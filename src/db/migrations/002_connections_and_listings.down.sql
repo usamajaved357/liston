@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS jobs_log;
+DROP TABLE IF EXISTS listings;
+DROP TABLE IF EXISTS tracked_stores;
+DROP TABLE IF EXISTS connections;

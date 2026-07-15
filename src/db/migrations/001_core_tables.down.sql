@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS plan_platform_access;
+DROP TABLE IF EXISTS platforms;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS plans;

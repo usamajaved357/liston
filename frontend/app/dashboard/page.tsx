@@ -1,0 +1,121 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { api, User } from "@/lib/api";
+
+export default function DashboardPage() {
+  const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      router.replace("/login");
+      return;
+    }
+
+    api
+      .me()
+      .then(({ user }) => setUser(user))
+      .catch(() => {
+        localStorage.removeItem("token");
+        router.replace("/login");
+      })
+      .finally(() => setLoading(false));
+  }, [router]);
+
+  function handleLogout() {
+    localStorage.removeItem("token");
+    router.push("/login");
+  }
+
+  if (loading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center">
+        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  const connectionsUsed = Number(user.connections_used ?? 0);
+  const maxConnections = user.max_connections ?? 0;
+  const listingsUsed = user.listings_used_this_month ?? 0;
+  const listingsIncluded = user.listings_included_per_month ?? 0;
+  const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
+  const listingsPct = listingsIncluded ? Math.min(100, (listingsUsed / listingsIncluded) * 100) : 0;
+
+  return (
+    <main className="min-h-screen">
+      <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)]">
+        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-primary)] text-white text-sm font-semibold">
+              L
+            </div>
+            <span className="font-semibold text-[var(--color-ink)]">Liston</span>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="text-sm font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)] transition-colors"
+          >
+            Log out
+          </button>
+        </div>
+      </header>
+
+      <div className="max-w-4xl mx-auto px-6 py-10">
+        <h1 className="text-2xl font-semibold text-[var(--color-ink)]">
+          Welcome, {user.email}
+        </h1>
+        {error && <p className="mt-2 text-sm text-[var(--color-danger)]">{error}</p>}
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
+            <div className="flex items-baseline justify-between">
+              <h2 className="text-sm font-medium text-[var(--color-muted)]">Plan</h2>
+              <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">
+                {user.plan_name ?? "—"}
+              </span>
+            </div>
+            <p className="mt-3 text-sm text-[var(--color-ink)]">
+              Connected accounts: {connectionsUsed} of {maxConnections}
+            </p>
+            <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
+              <div
+                className="h-full bg-[var(--color-accent)]"
+                style={{ width: `${connectionsPct}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
+            <h2 className="text-sm font-medium text-[var(--color-muted)]">Listings this month</h2>
+            <p className="mt-3 text-sm text-[var(--color-ink)]">
+              {listingsUsed} of {listingsIncluded} included
+            </p>
+            <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
+              <div
+                className="h-full bg-[var(--color-accent)]"
+                style={{ width: `${listingsPct}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
+          <p className="text-sm text-[var(--color-muted)]">
+            Connections aren&apos;t built yet — this is where you&apos;ll add a store to track
+            once the Connections module ships.
+          </p>
+        </div>
+      </div>
+    </main>
+  );
+}
