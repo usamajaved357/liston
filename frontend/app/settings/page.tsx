@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api, ApiError, User } from "@/lib/api";
 import { Field } from "@/components/Field";
 import { PasswordField } from "@/components/PasswordField";
+import { PasswordInput } from "@/components/PasswordInput";
 import { Alert } from "@/components/Alert";
 
 function ChangeEmailForm({ currentEmail }: { currentEmail: string }) {
@@ -46,13 +47,7 @@ function ChangeEmailForm({ currentEmail }: { currentEmail: string }) {
       <Field label="New email" type="email" value={email} onChange={setEmail} autoComplete="email" />
       <div>
         <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">Current password</span>
-        <input
-          type="password"
-          value={currentPassword}
-          autoComplete="current-password"
-          onChange={(e) => setCurrentPassword(e.target.value)}
-          className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2.5 text-[15px] text-[var(--color-ink)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/20 transition-colors"
-        />
+        <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
       </div>
       {error && <Alert>{error}</Alert>}
       {success && <Alert variant="success">{success}</Alert>}
@@ -111,13 +106,7 @@ function ChangePasswordForm() {
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
         <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">Current password</span>
-        <input
-          type="password"
-          value={currentPassword}
-          autoComplete="current-password"
-          onChange={(e) => setCurrentPassword(e.target.value)}
-          className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2.5 text-[15px] text-[var(--color-ink)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/20 transition-colors"
-        />
+        <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
       </div>
       <PasswordField
         label="New password"

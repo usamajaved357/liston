@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { Field } from "@/components/Field";
+import { PasswordInput } from "@/components/PasswordInput";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Alert } from "@/components/Alert";
 
@@ -56,13 +57,7 @@ export default function LoginPage() {
               Forgot password?
             </Link>
           </div>
-          <input
-            type="password"
-            value={password}
-            autoComplete="current-password"
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2.5 text-[15px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/20 transition-colors"
-          />
+          <PasswordInput value={password} onChange={setPassword} autoComplete="current-password" />
         </div>
         {error && <Alert>{error}</Alert>}
         <button

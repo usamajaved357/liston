@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PasswordInput } from "./PasswordInput";
 
 interface PasswordFieldProps {
   label: string;
@@ -25,14 +26,12 @@ export function PasswordField({
   return (
     <label className="block">
       <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">{label}</span>
-      <input
-        type="password"
+      <PasswordInput
         value={value}
+        onChange={onChange}
         autoComplete={autoComplete}
-        onChange={(e) => onChange(e.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2.5 text-[15px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/20 transition-colors"
       />
       {showCriteria && focused && (
         <div className="mt-2 flex items-center gap-1.5 text-xs">
