@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Env files (never commit real secrets)
+.env
+.env.local
+.env.*.local
+!.env.example
+!frontend/.env.local.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Coverage / test artifacts
+coverage/
+
+# Internal planning docs — kept local only, not pushed to the shared repo
+ARCHITECTURE.md
+PHASE-2.md

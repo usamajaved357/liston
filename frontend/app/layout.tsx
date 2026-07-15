@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Liston",
-  description: "Liston — track competitor listings, generate original content with AI, publish across marketplaces.",
+  description: "Liston: track competitor listings, generate original content with AI, publish across marketplaces.",
 };
 
 export default function RootLayout({

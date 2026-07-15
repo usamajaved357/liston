@@ -47,12 +47,20 @@ const config = {
   databaseUrl: required('DATABASE_URL'),
   redisUrl: required('REDIS_URL'),
 
+  // Used to build links in emailed tokens (verification/password-reset).
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
+
   jwt: {
     secret: required('JWT_SECRET'),
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
 
   credentialsEncryptionKey: credentialsEncryptionKey(),
+
+  resend: {
+    apiKey: process.env.RESEND_API_KEY || null,
+    fromEmail: process.env.EMAIL_FROM || 'Liston <onboarding@resend.dev>',
+  },
 
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
   briaApiKey: process.env.BRIA_API_KEY || null,
