@@ -10,4 +10,8 @@ async function getCurrentUser(userId) {
   return user;
 }
 
-module.exports = { getCurrentUser };
+async function deleteAccount(userId) {
+  await userRepository.deleteById(userId);
+}
+
+module.exports = { getCurrentUser, deleteAccount };

@@ -37,8 +37,8 @@ export function AuthLayout({ eyebrow, title, subtitle, children, footer }: AuthL
             Turn competitor listings into your own, automatically.
           </h2>
           <p className="mt-4 text-[15px] text-white/70 leading-relaxed">
-            Scrape, rewrite with AI, and publish across marketplaces — without lifting a finger
-            for each listing.
+            Scrape, rewrite with AI, and publish across marketplaces without lifting a finger for
+            each listing.
           </p>
           <ul className="mt-8 space-y-3">
             {FEATURES.map((feature) => (

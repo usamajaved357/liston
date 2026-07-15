@@ -9,4 +9,13 @@ async function getMe(req, res, next) {
   }
 }
 
-module.exports = { getMe };
+async function deleteAccount(req, res, next) {
+  try {
+    await userService.deleteAccount(req.userId);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getMe, deleteAccount };

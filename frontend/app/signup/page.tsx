@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { Field } from "@/components/Field";
+import { PasswordField } from "@/components/PasswordField";
 import { AuthLayout } from "@/components/AuthLayout";
+import { Alert } from "@/components/Alert";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -17,6 +19,12 @@ export default function SignupPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+
     setLoading(true);
     try {
       const { token } = await api.signup(email, password);
@@ -45,19 +53,14 @@ export default function SignupPage() {
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
-        <Field
+        <PasswordField
           label="Password"
-          type="password"
           value={password}
           onChange={setPassword}
           autoComplete="new-password"
+          showCriteria
         />
-        <p className="text-xs text-[var(--color-muted)] -mt-2">At least 8 characters.</p>
-        {error && (
-          <p role="alert" className="text-sm text-[var(--color-danger)]">
-            {error}
-          </p>
-        )}
+        {error && <Alert>{error}</Alert>}
         <button
           type="submit"
           disabled={loading}

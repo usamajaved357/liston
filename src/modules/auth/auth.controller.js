@@ -1,9 +1,17 @@
 const { z } = require('zod');
 const authService = require('./auth.service');
 
-const credentialsSchema = z.object({
+const signupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+// Login only needs a password to be present — enforcing today's minimum
+// length here would reject correct logins for any account created before
+// the rule existed (or after a future length change).
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1, 'Password is required'),
 });
 
 const tokenSchema = z.object({
@@ -21,7 +29,7 @@ const resetPasswordSchema = z.object({
 
 async function signup(req, res, next) {
   try {
-    const parsed = credentialsSchema.safeParse(req.body);
+    const parsed = signupSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
@@ -34,7 +42,7 @@ async function signup(req, res, next) {
 
 async function login(req, res, next) {
   try {
-    const parsed = credentialsSchema.safeParse(req.body);
+    const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }

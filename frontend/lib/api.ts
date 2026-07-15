@@ -87,4 +87,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ token, password }),
     }),
+
+  deleteAccount: () => request<void>("/api/users/me", { method: "DELETE" }),
 };

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { Field } from "@/components/Field";
 import { AuthLayout } from "@/components/AuthLayout";
+import { Alert } from "@/components/Alert";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -63,11 +64,7 @@ export default function LoginPage() {
             className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2.5 text-[15px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/20 transition-colors"
           />
         </div>
-        {error && (
-          <p role="alert" className="text-sm text-[var(--color-danger)]">
-            {error}
-          </p>
-        )}
+        {error && <Alert>{error}</Alert>}
         <button
           type="submit"
           disabled={loading}

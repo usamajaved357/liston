@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, User } from "@/lib/api";
+import { api, ApiError, User } from "@/lib/api";
+import { AccountMenu } from "@/components/AccountMenu";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { Alert } from "@/components/Alert";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -10,6 +13,8 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
+  const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -31,6 +36,19 @@ export default function DashboardPage() {
   function handleLogout() {
     localStorage.removeItem("token");
     router.push("/login");
+  }
+
+  async function handleDeleteAccount() {
+    setActionLoading(true);
+    try {
+      await api.deleteAccount();
+      localStorage.removeItem("token");
+      router.push("/signup");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't delete your account. Try again.");
+      setConfirmAction(null);
+      setActionLoading(false);
+    }
   }
 
   async function handleResendVerification() {
@@ -72,12 +90,10 @@ export default function DashboardPage() {
             </div>
             <span className="font-semibold text-[var(--color-ink)]">Liston</span>
           </div>
-          <button
-            onClick={handleLogout}
-            className="text-sm font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)] transition-colors"
-          >
-            Log out
-          </button>
+          <AccountMenu
+            onLogout={() => setConfirmAction("logout")}
+            onDeleteAccount={() => setConfirmAction("delete")}
+          />
         </div>
       </header>
 
@@ -85,13 +101,17 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-semibold text-[var(--color-ink)]">
           Welcome, {user.email}
         </h1>
-        {error && <p className="mt-2 text-sm text-[var(--color-danger)]">{error}</p>}
+        {error && (
+          <div className="mt-3">
+            <Alert>{error}</Alert>
+          </div>
+        )}
 
         {!user.email_verified_at && (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm text-amber-900">
               Verify your email to secure your account.
-              {resendState === "sent" && " Check the backend terminal log for the link (no email provider yet)."}
+              {resendState === "sent" && " Check your inbox for the new link."}
             </p>
             <button
               onClick={handleResendVerification}
@@ -112,7 +132,7 @@ export default function DashboardPage() {
             <div className="flex items-baseline justify-between">
               <h2 className="text-sm font-medium text-[var(--color-muted)]">Plan</h2>
               <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">
-                {user.plan_name ?? "—"}
+                {user.plan_name ?? "Unassigned"}
               </span>
             </div>
             <p className="mt-3 text-sm text-[var(--color-ink)]">
@@ -142,11 +162,30 @@ export default function DashboardPage() {
 
         <div className="mt-8 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
           <p className="text-sm text-[var(--color-muted)]">
-            Connections aren&apos;t built yet — this is where you&apos;ll add a store to track
+            Connections aren&apos;t built yet. This is where you&apos;ll add a store to track
             once the Connections module ships.
           </p>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmAction === "logout"}
+        title="Log out?"
+        description="You'll need to log in again to access your dashboard."
+        confirmLabel="Log out"
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={handleLogout}
+      />
+      <ConfirmDialog
+        open={confirmAction === "delete"}
+        title="Delete your account?"
+        description="This permanently deletes your account, connections, and listing data. This action cannot be undone."
+        confirmLabel="Delete account"
+        danger
+        loading={actionLoading}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={handleDeleteAccount}
+      />
     </main>
   );
 }

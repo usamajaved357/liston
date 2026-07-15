@@ -4,14 +4,16 @@ import { Suspense, useState, FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
-import { Field } from "@/components/Field";
+import { PasswordField } from "@/components/PasswordField";
 import { AuthLayout } from "@/components/AuthLayout";
+import { Alert } from "@/components/Alert";
 
 function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
@@ -19,6 +21,16 @@ function ResetPasswordForm() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
     setLoading(true);
     try {
       await api.resetPassword(token, password);
@@ -33,39 +45,38 @@ function ResetPasswordForm() {
 
   if (!token) {
     return (
-      <p className="text-[15px] text-[var(--color-danger)]">
+      <Alert>
         This link is missing a reset token. Request a new one from the{" "}
         <Link href="/forgot-password" className="underline">
           forgot password
         </Link>{" "}
         page.
-      </p>
+      </Alert>
     );
   }
 
   if (done) {
     return (
-      <p className="text-[15px] text-[var(--color-ink)]">
-        Password reset — redirecting you to log in…
-      </p>
+      <Alert variant="success">Password reset. Redirecting you to log in.</Alert>
     );
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <Field
+      <PasswordField
         label="New password"
-        type="password"
         value={password}
         onChange={setPassword}
         autoComplete="new-password"
+        showCriteria
       />
-      <p className="text-xs text-[var(--color-muted)] -mt-2">At least 8 characters.</p>
-      {error && (
-        <p role="alert" className="text-sm text-[var(--color-danger)]">
-          {error}
-        </p>
-      )}
+      <PasswordField
+        label="Confirm new password"
+        value={confirmPassword}
+        onChange={setConfirmPassword}
+        autoComplete="new-password"
+      />
+      {error && <Alert>{error}</Alert>}
       <button
         type="submit"
         disabled={loading}

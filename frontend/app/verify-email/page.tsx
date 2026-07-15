@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { AuthLayout } from "@/components/AuthLayout";
+import { Alert } from "@/components/Alert";
 
 function VerifyEmailStatus() {
   const searchParams = useSearchParams();
@@ -36,9 +37,7 @@ function VerifyEmailStatus() {
 
   return (
     <div>
-      <p className={`text-[15px] ${status === "error" ? "text-[var(--color-danger)]" : "text-[var(--color-ink)]"}`}>
-        {message}
-      </p>
+      {status === "error" ? <Alert>{message}</Alert> : <Alert variant="success">{message}</Alert>}
       <Link
         href="/dashboard"
         className="mt-4 inline-block text-sm font-medium text-[var(--color-accent)] hover:underline"

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { Field } from "@/components/Field";
 import { AuthLayout } from "@/components/AuthLayout";
+import { Alert } from "@/components/Alert";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -40,16 +41,12 @@ export default function ForgotPasswordPage() {
       {sent ? (
         <p className="text-[15px] text-[var(--color-ink)]">
           If an account exists for <span className="font-medium">{email}</span>, a reset link is on
-          its way. In local dev, check the backend terminal log for the link.
+          its way. Check your inbox (and spam folder) for an email from Liston.
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
           <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
-          {error && (
-            <p role="alert" className="text-sm text-[var(--color-danger)]">
-              {error}
-            </p>
-          )}
+          {error && <Alert>{error}</Alert>}
           <button
             type="submit"
             disabled={loading}

@@ -15,4 +15,10 @@ async function findByIdWithPlan(userId) {
   return result.rows[0] || null;
 }
 
-module.exports = { findByIdWithPlan };
+async function deleteById(userId) {
+  // connections/tracked_stores/listings cascade via ON DELETE CASCADE
+  // (see migration 002); jobs_log rows are kept with connection_id set to NULL.
+  await query('DELETE FROM users WHERE id = $1', [userId]);
+}
+
+module.exports = { findByIdWithPlan, deleteById };
