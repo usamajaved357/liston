@@ -89,4 +89,16 @@ export const api = {
     }),
 
   deleteAccount: () => request<void>("/api/users/me", { method: "DELETE" }),
+
+  updateEmail: (email: string, currentPassword: string) =>
+    request<{ message: string }>("/api/users/me/email", {
+      method: "PATCH",
+      body: JSON.stringify({ email, currentPassword }),
+    }),
+
+  updatePassword: (currentPassword: string, newPassword: string) =>
+    request<{ message: string }>("/api/users/me/password", {
+      method: "PATCH",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 };

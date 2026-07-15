@@ -21,4 +21,33 @@ async function deleteById(userId) {
   await query('DELETE FROM users WHERE id = $1', [userId]);
 }
 
-module.exports = { findByIdWithPlan, deleteById };
+async function findAuthById(userId) {
+  const result = await query('SELECT id, email, password_hash FROM users WHERE id = $1', [userId]);
+  return result.rows[0] || null;
+}
+
+async function emailTakenByAnotherUser(email, excludingUserId) {
+  const result = await query('SELECT id FROM users WHERE email = $1 AND id != $2', [email, excludingUserId]);
+  return result.rows.length > 0;
+}
+
+// Changing email re-triggers verification — the new address hasn't been proven yet.
+async function updateEmail(userId, newEmail) {
+  await query(
+    'UPDATE users SET email = $1, email_verified_at = NULL, updated_at = now() WHERE id = $2',
+    [newEmail, userId]
+  );
+}
+
+async function updatePasswordHash(userId, passwordHash) {
+  await query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2', [passwordHash, userId]);
+}
+
+module.exports = {
+  findByIdWithPlan,
+  deleteById,
+  findAuthById,
+  emailTakenByAnotherUser,
+  updateEmail,
+  updatePasswordHash,
+};

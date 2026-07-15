@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
@@ -34,7 +35,7 @@ async function post(path, body, token) {
 }
 
 test('login does not enforce the signup password-length rule', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   await post('/api/auth/signup', { email, password: 'correctpassword123' });
 
   // Wrong, short password — must fail as bad credentials (401), not a
@@ -45,14 +46,14 @@ test('login does not enforce the signup password-length rule', async () => {
 });
 
 test('signup still enforces the password-length rule', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   const { status, data } = await post('/api/auth/signup', { email, password: 'short' });
   assert.strictEqual(status, 400);
   assert.match(data.error, /at least 8 characters/);
 });
 
 test('DELETE /api/users/me deletes the account and invalidates future logins', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   const { data: signupData } = await post('/api/auth/signup', { email, password: 'testpassword123' });
 
   const res = await fetch(`${baseUrl}/api/users/me`, {

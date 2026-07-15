@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 require('dotenv').config();
 
 const authService = require('../../src/modules/auth/auth.service');
@@ -10,7 +11,7 @@ test.after(async () => {
 });
 
 test('signup creates a user on the starter plan and returns a valid token', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   const { user, token } = await authService.signup({ email, password: 'testpassword123' });
 
   assert.strictEqual(user.email, email);
@@ -22,7 +23,7 @@ test('signup creates a user on the starter plan and returns a valid token', asyn
 });
 
 test('signup rejects a duplicate email', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   await authService.signup({ email, password: 'testpassword123' });
 
   await assert.rejects(
@@ -32,7 +33,7 @@ test('signup rejects a duplicate email', async () => {
 });
 
 test('login succeeds with correct credentials and fails with incorrect ones', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   const password = 'testpassword123';
   await authService.signup({ email, password });
 
@@ -47,7 +48,7 @@ test('login succeeds with correct credentials and fails with incorrect ones', as
 });
 
 test('signup issues a usable email verification token', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   const { emailVerificationToken } = await authService.signup({ email, password: 'testpassword123' });
 
   const { user } = await authService.verifyEmail(emailVerificationToken);
@@ -68,7 +69,7 @@ test('verifyEmail rejects an unknown token', async () => {
 });
 
 test('resendVerification issues a new token and rejects an already-verified user', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   const { user } = await authService.signup({ email, password: 'testpassword123' });
 
   const { emailVerificationToken } = await authService.resendVerification(user.id);
@@ -82,7 +83,7 @@ test('resendVerification issues a new token and rejects an already-verified user
 });
 
 test('password reset flow: request token, reset password, log in with new password', async () => {
-  const email = `test-${Date.now()}@example.com`;
+  const email = `test-${crypto.randomUUID()}@example.com`;
   await authService.signup({ email, password: 'oldpassword123' });
 
   const { passwordResetToken } = await authService.requestPasswordReset(email);

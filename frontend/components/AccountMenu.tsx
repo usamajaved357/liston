@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 
 interface AccountMenuProps {
   onLogout: () => void;
@@ -45,7 +46,15 @@ export function AccountMenu({ onLogout, onDeleteAccount }: AccountMenuProps) {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-48 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] py-1.5 shadow-lg z-10">
+        <div className="absolute right-0 mt-2 w-52 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] py-1.5 shadow-lg z-10">
+          <Link
+            href="/settings"
+            onClick={() => setOpen(false)}
+            className="block w-full px-4 py-2 text-left text-sm text-[var(--color-ink)] hover:bg-[var(--color-paper)] transition-colors"
+          >
+            Account settings
+          </Link>
+          <div className="my-1.5 border-t border-[var(--color-line)]" />
           <button
             onClick={() => {
               setOpen(false);
