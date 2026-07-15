@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { Field } from "@/components/Field";
+import { AuthLayout } from "@/components/AuthLayout";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,55 +30,52 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 text-center">
-          <div className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-[var(--color-primary)] text-white text-sm font-semibold mb-4">
-            L
-          </div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)] mb-1">Liston</p>
-          <h1 className="text-2xl font-semibold text-[var(--color-ink)]">Log in</h1>
-          <p className="mt-1.5 text-[15px] text-[var(--color-muted)]">
-            Welcome back.
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4 bg-[var(--color-panel)] p-6 rounded-lg border border-[var(--color-line)]">
-          <Field
-            label="Email"
-            type="email"
-            value={email}
-            onChange={setEmail}
-            autoComplete="email"
-          />
-          <Field
-            label="Password"
-            type="password"
-            value={password}
-            onChange={setPassword}
-            autoComplete="current-password"
-          />
-          {error && (
-            <p role="alert" className="text-sm text-[var(--color-danger)]">
-              {error}
-            </p>
-          )}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
-          >
-            {loading ? "Logging in…" : "Log in"}
-          </button>
-        </form>
-
-        <p className="mt-5 text-center text-sm text-[var(--color-muted)]">
+    <AuthLayout
+      eyebrow="Liston"
+      title="Welcome back"
+      subtitle="Log in to keep your listings running."
+      footer={
+        <>
           Don&apos;t have an account?{" "}
           <Link href="/signup" className="text-[var(--color-accent)] font-medium hover:underline">
             Sign up
           </Link>
-        </p>
-      </div>
-    </main>
+        </>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="block text-sm font-medium text-[var(--color-ink)]">Password</span>
+            <Link
+              href="/forgot-password"
+              className="text-sm font-medium text-[var(--color-accent)] hover:underline"
+            >
+              Forgot password?
+            </Link>
+          </div>
+          <input
+            type="password"
+            value={password}
+            autoComplete="current-password"
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2.5 text-[15px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/20 transition-colors"
+          />
+        </div>
+        {error && (
+          <p role="alert" className="text-sm text-[var(--color-danger)]">
+            {error}
+          </p>
+        )}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
+        >
+          {loading ? "Logging in…" : "Log in"}
+        </button>
+      </form>
+    </AuthLayout>
   );
 }

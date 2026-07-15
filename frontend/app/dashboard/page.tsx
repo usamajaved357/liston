@@ -9,6 +9,7 @@ export default function DashboardPage() {
   const [user, setUser] = useState<User | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -30,6 +31,16 @@ export default function DashboardPage() {
   function handleLogout() {
     localStorage.removeItem("token");
     router.push("/login");
+  }
+
+  async function handleResendVerification() {
+    setResendState("sending");
+    try {
+      await api.resendVerification();
+      setResendState("sent");
+    } catch {
+      setResendState("idle");
+    }
   }
 
   if (loading) {
@@ -75,6 +86,26 @@ export default function DashboardPage() {
           Welcome, {user.email}
         </h1>
         {error && <p className="mt-2 text-sm text-[var(--color-danger)]">{error}</p>}
+
+        {!user.email_verified_at && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm text-amber-900">
+              Verify your email to secure your account.
+              {resendState === "sent" && " Check the backend terminal log for the link (no email provider yet)."}
+            </p>
+            <button
+              onClick={handleResendVerification}
+              disabled={resendState !== "idle"}
+              className="text-sm font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:text-amber-950 disabled:opacity-60"
+            >
+              {resendState === "sending"
+                ? "Sending…"
+                : resendState === "sent"
+                  ? "Sent"
+                  : "Resend verification email"}
+            </button>
+          </div>
+        )}
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
           <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-5">

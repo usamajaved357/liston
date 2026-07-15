@@ -41,6 +41,7 @@ export interface User {
   listings_included_per_month?: number;
   connections_used?: string;
   listings_used_this_month?: number;
+  email_verified_at?: string | null;
   created_at: string;
 }
 
@@ -63,4 +64,27 @@ export const api = {
     }),
 
   me: () => request<{ user: User }>("/api/users/me"),
+
+  verifyEmail: (token: string) =>
+    request<{ user: User }>("/api/auth/verify-email", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  resendVerification: () =>
+    request<{ message: string }>("/api/auth/resend-verification", {
+      method: "POST",
+    }),
+
+  forgotPassword: (email: string) =>
+    request<{ message: string }>("/api/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    }),
+
+  resetPassword: (token: string, password: string) =>
+    request<{ message: string }>("/api/auth/reset-password", {
+      method: "POST",
+      body: JSON.stringify({ token, password }),
+    }),
 };
