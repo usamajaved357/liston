@@ -6,6 +6,8 @@ const errorHandler = require('./middleware/errorHandler.middleware');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const userRoutes = require('./modules/users/user.routes');
+const connectionRoutes = require('./modules/connections/connection.routes');
+const ebayRoutes = require('./modules/ebay/ebay.routes');
 
 function createApp() {
   const app = express();
@@ -26,6 +28,8 @@ function createApp() {
 
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
+  app.use('/api/connections', connectionRoutes);
+  app.use('/api/ebay', ebayRoutes);
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

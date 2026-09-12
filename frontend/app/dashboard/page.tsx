@@ -1,20 +1,100 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { api, ApiError, User } from "@/lib/api";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { api, ApiError, Connection, Platform, User } from "@/lib/api";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
+import { PlatformIcon } from "@/components/PlatformIcon";
+import { AddConnectionPanel } from "@/components/AddConnectionPanel";
+
+const STATUS_STYLES: Record<Connection["status"], string> = {
+  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  expired: "bg-amber-50 text-amber-800 border-amber-200",
+  error: "bg-red-50 text-red-700 border-red-200",
+  suspended: "bg-red-50 text-red-700 border-red-200",
+};
+
+function StatTile({
+  label,
+  value,
+  sublabel,
+  pct,
+}: {
+  label: string;
+  value: string;
+  sublabel: string;
+  pct: number;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
+      <h2 className="text-sm font-medium text-[var(--color-muted)]">{label}</h2>
+      <p className="mt-2 text-2xl font-semibold text-[var(--color-ink)]">{value}</p>
+      <p className="mt-1 text-xs text-[var(--color-muted)]">{sublabel}</p>
+      <div className="mt-3 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
+        <div className="h-full rounded-full bg-[var(--color-accent)] transition-all" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ConnectionBanner() {
+  const searchParams = useSearchParams();
+  const connected = searchParams.get("connected");
+  const ebayError = searchParams.get("ebayError");
+
+  if (connected === "ebay") {
+    return (
+      <div className="mt-4">
+        <Alert variant="success">Your eBay account is connected.</Alert>
+      </div>
+    );
+  }
+  if (ebayError) {
+    return (
+      <div className="mt-4">
+        <Alert>Couldn&apos;t connect your eBay account ({ebayError}). Try again below.</Alert>
+      </div>
+    );
+  }
+  return null;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
   const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
+  const [pendingDeleteConnectionId, setPendingDeleteConnectionId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+
+  async function loadAll() {
+    try {
+      const [meData, connectionsData, platformsData] = await Promise.all([
+        api.me(),
+        api.listConnections(),
+        api.listPlatforms(),
+      ]);
+      setUser(meData.user);
+      setConnections(connectionsData.connections);
+      setPlatforms(platformsData.platforms);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        localStorage.removeItem("token");
+        router.replace("/login");
+        return;
+      }
+      setError("Couldn't load your dashboard. Try refreshing.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -22,15 +102,8 @@ export default function DashboardPage() {
       router.replace("/login");
       return;
     }
-
-    api
-      .me()
-      .then(({ user }) => setUser(user))
-      .catch(() => {
-        localStorage.removeItem("token");
-        router.replace("/login");
-      })
-      .finally(() => setLoading(false));
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   function handleLogout() {
@@ -61,6 +134,20 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleDeleteConnection() {
+    if (!pendingDeleteConnectionId) return;
+    setActionLoading(true);
+    try {
+      await api.deleteConnection(pendingDeleteConnectionId);
+      setPendingDeleteConnectionId(null);
+      await loadAll();
+    } catch {
+      setError("Couldn't remove that connection. Try again.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="min-h-screen flex items-center justify-center">
@@ -73,12 +160,13 @@ export default function DashboardPage() {
     return null;
   }
 
-  const connectionsUsed = Number(user.connections_used ?? 0);
+  const connectionsUsed = connections.length;
   const maxConnections = user.max_connections ?? 0;
   const listingsUsed = user.listings_used_this_month ?? 0;
   const listingsIncluded = user.listings_included_per_month ?? 0;
   const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
   const listingsPct = listingsIncluded ? Math.min(100, (listingsUsed / listingsIncluded) * 100) : 0;
+  const atLimit = connectionsUsed >= maxConnections;
 
   return (
     <main className="min-h-screen">
@@ -98,14 +186,25 @@ export default function DashboardPage() {
       </header>
 
       <div className="max-w-4xl mx-auto px-6 py-10">
-        <h1 className="text-2xl font-semibold text-[var(--color-ink)]">
-          Welcome, {user.email}
-        </h1>
+        <div className="flex items-baseline justify-between flex-wrap gap-2">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">Dashboard</p>
+            <h1 className="mt-1 text-2xl font-semibold text-[var(--color-ink)]">{user.email}</h1>
+          </div>
+          <span className="rounded-full bg-[var(--color-primary)]/5 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-primary)]">
+            {user.plan_name ?? "Unassigned"} plan
+          </span>
+        </div>
+
         {error && (
-          <div className="mt-3">
+          <div className="mt-4">
             <Alert>{error}</Alert>
           </div>
         )}
+
+        <Suspense fallback={null}>
+          <ConnectionBanner />
+        </Suspense>
 
         {!user.email_verified_at && (
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
@@ -128,43 +227,57 @@ export default function DashboardPage() {
         )}
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-sm font-medium text-[var(--color-muted)]">Plan</h2>
-              <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">
-                {user.plan_name ?? "Unassigned"}
-              </span>
-            </div>
-            <p className="mt-3 text-sm text-[var(--color-ink)]">
-              Connected accounts: {connectionsUsed} of {maxConnections}
-            </p>
-            <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
-              <div
-                className="h-full bg-[var(--color-accent)]"
-                style={{ width: `${connectionsPct}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
-            <h2 className="text-sm font-medium text-[var(--color-muted)]">Listings this month</h2>
-            <p className="mt-3 text-sm text-[var(--color-ink)]">
-              {listingsUsed} of {listingsIncluded} included
-            </p>
-            <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
-              <div
-                className="h-full bg-[var(--color-accent)]"
-                style={{ width: `${listingsPct}%` }}
-              />
-            </div>
-          </div>
+          <StatTile
+            label="Connected accounts"
+            value={`${connectionsUsed} / ${maxConnections}`}
+            sublabel="marketplace accounts linked"
+            pct={connectionsPct}
+          />
+          <StatTile
+            label="Listings this month"
+            value={`${listingsUsed} / ${listingsIncluded}`}
+            sublabel="included in your plan"
+            pct={listingsPct}
+          />
         </div>
 
-        <div className="mt-8 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
-          <p className="text-sm text-[var(--color-muted)]">
-            Connections aren&apos;t built yet. This is where you&apos;ll add a store to track
-            once the Connections module ships.
-          </p>
+        {connections.length > 0 && (
+          <div className="mt-8 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
+            <h2 className="text-base font-semibold text-[var(--color-ink)] mb-4">Connected accounts</h2>
+            <ul className="space-y-3">
+              {connections.map((connection) => (
+                <li
+                  key={connection.id}
+                  className="flex items-center justify-between rounded-md border border-[var(--color-line)] px-4 py-3 transition-colors hover:border-[var(--color-accent)]/50"
+                >
+                  <Link href={`/accounts/${connection.id}`} className="flex items-center gap-3 flex-1 min-w-0">
+                    <PlatformIcon platformKey={connection.platform_key} size={36} />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-[var(--color-ink)] truncate">{connection.label}</p>
+                      <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
+                    </div>
+                  </Link>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <span
+                      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${STATUS_STYLES[connection.status]}`}
+                    >
+                      {connection.status}
+                    </span>
+                    <button
+                      onClick={() => setPendingDeleteConnectionId(connection.id)}
+                      className="text-sm font-medium text-[var(--color-danger)] hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="mt-8">
+          <AddConnectionPanel platforms={platforms} atLimit={atLimit} maxConnections={maxConnections} />
         </div>
       </div>
 
@@ -185,6 +298,16 @@ export default function DashboardPage() {
         loading={actionLoading}
         onCancel={() => setConfirmAction(null)}
         onConfirm={handleDeleteAccount}
+      />
+      <ConfirmDialog
+        open={pendingDeleteConnectionId !== null}
+        title="Remove this connection?"
+        description="Liston will no longer be able to draft or publish listings to this account."
+        confirmLabel="Remove"
+        danger
+        loading={actionLoading}
+        onCancel={() => setPendingDeleteConnectionId(null)}
+        onConfirm={handleDeleteConnection}
       />
     </main>
   );

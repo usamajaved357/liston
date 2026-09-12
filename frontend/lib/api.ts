@@ -50,6 +50,25 @@ export interface AuthResponse {
   token: string;
 }
 
+export interface Connection {
+  id: string;
+  label: string;
+  status: "active" | "expired" | "error" | "suspended";
+  platform_key: string;
+  platform_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Platform {
+  id: string;
+  key: string;
+  name: string;
+  role: "source" | "destination" | "both";
+  status: "active" | "coming_soon";
+  connectable: boolean;
+}
+
 export const api = {
   signup: (email: string, password: string) =>
     request<AuthResponse>("/api/auth/signup", {
@@ -101,4 +120,19 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+
+  listConnections: () =>
+    request<{ connections: Connection[]; maxConnections: number }>("/api/connections"),
+
+  listPlatforms: () => request<{ platforms: Platform[] }>("/api/connections/platforms"),
+
+  getConnection: (id: string) => request<{ connection: Connection }>(`/api/connections/${id}`),
+
+  startEbayAuth: (label: string) =>
+    request<{ authorizeUrl: string }>("/api/connections/ebay/authorize", {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    }),
+
+  deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: "DELETE" }),
 };

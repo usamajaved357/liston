@@ -71,6 +71,15 @@ const config = {
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || null,
   },
 
+  ebay: {
+    clientId: process.env.EBAY_CLIENT_ID || null,
+    clientSecret: process.env.EBAY_CLIENT_SECRET || null,
+    // RuName ("redirect URL name") — registered in the eBay Developer Portal,
+    // maps to the actual callback URL configured there.
+    ruName: process.env.EBAY_RU_NAME || null,
+    environment: process.env.EBAY_ENVIRONMENT || 'SANDBOX', // SANDBOX | PRODUCTION
+  },
+
   google: {
     serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || null,
     serviceAccountPrivateKey: process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || null,
