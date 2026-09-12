@@ -7,6 +7,7 @@ import { api, ApiError, Connection } from "@/lib/api";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { Logo } from "@/components/Logo";
 
 const STATUS_STYLES: Record<Connection["status"], string> = {
   active: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -82,9 +83,7 @@ export default function AccountDetailPage() {
       <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)]">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-primary)] text-white text-sm font-semibold">
-              L
-            </div>
+            <Logo size={32} />
             <span className="font-semibold text-[var(--color-ink)]">Liston</span>
           </div>
           <Link

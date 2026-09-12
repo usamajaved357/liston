@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, Connection, Platform, User } from "@/lib/api";
+import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
@@ -17,24 +18,47 @@ const STATUS_STYLES: Record<Connection["status"], string> = {
   suspended: "bg-red-50 text-red-700 border-red-200",
 };
 
-function StatTile({
+const RING_RADIUS = 36;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+function RingStat({
   label,
-  value,
   sublabel,
+  value,
   pct,
 }: {
   label: string;
-  value: string;
   sublabel: string;
+  value: string;
   pct: number;
 }) {
+  const offset = RING_CIRCUMFERENCE * (1 - pct / 100);
+
   return (
-    <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
-      <h2 className="text-sm font-medium text-[var(--color-muted)]">{label}</h2>
-      <p className="mt-2 text-2xl font-semibold text-[var(--color-ink)]">{value}</p>
-      <p className="mt-1 text-xs text-[var(--color-muted)]">{sublabel}</p>
-      <div className="mt-3 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
-        <div className="h-full rounded-full bg-[var(--color-accent)] transition-all" style={{ width: `${pct}%` }} />
+    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5 flex items-center gap-5">
+      <div className="relative w-[84px] h-[84px] flex-shrink-0">
+        <svg width="84" height="84" viewBox="0 0 84 84" className="-rotate-90">
+          <circle cx="42" cy="42" r={RING_RADIUS} fill="none" stroke="var(--color-line)" strokeWidth="8" />
+          <circle
+            cx="42"
+            cy="42"
+            r={RING_RADIUS}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeWidth="8"
+            strokeLinecap="round"
+            strokeDasharray={RING_CIRCUMFERENCE}
+            strokeDashoffset={offset}
+            className="transition-all"
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center text-[17px] font-extrabold text-[var(--color-ink)]">
+          {value}
+        </div>
+      </div>
+      <div>
+        <span className="text-sm font-bold text-[var(--color-ink)] block">{label}</span>
+        <span className="text-xs text-[var(--color-muted)] leading-relaxed block mt-1">{sublabel}</span>
       </div>
     </div>
   );
@@ -167,118 +191,114 @@ export default function DashboardPage() {
   const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
   const listingsPct = listingsIncluded ? Math.min(100, (listingsUsed / listingsIncluded) * 100) : 0;
   const atLimit = connectionsUsed >= maxConnections;
+  const planName = user.plan_name ?? "Unassigned";
+
+  const sortedConnections = [...connections].sort((a, b) =>
+    a.platform_name === b.platform_name ? a.label.localeCompare(b.label) : a.platform_name.localeCompare(b.platform_name)
+  );
 
   return (
-    <main className="min-h-screen">
-      <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)]">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-primary)] text-white text-sm font-semibold">
-              L
-            </div>
-            <span className="font-semibold text-[var(--color-ink)]">Liston</span>
-          </div>
-          <AccountMenu
-            onLogout={() => setConfirmAction("logout")}
-            onDeleteAccount={() => setConfirmAction("delete")}
-          />
-        </div>
-      </header>
+    <AppShell connectionsUsed={connectionsUsed} maxConnections={maxConnections} planName={planName}>
+      <div className="flex items-center justify-between mb-7">
+        <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
+        <AccountMenu
+          email={user.email}
+          planName={planName}
+          onLogout={() => setConfirmAction("logout")}
+          onDeleteAccount={() => setConfirmAction("delete")}
+        />
+      </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-10">
-        <div className="flex items-baseline justify-between flex-wrap gap-2">
+      {error && (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      )}
+
+      <Suspense fallback={null}>
+        <ConnectionBanner />
+      </Suspense>
+
+      {!user.email_verified_at && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm text-amber-900">
+            Verify your email to secure your account.
+            {resendState === "sent" && " Check your inbox for the new link."}
+          </p>
+          <button
+            onClick={handleResendVerification}
+            disabled={resendState !== "idle"}
+            className="text-sm font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:text-amber-950 disabled:opacity-60"
+          >
+            {resendState === "sending" ? "Sending…" : resendState === "sent" ? "Sent" : "Resend verification email"}
+          </button>
+        </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2 mb-7">
+        <RingStat
+          label="Connected accounts"
+          value={`${connectionsUsed}/${maxConnections}`}
+          sublabel={
+            atLimit
+              ? "You've used all the connections your plan includes."
+              : "marketplace accounts linked to Liston."
+          }
+          pct={connectionsPct}
+        />
+        <RingStat
+          label="Listings this month"
+          value={`${listingsUsed}/${listingsIncluded}`}
+          sublabel="Included in your plan — resets each billing cycle."
+          pct={listingsPct}
+        />
+      </div>
+
+      <div id="connected-accounts" className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.03)] scroll-mt-6">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-line)]">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">Dashboard</p>
-            <h1 className="mt-1 text-2xl font-semibold text-[var(--color-ink)]">{user.email}</h1>
+            <span className="text-[15px] font-extrabold text-[var(--color-ink)] block">Connected accounts</span>
+            <span className="text-xs text-[var(--color-muted)]">Sorted by marketplace</span>
           </div>
-          <span className="rounded-full bg-[var(--color-primary)]/5 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-primary)]">
-            {user.plan_name ?? "Unassigned"} plan
-          </span>
         </div>
 
-        {error && (
-          <div className="mt-4">
-            <Alert>{error}</Alert>
-          </div>
-        )}
-
-        <Suspense fallback={null}>
-          <ConnectionBanner />
-        </Suspense>
-
-        {!user.email_verified_at && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-sm text-amber-900">
-              Verify your email to secure your account.
-              {resendState === "sent" && " Check your inbox for the new link."}
-            </p>
-            <button
-              onClick={handleResendVerification}
-              disabled={resendState !== "idle"}
-              className="text-sm font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:text-amber-950 disabled:opacity-60"
-            >
-              {resendState === "sending"
-                ? "Sending…"
-                : resendState === "sent"
-                  ? "Sent"
-                  : "Resend verification email"}
-            </button>
-          </div>
-        )}
-
-        <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          <StatTile
-            label="Connected accounts"
-            value={`${connectionsUsed} / ${maxConnections}`}
-            sublabel="marketplace accounts linked"
-            pct={connectionsPct}
-          />
-          <StatTile
-            label="Listings this month"
-            value={`${listingsUsed} / ${listingsIncluded}`}
-            sublabel="included in your plan"
-            pct={listingsPct}
-          />
-        </div>
-
-        {connections.length > 0 && (
-          <div className="mt-8 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-            <h2 className="text-base font-semibold text-[var(--color-ink)] mb-4">Connected accounts</h2>
-            <ul className="space-y-3">
-              {connections.map((connection) => (
-                <li
-                  key={connection.id}
-                  className="flex items-center justify-between rounded-md border border-[var(--color-line)] px-4 py-3 transition-colors hover:border-[var(--color-accent)]/50"
-                >
-                  <Link href={`/accounts/${connection.id}`} className="flex items-center gap-3 flex-1 min-w-0">
-                    <PlatformIcon platformKey={connection.platform_key} size={36} />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-[var(--color-ink)] truncate">{connection.label}</p>
-                      <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
-                    </div>
-                  </Link>
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    <span
-                      className={`rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${STATUS_STYLES[connection.status]}`}
-                    >
-                      {connection.status}
-                    </span>
-                    <button
-                      onClick={() => setPendingDeleteConnectionId(connection.id)}
-                      className="text-sm font-medium text-[var(--color-danger)] hover:underline"
-                    >
-                      Remove
-                    </button>
+        {sortedConnections.length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-[var(--color-muted)]">No accounts connected yet.</p>
+        ) : (
+          <ul>
+            {sortedConnections.map((connection) => (
+              <li
+                key={connection.id}
+                className="flex items-center gap-3.5 px-5 py-4 border-b border-[var(--color-line)] last:border-b-0 transition-colors hover:bg-[var(--color-paper)]"
+              >
+                <Link href={`/accounts/${connection.id}`} className="flex items-center gap-3.5 flex-1 min-w-0">
+                  <PlatformIcon platformKey={connection.platform_key} size={40} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-[var(--color-ink)] truncate">{connection.label}</p>
+                    <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
                   </div>
-                </li>
-              ))}
-            </ul>
-          </div>
+                </Link>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <span
+                    className={`rounded-full border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_STYLES[connection.status]}`}
+                  >
+                    {connection.status}
+                  </span>
+                  <button
+                    onClick={() => setPendingDeleteConnectionId(connection.id)}
+                    className="text-sm font-medium text-[var(--color-danger)] hover:underline"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
         )}
+      </div>
 
-        <div className="mt-8">
-          <AddConnectionPanel platforms={platforms} atLimit={atLimit} maxConnections={maxConnections} />
-        </div>
+      <div className="mt-7">
+        <AddConnectionPanel platforms={platforms} atLimit={atLimit} maxConnections={maxConnections} />
       </div>
 
       <ConfirmDialog
@@ -309,6 +329,6 @@ export default function DashboardPage() {
         onCancel={() => setPendingDeleteConnectionId(null)}
         onConfirm={handleDeleteConnection}
       />
-    </main>
+    </AppShell>
   );
 }

@@ -8,6 +8,7 @@ import { Field } from "@/components/Field";
 import { PasswordField } from "@/components/PasswordField";
 import { PasswordInput } from "@/components/PasswordInput";
 import { Alert } from "@/components/Alert";
+import { Logo } from "@/components/Logo";
 
 function ChangeEmailForm({ currentEmail }: { currentEmail: string }) {
   const [email, setEmail] = useState("");
@@ -172,9 +173,7 @@ export default function SettingsPage() {
       <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)]">
         <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-primary)] text-white text-sm font-semibold">
-              L
-            </div>
+            <Logo size={32} />
             <span className="font-semibold text-[var(--color-ink)]">Liston</span>
           </div>
           <Link

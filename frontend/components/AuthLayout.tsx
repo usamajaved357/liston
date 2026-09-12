@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { Logo } from "@/components/Logo";
 
 const FEATURES = [
   "Track competitor listings automatically",
@@ -26,9 +27,7 @@ export function AuthLayout({ eyebrow, title, subtitle, children, footer }: AuthL
           }}
         />
         <div className="relative flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-white/10 text-white text-sm font-semibold ring-1 ring-white/20">
-            L
-          </div>
+          <Logo size={36} variant="dark" />
           <span className="font-semibold tracking-tight">Liston</span>
         </div>
 
@@ -69,8 +68,8 @@ export function AuthLayout({ eyebrow, title, subtitle, children, footer }: AuthL
       <section className="flex items-center justify-center px-4 py-12 sm:px-6">
         <div className="w-full max-w-sm">
           <div className="mb-8 text-center lg:text-left">
-            <div className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-[var(--color-primary)] text-white text-sm font-semibold mb-4 lg:hidden">
-              L
+            <div className="inline-flex mb-4 lg:hidden">
+              <Logo size={36} />
             </div>
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)] mb-1.5">
               {eyebrow}
