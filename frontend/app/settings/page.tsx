@@ -1,144 +1,37 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, User } from "@/lib/api";
-import { Field } from "@/components/Field";
-import { PasswordField } from "@/components/PasswordField";
-import { PasswordInput } from "@/components/PasswordInput";
+import { AppShell } from "@/components/AppShell";
+import { AccountMenu } from "@/components/AccountMenu";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
-import { Logo } from "@/components/Logo";
 
-function ChangeEmailForm({ currentEmail }: { currentEmail: string }) {
-  const [email, setEmail] = useState("");
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    if (email.trim().toLowerCase() === currentEmail.trim().toLowerCase()) {
-      setError("New email must be different from your current email.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { message } = await api.updateEmail(email, currentPassword);
-      setSuccess(message);
-      setEmail("");
-      setCurrentPassword("");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't update your email. Try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
+function ComingSoonCard({ title, description }: { title: string; description: string }) {
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <p className="text-sm text-[var(--color-muted)]">
-        Current email: <span className="text-[var(--color-ink)] font-medium">{currentEmail}</span>
-      </p>
-      <Field label="New email" type="email" value={email} onChange={setEmail} autoComplete="email" />
-      <div>
-        <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">Current password</span>
-        <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
+    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="text-base font-bold text-[var(--color-ink)]">{title}</h2>
+        <span className="rounded-full bg-[var(--color-line)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-muted)]">
+          Coming soon
+        </span>
       </div>
-      {error && <Alert>{error}</Alert>}
-      {success && <Alert variant="success">{success}</Alert>}
-      <button
-        type="submit"
-        disabled={loading}
-        className="rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
-      >
-        {loading ? "Updating…" : "Update email"}
-      </button>
-    </form>
+      <div className="mt-4 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
+        <p className="text-sm text-[var(--color-muted)]">{description}</p>
+      </div>
+    </div>
   );
 }
 
-function ChangePasswordForm() {
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    if (newPassword.length < 8) {
-      setError("New password must be at least 8 characters.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-    if (newPassword === currentPassword) {
-      setError("New password must be different from your current password.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { message } = await api.updatePassword(currentPassword, newPassword);
-      setSuccess(message);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't update your password. Try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">Current password</span>
-        <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
-      </div>
-      <PasswordField
-        label="New password"
-        value={newPassword}
-        onChange={setNewPassword}
-        autoComplete="new-password"
-        showCriteria
-      />
-      <PasswordField
-        label="Confirm new password"
-        value={confirmPassword}
-        onChange={setConfirmPassword}
-        autoComplete="new-password"
-      />
-      {error && <Alert>{error}</Alert>}
-      {success && <Alert variant="success">{success}</Alert>}
-      <button
-        type="submit"
-        disabled={loading}
-        className="rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
-      >
-        {loading ? "Updating…" : "Update password"}
-      </button>
-    </form>
-  );
-}
-
-export default function SettingsPage() {
+export default function WorkspaceSettingsPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -149,12 +42,34 @@ export default function SettingsPage() {
     api
       .me()
       .then(({ user }) => setUser(user))
-      .catch(() => {
-        localStorage.removeItem("token");
-        router.replace("/login");
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          localStorage.removeItem("token");
+          router.replace("/login");
+          return;
+        }
+        setActionError("Couldn't load your settings. Try refreshing.");
       })
       .finally(() => setLoading(false));
   }, [router]);
+
+  function handleLogout() {
+    localStorage.removeItem("token");
+    router.push("/login");
+  }
+
+  async function handleDeleteAccount() {
+    setActionLoading(true);
+    try {
+      await api.deleteAccount();
+      localStorage.removeItem("token");
+      router.push("/signup");
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Couldn't delete your account. Try again.");
+      setConfirmAction(null);
+      setActionLoading(false);
+    }
+  }
 
   if (loading) {
     return (
@@ -168,42 +83,92 @@ export default function SettingsPage() {
     return null;
   }
 
+  const connectionsUsed = Number(user.connections_used ?? 0);
+  const maxConnections = user.max_connections ?? 0;
+  const listingsUsed = user.listings_used_this_month ?? 0;
+  const listingsIncluded = user.listings_included_per_month ?? 0;
+  const planName = user.plan_name ?? "Unassigned";
+
   return (
-    <main className="min-h-screen">
-      <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)]">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <Logo size={32} />
-            <span className="font-semibold text-[var(--color-ink)]">Liston</span>
+    <AppShell connectionsUsed={connectionsUsed} maxConnections={maxConnections} planName={planName}>
+      <div className="flex items-center justify-between mb-7">
+        <div>
+          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Settings</h1>
+          <p className="text-sm text-[var(--color-muted)] mt-0.5">Workspace preferences for connections and listings.</p>
+        </div>
+        <AccountMenu
+          email={user.email}
+          planName={planName}
+          avatarUrl={user.avatar_url}
+          onLogout={() => setConfirmAction("logout")}
+          onDeleteAccount={() => setConfirmAction("delete")}
+        />
+      </div>
+
+      {actionError && (
+        <div className="mb-4">
+          <Alert>{actionError}</Alert>
+        </div>
+      )}
+
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-base font-bold text-[var(--color-ink)]">Plan &amp; usage</h2>
+              <p className="text-sm text-[var(--color-muted)] mt-1">
+                You&apos;re on the <span className="font-semibold text-[var(--color-ink)]">{planName}</span> plan —{" "}
+                {connectionsUsed}/{maxConnections} connections and {listingsUsed}/{listingsIncluded} listings this
+                month.
+              </p>
+            </div>
+            <span className="flex-shrink-0 rounded-full bg-[var(--color-line)] px-3 py-1.5 text-xs font-medium text-[var(--color-muted)]">
+              Upgrade — coming soon
+            </span>
           </div>
-          <Link
-            href="/dashboard"
-            className="text-sm font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)] transition-colors"
-          >
-            Back to dashboard
-          </Link>
-        </div>
-      </header>
-
-      <div className="max-w-2xl mx-auto px-6 py-10 space-y-8">
-        <h1 className="text-2xl font-semibold text-[var(--color-ink)]">Account settings</h1>
-
-        <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-          <h2 className="text-base font-semibold text-[var(--color-ink)] mb-1">Change email</h2>
-          <p className="text-sm text-[var(--color-muted)] mb-5">
-            You will need to verify the new address before it is fully active.
-          </p>
-          <ChangeEmailForm currentEmail={user.email} />
         </div>
 
-        <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-          <h2 className="text-base font-semibold text-[var(--color-ink)] mb-1">Change password</h2>
-          <p className="text-sm text-[var(--color-muted)] mb-5">
-            Choose a strong password you are not using anywhere else.
+        <ComingSoonCard
+          title="Listing defaults"
+          description="Set a default minimum ROI threshold, pricing rules, and whether new listings publish automatically or wait for review."
+        />
+        <ComingSoonCard
+          title="Notifications"
+          description="Choose when Liston emails you — failed syncs, drafts ready for review, or connections needing re-authorization."
+        />
+        <ComingSoonCard
+          title="Sync schedule"
+          description="Control how often Liston checks tracked competitor listings for price and stock changes."
+        />
+
+        <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-paper)] px-6 py-4">
+          <p className="text-sm text-[var(--color-muted)]">
+            Looking to update your email, password, or profile photo?{" "}
+            <Link href="/account" className="font-medium text-[var(--color-accent)] hover:underline">
+              Go to account settings →
+            </Link>
           </p>
-          <ChangePasswordForm />
         </div>
       </div>
-    </main>
+
+      <ConfirmDialog
+        open={confirmAction === "logout"}
+        title="Log out?"
+        description="You'll need to log in again to access your dashboard."
+        confirmLabel="Log out"
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={handleLogout}
+      />
+      <ConfirmDialog
+        open={confirmAction === "delete"}
+        title="Delete your account?"
+        description="This permanently deletes your account, connections, and listing data. This action cannot be undone."
+        confirmLabel="Delete account"
+        danger
+        loading={actionLoading}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={handleDeleteAccount}
+      />
+    </AppShell>
   );
 }

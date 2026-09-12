@@ -2,15 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { Avatar } from "@/components/Avatar";
 
 interface AccountMenuProps {
   email: string;
   planName: string;
+  avatarUrl?: string | null;
   onLogout: () => void;
   onDeleteAccount: () => void;
 }
 
-export function AccountMenu({ email, planName, onLogout, onDeleteAccount }: AccountMenuProps) {
+export function AccountMenu({ email, planName, avatarUrl, onLogout, onDeleteAccount }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -30,27 +32,22 @@ export function AccountMenu({ email, planName, onLogout, onDeleteAccount }: Acco
         onClick={() => setOpen((v) => !v)}
         aria-label="Account menu"
         aria-expanded={open}
-        className="flex h-[34px] w-[34px] items-center justify-center rounded-full border-[1.5px] border-[var(--color-primary)] bg-[var(--color-primary)]/5 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/10 transition-colors"
+        className="rounded-full transition-opacity hover:opacity-80"
       >
-        <svg viewBox="0 0 24 24" fill="none" className="h-[17px] w-[17px]">
-          <circle cx="12" cy="8" r="3.6" stroke="currentColor" strokeWidth="1.8" />
-          <path
-            d="M4.5 19.5c1.4-3.4 4.3-5.2 7.5-5.2s6.1 1.8 7.5 5.2"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
-        </svg>
+        <Avatar avatarUrl={avatarUrl} size={34} />
       </button>
 
       {open && (
         <div className="absolute right-0 mt-2 w-56 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5 shadow-lg z-10">
-          <div className="px-3 py-2.5 mb-1 border-b border-[var(--color-line)]">
-            <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{email}</p>
-            <p className="text-xs text-[var(--color-muted)]">{planName} plan</p>
+          <div className="flex items-center gap-2.5 px-3 py-2.5 mb-1 border-b border-[var(--color-line)]">
+            <Avatar avatarUrl={avatarUrl} size={32} />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{email}</p>
+              <p className="text-xs text-[var(--color-muted)]">{planName} plan</p>
+            </div>
           </div>
           <Link
-            href="/settings"
+            href="/account"
             onClick={() => setOpen(false)}
             className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-[var(--color-ink)] hover:bg-[var(--color-paper)] transition-colors"
           >

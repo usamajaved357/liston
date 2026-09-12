@@ -14,7 +14,8 @@ function createApp() {
 
   app.use(helmet());
   app.use(cors());
-  app.use(express.json());
+  // 2mb accommodates base64 profile-photo uploads (src/modules/users) on top of normal JSON bodies
+  app.use(express.json({ limit: '2mb' }));
 
   // Lightweight request log — no bodies (may contain passwords/credentials)
   app.use((req, res, next) => {

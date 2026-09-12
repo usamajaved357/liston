@@ -42,6 +42,7 @@ export interface User {
   connections_used?: string;
   listings_used_this_month?: number;
   email_verified_at?: string | null;
+  avatar_url?: string | null;
   created_at: string;
 }
 
@@ -135,4 +136,12 @@ export const api = {
     }),
 
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: "DELETE" }),
+
+  updateAvatar: (avatarUrl: string) =>
+    request<{ message: string }>("/api/users/me/avatar", {
+      method: "PATCH",
+      body: JSON.stringify({ avatarUrl }),
+    }),
+
+  deleteAvatar: () => request<{ message: string }>("/api/users/me/avatar", { method: "DELETE" }),
 };

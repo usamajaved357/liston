@@ -4,7 +4,7 @@ async function findByIdWithPlan(userId) {
   const result = await query(
     `SELECT
        u.id, u.email, u.plan_id, u.listings_used_this_month, u.billing_cycle_start,
-       u.email_verified_at, u.created_at,
+       u.email_verified_at, u.created_at, u.avatar_url,
        p.name AS plan_name, p.max_connections, p.listings_included_per_month,
        (SELECT count(*) FROM connections c WHERE c.user_id = u.id) AS connections_used
      FROM users u
@@ -43,6 +43,10 @@ async function updatePasswordHash(userId, passwordHash) {
   await query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2', [passwordHash, userId]);
 }
 
+async function updateAvatar(userId, avatarUrl) {
+  await query('UPDATE users SET avatar_url = $1, updated_at = now() WHERE id = $2', [avatarUrl, userId]);
+}
+
 module.exports = {
   findByIdWithPlan,
   deleteById,
@@ -50,4 +54,5 @@ module.exports = {
   emailTakenByAnotherUser,
   updateEmail,
   updatePasswordHash,
+  updateAvatar,
 };

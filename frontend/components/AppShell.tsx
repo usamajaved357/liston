@@ -61,8 +61,8 @@ export function AppShell({ children, connectionsUsed, maxConnections, planName }
             }
           />
           <NavItem
-            href="/dashboard#connected-accounts"
-            active={false}
+            href="/connections"
+            active={pathname === "/connections"}
             label="Connections"
             icon={
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">

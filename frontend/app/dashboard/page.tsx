@@ -3,13 +3,12 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, Connection, Platform, User } from "@/lib/api";
+import { api, ApiError, Connection, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
 import { PlatformIcon } from "@/components/PlatformIcon";
-import { AddConnectionPanel } from "@/components/AddConnectionPanel";
 
 const STATUS_STYLES: Record<Connection["status"], string> = {
   active: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -90,24 +89,16 @@ export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
-  const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
   const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
-  const [pendingDeleteConnectionId, setPendingDeleteConnectionId] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
 
   async function loadAll() {
     try {
-      const [meData, connectionsData, platformsData] = await Promise.all([
-        api.me(),
-        api.listConnections(),
-        api.listPlatforms(),
-      ]);
+      const [meData, connectionsData] = await Promise.all([api.me(), api.listConnections()]);
       setUser(meData.user);
       setConnections(connectionsData.connections);
-      setPlatforms(platformsData.platforms);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         localStorage.removeItem("token");
@@ -135,6 +126,8 @@ export default function DashboardPage() {
     router.push("/login");
   }
 
+  const [actionLoading, setActionLoading] = useState(false);
+
   async function handleDeleteAccount() {
     setActionLoading(true);
     try {
@@ -155,20 +148,6 @@ export default function DashboardPage() {
       setResendState("sent");
     } catch {
       setResendState("idle");
-    }
-  }
-
-  async function handleDeleteConnection() {
-    if (!pendingDeleteConnectionId) return;
-    setActionLoading(true);
-    try {
-      await api.deleteConnection(pendingDeleteConnectionId);
-      setPendingDeleteConnectionId(null);
-      await loadAll();
-    } catch {
-      setError("Couldn't remove that connection. Try again.");
-    } finally {
-      setActionLoading(false);
     }
   }
 
@@ -204,6 +183,7 @@ export default function DashboardPage() {
         <AccountMenu
           email={user.email}
           planName={planName}
+          avatarUrl={user.avatar_url}
           onLogout={() => setConfirmAction("logout")}
           onDeleteAccount={() => setConfirmAction("delete")}
         />
@@ -254,16 +234,30 @@ export default function DashboardPage() {
         />
       </div>
 
-      <div id="connected-accounts" className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.03)] scroll-mt-6">
+      <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-line)]">
           <div>
             <span className="text-[15px] font-extrabold text-[var(--color-ink)] block">Connected accounts</span>
             <span className="text-xs text-[var(--color-muted)]">Sorted by marketplace</span>
           </div>
+          <Link
+            href="/connections"
+            className="text-sm font-medium text-[var(--color-accent)] hover:underline flex-shrink-0"
+          >
+            Manage →
+          </Link>
         </div>
 
         {sortedConnections.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-[var(--color-muted)]">No accounts connected yet.</p>
+          <div className="px-5 py-8 text-center">
+            <p className="text-sm text-[var(--color-muted)] mb-3">No accounts connected yet.</p>
+            <Link
+              href="/connections"
+              className="inline-flex rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-colors"
+            >
+              Connect an account
+            </Link>
+          </div>
         ) : (
           <ul>
             {sortedConnections.map((connection) => (
@@ -278,27 +272,15 @@ export default function DashboardPage() {
                     <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
                   </div>
                 </Link>
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  <span
-                    className={`rounded-full border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_STYLES[connection.status]}`}
-                  >
-                    {connection.status}
-                  </span>
-                  <button
-                    onClick={() => setPendingDeleteConnectionId(connection.id)}
-                    className="text-sm font-medium text-[var(--color-danger)] hover:underline"
-                  >
-                    Remove
-                  </button>
-                </div>
+                <span
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-bold capitalize flex-shrink-0 ${STATUS_STYLES[connection.status]}`}
+                >
+                  {connection.status}
+                </span>
               </li>
             ))}
           </ul>
         )}
-      </div>
-
-      <div className="mt-7">
-        <AddConnectionPanel platforms={platforms} atLimit={atLimit} maxConnections={maxConnections} />
       </div>
 
       <ConfirmDialog
@@ -318,16 +300,6 @@ export default function DashboardPage() {
         loading={actionLoading}
         onCancel={() => setConfirmAction(null)}
         onConfirm={handleDeleteAccount}
-      />
-      <ConfirmDialog
-        open={pendingDeleteConnectionId !== null}
-        title="Remove this connection?"
-        description="Liston will no longer be able to draft or publish listings to this account."
-        confirmLabel="Remove"
-        danger
-        loading={actionLoading}
-        onCancel={() => setPendingDeleteConnectionId(null)}
-        onConfirm={handleDeleteConnection}
       />
     </AppShell>
   );
