@@ -62,7 +62,9 @@ async function remove(req, res, next) {
   }
 }
 
-const LIST_ORDER_RANGES = ['today', '7d', '30d', '90d'];
+const LIST_ORDER_RANGES = ['7d', '30d', '90d'];
+const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'cancelled'];
+const ORDER_PAGE_SIZES = [25, 50, 100, 200];
 const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month', 'custom', 'all_time'];
 
 async function getListings(req, res, next) {
@@ -87,26 +89,26 @@ async function getListings(req, res, next) {
 
 async function getOrders(req, res, next) {
   try {
-    const range = LIST_ORDER_RANGES.includes(req.query.range) ? req.query.range : '7d';
-    const pageNumber = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const range = LIST_ORDER_RANGES.includes(req.query.range) ? req.query.range : '90d';
+    const status = ORDER_STATUS_FILTERS.includes(req.query.status) ? req.query.status : 'all';
+    const perPage = ORDER_PAGE_SIZES.includes(Number(req.query.perPage)) ? Number(req.query.perPage) : 25;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      const [createTimeFrom, createTimeTo] = ebayService.resolveRangeWindow(range);
-      return ebayService.listOrders(credentials, {
-        createTimeFrom: createTimeFrom.toISOString(),
-        createTimeTo: createTimeTo.toISOString(),
-        pageNumber,
-        entriesPerPage: 50,
-      });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage });
     });
 
     res.status(200).json({
       orders: result.orders,
+      counts: result.counts,
       totalEntries: result.totalEntries,
       totalPages: result.totalPages,
+      page: result.page,
+      perPage: result.perPage,
     });
   } catch (err) {
     next(err);

@@ -116,19 +116,70 @@ async function getUnsoldListings(accessToken, { pageNumber = 1, entriesPerPage =
   };
 }
 
+function mapLineItem(transaction) {
+  const item = transaction.Item || {};
+  const tracking = transaction.ShippingDetails?.ShipmentTrackingDetails;
+  return {
+    itemId: item.ItemID ? String(item.ItemID) : null,
+    title: item.Title || null,
+    quantityPurchased: Number(transaction.QuantityPurchased ?? 1),
+    price: money(transaction.TransactionPrice),
+    variation: toArray(transaction.Variation?.VariationSpecifics?.NameValueList).map((nv) => ({
+      name: nv.Name,
+      value: typeof nv.Value === 'object' ? nv.Value['#text'] : nv.Value,
+    })),
+    trackingCarrier: tracking?.ShippingCarrierUsed || null,
+    trackingNumber: tracking?.ShipmentTrackingNumber || null,
+    handleByTime: transaction.ShippingServiceSelected?.ShippingPackageInfo?.HandleByTime || null,
+  };
+}
+
 function mapOrder(order) {
   const transactions = toArray(order.TransactionArray?.Transaction);
   const firstItem = transactions[0]?.Item;
   const buyer = transactions[0]?.Buyer;
+  const lineItems = transactions.map(mapLineItem);
+  const dispatchByTime = lineItems.map((li) => li.handleByTime).filter(Boolean).sort()[0] || null;
+
   return {
     orderId: order.OrderID,
     status: order.OrderStatus,
     createdAt: order.CreatedTime,
     total: money(order.Total),
+    subtotal: money(order.Subtotal),
     buyerName: [buyer?.UserFirstName, buyer?.UserLastName].filter(Boolean).join(' ') || null,
+    buyerUserId: order.BuyerUserID || null,
     itemTitle: firstItem?.Title || null,
     itemId: firstItem?.ItemID ? String(firstItem.ItemID) : null,
     itemCount: transactions.length,
+    checkoutStatus: order.CheckoutStatus?.Status || null,
+    paidTime: order.PaidTime || null,
+    shippedTime: order.ShippedTime || null,
+    cancelStatus: order.CancelStatus || null,
+    dispatchByTime,
+    lineItems,
+  };
+}
+
+// Used to enrich an order's line items with an image + live quantity —
+// GetOrders itself carries neither. OutputSelector trims the response to
+// just what we need.
+async function getItemSummary(accessToken, itemId) {
+  const body =
+    `<ItemID>${itemId}</ItemID>` +
+    `<OutputSelector>Item.PictureDetails</OutputSelector>` +
+    `<OutputSelector>Item.Quantity</OutputSelector>` +
+    `<OutputSelector>Item.QuantityAvailable</OutputSelector>` +
+    `<OutputSelector>Item.ListingDetails.ViewItemURL</OutputSelector>`;
+  const res = await tradingRequest(accessToken, 'GetItem', body);
+  const item = res.Item || {};
+  const pictures = toArray(item.PictureDetails?.PictureURL);
+  return {
+    itemId: String(itemId),
+    imageUrl: pictures[0] || item.PictureDetails?.GalleryURL || null,
+    quantity: item.Quantity !== undefined ? Number(item.Quantity) : null,
+    quantityAvailable: item.QuantityAvailable !== undefined ? Number(item.QuantityAvailable) : null,
+    viewItemUrl: item.ListingDetails?.ViewItemURL || null,
   };
 }
 
@@ -147,4 +198,4 @@ async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber
   };
 }
 
-module.exports = { EbayTradingError, getActiveListings, getUnsoldListings, getOrders };
+module.exports = { EbayTradingError, getActiveListings, getUnsoldListings, getOrders, getItemSummary };

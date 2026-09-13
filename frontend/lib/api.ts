@@ -90,19 +90,51 @@ export interface Listing {
   endTime: string | null;
 }
 
+export interface OrderLineItem {
+  itemId: string | null;
+  title: string | null;
+  quantityPurchased: number;
+  price: Money | null;
+  variation: { name: string; value: string }[];
+  trackingCarrier: string | null;
+  trackingNumber: string | null;
+  handleByTime: string | null;
+  imageUrl: string | null;
+  quantityAvailable: number | null;
+  viewItemUrl: string | null;
+}
+
 export interface Order {
   orderId: string;
   status: string;
   createdAt: string;
   total: Money | null;
+  subtotal: Money | null;
   buyerName: string | null;
+  buyerUserId: string | null;
   itemTitle: string | null;
   itemId: string | null;
   itemCount: number;
+  checkoutStatus: string | null;
+  paidTime: string | null;
+  shippedTime: string | null;
+  cancelStatus: string | null;
+  dispatchByTime: string | null;
+  lineItems: OrderLineItem[];
+  derivedStatus?: OrderStatusFilter;
+}
+
+export interface OrderCounts {
+  all: number;
+  awaiting_payment: number;
+  awaiting_dispatch: number;
+  dispatched: number;
+  cancelled: number;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
-export type OrderRange = "today" | "7d" | "30d" | "90d";
+export type OrderRange = "7d" | "30d" | "90d";
+export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "cancelled";
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
 
 export const api = {
@@ -185,10 +217,26 @@ export const api = {
       `/api/connections/${id}/listings?status=${status}&page=${page}`
     ),
 
-  getConnectionOrders: (id: string, range: OrderRange, page = 1) =>
-    request<{ orders: Order[]; totalEntries: number; totalPages: number }>(
-      `/api/connections/${id}/orders?range=${range}&page=${page}`
-    ),
+  getConnectionOrders: (
+    id: string,
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; page?: number; perPage?: number }
+  ) => {
+    const query = new URLSearchParams({
+      range: params.range,
+      status: params.status,
+      page: String(params.page ?? 1),
+      perPage: String(params.perPage ?? 25),
+    });
+    if (params.search) query.set("search", params.search);
+    return request<{
+      orders: Order[];
+      counts: OrderCounts;
+      totalEntries: number;
+      totalPages: number;
+      page: number;
+      perPage: number;
+    }>(`/api/connections/${id}/orders?${query.toString()}`);
+  },
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });

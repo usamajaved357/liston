@@ -291,6 +291,140 @@ async function sumOrdersInWindow(accessToken, createTimeFrom, createTimeTo) {
   return { amount, count, currency };
 }
 
+// Fetches every order in a <=90-day window (paging through all of them) as
+// full mapped objects — used by the Orders page, which needs to classify,
+// search and paginate itself since eBay's OrderStatus filter doesn't cover
+// the payment/dispatch distinctions the UI shows.
+async function fetchAllOrdersInWindow(accessToken, createTimeFrom, createTimeTo) {
+  let pageNumber = 1;
+  const all = [];
+  for (;;) {
+    const { orders, totalPages } = await ebayTrading.getOrders(accessToken, {
+      createTimeFrom,
+      createTimeTo,
+      pageNumber,
+      entriesPerPage: MAX_ORDER_PAGE_SIZE,
+    });
+    all.push(...orders);
+    if (orders.length === 0 || pageNumber >= totalPages) break;
+    pageNumber += 1;
+  }
+  return all;
+}
+
+// Switching status tab, page, or search on the Orders page all re-derive
+// from the same underlying order set for a given (connection, range) — with
+// no cache, each of those was a full eBay refetch (2+ GetOrders calls plus
+// up to `perPage` GetItem calls), which is what made the UI feel like it
+// hung. These are process-local, short-lived caches — fine for a
+// single-instance deployment; would need a shared store (Redis) once this
+// runs on more than one process.
+const ordersWindowCache = new Map(); // `${connectionId}:${range}` -> { fetchedAt, orders }
+const ORDERS_CACHE_TTL_MS = 60 * 1000;
+
+const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
+const ITEM_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
+
+async function getOrdersWindowCached(connectionId, accessToken, range, start, end) {
+  const key = `${connectionId}:${range}`;
+  const cached = ordersWindowCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < ORDERS_CACHE_TTL_MS) {
+    return cached.orders;
+  }
+  const orders = await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString());
+  ordersWindowCache.set(key, { fetchedAt: Date.now(), orders });
+  return orders;
+}
+
+async function getItemSummaryCached(accessToken, itemId) {
+  const cached = itemSummaryCache.get(itemId);
+  if (cached && Date.now() - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) {
+    return cached.summary;
+  }
+  const summary = await ebayTrading.getItemSummary(accessToken, itemId).catch(() => null);
+  if (summary) itemSummaryCache.set(itemId, { fetchedAt: Date.now(), summary });
+  return summary;
+}
+
+// Classifies an order the way eBay's Seller Hub visually groups them —
+// Trading API has no single field for this, so it's derived from payment
+// and shipping state actually present on the order.
+function classifyOrderStatus(order) {
+  if (order.cancelStatus && order.cancelStatus !== 'NotApplicable') return 'cancelled';
+  if (order.status === 'Cancelled') return 'cancelled';
+  if (order.checkoutStatus !== 'Complete') return 'awaiting_payment';
+  if (!order.shippedTime) return 'awaiting_dispatch';
+  return 'dispatched';
+}
+
+const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatched', 'cancelled'];
+
+/**
+ * The Orders page's data source: fetches every order in the range, tags each
+ * with a derived status, filters by status/search text, sorts newest first,
+ * and paginates in-memory (eBay's own pagination doesn't support these
+ * filters) — then enriches only the returned page's line items with a
+ * picture + live quantity from GetItem, so we're not fetching images for
+ * orders the page never shows.
+ */
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25 }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const [start, end] = resolveRangeWindow(range);
+  const rawOrders = await getOrdersWindowCached(connectionId, accessToken, range, start, end);
+
+  const tagged = rawOrders.map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order) }));
+
+  const counts = { all: tagged.length };
+  for (const key of ORDER_STATUS_FILTERS) {
+    counts[key] = tagged.filter((o) => o.derivedStatus === key).length;
+  }
+
+  let filtered = status && status !== 'all' ? tagged.filter((o) => o.derivedStatus === status) : tagged;
+
+  if (search && search.trim()) {
+    const needle = search.trim().toLowerCase();
+    filtered = filtered.filter(
+      (o) =>
+        o.orderId.toLowerCase().includes(needle) ||
+        o.lineItems.some((li) => (li.title || '').toLowerCase().includes(needle))
+    );
+  }
+
+  filtered.sort((a, b) => new Date(b.paidTime || b.createdAt) - new Date(a.paidTime || a.createdAt));
+
+  const totalEntries = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalEntries / perPage));
+  const pageOrders = filtered.slice((page - 1) * perPage, page * perPage);
+
+  const uniqueItemIds = [...new Set(pageOrders.flatMap((o) => o.lineItems.map((li) => li.itemId).filter(Boolean)))];
+  const summaries = await Promise.all(uniqueItemIds.map((itemId) => getItemSummaryCached(accessToken, itemId)));
+  const summaryByItemId = new Map(summaries.filter(Boolean).map((s) => [s.itemId, s]));
+
+  const enrichedOrders = pageOrders.map((order) => ({
+    ...order,
+    lineItems: order.lineItems.map((li) => {
+      const summary = li.itemId ? summaryByItemId.get(li.itemId) : null;
+      return {
+        ...li,
+        imageUrl: summary?.imageUrl || null,
+        quantityAvailable: summary?.quantityAvailable ?? null,
+        viewItemUrl: summary?.viewItemUrl || null,
+      };
+    }),
+  }));
+
+  return {
+    orders: enrichedOrders,
+    counts,
+    totalEntries,
+    totalPages,
+    page,
+    perPage,
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
 // eBay's GetOrders hard-rejects any CreateTimeFrom older than 90 days —
 // there is no pagination or chunking trick around it, confirmed against the
 // live API ("Orders older than 90 days cannot be retrieved"). So 'all_time'
@@ -324,6 +458,7 @@ module.exports = {
   listActiveListings,
   listUnsoldListings,
   listOrders,
+  listOrdersDetailed,
   getEarningsSummary,
   resolveRangeWindow,
 };

@@ -55,7 +55,7 @@ test('getActiveListings maps items and pagination out of the Trading API XML', a
   });
 });
 
-test('getOrders maps buyer name and order total', async () => {
+test('getOrders maps buyer, payment/dispatch state, and line item details', async () => {
   mock.method(global, 'fetch', async () =>
     fakeResponse(`<?xml version="1.0"?>
       <GetOrdersResponse xmlns="urn:ebay:apis:eBLBaseComponents">
@@ -67,10 +67,21 @@ test('getOrders maps buyer name and order total', async () => {
             <OrderStatus>Completed</OrderStatus>
             <CreatedTime>2026-01-02T00:00:00.000Z</CreatedTime>
             <Total currencyID="GBP">12.50</Total>
+            <Subtotal currencyID="GBP">12.50</Subtotal>
+            <BuyerUserID>janedoe123</BuyerUserID>
+            <CheckoutStatus><Status>Complete</Status></CheckoutStatus>
+            <PaidTime>2026-01-02T00:05:00.000Z</PaidTime>
+            <ShippedTime>2026-01-03T09:00:00.000Z</ShippedTime>
+            <CancelStatus>NotApplicable</CancelStatus>
             <TransactionArray>
               <Transaction>
                 <Buyer><UserFirstName>Jane</UserFirstName><UserLastName>Doe</UserLastName></Buyer>
                 <Item><ItemID>456</ItemID><Title>Widget</Title></Item>
+                <QuantityPurchased>2</QuantityPurchased>
+                <TransactionPrice currencyID="GBP">6.25</TransactionPrice>
+                <Variation><VariationSpecifics><NameValueList><Name>Color</Name><Value>Blue</Value></NameValueList></VariationSpecifics></Variation>
+                <ShippingDetails><ShipmentTrackingDetails><ShippingCarrierUsed>Evri</ShippingCarrierUsed><ShipmentTrackingNumber>TRACK123</ShipmentTrackingNumber></ShipmentTrackingDetails></ShippingDetails>
+                <ShippingServiceSelected><ShippingPackageInfo><HandleByTime>2026-01-02T23:59:59.000Z</HandleByTime></ShippingPackageInfo></ShippingServiceSelected>
               </Transaction>
             </TransactionArray>
           </Order>
@@ -89,10 +100,29 @@ test('getOrders maps buyer name and order total', async () => {
     status: 'Completed',
     createdAt: '2026-01-02T00:00:00.000Z',
     total: { amount: 12.5, currency: 'GBP' },
+    subtotal: { amount: 12.5, currency: 'GBP' },
     buyerName: 'Jane Doe',
+    buyerUserId: 'janedoe123',
     itemTitle: 'Widget',
     itemId: '456',
     itemCount: 1,
+    checkoutStatus: 'Complete',
+    paidTime: '2026-01-02T00:05:00.000Z',
+    shippedTime: '2026-01-03T09:00:00.000Z',
+    cancelStatus: 'NotApplicable',
+    dispatchByTime: '2026-01-02T23:59:59.000Z',
+    lineItems: [
+      {
+        itemId: '456',
+        title: 'Widget',
+        quantityPurchased: 2,
+        price: { amount: 6.25, currency: 'GBP' },
+        variation: [{ name: 'Color', value: 'Blue' }],
+        trackingCarrier: 'Evri',
+        trackingNumber: 'TRACK123',
+        handleByTime: '2026-01-02T23:59:59.000Z',
+      },
+    ],
   });
 });
 

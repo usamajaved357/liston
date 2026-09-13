@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const ebayClient = require('../../src/modules/ebay/ebay.client');
 const ebayOauth = require('../../src/modules/ebay/ebay.oauth');
+const ebayTrading = require('../../src/modules/ebay/ebay.trading');
 const ebayService = require('../../src/modules/ebay/ebay.service');
 
 function freshCredentials(overrides = {}) {
@@ -137,4 +138,91 @@ test('publishDraft calls publishOffer and returns the external listing id', asyn
   const result = await ebayService.publishDraft(freshCredentials(), 'offer-1');
   assert.strictEqual(result.externalProductId, 'listing-999');
   assert.strictEqual(result.status, 'published');
+});
+
+function makeOrder(overrides = {}) {
+  return {
+    orderId: 'ORD-1',
+    status: 'Completed',
+    createdAt: '2026-01-05T00:00:00.000Z',
+    total: { amount: 10, currency: 'GBP' },
+    subtotal: { amount: 10, currency: 'GBP' },
+    buyerName: 'Jane Doe',
+    buyerUserId: 'janedoe',
+    itemTitle: 'Widget',
+    itemId: '111',
+    itemCount: 1,
+    checkoutStatus: 'Complete',
+    paidTime: '2026-01-05T00:05:00.000Z',
+    shippedTime: '2026-01-06T00:00:00.000Z',
+    cancelStatus: 'NotApplicable',
+    dispatchByTime: null,
+    lineItems: [{ itemId: '111', title: 'Widget', quantityPurchased: 1, price: { amount: 10, currency: 'GBP' }, variation: [], trackingCarrier: null, trackingNumber: null, handleByTime: null }],
+    ...overrides,
+  };
+}
+
+test('listOrdersDetailed classifies orders by payment/dispatch state and reports counts for the whole range', async () => {
+  const awaitingPayment = makeOrder({ orderId: 'ORD-AP', checkoutStatus: 'Incomplete', shippedTime: null });
+  const awaitingDispatch = makeOrder({ orderId: 'ORD-AD', shippedTime: null });
+  const dispatched = makeOrder({ orderId: 'ORD-D' });
+  const cancelled = makeOrder({ orderId: 'ORD-C', cancelStatus: 'CancelClosed' });
+
+  mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [awaitingPayment, awaitingDispatch, dispatched, cancelled],
+    totalEntries: 4,
+    totalPages: 1,
+  }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({
+    itemId,
+    imageUrl: 'https://example.com/pic.jpg',
+    quantity: 5,
+    quantityAvailable: 3,
+  }));
+
+  const result = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-1', range: '30d', status: 'all', search: '', page: 1, perPage: 25 });
+
+  assert.deepStrictEqual(result.counts, { all: 4, awaiting_payment: 1, awaiting_dispatch: 1, dispatched: 1, cancelled: 1 });
+  assert.strictEqual(result.totalEntries, 4);
+  assert.strictEqual(result.orders[0].lineItems[0].imageUrl, 'https://example.com/pic.jpg');
+});
+
+test('listOrdersDetailed filters by status and by search text (order id or item title)', async () => {
+  const awaitingDispatch = makeOrder({ orderId: 'ORD-AD', shippedTime: null, itemTitle: 'Blue Widget', lineItems: [{ itemId: '111', title: 'Blue Widget', quantityPurchased: 1, price: null, variation: [], trackingCarrier: null, trackingNumber: null, handleByTime: null }] });
+  const dispatched = makeOrder({ orderId: 'ORD-D', itemTitle: 'Red Gadget', lineItems: [{ itemId: '222', title: 'Red Gadget', quantityPurchased: 1, price: null, variation: [], trackingCarrier: null, trackingNumber: null, handleByTime: null }] });
+
+  mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [awaitingDispatch, dispatched],
+    totalEntries: 2,
+    totalPages: 1,
+  }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+
+  const byStatus = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-2', range: '30d', status: 'dispatched', search: '', page: 1, perPage: 25 });
+  assert.strictEqual(byStatus.orders.length, 1);
+  assert.strictEqual(byStatus.orders[0].orderId, 'ORD-D');
+
+  const byOrderId = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-2', range: '30d', status: 'all', search: 'ord-ad', page: 1, perPage: 25 });
+  assert.strictEqual(byOrderId.orders.length, 1);
+  assert.strictEqual(byOrderId.orders[0].orderId, 'ORD-AD');
+
+  const byTitle = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-2', range: '30d', status: 'all', search: 'gadget', page: 1, perPage: 25 });
+  assert.strictEqual(byTitle.orders.length, 1);
+  assert.strictEqual(byTitle.orders[0].orderId, 'ORD-D');
+});
+
+test('listOrdersDetailed caches the fetched order window per connection+range, so switching status/search/page does not re-hit eBay', async () => {
+  const getOrdersMock = mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [makeOrder({ orderId: 'ORD-CACHE' })],
+    totalEntries: 1,
+    totalPages: 1,
+  }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+
+  const opts = { connectionId: 'test-conn-cache', range: '30d', status: 'all', search: '', page: 1, perPage: 25 };
+  await ebayService.listOrdersDetailed(freshCredentials(), opts);
+  await ebayService.listOrdersDetailed(freshCredentials(), { ...opts, status: 'dispatched' });
+  await ebayService.listOrdersDetailed(freshCredentials(), { ...opts, search: 'widget' });
+
+  assert.strictEqual(getOrdersMock.mock.calls.length, 1);
 });
