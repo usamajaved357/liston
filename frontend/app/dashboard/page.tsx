@@ -240,12 +240,6 @@ export default function DashboardPage() {
             <span className="text-[15px] font-extrabold text-[var(--color-ink)] block">Connected accounts</span>
             <span className="text-xs text-[var(--color-muted)]">Sorted by marketplace</span>
           </div>
-          <Link
-            href="/connections"
-            className="text-sm font-medium text-[var(--color-accent)] hover:underline flex-shrink-0"
-          >
-            Manage →
-          </Link>
         </div>
 
         {sortedConnections.length === 0 ? (

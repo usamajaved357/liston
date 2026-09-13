@@ -2,150 +2,212 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
-import { api, ApiError, Connection } from "@/lib/api";
-import { PlatformIcon } from "@/components/PlatformIcon";
+import { api, ApiError, EarningsRange, Money } from "@/lib/api";
+import { useConnection } from "@/lib/useConnection";
+import { formatMoney } from "@/lib/format";
+import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { Logo } from "@/components/Logo";
 
-const STATUS_STYLES: Record<Connection["status"], string> = {
+const STATUS_STYLES: Record<string, string> = {
   active: "bg-emerald-50 text-emerald-700 border-emerald-200",
   expired: "bg-amber-50 text-amber-800 border-amber-200",
   error: "bg-red-50 text-red-700 border-red-200",
   suspended: "bg-red-50 text-red-700 border-red-200",
 };
 
-function ComingSoonCard({ title, description }: { title: string; description: string }) {
+const RANGE_LABELS: Record<EarningsRange, string> = {
+  today: "Today",
+  "7d": "7 days",
+  "30d": "30 days",
+  "90d": "90 days",
+  this_month: "This month",
+  last_month: "Last month",
+  custom: "Custom",
+  all_time: "All time",
+};
+
+const RANGE_ORDER: EarningsRange[] = ["today", "7d", "30d", "this_month", "last_month", "custom", "all_time"];
+
+function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-      <div className="flex items-center justify-between mb-1">
-        <h2 className="text-base font-semibold text-[var(--color-ink)]">{title}</h2>
-        <span className="rounded-full bg-[var(--color-line)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-muted)]">
-          Coming soon
-        </span>
+    <button
+      onClick={onClick}
+      className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+        active
+          ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
+          : "border-[var(--color-line)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50 hover:text-[var(--color-ink)]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function EarningsWidget({ connectionId }: { connectionId: string }) {
+  const [range, setRange] = useState<EarningsRange>("7d");
+  const [customFrom, setCustomFrom] = useState(todayIso());
+  const [customTo, setCustomTo] = useState(todayIso());
+  const [earnings, setEarnings] = useState<Money>({ amount: 0 });
+  const [orderCount, setOrderCount] = useState(0);
+  const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    api
+      .getConnectionEarnings(connectionId, range, range === "custom" ? { from: customFrom, to: customTo } : undefined)
+      .then((data) => {
+        setEarnings(data.earnings);
+        setOrderCount(data.orderCount);
+        setTruncated(data.truncated);
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load earnings from eBay."))
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, range, range === "custom" ? customFrom : null, range === "custom" ? customTo : null]);
+
+  return (
+    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <h2 className="text-base font-bold text-[var(--color-ink)]">Earnings</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          {RANGE_ORDER.map((key) => (
+            <FilterPill key={key} active={range === key} onClick={() => setRange(key)}>
+              {RANGE_LABELS[key]}
+            </FilterPill>
+          ))}
+        </div>
       </div>
-      <div className="mt-4 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
-        <p className="text-sm text-[var(--color-muted)]">{description}</p>
-      </div>
+
+      {range === "custom" && (
+        <div className="flex items-center gap-3 mb-5">
+          <input
+            type="date"
+            value={customFrom}
+            max={customTo}
+            onChange={(e) => setCustomFrom(e.target.value)}
+            className="rounded-md border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink)]"
+          />
+          <span className="text-sm text-[var(--color-muted)]">to</span>
+          <input
+            type="date"
+            value={customTo}
+            min={customFrom}
+            max={todayIso()}
+            onChange={(e) => setCustomTo(e.target.value)}
+            className="rounded-md border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink)]"
+          />
+        </div>
+      )}
+
+      {error ? (
+        <Alert>{error}</Alert>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              {RANGE_LABELS[range]} revenue
+            </span>
+            <p className="mt-1.5 text-3xl font-extrabold text-[var(--color-ink)]">
+              {loading ? "…" : formatMoney(earnings)}
+            </p>
+          </div>
+          <div>
+            <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">Orders</span>
+            <p className="mt-1.5 text-3xl font-extrabold text-[var(--color-ink)]">{loading ? "…" : orderCount}</p>
+          </div>
+        </div>
+      )}
+
+      {truncated && !error && (
+        <p className="mt-4 text-xs text-[var(--color-muted)]">
+          eBay only provides order history for the last 90 days — this is the most "all time" can show.
+        </p>
+      )}
     </div>
   );
 }
 
-export default function AccountDetailPage() {
+export default function AccountOverviewPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
-  const [connection, setConnection] = useState<Connection | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { connection, loading, error } = useConnection(params.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
-
-  useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-
-    api
-      .getConnection(params.id)
-      .then((data) => setConnection(data.connection))
-      .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) {
-          localStorage.removeItem("token");
-          router.replace("/login");
-          return;
-        }
-        if (err instanceof ApiError && err.status === 404) {
-          setError("This account connection doesn't exist, or isn't yours.");
-          return;
-        }
-        setError("Couldn't load this account.");
-      })
-      .finally(() => setLoading(false));
-  }, [params.id, router]);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   async function handleDelete() {
     setDeleting(true);
     try {
       await api.deleteConnection(params.id);
-      router.push("/dashboard");
+      router.push("/connections");
     } catch {
-      setError("Couldn't remove this connection. Try again.");
+      setDeleteError("Couldn't remove this connection. Try again.");
       setDeleting(false);
       setConfirmDelete(false);
     }
   }
 
+  if (loading) {
+    return (
+      <main className="min-h-screen flex items-center justify-center">
+        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
+      </main>
+    );
+  }
+
+  if (error || !connection) {
+    return (
+      <main className="min-h-screen flex items-center justify-center px-6">
+        <Alert>{error || "This account connection doesn't exist, or isn't yours."}</Alert>
+      </main>
+    );
+  }
+
   return (
-    <main className="min-h-screen">
-      <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)]">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <Logo size={32} />
-            <span className="font-semibold text-[var(--color-ink)]">Liston</span>
-          </div>
-          <Link
-            href="/dashboard"
-            className="text-sm font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)] transition-colors"
-          >
-            Back to dashboard
-          </Link>
+    <AccountShell
+      connectionId={connection.id}
+      label={connection.label}
+      platformKey={connection.platform_key}
+      platformName={connection.platform_name}
+      status={connection.status}
+    >
+      <div className="flex items-center justify-between mb-7">
+        <div>
+          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
+          <p className="text-sm text-[var(--color-muted)] mt-0.5">{connection.label} · {connection.platform_name}</p>
         </div>
-      </header>
-
-      <div className="max-w-4xl mx-auto px-6 py-10 space-y-6">
-        {loading ? (
-          <p className="text-sm text-[var(--color-muted)]">Loading…</p>
-        ) : error ? (
-          <Alert>{error}</Alert>
-        ) : connection ? (
-          <>
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-4">
-                <PlatformIcon platformKey={connection.platform_key} size={48} />
-                <div>
-                  <h1 className="text-2xl font-semibold text-[var(--color-ink)]">{connection.label}</h1>
-                  <p className="text-sm text-[var(--color-muted)]">{connection.platform_name}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span
-                  className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${STATUS_STYLES[connection.status]}`}
-                >
-                  {connection.status}
-                </span>
-                <button
-                  onClick={() => setConfirmDelete(true)}
-                  className="text-sm font-medium text-[var(--color-danger)] hover:underline"
-                >
-                  Remove connection
-                </button>
-              </div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <ComingSoonCard
-                title="Active listings"
-                description="Live listings on this account will show up here once the listings sync is built."
-              />
-              <ComingSoonCard
-                title="Drafted listings"
-                description="Listings Liston has drafted for review, before you publish them, will show up here."
-              />
-              <ComingSoonCard
-                title="Inbox"
-                description="Buyer messages for this account will show up here once messaging is built."
-              />
-              <ComingSoonCard
-                title="Campaigns"
-                description="Advertising / promoted listings for this account, if the platform supports it."
-              />
-            </div>
-          </>
-        ) : null}
+        <div className="flex items-center gap-3">
+          <span
+            className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${
+              STATUS_STYLES[connection.status] || STATUS_STYLES.error
+            }`}
+          >
+            {connection.status}
+          </span>
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-sm font-medium text-[var(--color-danger)] hover:underline"
+          >
+            Remove connection
+          </button>
+        </div>
       </div>
+
+      {deleteError && (
+        <div className="mb-4">
+          <Alert>{deleteError}</Alert>
+        </div>
+      )}
+
+      <EarningsWidget connectionId={connection.id} />
 
       <ConfirmDialog
         open={confirmDelete}
@@ -157,6 +219,6 @@ export default function AccountDetailPage() {
         onCancel={() => setConfirmDelete(false)}
         onConfirm={handleDelete}
       />
-    </main>
+    </AccountShell>
   );
 }

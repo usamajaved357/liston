@@ -70,6 +70,41 @@ export interface Platform {
   connectable: boolean;
 }
 
+export interface Money {
+  amount: number;
+  currency?: string;
+}
+
+export interface Listing {
+  itemId: string;
+  sku: string | null;
+  title: string;
+  price: Money | null;
+  convertedPrice: Money | null;
+  quantity: number;
+  quantityAvailable: number;
+  quantitySold: number;
+  imageUrl: string | null;
+  viewItemUrl: string | null;
+  startTime: string | null;
+  endTime: string | null;
+}
+
+export interface Order {
+  orderId: string;
+  status: string;
+  createdAt: string;
+  total: Money | null;
+  buyerName: string | null;
+  itemTitle: string | null;
+  itemId: string | null;
+  itemCount: number;
+}
+
+export type ListingStatusFilter = "active" | "inactive";
+export type OrderRange = "today" | "7d" | "30d" | "90d";
+export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
+
 export const api = {
   signup: (email: string, password: string) =>
     request<AuthResponse>("/api/auth/signup", {
@@ -144,4 +179,25 @@ export const api = {
     }),
 
   deleteAvatar: () => request<{ message: string }>("/api/users/me/avatar", { method: "DELETE" }),
+
+  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1) =>
+    request<{ items: Listing[]; totalEntries: number; totalPages: number }>(
+      `/api/connections/${id}/listings?status=${status}&page=${page}`
+    ),
+
+  getConnectionOrders: (id: string, range: OrderRange, page = 1) =>
+    request<{ orders: Order[]; totalEntries: number; totalPages: number }>(
+      `/api/connections/${id}/orders?range=${range}&page=${page}`
+    ),
+
+  getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
+    const params = new URLSearchParams({ range });
+    if (range === "custom" && custom) {
+      params.set("from", custom.from);
+      params.set("to", custom.to);
+    }
+    return request<{ earnings: Money; orderCount: number; truncated: boolean }>(
+      `/api/connections/${id}/earnings?${params.toString()}`
+    );
+  },
 };

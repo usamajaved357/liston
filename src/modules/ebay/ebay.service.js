@@ -1,5 +1,6 @@
 const ebayClient = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
+const ebayTrading = require('./ebay.trading');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -185,6 +186,133 @@ async function withdrawDraft(credentials, offerId) {
   return { status: 'withdrawn', credentialsChanged, credentials: refreshedCredentials };
 }
 
+// Active + ended listings read from the seller's real eBay catalog (Trading
+// API) — this sees everything on the account, not just what Liston created.
+async function listActiveListings(credentials, opts) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.getActiveListings(accessToken, opts);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
+async function listUnsoldListings(credentials, opts) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.getUnsoldListings(accessToken, opts);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
+async function listOrders(credentials, opts) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.getOrders(accessToken, opts);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_WINDOW_DAYS = 90; // eBay's own cap on CreateTimeFrom/CreateTimeTo span per GetOrders call
+const MAX_ORDER_PAGE_SIZE = 200; // eBay's max EntriesPerPage for GetOrders
+
+function startOfUtcDay(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function startOfUtcMonth(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function endOfUtcMonth(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - 1);
+}
+
+// Resolves a named range (or explicit custom from/to) to a concrete window.
+// Returns null for 'all_time', which has no single window — see
+// getEarningsSummary, which walks backwards in chunks instead.
+function resolveRangeWindow(range, from, to) {
+  const now = new Date();
+  switch (range) {
+    case 'today':
+      return [startOfUtcDay(now), now];
+    case '7d':
+      return [new Date(now.getTime() - 7 * DAY_MS), now];
+    case '30d':
+      return [new Date(now.getTime() - 30 * DAY_MS), now];
+    case '90d':
+      return [new Date(now.getTime() - 90 * DAY_MS), now];
+    case 'this_month':
+      return [startOfUtcMonth(now), now];
+    case 'last_month': {
+      const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+      return [startOfUtcMonth(lastMonth), endOfUtcMonth(lastMonth)];
+    }
+    case 'custom': {
+      if (!from || !to) {
+        throw new EbayError('A custom range needs both a from and to date', 400);
+      }
+      const start = new Date(from);
+      const end = new Date(to);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+        throw new EbayError('Invalid custom date range', 400);
+      }
+      if (end.getTime() - start.getTime() > MAX_WINDOW_DAYS * DAY_MS) {
+        throw new EbayError('Custom ranges can span at most 90 days', 400);
+      }
+      return [start, end];
+    }
+    default:
+      return [new Date(now.getTime() - 7 * DAY_MS), now];
+  }
+}
+
+// Sums every order's total within one <=90-day window, paging through all
+// results rather than just the first page — a single page undercounts
+// earnings whenever a window has more orders than one page holds.
+async function sumOrdersInWindow(accessToken, createTimeFrom, createTimeTo) {
+  let pageNumber = 1;
+  let amount = 0;
+  let count = 0;
+  let currency = null;
+
+  for (;;) {
+    const { orders, totalPages } = await ebayTrading.getOrders(accessToken, {
+      createTimeFrom,
+      createTimeTo,
+      pageNumber,
+      entriesPerPage: MAX_ORDER_PAGE_SIZE,
+    });
+    for (const order of orders) {
+      if (order.total) {
+        amount += order.total.amount;
+        currency = currency || order.total.currency;
+      }
+    }
+    count += orders.length;
+    if (orders.length === 0 || pageNumber >= totalPages) break;
+    pageNumber += 1;
+  }
+
+  return { amount, count, currency };
+}
+
+// eBay's GetOrders hard-rejects any CreateTimeFrom older than 90 days —
+// there is no pagination or chunking trick around it, confirmed against the
+// live API ("Orders older than 90 days cannot be retrieved"). So 'all_time'
+// is, honestly, "as far back as eBay lets us look": the last 90 days. The
+// `truncated` flag lets the frontend say so instead of implying a true
+// lifetime total.
+async function getEarningsSummary(credentials, { range, from, to }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+
+  const effectiveRange = range === 'all_time' ? '90d' : range;
+  const [start, end] = resolveRangeWindow(effectiveRange, from, to);
+  const sum = await sumOrdersInWindow(accessToken, start.toISOString(), end.toISOString());
+
+  return {
+    earnings: { amount: Math.round(sum.amount * 100) / 100, currency: sum.currency },
+    orderCount: sum.count,
+    truncated: range === 'all_time',
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
 module.exports = {
   EbayError,
   ensureValidAccessToken,
@@ -193,4 +321,9 @@ module.exports = {
   publishDraft,
   publishGroup,
   withdrawDraft,
+  listActiveListings,
+  listUnsoldListings,
+  listOrders,
+  getEarningsSummary,
+  resolveRangeWindow,
 };

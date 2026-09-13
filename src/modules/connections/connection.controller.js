@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const connectionService = require('./connection.service');
 const ebayOauth = require('../ebay/ebay.oauth');
+const ebayService = require('../ebay/ebay.service');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
@@ -61,4 +62,73 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, listPlatforms, getOne, remove, startEbayAuth };
+const LIST_ORDER_RANGES = ['today', '7d', '30d', '90d'];
+const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month', 'custom', 'all_time'];
+
+async function getListings(req, res, next) {
+  try {
+    const status = req.query.status === 'inactive' ? 'inactive' : 'active';
+    const pageNumber = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Listings aren't available for ${connection.platform_name} yet`, 400);
+      }
+      return status === 'active'
+        ? ebayService.listActiveListings(credentials, { pageNumber, entriesPerPage: 25 })
+        : ebayService.listUnsoldListings(credentials, { pageNumber, entriesPerPage: 25 });
+    });
+
+    res.status(200).json({ items: result.items, totalEntries: result.totalEntries, totalPages: result.totalPages });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getOrders(req, res, next) {
+  try {
+    const range = LIST_ORDER_RANGES.includes(req.query.range) ? req.query.range : '7d';
+    const pageNumber = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
+      }
+      const [createTimeFrom, createTimeTo] = ebayService.resolveRangeWindow(range);
+      return ebayService.listOrders(credentials, {
+        createTimeFrom: createTimeFrom.toISOString(),
+        createTimeTo: createTimeTo.toISOString(),
+        pageNumber,
+        entriesPerPage: 50,
+      });
+    });
+
+    res.status(200).json({
+      orders: result.orders,
+      totalEntries: result.totalEntries,
+      totalPages: result.totalPages,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getEarnings(req, res, next) {
+  try {
+    const range = EARNINGS_RANGES.includes(req.query.range) ? req.query.range : '7d';
+    const { from, to } = req.query;
+
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Earnings aren't available for ${connection.platform_name} yet`, 400);
+      }
+      return ebayService.getEarningsSummary(credentials, { range, from, to });
+    });
+
+    res.status(200).json({ earnings: result.earnings, orderCount: result.orderCount, truncated: result.truncated });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { list, listPlatforms, getOne, remove, startEbayAuth, getListings, getOrders, getEarnings };

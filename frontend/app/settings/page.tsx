@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { api, ApiError, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
@@ -140,15 +139,6 @@ export default function WorkspaceSettingsPage() {
           title="Sync schedule"
           description="Control how often Liston checks tracked competitor listings for price and stock changes."
         />
-
-        <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-paper)] px-6 py-4">
-          <p className="text-sm text-[var(--color-muted)]">
-            Looking to update your email, password, or profile photo?{" "}
-            <Link href="/account" className="font-medium text-[var(--color-accent)] hover:underline">
-              Go to account settings →
-            </Link>
-          </p>
-        </div>
       </div>
 
       <ConfirmDialog
