@@ -8,17 +8,36 @@ class EbayApiError extends Error {
   }
 }
 
+const REQUEST_TIMEOUT_MS = 20 * 1000;
+
 async function request(accessToken, method, path, body) {
-  const res = await fetch(`${apiBaseUrl()}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Language': 'en-US',
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`,
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  let res;
+  try {
+    res = await fetch(`${apiBaseUrl()}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        // Both required by eBay's Inventory API on write calls — confirmed live
+        // against the real API: omitting Accept-Language (easy to miss, since
+        // it's separate from Content-Language) fails every write with
+        // errorId 25709 "Invalid value for header Accept-Language."
+        'Content-Language': 'en-US',
+        'Accept-Language': 'en-US',
+        Accept: 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      // Without this, a connection that hangs (rather than returning a fast
+      // error) under rate-limiting/throttling stalls indefinitely — confirmed
+      // live this session (a request sat for 5+ minutes with no response).
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch (err) {
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      throw new EbayApiError('eBay API request timed out — try again in a moment.', 504);
+    }
+    throw err;
+  }
 
   if (res.status === 204) return null;
 
@@ -86,6 +105,20 @@ function createInventoryLocation(accessToken, merchantLocationKey, location) {
   );
 }
 
+// Seller-configured business policies (shipping/handling, payment, returns) —
+// an offer can't be published without one of each attached.
+function getFulfillmentPolicies(accessToken, marketplaceId) {
+  return request(accessToken, 'GET', `/sell/account/v1/fulfillment_policy?marketplace_id=${encodeURIComponent(marketplaceId)}`);
+}
+
+function getPaymentPolicies(accessToken, marketplaceId) {
+  return request(accessToken, 'GET', `/sell/account/v1/payment_policy?marketplace_id=${encodeURIComponent(marketplaceId)}`);
+}
+
+function getReturnPolicies(accessToken, marketplaceId) {
+  return request(accessToken, 'GET', `/sell/account/v1/return_policy?marketplace_id=${encodeURIComponent(marketplaceId)}`);
+}
+
 module.exports = {
   EbayApiError,
   createOrReplaceInventoryItem,
@@ -97,4 +130,7 @@ module.exports = {
   withdrawOffer,
   getInventoryLocations,
   createInventoryLocation,
+  getFulfillmentPolicies,
+  getPaymentPolicies,
+  getReturnPolicies,
 };

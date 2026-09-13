@@ -1,3 +1,4 @@
+const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -8,6 +9,7 @@ const authRoutes = require('./modules/auth/auth.routes');
 const userRoutes = require('./modules/users/user.routes');
 const connectionRoutes = require('./modules/connections/connection.routes');
 const ebayRoutes = require('./modules/ebay/ebay.routes');
+const listingRoutes = require('./modules/listings/listing.routes');
 
 function createApp() {
   const app = express();
@@ -27,10 +29,15 @@ function createApp() {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // Static legal pages (e.g. the privacy policy URL required by eBay's
+  // "User Tokens (eBay Sign-In)" OAuth setup).
+  app.use(express.static(path.join(__dirname, 'public')));
+
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
   app.use('/api/connections', connectionRoutes);
   app.use('/api/ebay', ebayRoutes);
+  app.use('/api/listings', listingRoutes);
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

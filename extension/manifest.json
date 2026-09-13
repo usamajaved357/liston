@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Liston Scraper Helper",
+  "version": "0.1.0",
+  "description": "Fetches a competitor eBay listing and a source AliExpress product through your own browser, so Liston's draft-with-AI feature doesn't depend on this server's IP.",
+  "permissions": ["scripting", "tabs"],
+  "host_permissions": [
+    "*://*.ebay.co.uk/*",
+    "*://*.ebay.com/*",
+    "*://*.aliexpress.com/*",
+    "http://localhost:3001/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:3001/*"],
+      "js": ["content-bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

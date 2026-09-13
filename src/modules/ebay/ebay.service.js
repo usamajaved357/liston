@@ -11,6 +11,30 @@ class EbayError extends Error {
 
 const TOKEN_REFRESH_MARGIN_MS = 2 * 60 * 1000; // refresh a bit before actual expiry
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// eBay's Inventory API has a brief, well-documented propagation delay: a SKU
+// created via createOrReplaceInventoryItem isn't always immediately visible
+// to createOffer for the same SKU (confirmed live this session — a
+// freshly-created SKU failed with "could not be found ... for the
+// marketplace" on the very next call). Retry a few times with backoff before
+// giving up, rather than failing the whole draft over a timing race.
+const SKU_PROPAGATION_DELAY_PATTERN = /could not be found|is not available in the system/i;
+
+async function createOfferWithRetry(accessToken, offerInput, attempts = 4, delayMs = 2000) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await ebayClient.createOffer(accessToken, offerInput);
+    } catch (err) {
+      const isPropagationDelay = SKU_PROPAGATION_DELAY_PATTERN.test(err.message);
+      if (!isPropagationDelay || attempt === attempts) throw err;
+      await sleep(delayMs * attempt);
+    }
+  }
+}
+
 // Returns a valid access token for this connection, refreshing it first if
 // it's expired or close to it. When a refresh happens, `credentialsChanged`
 // is true and `credentials` holds the updated values — the caller (which
@@ -70,16 +94,62 @@ function buildInventoryItem({ title, description, imageUrls, aspects, condition,
   };
 }
 
-function buildOffer({ sku, marketplaceId, categoryId, description, price, merchantLocationKey, quantity }) {
+function buildOffer({ sku, marketplaceId, categoryId, description, price, merchantLocationKey, quantity, listingPolicies }) {
   return {
     sku,
-    marketplaceId: marketplaceId || 'EBAY_US',
+    marketplaceId: marketplaceId || 'EBAY_GB',
     format: 'FIXED_PRICE',
     availableQuantity: quantity,
     categoryId,
     listingDescription: description,
     pricingSummary: { price },
     merchantLocationKey,
+    ...(listingPolicies ? { listingPolicies } : {}),
+  };
+}
+
+// eBay rejects publishOffer without a fulfillment/payment/return policy
+// attached — failing here, at draft time, gives a clearer error than
+// discovering it later when the user tries to publish.
+function ensureListingPolicies(listingPolicies) {
+  const hasAll =
+    listingPolicies &&
+    listingPolicies.fulfillmentPolicyId &&
+    listingPolicies.paymentPolicyId &&
+    listingPolicies.returnPolicyId;
+  if (!hasAll) {
+    throw new EbayError(
+      'This eBay connection has no default business policies selected yet. Choose them in Settings before drafting a listing.',
+      400
+    );
+  }
+}
+
+async function getBusinessPolicies(credentials, marketplaceId = 'EBAY_GB') {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+
+  const [fulfillment, payment, returnPolicy] = await Promise.all([
+    ebayClient.getFulfillmentPolicies(accessToken, marketplaceId),
+    ebayClient.getPaymentPolicies(accessToken, marketplaceId),
+    ebayClient.getReturnPolicies(accessToken, marketplaceId),
+  ]);
+
+  return {
+    fulfillmentPolicies: fulfillment?.fulfillmentPolicies || [],
+    paymentPolicies: payment?.paymentPolicies || [],
+    returnPolicies: returnPolicy?.returnPolicies || [],
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
+async function getMerchantLocations(credentials) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const result = await ebayClient.getInventoryLocations(accessToken);
+  return {
+    locations: result?.locations || [],
+    credentialsChanged,
+    credentials: refreshedCredentials,
   };
 }
 
@@ -90,9 +160,10 @@ function buildOffer({ sku, marketplaceId, categoryId, description, price, mercha
 async function draftListing(credentials, input) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
+  ensureListingPolicies(input.listingPolicies);
   await ensureInventoryLocation(accessToken, input.merchantLocationKey, input.locationInput);
   await ebayClient.createOrReplaceInventoryItem(accessToken, input.sku, buildInventoryItem(input));
-  const offer = await ebayClient.createOffer(accessToken, buildOffer(input));
+  const offer = await createOfferWithRetry(accessToken, buildOffer(input));
 
   return {
     offerId: offer.offerId,
@@ -107,9 +178,10 @@ async function draftListing(credentials, input) {
  * Drafts a multi-variation listing: one inventory item per variant SKU, all
  * grouped, offers created per SKU. Publish separately via publishGroup.
  */
-async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, merchantLocationKey, locationInput }) {
+async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, merchantLocationKey, locationInput, listingPolicies }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
+  ensureListingPolicies(listingPolicies);
   await ensureInventoryLocation(accessToken, merchantLocationKey, locationInput);
 
   const offers = [];
@@ -126,7 +198,7 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         quantity: variant.quantity,
       })
     );
-    const offer = await ebayClient.createOffer(
+    const offer = await createOfferWithRetry(
       accessToken,
       buildOffer({
         sku: variant.sku,
@@ -136,6 +208,7 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         price: variant.price,
         merchantLocationKey,
         quantity: variant.quantity,
+        listingPolicies,
       })
     );
     offers.push({ sku: variant.sku, offerId: offer.offerId });
@@ -171,7 +244,7 @@ async function publishDraft(credentials, offerId) {
 
 async function publishGroup(credentials, groupKey, marketplaceId) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayClient.publishOfferByInventoryItemGroup(accessToken, groupKey, marketplaceId || 'EBAY_US');
+  const result = await ebayClient.publishOfferByInventoryItemGroup(accessToken, groupKey, marketplaceId || 'EBAY_GB');
   return {
     externalProductId: result.listingId,
     status: 'published',
@@ -450,8 +523,11 @@ async function getEarningsSummary(credentials, { range, from, to }) {
 module.exports = {
   EbayError,
   ensureValidAccessToken,
+  createOfferWithRetry,
   draftListing,
   draftVariationListing,
+  getBusinessPolicies,
+  getMerchantLocations,
   publishDraft,
   publishGroup,
   withdrawDraft,

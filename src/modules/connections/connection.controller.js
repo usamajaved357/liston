@@ -133,4 +133,72 @@ async function getEarnings(req, res, next) {
   }
 }
 
-module.exports = { list, listPlatforms, getOne, remove, startEbayAuth, getListings, getOrders, getEarnings };
+const updatePoliciesSchema = z.object({
+  marketplaceId: z.string().min(1).default('EBAY_GB'),
+  fulfillmentPolicyId: z.string().min(1),
+  paymentPolicyId: z.string().min(1),
+  returnPolicyId: z.string().min(1),
+  merchantLocationKey: z.string().min(1).optional(),
+});
+
+async function getPolicies(req, res, next) {
+  try {
+    const marketplaceId = typeof req.query.marketplaceId === 'string' ? req.query.marketplaceId : 'EBAY_GB';
+
+    // Folded into one endpoint (rather than a second round-trip) — the
+    // Settings page needs policies + shipping location together to hydrate
+    // all four pickers in a single load.
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, async (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Policies aren't available for ${connection.platform_name} yet`, 400);
+      }
+      const [policies, locations] = await Promise.all([
+        ebayService.getBusinessPolicies(credentials, marketplaceId),
+        ebayService.getMerchantLocations(credentials),
+      ]);
+      const refreshed = locations.credentialsChanged ? locations : policies;
+      return { policies, locations, credentialsChanged: refreshed.credentialsChanged, credentials: refreshed.credentials };
+    });
+
+    res.status(200).json({
+      fulfillmentPolicies: result.policies.fulfillmentPolicies,
+      paymentPolicies: result.policies.paymentPolicies,
+      returnPolicies: result.policies.returnPolicies,
+      merchantLocations: result.locations.locations,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updatePolicies(req, res, next) {
+  try {
+    const parsed = updatePoliciesSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.userId);
+    if (connection.platform_key !== 'ebay') {
+      throw new connectionService.ConnectionError(`Policies aren't available for ${connection.platform_name} yet`, 400);
+    }
+
+    const settings = await connectionService.updateConnectionSettings(req.params.id, req.userId, { ebay: parsed.data });
+    res.status(200).json({ settings });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  list,
+  listPlatforms,
+  getOne,
+  remove,
+  startEbayAuth,
+  getListings,
+  getOrders,
+  getEarnings,
+  getPolicies,
+  updatePolicies,
+};

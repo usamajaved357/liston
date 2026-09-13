@@ -96,6 +96,20 @@ async function updateConnectionCredentials(id, credentials) {
   await connectionRepository.updateCredentials(id, encryptCredentials(credentials));
 }
 
+// Settings are plain, non-secret per-connection config (e.g. eBay's chosen
+// default business policies) — never routed through credentials encryption.
+// Shallow-merged at the top level, namespaced by platform key, so
+// { ebay: {...} } replaces wholesale without touching other platforms' keys.
+async function updateConnectionSettings(id, userId, patch) {
+  const connection = await connectionRepository.findByIdForUser(id, userId);
+  if (!connection) {
+    throw new ConnectionError('Connection not found', 404);
+  }
+  const merged = { ...connection.settings, ...patch };
+  await connectionRepository.updateSettings(id, merged);
+  return merged;
+}
+
 // Runs a platform action (e.g. an eBay draft/publish call) with this
 // connection's decrypted credentials, then persists any refreshed tokens the
 // action reports back — callers never touch encryption or the DB directly.
@@ -123,6 +137,7 @@ module.exports = {
   getConnectionSummary,
   getConnectionWithDecryptedCredentials,
   updateConnectionCredentials,
+  updateConnectionSettings,
   withDecryptedCredentials,
   deleteConnection,
   ConnectionError,

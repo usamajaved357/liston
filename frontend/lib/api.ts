@@ -51,12 +51,21 @@ export interface AuthResponse {
   token: string;
 }
 
+export interface EbaySettings {
+  marketplaceId: string;
+  fulfillmentPolicyId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+  merchantLocationKey?: string;
+}
+
 export interface Connection {
   id: string;
   label: string;
   status: "active" | "expired" | "error" | "suspended";
   platform_key: string;
   platform_name: string;
+  settings?: { ebay?: EbaySettings };
   created_at: string;
   updated_at: string;
 }
@@ -130,6 +139,116 @@ export interface OrderCounts {
   awaiting_dispatch: number;
   dispatched: number;
   cancelled: number;
+}
+
+export interface Policy {
+  fulfillmentPolicyId?: string;
+  paymentPolicyId?: string;
+  returnPolicyId?: string;
+  name: string;
+  marketplaceId: string;
+}
+
+export interface MerchantLocation {
+  merchantLocationKey: string;
+  name?: string;
+}
+
+export interface ConnectionPolicies {
+  fulfillmentPolicies: Policy[];
+  paymentPolicies: Policy[];
+  returnPolicies: Policy[];
+  merchantLocations: MerchantLocation[];
+}
+
+export interface OfferPrice {
+  value: string;
+  currency: string;
+}
+
+// Present once persisted server-side (see DraftListing.generated_data) — the
+// policies actually attached at draft time, not the connection's current defaults.
+export interface ListingPolicies {
+  fulfillmentPolicyId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+}
+
+export interface SingleDraftContent {
+  title: string;
+  description: string;
+  imageUrls: string[];
+  aspects?: Record<string, string[]>;
+  condition?: string;
+  quantity: number;
+  categoryId: string;
+  price: OfferPrice;
+  marketplaceId?: string;
+  merchantLocationKey: string;
+  listingPolicies?: ListingPolicies;
+}
+
+export interface VariationDraftVariant {
+  sku?: string;
+  imageUrls: string[];
+  aspects: Record<string, string[]>;
+  condition?: string;
+  quantity: number;
+  price: OfferPrice;
+}
+
+export interface VariationDraftContent {
+  commonTitle: string;
+  commonDescription: string;
+  imageUrls: string[];
+  variesBy: {
+    aspects: Record<string, string[]>;
+    aspectsImageVariesBy: string[];
+    specifications: { name: string; values: string[] }[];
+  };
+  variants: VariationDraftVariant[];
+  categoryId: string;
+  marketplaceId?: string;
+  merchantLocationKey: string;
+  listingPolicies?: ListingPolicies;
+}
+
+export type DraftContent = SingleDraftContent | VariationDraftContent;
+
+export function isVariationDraft(content: DraftContent): content is VariationDraftContent {
+  return "variants" in content;
+}
+
+// Raw, pre-normalize() page fields — matches src/modules/scraping/dom-extractors/*.js's
+// return shape exactly. Loosely typed since the backend re-validates/shapes
+// these via each scraper's own `normalize()`.
+export type RawScrapedFields = Record<string, unknown>;
+
+export interface GenerateDraftInput {
+  competitorUrl: string;
+  sourceUrl: string;
+  // Present only when the Liston browser extension supplied this side's data
+  // directly from the user's own browser — omitted (server scrapes instead)
+  // when the extension isn't installed or that fetch failed.
+  competitorRaw?: RawScrapedFields;
+  sourceRaw?: RawScrapedFields;
+  costPrice: number;
+  sellPrice: number;
+  currency: string;
+}
+
+export interface DraftListing {
+  id: string;
+  connection_id: string;
+  sku: string | null;
+  status: string;
+  generated_data: DraftContent;
+  platform_offer_id: string | null;
+  platform_group_key: string | null;
+  external_product_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
@@ -248,4 +367,28 @@ export const api = {
       `/api/connections/${id}/earnings?${params.toString()}`
     );
   },
+
+  getConnectionPolicies: (id: string, marketplaceId = "EBAY_GB") =>
+    request<ConnectionPolicies>(`/api/connections/${id}/policies?marketplaceId=${marketplaceId}`),
+
+  updateConnectionPolicies: (id: string, settings: EbaySettings) =>
+    request<{ settings: { ebay: EbaySettings } }>(`/api/connections/${id}/policies`, {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+
+  generateDraftListing: (connectionId: string, input: GenerateDraftInput) =>
+    request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/drafts`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  listDraftListings: (connectionId: string) =>
+    request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
+
+  getDraftListing: (listingId: string) =>
+    request<{ listing: DraftListing; policies: ConnectionPolicies | null }>(`/api/listings/${listingId}`),
+
+  publishDraftListing: (listingId: string) =>
+    request<{ listing: DraftListing }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
 };

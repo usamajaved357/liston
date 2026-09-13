@@ -41,7 +41,7 @@ async function findAllByUser(userId) {
 
 async function findByIdForUser(id, userId) {
   const result = await query(
-    `SELECT c.id, c.user_id, c.label, c.status, c.credentials, c.created_at, c.updated_at,
+    `SELECT c.id, c.user_id, c.label, c.status, c.credentials, c.settings, c.created_at, c.updated_at,
             p.key AS platform_key, p.name AS platform_name
      FROM connections c
      JOIN platforms p ON p.id = c.destination_platform_id
@@ -68,6 +68,13 @@ async function updateCredentials(id, credentials) {
   );
 }
 
+async function updateSettings(id, settings) {
+  await query(
+    'UPDATE connections SET settings = $1, updated_at = now() WHERE id = $2',
+    [settings, id]
+  );
+}
+
 async function updateStatus(id, status) {
   await query('UPDATE connections SET status = $1, updated_at = now() WHERE id = $2', [status, id]);
 }
@@ -86,6 +93,7 @@ module.exports = {
   findByIdForUser,
   create,
   updateCredentials,
+  updateSettings,
   updateStatus,
   deleteByIdForUser,
 };

@@ -66,6 +66,14 @@ const config = {
   briaApiKey: process.env.BRIA_API_KEY || null,
   photoroomApiKey: process.env.PHOTOROOM_API_KEY || null,
 
+  // Optional rotating-proxy service for the eBay/AliExpress scrapers (e.g.
+  // Bright Data, Oxylabs, ScraperAPI). Without one, scraping requests come
+  // from this server's own IP, which real-world anti-bot systems can rate-
+  // limit/block under sustained use — a proxy provider's rotating IP pool is
+  // the standard mitigation for that. Format: a full proxy URL, credentials
+  // included if required, e.g. "http://user:pass@proxy.host:port".
+  scraperProxyUrl: process.env.SCRAPER_PROXY_URL || null,
+
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY || null,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || null,
@@ -78,6 +86,15 @@ const config = {
     // maps to the actual callback URL configured there.
     ruName: process.env.EBAY_RU_NAME || null,
     environment: process.env.EBAY_ENVIRONMENT || 'SANDBOX', // SANDBOX | PRODUCTION
+    // Marketplace Account Deletion/Closure Notification compliance (mandatory
+    // for every production keyset). Must match exactly what's saved in the
+    // Developer Portal's "Alerts & Notifications" tab: 32-80 chars, only
+    // alphanumeric/underscore/hyphen.
+    deletionVerificationToken: process.env.EBAY_DELETION_VERIFICATION_TOKEN || null,
+    // The full public HTTPS endpoint URL exactly as registered with eBay —
+    // used as one of the three inputs to the challenge-response hash, so it
+    // must match byte-for-byte (no trailing slash mismatch, etc).
+    deletionEndpointUrl: process.env.EBAY_DELETION_ENDPOINT_URL || null,
   },
 
   google: {

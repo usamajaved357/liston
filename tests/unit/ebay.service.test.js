@@ -8,6 +8,14 @@ const ebayOauth = require('../../src/modules/ebay/ebay.oauth');
 const ebayTrading = require('../../src/modules/ebay/ebay.trading');
 const ebayService = require('../../src/modules/ebay/ebay.service');
 
+function validListingPolicies() {
+  return {
+    fulfillmentPolicyId: 'fulfillment-1',
+    paymentPolicyId: 'payment-1',
+    returnPolicyId: 'return-1',
+  };
+}
+
 function freshCredentials(overrides = {}) {
   return {
     accessToken: 'valid-access-token',
@@ -57,6 +65,41 @@ test('ensureValidAccessToken throws a clear error when there is no refresh token
   await assert.rejects(() => ebayService.ensureValidAccessToken(credentials), /reconnect the account/);
 });
 
+test('createOfferWithRetry retries on the SKU-propagation-delay error and eventually succeeds', async () => {
+  let attempts = 0;
+  mock.method(ebayClient, 'createOffer', async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      throw new Error('AE123-1 could not be found or is not available in the system for the marketplace EBAY_GB.');
+    }
+    return { offerId: 'offer-1' };
+  });
+
+  const result = await ebayService.createOfferWithRetry('token', { sku: 'AE123-1' }, 5, 1);
+
+  assert.strictEqual(attempts, 3);
+  assert.strictEqual(result.offerId, 'offer-1');
+});
+
+test('createOfferWithRetry does not retry a non-propagation-delay error', async () => {
+  mock.method(ebayClient, 'createOffer', async () => {
+    throw new Error('Category ID is invalid.');
+  });
+
+  await assert.rejects(() => ebayService.createOfferWithRetry('token', {}, 5, 1), /Category ID is invalid/);
+});
+
+test('createOfferWithRetry gives up and throws after exhausting all attempts', async () => {
+  let attempts = 0;
+  mock.method(ebayClient, 'createOffer', async () => {
+    attempts += 1;
+    throw new Error('SKU could not be found for the marketplace EBAY_GB.');
+  });
+
+  await assert.rejects(() => ebayService.createOfferWithRetry('token', {}, 3, 1), /could not be found/);
+  assert.strictEqual(attempts, 3);
+});
+
 test('draftListing creates the inventory item and offer, and reports drafted status', async () => {
   const calls = [];
   mock.method(ebayClient, 'getInventoryLocations', async () => ({ locations: [{ merchantLocationKey: 'main' }] }));
@@ -79,6 +122,7 @@ test('draftListing creates the inventory item and offer, and reports drafted sta
     categoryId: '12345',
     price: { value: '19.99', currency: 'USD' },
     merchantLocationKey: 'main',
+    listingPolicies: validListingPolicies(),
   });
 
   assert.strictEqual(result.offerId, 'offer-1');
@@ -88,6 +132,24 @@ test('draftListing creates the inventory item and offer, and reports drafted sta
   assert.strictEqual(calls[1][0], 'createOffer');
   assert.strictEqual(calls[1][1].sku, 'SKU-1');
   assert.strictEqual(calls[1][1].pricingSummary.price.value, '19.99');
+  assert.deepStrictEqual(calls[1][1].listingPolicies, validListingPolicies());
+});
+
+test('draftListing refuses to create an offer when no default business policies are selected', async () => {
+  await assert.rejects(
+    () =>
+      ebayService.draftListing(freshCredentials(), {
+        sku: 'SKU-1b',
+        title: 'Widget',
+        description: 'desc',
+        imageUrls: [],
+        quantity: 1,
+        price: { value: '10.00', currency: 'USD' },
+        merchantLocationKey: 'main',
+        // no listingPolicies supplied
+      }),
+    /default business policies/i
+  );
 });
 
 test('draftListing refuses to fabricate a merchant location when none exists and none was supplied', async () => {
@@ -103,6 +165,7 @@ test('draftListing refuses to fabricate a merchant location when none exists and
         quantity: 1,
         price: { value: '10.00', currency: 'USD' },
         merchantLocationKey: 'main',
+        listingPolicies: validListingPolicies(),
         // no locationInput supplied
       }),
     /inventory location/i
@@ -124,9 +187,36 @@ test('draftListing creates the missing merchant location when locationInput is s
     price: { value: '10.00', currency: 'USD' },
     merchantLocationKey: 'main',
     locationInput: { country: 'US', postalCode: '10001' },
+    listingPolicies: validListingPolicies(),
   });
 
   assert.strictEqual(createLocation.mock.calls.length, 1);
+});
+
+test('getBusinessPolicies fetches and normalizes all three policy types', async () => {
+  mock.method(ebayClient, 'getFulfillmentPolicies', async (token, marketplaceId) => {
+    assert.strictEqual(marketplaceId, 'EBAY_GB');
+    return { fulfillmentPolicies: [{ fulfillmentPolicyId: 'f1', name: 'Standard' }] };
+  });
+  mock.method(ebayClient, 'getPaymentPolicies', async () => ({ paymentPolicies: [{ paymentPolicyId: 'p1', name: 'eBay Payments' }] }));
+  mock.method(ebayClient, 'getReturnPolicies', async () => ({}));
+
+  const result = await ebayService.getBusinessPolicies(freshCredentials(), 'EBAY_GB');
+
+  assert.deepStrictEqual(result.fulfillmentPolicies, [{ fulfillmentPolicyId: 'f1', name: 'Standard' }]);
+  assert.deepStrictEqual(result.paymentPolicies, [{ paymentPolicyId: 'p1', name: 'eBay Payments' }]);
+  assert.deepStrictEqual(result.returnPolicies, []);
+});
+
+test('getMerchantLocations fetches and returns the connection\'s inventory locations', async () => {
+  mock.method(ebayClient, 'getInventoryLocations', async (token) => {
+    assert.strictEqual(token, 'valid-access-token');
+    return { locations: [{ merchantLocationKey: 'main', name: 'Main warehouse' }] };
+  });
+
+  const result = await ebayService.getMerchantLocations(freshCredentials());
+
+  assert.deepStrictEqual(result.locations, [{ merchantLocationKey: 'main', name: 'Main warehouse' }]);
 });
 
 test('publishDraft calls publishOffer and returns the external listing id', async () => {

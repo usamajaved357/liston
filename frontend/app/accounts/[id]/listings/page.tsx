@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, Listing, ListingStatusFilter } from "@/lib/api";
+import { api, DraftListing, isVariationDraft, Listing, ListingStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -59,10 +59,13 @@ function PaginationControls({
 
 export default function AccountListingsPage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const { connection, loading: loadingConnection, error: connectionError } = useConnection(params.id);
 
-  const [filter, setFilter] = useState<ListingStatusFilter | "draft">("active");
+  const initialFilter = searchParams.get("filter") === "draft" ? "draft" : "active";
+  const [filter, setFilter] = useState<ListingStatusFilter | "draft">(initialFilter);
   const [items, setItems] = useState<Listing[]>([]);
+  const [drafts, setDrafts] = useState<DraftListing[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalEntries, setTotalEntries] = useState(0);
@@ -72,7 +75,13 @@ export default function AccountListingsPage() {
   useEffect(() => {
     if (!connection) return;
     if (filter === "draft") {
-      setLoading(false);
+      setLoading(true);
+      setError(null);
+      api
+        .listDraftListings(connection.id)
+        .then((data) => setDrafts(data.drafts))
+        .catch(() => setError("Couldn't load your draft listings. Try again."))
+        .finally(() => setLoading(false));
       return;
     }
     setLoading(true);
@@ -139,18 +148,59 @@ export default function AccountListingsPage() {
       </div>
 
       {filter === "draft" ? (
-        <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-10 text-center">
-          <p className="text-sm font-semibold text-[var(--color-ink)] mb-1">No drafts yet</p>
-          <p className="text-sm text-[var(--color-muted)] max-w-sm mx-auto">
-            Listings Liston drafts with AI — before you review and publish them to eBay — will show up here.
-          </p>
-          <Link
-            href={`/accounts/${connection.id}/listings/new`}
-            className="inline-flex mt-4 rounded-md border border-[var(--color-line)] px-4 py-2 text-sm font-medium text-[var(--color-ink)] hover:border-[var(--color-accent)] transition-colors"
-          >
-            Draft a listing with AI
-          </Link>
-        </div>
+        error ? (
+          <Alert>{error}</Alert>
+        ) : loading ? (
+          <p className="px-5 py-10 text-center text-sm text-[var(--color-muted)]">Loading…</p>
+        ) : drafts.length === 0 ? (
+          <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-10 text-center">
+            <p className="text-sm font-semibold text-[var(--color-ink)] mb-1">No drafts yet</p>
+            <p className="text-sm text-[var(--color-muted)] max-w-sm mx-auto">
+              Listings Liston drafts — before you review and publish them to eBay — will show up here.
+            </p>
+            <Link
+              href={`/accounts/${connection.id}/listings/new`}
+              className="inline-flex mt-4 rounded-md border border-[var(--color-line)] px-4 py-2 text-sm font-medium text-[var(--color-ink)] hover:border-[var(--color-accent)] transition-colors"
+            >
+              Draft a listing
+            </Link>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden">
+            {drafts.map((draft) => {
+              const content = draft.generated_data;
+              const isVariation = isVariationDraft(content);
+              const title = isVariation ? content.commonTitle : content.title;
+              const image = content.imageUrls[0];
+              const priceLabel = isVariation
+                ? `${content.variants[0]?.price.currency} ${content.variants[0]?.price.value}`
+                : `${content.price.currency} ${content.price.value}`;
+              const variantCount = isVariation ? content.variants.length : null;
+
+              return (
+                <Link
+                  key={draft.id}
+                  href={`/accounts/${connection.id}/listings/draft/${draft.id}`}
+                  className="flex items-center gap-4 px-5 py-4 border-b border-[var(--color-line)] last:border-b-0 hover:bg-[var(--color-paper)] transition-colors"
+                >
+                  {image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={image} alt="" className="h-12 w-12 rounded-lg object-cover flex-shrink-0 border border-[var(--color-line)]" />
+                  ) : (
+                    <div className="h-12 w-12 rounded-lg bg-[var(--color-paper)] flex-shrink-0 border border-[var(--color-line)]" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{title}</p>
+                    <p className="text-xs text-[var(--color-muted)]">
+                      {variantCount !== null ? `${variantCount} variants` : `SKU ${draft.sku || "—"}`} · pending review
+                    </p>
+                  </div>
+                  <p className="text-sm font-bold text-[var(--color-ink)] flex-shrink-0">{priceLabel}</p>
+                </Link>
+              );
+            })}
+          </div>
+        )
       ) : (
         <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden">
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--color-line)]">
