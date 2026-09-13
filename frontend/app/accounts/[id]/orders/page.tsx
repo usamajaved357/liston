@@ -67,12 +67,12 @@ const ROW_COLUMNS = "132px minmax(280px,1fr) 96px 84px 84px 92px 92px";
 function OrderTableHeader() {
   return (
     <div
-      className="hidden md:grid gap-4 px-5 py-3 border-b border-[var(--color-line)] text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]"
+      className="grid gap-4 px-5 py-3 border-b border-[var(--color-line)] text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]"
       style={{ gridTemplateColumns: ROW_COLUMNS }}
     >
       <span>Status</span>
       <span>Order</span>
-      <span>Quantity</span>
+      <span className="text-center">Quantity</span>
       <span>Subtotal</span>
       <span>Total</span>
       <span>Date sold</span>
@@ -176,7 +176,7 @@ function OrderCard({ order }: { order: Order }) {
             </div>
 
             {/* Quantity */}
-            <div className="text-[13px] text-[var(--color-ink)]">
+            <div className="text-[13px] text-[var(--color-ink)] text-center">
               <span className="font-bold">{li.quantityPurchased}</span>
               {li.quantityAvailable !== null && (
                 <span className="text-[var(--color-muted)]"> ({li.quantityAvailable} available)</span>
@@ -418,8 +418,16 @@ export default function AccountOrdersPage() {
           </p>
         )}
 
-        {!error && !loading && orders.length > 0 && <OrderTableHeader />}
-        {!error && !loading && orders.map((order) => <OrderCard key={order.orderId} order={order} />)}
+        {!error && !loading && orders.length > 0 && (
+          <div className="overflow-x-auto">
+            <div className="min-w-[980px]">
+              <OrderTableHeader />
+              {orders.map((order) => (
+                <OrderCard key={order.orderId} order={order} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {!error && !loading && orders.length > 0 && (
           <EbayStylePagination
