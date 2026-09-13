@@ -6,18 +6,19 @@ import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 
 interface AppShellProps {
   children: React.ReactNode;
+  header?: React.ReactNode;
   connectionsUsed: number;
   maxConnections: number;
   planName: string;
 }
 
-export function AppShell({ children, connectionsUsed, maxConnections, planName }: AppShellProps) {
+export function AppShell({ children, header, connectionsUsed, maxConnections, planName }: AppShellProps) {
   const pathname = usePathname();
   const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
 
   return (
-    <div className="min-h-screen flex">
-      <aside className="w-[220px] flex-shrink-0 bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-7">
+    <div className="h-screen flex overflow-hidden">
+      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-7">
         <div className="flex items-center gap-2.5 px-2">
           <Logo size={30} />
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
@@ -78,8 +79,11 @@ export function AppShell({ children, connectionsUsed, maxConnections, planName }
         </div>
       </aside>
 
-      <div className="flex-1 min-w-0">
-        <div className="px-10 py-8">{children}</div>
+      <div className="flex-1 min-w-0 h-screen flex flex-col">
+        {header && (
+          <div className="flex-shrink-0 px-10 pt-8 pb-6 bg-[var(--color-paper)]">{header}</div>
+        )}
+        <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>{children}</div>
       </div>
     </div>
   );

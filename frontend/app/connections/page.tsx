@@ -137,23 +137,28 @@ export default function ConnectionsPage() {
   );
 
   return (
-    <AppShell connectionsUsed={connectionsUsed} maxConnections={maxConnections} planName={planName}>
-      <div className="flex items-center justify-between mb-7">
-        <div>
-          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Connections</h1>
-          <p className="text-sm text-[var(--color-muted)] mt-0.5">
-            Marketplace accounts linked to Liston, per account.
-          </p>
+    <AppShell
+      connectionsUsed={connectionsUsed}
+      maxConnections={maxConnections}
+      planName={planName}
+      header={
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Connections</h1>
+            <p className="text-sm text-[var(--color-muted)] mt-0.5">
+              Marketplace accounts linked to Liston, per account.
+            </p>
+          </div>
+          <AccountMenu
+            email={user.email}
+            planName={planName}
+            avatarUrl={user.avatar_url}
+            onLogout={() => setConfirmAction("logout")}
+            onDeleteAccount={() => setConfirmAction("delete")}
+          />
         </div>
-        <AccountMenu
-          email={user.email}
-          planName={planName}
-          avatarUrl={user.avatar_url}
-          onLogout={() => setConfirmAction("logout")}
-          onDeleteAccount={() => setConfirmAction("delete")}
-        />
-      </div>
-
+      }
+    >
       {error && (
         <div className="mb-4">
           <Alert>{error}</Alert>

@@ -178,29 +178,30 @@ export default function AccountOverviewPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      header={
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
+            <p className="text-sm text-[var(--color-muted)] mt-0.5">{connection.label} · {connection.platform_name}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span
+              className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${
+                STATUS_STYLES[connection.status] || STATUS_STYLES.error
+              }`}
+            >
+              {connection.status}
+            </span>
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="text-sm font-medium text-[var(--color-danger)] hover:underline"
+            >
+              Remove connection
+            </button>
+          </div>
+        </div>
+      }
     >
-      <div className="flex items-center justify-between mb-7">
-        <div>
-          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
-          <p className="text-sm text-[var(--color-muted)] mt-0.5">{connection.label} · {connection.platform_name}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <span
-            className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${
-              STATUS_STYLES[connection.status] || STATUS_STYLES.error
-            }`}
-          >
-            {connection.status}
-          </span>
-          <button
-            onClick={() => setConfirmDelete(true)}
-            className="text-sm font-medium text-[var(--color-danger)] hover:underline"
-          >
-            Remove connection
-          </button>
-        </div>
-      </div>
-
       {deleteError && (
         <div className="mb-4">
           <Alert>{deleteError}</Alert>

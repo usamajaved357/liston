@@ -122,11 +122,8 @@ export default function AccountOrdersPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Orders</h1>}
     >
-      <div className="flex items-center justify-between mb-7">
-        <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Orders</h1>
-      </div>
-
       <div className="flex items-center gap-2 mb-5">
         {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
           <FilterPill key={key} active={range === key} onClick={() => changeRange(key)}>

@@ -177,18 +177,23 @@ export default function DashboardPage() {
   );
 
   return (
-    <AppShell connectionsUsed={connectionsUsed} maxConnections={maxConnections} planName={planName}>
-      <div className="flex items-center justify-between mb-7">
-        <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
-        <AccountMenu
-          email={user.email}
-          planName={planName}
-          avatarUrl={user.avatar_url}
-          onLogout={() => setConfirmAction("logout")}
-          onDeleteAccount={() => setConfirmAction("delete")}
-        />
-      </div>
-
+    <AppShell
+      connectionsUsed={connectionsUsed}
+      maxConnections={maxConnections}
+      planName={planName}
+      header={
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
+          <AccountMenu
+            email={user.email}
+            planName={planName}
+            avatarUrl={user.avatar_url}
+            onLogout={() => setConfirmAction("logout")}
+            onDeleteAccount={() => setConfirmAction("delete")}
+          />
+        </div>
+      }
+    >
       {error && (
         <div className="mb-4">
           <Alert>{error}</Alert>

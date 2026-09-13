@@ -116,11 +116,8 @@ export default function AccountListingsPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Listings</h1>}
     >
-      <div className="flex items-center justify-between mb-7">
-        <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Listings</h1>
-      </div>
-
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div className="flex items-center gap-2">
           <FilterPill active={filter === "active"} onClick={() => changeFilter("active")}>

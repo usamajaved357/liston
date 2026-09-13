@@ -32,11 +32,8 @@ export default function AccountInboxPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Inbox</h1>}
     >
-      <div className="flex items-center justify-between mb-7">
-        <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Inbox</h1>
-      </div>
-
       <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
         <div className="flex items-center justify-between mb-1">
           <h2 className="text-base font-bold text-[var(--color-ink)]">Buyer messages</h2>
