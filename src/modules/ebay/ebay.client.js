@@ -10,7 +10,36 @@ class EbayApiError extends Error {
 
 const REQUEST_TIMEOUT_MS = 20 * 1000;
 
-async function request(accessToken, method, path, body) {
+// eBay ties a SKU/offer's marketplace visibility to the Content-Language of
+// the write calls that created it — confirmed live: creating an inventory
+// item + offer with en-US headers made the SKU invisible to EBAY_GB's
+// createOffer ("could not be found ... for the marketplace EBAY_GB",
+// errorId 25751), while the identical calls with en-GB headers succeeded.
+// Same root cause reported by other developers for EBAY_PL/EBAY_DE/EBAY_CA
+// (eBay Developer Community). Default to en-US for marketplaces not listed.
+const MARKETPLACE_LOCALES = {
+  EBAY_US: 'en-US',
+  EBAY_GB: 'en-GB',
+  EBAY_AU: 'en-AU',
+  EBAY_CA: 'en-CA',
+  EBAY_IE: 'en-IE',
+  EBAY_DE: 'de-DE',
+  EBAY_AT: 'de-AT',
+  EBAY_CH: 'de-CH',
+  EBAY_FR: 'fr-FR',
+  EBAY_IT: 'it-IT',
+  EBAY_ES: 'es-ES',
+  EBAY_NL: 'nl-NL',
+  EBAY_BE: 'nl-BE',
+  EBAY_PL: 'pl-PL',
+};
+
+function localeForMarketplace(marketplaceId) {
+  return MARKETPLACE_LOCALES[marketplaceId] || 'en-US';
+}
+
+async function request(accessToken, method, path, body, marketplaceId) {
+  const locale = localeForMarketplace(marketplaceId);
   let res;
   try {
     res = await fetch(`${apiBaseUrl()}${path}`, {
@@ -20,9 +49,10 @@ async function request(accessToken, method, path, body) {
         // Both required by eBay's Inventory API on write calls — confirmed live
         // against the real API: omitting Accept-Language (easy to miss, since
         // it's separate from Content-Language) fails every write with
-        // errorId 25709 "Invalid value for header Accept-Language."
-        'Content-Language': 'en-US',
-        'Accept-Language': 'en-US',
+        // errorId 25709 "Invalid value for header Accept-Language." Both must
+        // also match the target marketplace's locale (see MARKETPLACE_LOCALES).
+        'Content-Language': locale,
+        'Accept-Language': locale,
         Accept: 'application/json',
         Authorization: `Bearer ${accessToken}`,
       },
@@ -50,40 +80,60 @@ async function request(accessToken, method, path, body) {
 }
 
 // SKU is the seller's own identifier — inventory items are created/replaced
-// idempotently by SKU, independent of any offer or listing.
-function createOrReplaceInventoryItem(accessToken, sku, inventoryItem) {
-  return request(accessToken, 'PUT', `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, inventoryItem);
+// idempotently by SKU, independent of any offer or listing. `marketplaceId`
+// isn't part of the request body (eBay's schema has no such field here) —
+// it only controls the Content-Language/Accept-Language headers, which is
+// what actually determines which marketplace can later see this SKU.
+function createOrReplaceInventoryItem(accessToken, sku, inventoryItem, marketplaceId) {
+  return request(
+    accessToken,
+    'PUT',
+    `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+    inventoryItem,
+    marketplaceId
+  );
 }
 
-function createOrReplaceInventoryItemGroup(accessToken, groupKey, inventoryItemGroup) {
+function createOrReplaceInventoryItemGroup(accessToken, groupKey, inventoryItemGroup, marketplaceId) {
   return request(
     accessToken,
     'PUT',
     `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`,
-    inventoryItemGroup
+    inventoryItemGroup,
+    marketplaceId
   );
 }
 
 // Returns { offerId } — this is the "draft": it exists in the seller's
-// account but nothing is live until publishOffer is called.
+// account but nothing is live until publishOffer is called. `offer.marketplaceId`
+// is always present in the body already — reused here to pick the matching locale.
 function createOffer(accessToken, offer) {
-  return request(accessToken, 'POST', '/sell/inventory/v1/offer', offer);
+  return request(accessToken, 'POST', '/sell/inventory/v1/offer', offer, offer.marketplaceId);
 }
 
 function updateOffer(accessToken, offerId, offer) {
-  return request(accessToken, 'PUT', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, offer);
+  return request(accessToken, 'PUT', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, offer, offer.marketplaceId);
 }
 
 // Returns { listingId } — the offer is now a live eBay listing.
-function publishOffer(accessToken, offerId) {
-  return request(accessToken, 'POST', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`);
+function publishOffer(accessToken, offerId, marketplaceId) {
+  return request(
+    accessToken,
+    'POST',
+    `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish`,
+    undefined,
+    marketplaceId
+  );
 }
 
 function publishOfferByInventoryItemGroup(accessToken, inventoryItemGroupKey, marketplaceId) {
-  return request(accessToken, 'POST', '/sell/inventory/v1/offer/publish_by_inventory_item_group', {
-    inventoryItemGroupKey,
-    marketplaceId,
-  });
+  return request(
+    accessToken,
+    'POST',
+    '/sell/inventory/v1/offer/publish_by_inventory_item_group',
+    { inventoryItemGroupKey, marketplaceId },
+    marketplaceId
+  );
 }
 
 function withdrawOffer(accessToken, offerId) {

@@ -165,7 +165,7 @@ async function publish(id, userId) {
   const result = await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
     listing.platform_group_key
       ? ebayService.publishGroup(credentials, listing.platform_group_key, listing.generated_data?.marketplaceId)
-      : ebayService.publishDraft(credentials, listing.platform_offer_id)
+      : ebayService.publishDraft(credentials, listing.platform_offer_id, listing.generated_data?.marketplaceId)
   );
 
   return listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });

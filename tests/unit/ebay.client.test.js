@@ -60,3 +60,47 @@ test('a non-2xx policy response throws EbayApiError with eBay\'s error message',
     (err) => err instanceof ebayClient.EbayApiError && err.message === 'Invalid marketplace'
   );
 });
+
+// A SKU/offer's marketplace visibility is tied to the Content-Language of the
+// write calls that created it — confirmed live: en-US headers made a SKU
+// invisible to EBAY_GB's createOffer (errorId 25751), en-GB headers fixed it.
+test('createOrReplaceInventoryItem sends en-GB Content-Language/Accept-Language for EBAY_GB', async () => {
+  mock.method(global, 'fetch', async (url, options) => {
+    assert.strictEqual(options.headers['Content-Language'], 'en-GB');
+    assert.strictEqual(options.headers['Accept-Language'], 'en-GB');
+    return fakeJsonResponse({}, 204);
+  });
+
+  await ebayClient.createOrReplaceInventoryItem('tok-1', 'sku-1', { condition: 'NEW' }, 'EBAY_GB');
+});
+
+test('createOrReplaceInventoryItem defaults to en-US when no marketplaceId is given', async () => {
+  mock.method(global, 'fetch', async (url, options) => {
+    assert.strictEqual(options.headers['Content-Language'], 'en-US');
+    assert.strictEqual(options.headers['Accept-Language'], 'en-US');
+    return fakeJsonResponse({}, 204);
+  });
+
+  await ebayClient.createOrReplaceInventoryItem('tok-1', 'sku-1', { condition: 'NEW' });
+});
+
+test('createOffer derives the locale from offer.marketplaceId', async () => {
+  mock.method(global, 'fetch', async (url, options) => {
+    assert.strictEqual(options.headers['Content-Language'], 'en-GB');
+    assert.strictEqual(options.headers['Accept-Language'], 'en-GB');
+    return fakeJsonResponse({ offerId: 'o1' });
+  });
+
+  const result = await ebayClient.createOffer('tok-1', { sku: 'sku-1', marketplaceId: 'EBAY_GB' });
+  assert.strictEqual(result.offerId, 'o1');
+});
+
+test('publishOfferByInventoryItemGroup sends the matching marketplace locale', async () => {
+  mock.method(global, 'fetch', async (url, options) => {
+    assert.strictEqual(options.headers['Content-Language'], 'de-DE');
+    return fakeJsonResponse({ listingId: 'l1' });
+  });
+
+  const result = await ebayClient.publishOfferByInventoryItemGroup('tok-1', 'group-1', 'EBAY_DE');
+  assert.strictEqual(result.listingId, 'l1');
+});

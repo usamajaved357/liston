@@ -162,7 +162,7 @@ async function draftListing(credentials, input) {
 
   ensureListingPolicies(input.listingPolicies);
   await ensureInventoryLocation(accessToken, input.merchantLocationKey, input.locationInput);
-  await ebayClient.createOrReplaceInventoryItem(accessToken, input.sku, buildInventoryItem(input));
+  await ebayClient.createOrReplaceInventoryItem(accessToken, input.sku, buildInventoryItem(input), input.marketplaceId);
   const offer = await createOfferWithRetry(accessToken, buildOffer(input));
 
   return {
@@ -196,7 +196,8 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         aspects: { ...variesBy.aspects, ...variant.aspects },
         condition: variant.condition,
         quantity: variant.quantity,
-      })
+      }),
+      marketplaceId
     );
     const offer = await createOfferWithRetry(
       accessToken,
@@ -214,13 +215,18 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
     offers.push({ sku: variant.sku, offerId: offer.offerId });
   }
 
-  await ebayClient.createOrReplaceInventoryItemGroup(accessToken, groupKey, {
-    title: commonTitle,
-    description: commonDescription,
-    imageUrls,
-    variantSKUs: variants.map((v) => v.sku),
-    variesBy: { aspectsImageVariesBy: variesBy.aspectsImageVariesBy, specifications: variesBy.specifications },
-  });
+  await ebayClient.createOrReplaceInventoryItemGroup(
+    accessToken,
+    groupKey,
+    {
+      title: commonTitle,
+      description: commonDescription,
+      imageUrls,
+      variantSKUs: variants.map((v) => v.sku),
+      variesBy: { aspectsImageVariesBy: variesBy.aspectsImageVariesBy, specifications: variesBy.specifications },
+    },
+    marketplaceId
+  );
 
   return {
     groupKey,
@@ -231,9 +237,9 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
   };
 }
 
-async function publishDraft(credentials, offerId) {
+async function publishDraft(credentials, offerId, marketplaceId) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayClient.publishOffer(accessToken, offerId);
+  const result = await ebayClient.publishOffer(accessToken, offerId, marketplaceId);
   return {
     externalProductId: result.listingId,
     status: 'published',
