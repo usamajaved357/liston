@@ -10,9 +10,12 @@ interface AppShellProps {
   connectionsUsed: number;
   maxConnections: number;
   planName: string;
+  // Team management is owner-only — the nav item (and the page itself) is
+  // hidden for a member, who never has a role other than "member" here.
+  role?: "owner" | "member";
 }
 
-export function AppShell({ children, header, connectionsUsed, maxConnections, planName }: AppShellProps) {
+export function AppShell({ children, header, connectionsUsed, maxConnections, planName, role }: AppShellProps) {
   const pathname = usePathname();
   const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
 
@@ -64,6 +67,21 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
               </svg>
             }
           />
+          {role === "owner" && (
+            <NavItem
+              href="/team"
+              active={pathname === "/team"}
+              label="Team"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <circle cx="17" cy="8.5" r="2.3" stroke="currentColor" strokeWidth="1.6" />
+                  <path d="M15.5 14c2.5 0 5 1.6 5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
         </nav>
 
         <div className="mt-auto rounded-lg bg-[var(--color-paper)] p-3 flex flex-col gap-1">

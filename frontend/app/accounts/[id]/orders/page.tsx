@@ -314,6 +314,7 @@ export default function AccountOrdersPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      permissions={connection.permissions}
       header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Orders</h1>}
     >
       {/* Status tabs */}

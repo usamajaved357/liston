@@ -10,6 +10,7 @@ const userRoutes = require('./modules/users/user.routes');
 const connectionRoutes = require('./modules/connections/connection.routes');
 const ebayRoutes = require('./modules/ebay/ebay.routes');
 const listingRoutes = require('./modules/listings/listing.routes');
+const teamRoutes = require('./modules/team/team.routes');
 
 function createApp() {
   const app = express();
@@ -38,6 +39,7 @@ function createApp() {
   app.use('/api/connections', connectionRoutes);
   app.use('/api/ebay', ebayRoutes);
   app.use('/api/listings', listingRoutes);
+  app.use('/api/team', teamRoutes);
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

@@ -125,6 +125,7 @@ export default function AccountListingsPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      permissions={connection.permissions}
       header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Listings</h1>}
     >
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">

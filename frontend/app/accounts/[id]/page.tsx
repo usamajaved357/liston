@@ -178,6 +178,7 @@ export default function AccountOverviewPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      permissions={connection.permissions}
       header={
         <div className="flex items-center justify-between">
           <div>

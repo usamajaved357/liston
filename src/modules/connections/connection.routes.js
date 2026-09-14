@@ -1,5 +1,7 @@
 const express = require('express');
 const { requireAuth } = require('../../middleware/auth.middleware');
+const { requireOwner, requireFeature, requireAnyFeature } = require('../../middleware/feature.middleware');
+const { KNOWN_FEATURES } = require('../team/team.repository');
 const connectionController = require('./connection.controller');
 const listingController = require('../listings/listing.controller');
 
@@ -7,15 +9,17 @@ const router = express.Router();
 
 router.get('/', requireAuth, connectionController.list);
 router.get('/platforms', requireAuth, connectionController.listPlatforms);
-router.post('/ebay/authorize', requireAuth, connectionController.startEbayAuth);
-router.get('/:id', requireAuth, connectionController.getOne);
-router.delete('/:id', requireAuth, connectionController.remove);
-router.get('/:id/listings', requireAuth, connectionController.getListings);
-router.get('/:id/orders', requireAuth, connectionController.getOrders);
-router.get('/:id/earnings', requireAuth, connectionController.getEarnings);
-router.get('/:id/policies', requireAuth, connectionController.getPolicies);
-router.put('/:id/policies', requireAuth, connectionController.updatePolicies);
-router.get('/:id/listings/drafts', requireAuth, listingController.listDrafts);
-router.post('/:id/listings/drafts', requireAuth, listingController.generateDraft);
+// Creating/removing a whole eBay connection, and its business
+// policies/shipping location, are always admin-only — never delegable.
+router.post('/ebay/authorize', requireAuth, requireOwner, connectionController.startEbayAuth);
+router.get('/:id', requireAuth, requireAnyFeature(KNOWN_FEATURES), connectionController.getOne);
+router.delete('/:id', requireAuth, requireOwner, connectionController.remove);
+router.get('/:id/listings', requireAuth, requireFeature('listings'), connectionController.getListings);
+router.get('/:id/orders', requireAuth, requireFeature('orders'), connectionController.getOrders);
+router.get('/:id/earnings', requireAuth, requireFeature('orders'), connectionController.getEarnings);
+router.get('/:id/policies', requireAuth, requireOwner, connectionController.getPolicies);
+router.put('/:id/policies', requireAuth, requireOwner, connectionController.updatePolicies);
+router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
+router.post('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.generateDraft);
 
 module.exports = router;

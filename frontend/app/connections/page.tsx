@@ -141,6 +141,7 @@ export default function ConnectionsPage() {
       connectionsUsed={connectionsUsed}
       maxConnections={maxConnections}
       planName={planName}
+      role={user.role}
       header={
         <div className="flex items-center justify-between">
           <div>

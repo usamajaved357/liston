@@ -35,6 +35,8 @@ async function request<T>(
 export interface User {
   id: string;
   email: string;
+  name?: string | null;
+  role?: "owner" | "member";
   plan_id: string;
   plan_name?: string;
   max_connections?: number;
@@ -59,6 +61,18 @@ export interface EbaySettings {
   merchantLocationKey?: string;
 }
 
+// Present only when the caller is a team member — resolved per-feature
+// access for this connection, per the deny-by-default rule (see
+// src/modules/team on the backend). Absent for an owner, who always sees
+// everything.
+export interface ConnectionPermissions {
+  orders: boolean;
+  listings: boolean;
+  inbox: boolean;
+  campaigns: boolean;
+  [feature: string]: boolean;
+}
+
 export interface Connection {
   id: string;
   label: string;
@@ -66,8 +80,30 @@ export interface Connection {
   platform_key: string;
   platform_name: string;
   settings?: { ebay?: EbaySettings };
+  permissions?: ConnectionPermissions;
   created_at: string;
   updated_at: string;
+}
+
+export interface TeamMemberPermission {
+  id: string;
+  connection_id: string | null;
+  feature: string;
+  allowed: boolean;
+}
+
+export interface TeamMember {
+  id: string;
+  email: string;
+  name: string | null;
+  created_at: string;
+  permissions: TeamMemberPermission[];
+}
+
+export interface PermissionUpdate {
+  connectionId: string | null;
+  feature: string;
+  allowed: boolean;
 }
 
 export interface Platform {
@@ -391,4 +427,21 @@ export const api = {
 
   publishDraftListing: (listingId: string) =>
     request<{ listing: DraftListing }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
+
+  listTeamMembers: () =>
+    request<{ members: TeamMember[]; knownFeatures: string[] }>("/api/team/members"),
+
+  addTeamMember: (input: { email: string; name?: string; password: string }) =>
+    request<{ member: TeamMember }>("/api/team/members", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
+
+  updateMemberPermissions: (memberId: string, permissions: PermissionUpdate[]) =>
+    request<{ permissions: TeamMemberPermission[] }>(`/api/team/members/${memberId}/permissions`, {
+      method: "PUT",
+      body: JSON.stringify({ permissions }),
+    }),
 };

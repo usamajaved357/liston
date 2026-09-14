@@ -181,6 +181,7 @@ export default function DashboardPage() {
       connectionsUsed={connectionsUsed}
       maxConnections={maxConnections}
       planName={planName}
+      role={user.role}
       header={
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>

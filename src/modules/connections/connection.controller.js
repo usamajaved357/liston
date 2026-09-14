@@ -16,9 +16,9 @@ async function startEbayAuth(req, res, next) {
 
     // Fail fast on plan limit before sending the user through eBay's consent
     // screen — nothing worse than a "connection added" surprise 403 after.
-    await connectionService.assertUnderPlanLimit(req.userId);
+    await connectionService.assertUnderPlanLimit(req.ownerId);
 
-    const state = ebayOauth.signState({ userId: req.userId, label: parsed.data.label });
+    const state = ebayOauth.signState({ userId: req.ownerId, label: parsed.data.label });
     const authorizeUrl = ebayOauth.buildAuthorizeUrl(state);
     res.status(200).json({ authorizeUrl });
   } catch (err) {
@@ -37,7 +37,10 @@ async function listPlatforms(req, res, next) {
 
 async function list(req, res, next) {
   try {
-    const { connections, maxConnections } = await connectionService.listConnections(req.userId);
+    const { connections, maxConnections } = await connectionService.listConnections(req.ownerId, {
+      role: req.role,
+      userId: req.userId,
+    });
     res.status(200).json({ connections, maxConnections });
   } catch (err) {
     next(err);
@@ -46,7 +49,10 @@ async function list(req, res, next) {
 
 async function getOne(req, res, next) {
   try {
-    const connection = await connectionService.getConnectionSummary(req.params.id, req.userId);
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId, {
+      role: req.role,
+      userId: req.userId,
+    });
     res.status(200).json({ connection });
   } catch (err) {
     next(err);
@@ -55,7 +61,7 @@ async function getOne(req, res, next) {
 
 async function remove(req, res, next) {
   try {
-    await connectionService.deleteConnection(req.params.id, req.userId);
+    await connectionService.deleteConnection(req.params.id, req.ownerId);
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -72,7 +78,7 @@ async function getListings(req, res, next) {
     const status = req.query.status === 'inactive' ? 'inactive' : 'active';
     const pageNumber = Math.max(1, parseInt(req.query.page, 10) || 1);
 
-    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, (credentials, connection) => {
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Listings aren't available for ${connection.platform_name} yet`, 400);
       }
@@ -95,7 +101,7 @@ async function getOrders(req, res, next) {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
 
-    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, (credentials, connection) => {
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
@@ -120,7 +126,7 @@ async function getEarnings(req, res, next) {
     const range = EARNINGS_RANGES.includes(req.query.range) ? req.query.range : '7d';
     const { from, to } = req.query;
 
-    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, (credentials, connection) => {
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Earnings aren't available for ${connection.platform_name} yet`, 400);
       }
@@ -148,7 +154,7 @@ async function getPolicies(req, res, next) {
     // Folded into one endpoint (rather than a second round-trip) — the
     // Settings page needs policies + shipping location together to hydrate
     // all four pickers in a single load.
-    const result = await connectionService.withDecryptedCredentials(req.params.id, req.userId, async (credentials, connection) => {
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, async (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Policies aren't available for ${connection.platform_name} yet`, 400);
       }
@@ -178,12 +184,12 @@ async function updatePolicies(req, res, next) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
 
-    const connection = await connectionService.getConnectionSummary(req.params.id, req.userId);
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
     if (connection.platform_key !== 'ebay') {
       throw new connectionService.ConnectionError(`Policies aren't available for ${connection.platform_name} yet`, 400);
     }
 
-    const settings = await connectionService.updateConnectionSettings(req.params.id, req.userId, { ebay: parsed.data });
+    const settings = await connectionService.updateConnectionSettings(req.params.id, req.ownerId, { ebay: parsed.data });
     res.status(200).json({ settings });
   } catch (err) {
     next(err);

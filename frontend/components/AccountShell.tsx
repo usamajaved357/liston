@@ -21,6 +21,12 @@ interface AccountShellProps {
   platformKey: string;
   platformName: string;
   status: string;
+  // Undefined for an owner (show every tab). For a team member, comes from
+  // the connection's resolved `permissions` (see ConnectionPermissions in
+  // lib/api.ts) — only tabs with `true` are shown. The backend enforces the
+  // same gate on each route independently (see requireFeature), so this is
+  // a UX nicety, not the security boundary.
+  permissions?: Record<string, boolean>;
 }
 
 export function AccountShell({
@@ -31,7 +37,9 @@ export function AccountShell({
   platformKey,
   platformName,
   status,
+  permissions,
 }: AccountShellProps) {
+  const canShow = (feature: string) => permissions === undefined || permissions[feature];
   const pathname = usePathname();
   const base = `/accounts/${connectionId}`;
 
@@ -72,78 +80,91 @@ export function AccountShell({
               </svg>
             }
           />
-          <NavItem
-            href={`${base}/listings`}
-            active={pathname.startsWith(`${base}/listings`)}
-            label="Listings"
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <rect x="3.5" y="4" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-                <rect x="3.5" y="10.5" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-                <rect x="3.5" y="17" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-              </svg>
-            }
-          />
-          <NavItem
-            href={`${base}/orders`}
-            active={pathname.startsWith(`${base}/orders`)}
-            label="Orders"
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path
-                  d="M6 3h12l1 5H5l1-5z"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinejoin="round"
-                />
-                <path d="M5 8h14v11a2 2 0 01-2 2H7a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                <path d="M9 12a3 3 0 006 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-            }
-          />
-          <NavItem
-            href={`${base}/campaigns`}
-            active={pathname.startsWith(`${base}/campaigns`)}
-            label="Campaigns"
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path d="M3 10v4a1 1 0 001 1h2l7 4V5L6 9H4a1 1 0 00-1 1z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                <path d="M17 9a3 3 0 010 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              </svg>
-            }
-          />
-          <NavItem
-            href={`${base}/inbox`}
-            active={pathname.startsWith(`${base}/inbox`)}
-            label="Inbox"
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path
-                  d="M3.5 6.5h17v11a1.5 1.5 0 01-1.5 1.5h-14A1.5 1.5 0 013.5 17.5v-11z"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinejoin="round"
-                />
-                <path d="M3.5 6.5l8.5 6 8.5-6" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-              </svg>
-            }
-          />
-          <NavItem
-            href={`${base}/settings`}
-            active={pathname.startsWith(`${base}/settings`)}
-            label="Settings"
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
-                <path
-                  d="M19.4 13.5a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.04 1.56V19.5a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1.04-1.56 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1.04H4.5a2 2 0 110-4h.09a1.7 1.7 0 001.56-1.04 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H10.6A1.7 1.7 0 0011.5 4.5V4.4a2 2 0 114 0v.09a1.7 1.7 0 001.04 1.56 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87v.09a1.7 1.7 0 001.56 1.04h.09a2 2 0 110 4h-.09a1.7 1.7 0 00-1.56 1.04z"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            }
-          />
+          {canShow("listings") && (
+            <NavItem
+              href={`${base}/listings`}
+              active={pathname.startsWith(`${base}/listings`)}
+              label="Listings"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <rect x="3.5" y="4" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
+                  <rect x="3.5" y="10.5" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
+                  <rect x="3.5" y="17" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
+                </svg>
+              }
+            />
+          )}
+          {canShow("orders") && (
+            <NavItem
+              href={`${base}/orders`}
+              active={pathname.startsWith(`${base}/orders`)}
+              label="Orders"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path
+                    d="M6 3h12l1 5H5l1-5z"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M5 8h14v11a2 2 0 01-2 2H7a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M9 12a3 3 0 006 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
+          {canShow("campaigns") && (
+            <NavItem
+              href={`${base}/campaigns`}
+              active={pathname.startsWith(`${base}/campaigns`)}
+              label="Campaigns"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M3 10v4a1 1 0 001 1h2l7 4V5L6 9H4a1 1 0 00-1 1z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M17 9a3 3 0 010 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
+          {canShow("inbox") && (
+            <NavItem
+              href={`${base}/inbox`}
+              active={pathname.startsWith(`${base}/inbox`)}
+              label="Inbox"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path
+                    d="M3.5 6.5h17v11a1.5 1.5 0 01-1.5 1.5h-14A1.5 1.5 0 013.5 17.5v-11z"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinejoin="round"
+                  />
+                  <path d="M3.5 6.5l8.5 6 8.5-6" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+          )}
+          {/* Connection Settings (business policies, shipping location) is always
+              admin-only, never delegable — hidden outright for a member rather
+              than shown then 403'd. */}
+          {permissions === undefined && (
+            <NavItem
+              href={`${base}/settings`}
+              active={pathname.startsWith(`${base}/settings`)}
+              label="Settings"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+                  <path
+                    d="M19.4 13.5a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.04 1.56V19.5a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1.04-1.56 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1.04H4.5a2 2 0 110-4h.09a1.7 1.7 0 001.56-1.04 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H10.6A1.7 1.7 0 0011.5 4.5V4.4a2 2 0 114 0v.09a1.7 1.7 0 001.04 1.56 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87v.09a1.7 1.7 0 001.56 1.04h.09a2 2 0 110 4h-.09a1.7 1.7 0 00-1.56 1.04z"
+                    stroke="currentColor"
+                    strokeWidth="1.3"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              }
+            />
+          )}
         </nav>
 
         <div className="mt-auto rounded-lg bg-[var(--color-paper)] p-3 flex flex-col gap-1.5">

@@ -20,9 +20,13 @@ async function findPlatformByKey(key) {
   return result.rows[0] || null;
 }
 
+// Amazon is dropped from the product scope for now (eBay is the only active
+// platform; TikTok Shop is a later, already-partially-built destination) —
+// excluded here rather than deleted from the `platforms` table, so the row
+// (and any historical data referencing it) stays intact if it's ever revived.
 async function findAllPlatforms() {
   const result = await query(
-    "SELECT id, key, name, role, status FROM platforms WHERE role IN ('destination', 'both') ORDER BY name"
+    "SELECT id, key, name, role, status FROM platforms WHERE role IN ('destination', 'both') AND key != 'amazon' ORDER BY name"
   );
   return result.rows;
 }

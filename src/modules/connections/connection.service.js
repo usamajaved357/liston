@@ -1,4 +1,5 @@
 const connectionRepository = require('./connection.repository');
+const teamRepository = require('../team/team.repository');
 const { encrypt, decrypt } = require('./credentials.encryption');
 
 class ConnectionError extends Error {
@@ -33,12 +34,30 @@ async function listPlatforms() {
   }));
 }
 
-async function listConnections(userId) {
+// `viewer` (optional: { role, userId }) is the actual authenticated caller —
+// distinct from `ownerId`, whose connections are being listed. For a member,
+// each connection gets its resolved feature permissions attached and
+// connections with zero granted features are dropped entirely (they'd have
+// nothing to show a member anyway). Omitted/owner viewer returns everything
+// unchanged, matching today's owner-only behavior.
+async function listConnections(ownerId, viewer) {
   const [connections, maxConnections] = await Promise.all([
-    connectionRepository.findAllByUser(userId),
-    connectionRepository.getMaxConnectionsForUser(userId),
+    connectionRepository.findAllByUser(ownerId),
+    connectionRepository.getMaxConnectionsForUser(ownerId),
   ]);
-  return { connections, maxConnections };
+
+  if (!viewer || viewer.role === 'owner') {
+    return { connections, maxConnections };
+  }
+
+  const withPermissions = await Promise.all(
+    connections.map(async (connection) => ({
+      ...connection,
+      permissions: await teamRepository.getResolvedPermissions(viewer.userId, connection.id),
+    }))
+  );
+  const visible = withPermissions.filter((c) => Object.values(c.permissions).some(Boolean));
+  return { connections: visible, maxConnections };
 }
 
 async function assertUnderPlanLimit(userId) {
@@ -74,13 +93,19 @@ async function createConnection(userId, { platformKey, label, credentials }) {
 }
 
 // Safe to return to the frontend — no credentials, decrypted or otherwise.
-async function getConnectionSummary(id, userId) {
-  const connection = await connectionRepository.findByIdForUser(id, userId);
+// `viewer` (optional: { role, userId }), see listConnections — a member's
+// summary carries their resolved permissions so the frontend (AccountShell)
+// can gate nav tabs from the same data it already fetches per-page.
+async function getConnectionSummary(id, ownerId, viewer) {
+  const connection = await connectionRepository.findByIdForUser(id, ownerId);
   if (!connection) {
     throw new ConnectionError('Connection not found', 404);
   }
   const { credentials, ...summary } = connection;
   void credentials;
+  if (viewer && viewer.role === 'member') {
+    summary.permissions = await teamRepository.getResolvedPermissions(viewer.userId, id);
+  }
   return summary;
 }
 

@@ -32,6 +32,7 @@ export default function AccountCampaignsPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      permissions={connection.permissions}
       header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Campaigns</h1>}
     >
       <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">

@@ -159,6 +159,7 @@ export default function AccountSettingsPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
+      permissions={connection.permissions}
       header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Settings</h1>}
     >
       {connection.platform_key !== "ebay" ? (

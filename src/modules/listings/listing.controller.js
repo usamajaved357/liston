@@ -60,7 +60,7 @@ async function generateDraft(req, res, next) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
 
-    const listing = await listingService.generateEbayDraftFromUrls(req.params.id, req.userId, parsed.data);
+    const listing = await listingService.generateEbayDraftFromUrls(req.params.id, req.ownerId, parsed.data);
     res.status(201).json({ listing });
   } catch (err) {
     next(err);
@@ -69,7 +69,7 @@ async function generateDraft(req, res, next) {
 
 async function listDrafts(req, res, next) {
   try {
-    const drafts = await listingService.listPendingDrafts(req.params.id, req.userId);
+    const drafts = await listingService.listPendingDrafts(req.params.id, req.ownerId);
     res.status(200).json({ drafts });
   } catch (err) {
     next(err);
@@ -78,7 +78,7 @@ async function listDrafts(req, res, next) {
 
 async function getOne(req, res, next) {
   try {
-    const { listing, policies } = await listingService.getDraftDetail(req.params.listingId, req.userId);
+    const { listing, policies } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
     res.status(200).json({ listing, policies });
   } catch (err) {
     next(err);
@@ -87,7 +87,7 @@ async function getOne(req, res, next) {
 
 async function publish(req, res, next) {
   try {
-    const listing = await listingService.publish(req.params.listingId, req.userId);
+    const listing = await listingService.publish(req.params.listingId, req.ownerId);
     res.status(200).json({ listing });
   } catch (err) {
     next(err);
