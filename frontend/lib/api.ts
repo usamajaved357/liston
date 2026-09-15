@@ -305,6 +305,44 @@ export interface PriceBreakdown {
   competitorPrice?: number | null;
 }
 
+// Only what changed. Variants are keyed by index (a local draft has no SKUs
+// yet); removals are expressed as such rather than as a replacement array.
+export interface DraftPatch {
+  title?: string;
+  commonTitle?: string;
+  description?: string;
+  commonDescription?: string;
+  condition?: string;
+  aspects?: Record<string, string[]>;
+  imageUrls?: string[];
+  price?: OfferPrice;
+  variants?: Record<string, { price?: OfferPrice; quantity?: number; imageUrls?: string[] }>;
+  removeAxisValues?: { axis: string; value: string }[];
+  variantSkusToRemove?: string[];
+}
+
+export interface ImageCheck {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface TextProposal {
+  changes: Partial<Pick<SingleDraftContent, "title" | "description" | "aspects">> & {
+    commonTitle?: string;
+    commonDescription?: string;
+  };
+  summary: string;
+}
+
+export interface ImageProposal {
+  proposalId: string;
+  operation: "scene" | "background" | "text_overlay";
+  summary: string;
+  policyWarning: string | null;
+  previewDataUrl: string;
+}
+
 export interface DraftListing {
   id: string;
   connection_id: string;
@@ -465,6 +503,32 @@ export const api = {
 
   publishDraftListing: (listingId: string) =>
     request<{ listing: DraftListing }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
+
+  // A draft lives only in Liston until Publish, so every edit below is a
+  // plain update — nothing touches eBay until the seller decides to go live.
+  updateDraftListing: (listingId: string, patch: DraftPatch) =>
+    request<{ listing: DraftListing; imageCheck: ImageCheck }>(`/api/listings/${listingId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  deleteDraftListing: (listingId: string) => request<void>(`/api/listings/${listingId}`, { method: "DELETE" }),
+
+  // AI revisions PROPOSE; nothing changes until the seller accepts.
+  reviseDraftText: (listingId: string, instruction: string) =>
+    request<TextProposal>(`/api/listings/${listingId}/revise`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
+  reviseDraftImage: (listingId: string, imageUrl: string, instruction: string) =>
+    request<ImageProposal>(`/api/listings/${listingId}/images/revise`, {
+      method: "POST",
+      body: JSON.stringify({ imageUrl, instruction }),
+    }),
+  acceptDraftImage: (listingId: string, proposalId: string, replaces: string) =>
+    request<{ listing: DraftListing; imageUrl: string }>(`/api/listings/${listingId}/images/accept`, {
+      method: "POST",
+      body: JSON.stringify({ proposalId, replaces }),
+    }),
 
   listTeamMembers: () =>
     request<{ members: TeamMember[]; knownFeatures: string[] }>("/api/team/members"),

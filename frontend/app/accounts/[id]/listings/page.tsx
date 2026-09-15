@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, DraftListing, isVariationDraft, Listing, ListingStatusFilter } from "@/lib/api";
+import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -66,11 +67,27 @@ export default function AccountListingsPage() {
   const [filter, setFilter] = useState<ListingStatusFilter | "draft">(initialFilter);
   const [items, setItems] = useState<Listing[]>([]);
   const [drafts, setDrafts] = useState<DraftListing[]>([]);
+  const [draftToDelete, setDraftToDelete] = useState<string | null>(null);
+  const [deletingDraft, setDeletingDraft] = useState(false);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalEntries, setTotalEntries] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  async function handleDeleteDraft() {
+    if (!draftToDelete) return;
+    setDeletingDraft(true);
+    try {
+      await api.deleteDraftListing(draftToDelete);
+      setDrafts((list) => list.filter((d) => d.id !== draftToDelete));
+      setDraftToDelete(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't delete this draft.");
+    } finally {
+      setDeletingDraft(false);
+    }
+  }
 
   useEffect(() => {
     if (!connection) return;
@@ -180,25 +197,36 @@ export default function AccountListingsPage() {
               const variantCount = isVariation ? content.variants.length : null;
 
               return (
-                <Link
+                <div
                   key={draft.id}
-                  href={`/accounts/${connection.id}/listings/draft/${draft.id}`}
                   className="flex items-center gap-4 px-5 py-4 border-b border-[var(--color-line)] last:border-b-0 hover:bg-[var(--color-paper)] transition-colors"
                 >
-                  {image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={image} alt="" className="h-12 w-12 rounded-lg object-cover flex-shrink-0 border border-[var(--color-line)]" />
-                  ) : (
-                    <div className="h-12 w-12 rounded-lg bg-[var(--color-paper)] flex-shrink-0 border border-[var(--color-line)]" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{title}</p>
-                    <p className="text-xs text-[var(--color-muted)]">
-                      {variantCount !== null ? `${variantCount} variants` : `SKU ${draft.sku || "—"}`} · pending review
-                    </p>
-                  </div>
-                  <p className="text-sm font-bold text-[var(--color-ink)] flex-shrink-0">{priceLabel}</p>
-                </Link>
+                  <Link
+                    href={`/accounts/${connection.id}/listings/draft/${draft.id}`}
+                    className="flex min-w-0 flex-1 items-center gap-4"
+                  >
+                    {image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={image} alt="" className="h-12 w-12 rounded-lg object-cover flex-shrink-0 border border-[var(--color-line)]" />
+                    ) : (
+                      <div className="h-12 w-12 rounded-lg bg-[var(--color-paper)] flex-shrink-0 border border-[var(--color-line)]" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{title}</p>
+                      <p className="text-xs text-[var(--color-muted)]">
+                        {variantCount !== null ? `${variantCount} variants` : `SKU ${draft.sku || "—"}`} · pending review
+                      </p>
+                    </div>
+                    <p className="text-sm font-bold text-[var(--color-ink)] flex-shrink-0">{priceLabel}</p>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setDraftToDelete(draft.id)}
+                    className="flex-shrink-0 text-xs font-semibold text-[var(--color-danger)] hover:underline"
+                  >
+                    Delete
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -266,6 +294,16 @@ export default function AccountListingsPage() {
           <PaginationControls page={page} totalPages={totalPages} onPage={setPage} />
         </div>
       )}
+      <ConfirmDialog
+        open={draftToDelete !== null}
+        title="Delete this draft?"
+        description="This removes the draft from Liston. Nothing has been created on eBay yet, so there's nothing to undo there."
+        confirmLabel="Delete"
+        danger
+        loading={deletingDraft}
+        onCancel={() => setDraftToDelete(null)}
+        onConfirm={handleDeleteDraft}
+      />
     </AccountShell>
   );
 }

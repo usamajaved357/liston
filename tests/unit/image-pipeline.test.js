@@ -308,3 +308,77 @@ test('the screen tool requires a verdict on text and collage for every image', (
   assert.ok(required.includes('hasTextOrGraphics'));
   assert.ok(required.includes('isCollage'));
 });
+
+// --- provider dispatch -----------------------------------------------------
+
+const pipeline = require('../../src/modules/ai-generation/image-pipeline');
+const openaiImage = require('../../src/modules/ai-generation/image-generation/openai-image.service');
+const config = require('../../src/config');
+
+test('with OpenAI configured, the gallery is generated from the best clean supplier photo', async () => {
+  const previousKey = config.openaiApiKey;
+  const previousProvider = config.imageGeneration.provider;
+  config.openaiApiKey = 'test-key';
+  config.imageGeneration.provider = 'openai';
+
+  const source = await makeImage(900, 900);
+  const generated = await makeImage(1024, 1024);
+  mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
+  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
+  mock.method(screen, 'screenImages', async (images) => images.map((i) => ({ ...i, screen: null })));
+  const shotMock = mock.method(openaiImage, 'generateProductShot', async () => generated);
+  mock.method(eps, 'uploadAll', async (token, prepared) => prepared.map((p) => p.sourceUrl));
+
+  try {
+    const { imageUrls } = await pipeline.buildGalleryImages({
+      sourceImageUrls: ['https://example.com/a.jpg'],
+      scenePrompt: 'x',
+      accessToken: 't',
+      marketplaceId: 'EBAY_GB',
+      categoryId: '20349',
+    });
+
+    // One generation per gallery slot, each a different shot type.
+    assert.strictEqual(shotMock.mock.calls.length, 5);
+    assert.deepStrictEqual(
+      shotMock.mock.calls.map((c) => c.arguments[0].variant),
+      ['hero', 'angle', 'detail', 'in_use', 'back']
+    );
+    assert.ok(imageUrls.every((u) => u.startsWith('generated:')));
+  } finally {
+    config.openaiApiKey = previousKey;
+    config.imageGeneration.provider = previousProvider;
+  }
+});
+
+test('a failed generation falls back to the clean supplier photo instead of a hole', async () => {
+  const previousKey = config.openaiApiKey;
+  const previousProvider = config.imageGeneration.provider;
+  config.openaiApiKey = 'test-key';
+  config.imageGeneration.provider = 'openai';
+
+  const source = await makeImage(900, 900);
+  mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
+  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
+  mock.method(screen, 'screenImages', async (images) => images.map((i) => ({ ...i, screen: null })));
+  mock.method(openaiImage, 'generateProductShot', async () => {
+    throw new Error('rate limited');
+  });
+  mock.method(eps, 'uploadAll', async (token, prepared) => prepared.map((p) => p.sourceUrl));
+
+  try {
+    const { imageUrls, warnings } = await pipeline.buildGalleryImages({
+      sourceImageUrls: ['https://example.com/a.jpg'],
+      scenePrompt: 'x',
+      accessToken: 't',
+      marketplaceId: 'EBAY_GB',
+      categoryId: '20349',
+    });
+
+    assert.deepStrictEqual(imageUrls, ['https://example.com/a.jpg']);
+    assert.match(warnings.join(' '), /5 generated shot\(s\) failed/);
+  } finally {
+    config.openaiApiKey = previousKey;
+    config.imageGeneration.provider = previousProvider;
+  }
+});

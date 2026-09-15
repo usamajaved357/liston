@@ -3,7 +3,34 @@ const imageOps = require('./image.ops');
 const eps = require('./eps');
 const slotPlan = require('./slot-plan');
 const imageScreen = require('./image-screen.service');
+const openaiImage = require('../image-generation/openai-image.service');
+const config = require('../../../config');
 const logger = require('../../../utils/logger');
+
+// The gallery's shot list when generating real product photography: the hero
+// first (it's the search thumbnail), then views a buyer actually wants before
+// committing — an angle for depth, a close detail for finish, the product in
+// use, the back. Each is a separate generation from the same reference photo.
+const GALLERY_SHOTS = ['hero', 'angle', 'detail', 'in_use', 'back'];
+
+function useOpenAi() {
+  return config.imageGeneration.provider === 'openai' && openaiImage.isConfigured();
+}
+
+// One generated photograph, normalised to eBay's shape. Returns null on any
+// failure so the caller can fall back rather than lose the slot.
+async function generateShot(referenceBuffers, variant) {
+  try {
+    const png = await openaiImage.generateProductShot({ referenceImages: referenceBuffers, variant });
+    const squared = await imageOps.padToSquare(png);
+    const check = await imageOps.validate(squared);
+    if (!check.ok) return null;
+    return { buffer: squared, sourceUrl: `generated:${variant}`, meta: check.meta, sourceMeta: check.meta, warnings: [] };
+  } catch (err) {
+    logger.warn('Generated shot failed — falling back', { variant, error: err.message });
+    return null;
+  }
+}
 
 // The listing image pipeline, in one place.
 //
@@ -83,6 +110,10 @@ async function buildGalleryImages({
 
   const usable = ranked.slice(0, plan.recommendedImages);
 
+  if (useOpenAi() && usable.length) {
+    return buildGeneratedGallery({ usable, rejected, sourceImageUrls, screened, accessToken, marketplaceId, plan });
+  }
+
   // Supplier galleries rarely leave enough clean photography behind: a real
   // iPhone-case listing had 10 of its 13 photos rejected as marketing
   // graphics, leaving a single usable shot. A one-image listing looks
@@ -157,6 +188,53 @@ async function buildGalleryImages({
   return { imageUrls, warnings };
 }
 
+// The OpenAI path. The best clean supplier photo (plus a second one when the
+// gallery has it, e.g. front + back) is the reference for every shot, so the
+// product stays identical across the set. If a shot fails, the clean supplier
+// photo takes that slot rather than leaving a hole.
+async function buildGeneratedGallery({ usable, rejected, sourceImageUrls, screened, accessToken, marketplaceId, plan }) {
+  const references = usable.slice(0, 2).map((image) => image.buffer);
+  const shots = [];
+
+  // Generated sequentially: each is a ~20-40s call and OpenAI rate-limits
+  // image edits, so a burst of five would mostly get 429s.
+  for (const variant of GALLERY_SHOTS.slice(0, plan.recommendedImages)) {
+    const shot = await generateShot(references, variant);
+    if (shot) shots.push(shot);
+  }
+
+  // Clean supplier photos not already represented fill any remaining slots —
+  // a real photo of the actual product is still worth showing.
+  for (const image of usable) {
+    if (shots.length >= plan.recommendedImages) break;
+    shots.push(image);
+  }
+
+  const warnings = [];
+  const skipped = sourceImageUrls.length - screened.length;
+  if (skipped > 0) warnings.push(`${skipped} of the supplier's ${sourceImageUrls.length} photos were too small to use.`);
+  if (rejected.length) {
+    warnings.push(
+      `${rejected.length} of the supplier's photos were marketing graphics (text overlays or photo collages) — ` +
+        `eBay doesn't allow those on listing images, so they were left out.`
+    );
+  }
+  const generated = shots.filter((image) => image.sourceUrl.startsWith('generated:')).length;
+  if (generated < GALLERY_SHOTS.length) {
+    warnings.push(`${GALLERY_SHOTS.length - generated} generated shot(s) failed and were replaced with supplier photos.`);
+  }
+  const overlays = openaiImage.activeOverlays();
+  if (overlays.length) {
+    warnings.push(
+      `Images carry a ${overlays.join(', ')}. eBay's picture policy discourages badges, text and borders on listing ` +
+        `images and can reduce visibility for them — switch them off in the image settings if you'd rather not.`
+    );
+  }
+
+  const imageUrls = await eps.uploadAll(accessToken, shots.slice(0, plan.recommendedImages), { marketplaceId });
+  return { imageUrls, warnings };
+}
+
 /**
  * Prepares one variant's own image.
  *
@@ -167,6 +245,23 @@ async function buildGalleryImages({
  */
 async function buildVariantImage({ sourceImageUrl, accessToken, marketplaceId }) {
   if (!sourceImageUrl) return null;
+
+  // With real generation available, each colour gets its own premium hero
+  // from its own supplier photo — the same prompt every time, so the
+  // variants read as one product in several colours.
+  if (useOpenAi()) {
+    const reference = await imageOps.prepare(sourceImageUrl);
+    if (reference) {
+      const shot = await generateShot([reference.buffer], 'hero');
+      if (shot) {
+        try {
+          return await eps.upload(accessToken, shot.buffer, { marketplaceId });
+        } catch (err) {
+          logger.warn('EPS upload failed for a generated variant image', { error: err.message });
+        }
+      }
+    }
+  }
 
   let treated = sourceImageUrl;
   try {

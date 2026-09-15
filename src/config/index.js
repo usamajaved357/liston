@@ -64,6 +64,23 @@ const config = {
 
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
   briaApiKey: process.env.BRIA_API_KEY || null,
+  openaiApiKey: process.env.OPENAI_API_KEY || null,
+
+  // Listing image generation. 'openai' produces genuine product photography
+  // (a person holding the product, pure white background) from the supplier
+  // photo as a reference; 'bria' only re-backgrounds the supplier cutout.
+  // Selected automatically: openai when its key is set, else bria.
+  imageGeneration: {
+    provider: process.env.IMAGE_PROVIDER || (process.env.OPENAI_API_KEY ? 'openai' : 'bria'),
+    // The seller asked for these on the image. eBay's picture policy
+    // discourages badges and borders on listing images, so they're each
+    // switchable and the draft carries a warning when any are on.
+    addUkFlag: process.env.IMAGE_ADD_UK_FLAG !== 'false',
+    addFreeShippingLabel: process.env.IMAGE_ADD_FREE_SHIPPING !== 'false',
+    addGlowBorder: process.env.IMAGE_ADD_GLOW_BORDER !== 'false',
+    showPerson: process.env.IMAGE_SHOW_PERSON !== 'false',
+    quality: process.env.IMAGE_QUALITY || 'high',
+  },
   photoroomApiKey: process.env.PHOTOROOM_API_KEY || null,
 
   // How source products are read from AliExpress. 'scraper' drives a real

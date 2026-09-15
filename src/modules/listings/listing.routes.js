@@ -16,6 +16,23 @@ async function resolveConnectionIdFromListing(req) {
 }
 
 router.get('/:listingId', requireAuth, requireFeature('listings', { resolveConnectionId: resolveConnectionIdFromListing }), listingController.getOne);
+router.patch(
+  '/:listingId',
+  requireAuth,
+  requireFeature('listings', { resolveConnectionId: resolveConnectionIdFromListing }),
+  listingController.update
+);
+router.delete(
+  '/:listingId',
+  requireAuth,
+  requireFeature('listings', { resolveConnectionId: resolveConnectionIdFromListing }),
+  listingController.remove
+);
+const editGuard = [requireAuth, requireFeature('listings', { resolveConnectionId: resolveConnectionIdFromListing })];
+
+router.post('/:listingId/revise', ...editGuard, listingController.reviseText);
+router.post('/:listingId/images/revise', ...editGuard, listingController.reviseImage);
+router.post('/:listingId/images/accept', ...editGuard, listingController.acceptImage);
 router.post(
   '/:listingId/publish',
   requireAuth,
