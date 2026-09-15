@@ -224,6 +224,8 @@ test('generateDraftInput assembles a variation draftInput when the source has va
   assert.strictEqual(draftInput.variants.length, 2);
   assert.deepStrictEqual(draftInput.variants[0].aspects, { Colour: ['Black'] });
   assert.deepStrictEqual(draftInput.variants[0].imageUrls, ['https://example.com/black.jpg']);
+  // Fixture source has no variantAxes, so the model's single axis name is
+  // used — the multi-axis path is covered by its own test below.
   assert.deepStrictEqual(draftInput.variesBy.specifications, [{ name: 'Colour', values: ['Black', 'Red'] }]);
   assert.deepStrictEqual(draftInput.variesBy.aspectsImageVariesBy, ['Colour']);
   assert.strictEqual(draftInput.categoryId, '123');

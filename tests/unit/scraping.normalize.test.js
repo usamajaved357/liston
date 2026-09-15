@@ -18,7 +18,7 @@ test('aliexpress normalize throws ScrapingError when no title was found', () => 
   assert.throws(() => aliexpressScraper.normalize({ title: null }), ScrapingError);
 });
 
-test('aliexpress normalize treats only the first variant group as the purchasable variation axis', () => {
+test('aliexpress normalize builds the full matrix across EVERY variant group', () => {
   const result = aliexpressScraper.normalize({
     title: 'Cat Case',
     priceText: 'Rs.837',
@@ -40,15 +40,72 @@ test('aliexpress normalize treats only the first variant group as the purchasabl
     ],
   });
 
-  assert.strictEqual(result.variants.length, 2);
+  // A fitted case is sold per model AND per colour. Keeping only the first
+  // axis produced a listing where the buyer couldn't say which phone they
+  // had — confirmed on a real draft before this was fixed.
+  assert.strictEqual(result.variants.length, 4);
   assert.deepStrictEqual(result.variants[0], {
-    attributes: { Color: 'Black' },
+    attributes: { Color: 'Black', 'Compatibility by Model': 'Galaxy A12' },
     imageUrl: 'https://example.com/black.jpg',
     priceText: null,
   });
-  // The second group gets folded into specifics as informational text, not a second variation axis.
-  assert.strictEqual(result.specifics['Compatibility by Model'], 'Galaxy A12, Galaxy A13');
+  assert.deepStrictEqual(
+    result.variants.map((v) => v.attributes['Compatibility by Model']),
+    ['Galaxy A12', 'Galaxy A13', 'Galaxy A12', 'Galaxy A13']
+  );
+
+  // The colour photo carries across that colour's whole row of models.
+  assert.strictEqual(result.variants[1].imageUrl, 'https://example.com/black.jpg');
+  assert.strictEqual(result.variants[2].imageUrl, 'https://example.com/red.jpg');
+
+  // A real variation axis is no longer buried in specifics as flat text.
+  assert.strictEqual(result.specifics['Compatibility by Model'], undefined);
   assert.strictEqual(result.specifics.Material, 'Silicone');
+});
+
+test('aliexpress normalize reports each axis and which one carries photos', () => {
+  const result = aliexpressScraper.normalize({
+    title: 'Case',
+    imageUrls: [],
+    specifics: {},
+    variantGroups: [
+      { name: 'Color', options: [{ label: 'Black', imageUrl: 'https://example.com/b.jpg' }] },
+      { name: 'Size', options: [{ label: 'S' }, { label: 'M' }] },
+    ],
+  });
+
+  // Only an axis with its own photography should drive eBay's image switching.
+  assert.deepStrictEqual(result.variantAxes.map((a) => [a.name, a.hasImages]), [
+    ['Color', true],
+    ['Size', false],
+  ]);
+});
+
+test('aliexpress normalize caps a runaway matrix instead of building thousands of variants', () => {
+  const many = (n, prefix) => Array.from({ length: n }, (_, i) => ({ label: `${prefix}${i}` }));
+  const result = aliexpressScraper.normalize({
+    title: 'Case',
+    imageUrls: [],
+    specifics: {},
+    variantGroups: [
+      { name: 'Color', options: many(20, 'c') },
+      { name: 'Model', options: many(30, 'm') },
+    ],
+  });
+
+  // 600 combinations would be hundreds of eBay API calls and well past what
+  // one listing should carry — and the trim lands on a whole number of
+  // colours, so no colour is left offering only some of the models.
+  assert.ok(result.variants.length <= aliexpressScraper.MAX_VARIANTS);
+  assert.strictEqual(result.variants.length % 30, 0, 'must keep whole rows of the trailing axis');
+
+  const perColour = new Map();
+  for (const variant of result.variants) {
+    const colour = variant.attributes.Color;
+    perColour.set(colour, (perColour.get(colour) || 0) + 1);
+  }
+  // Every colour that made the cut carries the full model range.
+  assert.ok([...perColour.values()].every((count) => count === 30));
 });
 
 test('aliexpress normalize returns an empty variants array for a product with no variant options', () => {

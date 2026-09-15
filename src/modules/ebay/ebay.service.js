@@ -178,14 +178,42 @@ async function draftListing(credentials, input) {
  * Drafts a multi-variation listing: one inventory item per variant SKU, all
  * grouped, offers created per SKU. Publish separately via publishGroup.
  */
+// Deliberately modest: high enough to make a 160-variant listing practical,
+// low enough that eBay never sees a burst worth throttling. Offers are also
+// retried individually (createOfferWithRetry) for eBay's eventually-consistent
+// SKU index, which concurrency doesn't change.
+const VARIANT_CONCURRENCY = 4;
+
+// Results keep input order, and the first failure rejects — a half-built
+// variation group is not something to paper over.
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await fn(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, merchantLocationKey, locationInput, listingPolicies }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   ensureListingPolicies(listingPolicies);
   await ensureInventoryLocation(accessToken, merchantLocationKey, locationInput);
 
-  const offers = [];
-  for (const variant of variants) {
+  // Each variant costs two sequential eBay calls (inventory item, then
+  // offer), so a real multi-axis matrix — a phone case is 6 colours x 27
+  // models — turns into hundreds of round trips and minutes of waiting.
+  // Running a few at a time cuts that sharply while staying well short of
+  // anything eBay would treat as abuse; the per-variant order (item before
+  // its own offer) is preserved, which is the only ordering that matters.
+  async function draftOneVariant(variant) {
     await ebayClient.createOrReplaceInventoryItem(
       accessToken,
       variant.sku,
@@ -212,8 +240,10 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         listingPolicies,
       })
     );
-    offers.push({ sku: variant.sku, offerId: offer.offerId });
+    return { sku: variant.sku, offerId: offer.offerId };
   }
+
+  const offers = await mapWithConcurrency(variants, VARIANT_CONCURRENCY, draftOneVariant);
 
   await ebayClient.createOrReplaceInventoryItemGroup(
     accessToken,

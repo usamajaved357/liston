@@ -47,10 +47,24 @@ const SINGLE_TOOL = {
         description:
           'A short, concrete description of an appealing product-photography background/scene for this item ' +
           '(e.g. "clean white studio background with soft shadow" or "minimalist marble surface with soft ' +
-          'natural light") — chosen to suit the product category and make it look professionally photographed.',
+          'natural light") — chosen to suit the product category and make it look professionally photographed. ' +
+          'This one is the MAIN gallery shot.',
+      },
+      imageScenePrompts: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 3,
+        maxItems: 5,
+        description:
+          'Three to five DISTINCT photography briefs for this product, in gallery order, starting with the main ' +
+          'shot. Supplier galleries are mostly unusable marketing graphics, so these are used to build a full ' +
+          'gallery from whatever clean photography exists. Vary the setting meaningfully — a clean studio hero, ' +
+          'the product in realistic use in a fitting environment, a close detail on texture or finish, a styled ' +
+          'surface — and make each specific to THIS product category rather than generic. Never describe text, ' +
+          'labels, badges, watermarks or collages: eBay prohibits those on listing images.',
       },
     },
-    required: ['title', 'description', 'condition', 'aspects', 'imageScenePrompt'],
+    required: ['title', 'description', 'condition', 'aspects', 'imageScenePrompt', 'imageScenePrompts'],
   },
 };
 
@@ -80,7 +94,21 @@ const VARIATION_TOOL = {
         description:
           'A short, concrete description of an appealing product-photography background/scene for this item ' +
           '(e.g. "clean white studio background with soft shadow" or "minimalist marble surface with soft ' +
-          'natural light") — chosen to suit the product category and make it look professionally photographed.',
+          'natural light") — chosen to suit the product category and make it look professionally photographed. ' +
+          'This one is the MAIN gallery shot.',
+      },
+      imageScenePrompts: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 3,
+        maxItems: 5,
+        description:
+          'Three to five DISTINCT photography briefs for this product, in gallery order, starting with the main ' +
+          'shot. Supplier galleries are mostly unusable marketing graphics, so these are used to build a full ' +
+          'gallery from whatever clean photography exists. Vary the setting meaningfully — a clean studio hero, ' +
+          'the product in realistic use in a fitting environment, a close detail on texture or finish, a styled ' +
+          'surface — and make each specific to THIS product category rather than generic. Never describe text, ' +
+          'labels, badges, watermarks or collages: eBay prohibits those on listing images.',
       },
     },
     required: [
@@ -91,6 +119,7 @@ const VARIATION_TOOL = {
       'varyingAspectName',
       'variantAspectValues',
       'imageScenePrompt',
+      'imageScenePrompts',
     ],
   },
 };
@@ -123,7 +152,7 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
         `value genuinely isn't knowable from the information given, leave it out rather than inventing it.\n` +
         `${schemaText}`
       : '') +
-    `\n\nAlso write a photography brief (imageScenePrompt) for the product photo background — a specific, ` +
+    `\n\nAlso write photography briefs (imageScenePrompt) for the product photo background — a specific, ` +
     `concrete scene appropriate to this exact product category (not a generic phrase), aimed at making the ` +
     `product photo look more professional and appealing than the competitor's.`
   );

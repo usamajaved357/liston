@@ -36,8 +36,18 @@ async function treatGalleryImage(url, scenePrompt) {
  * Prepares the shared gallery images for a listing.
  * Returns { imageUrls, warnings } — URLs are eBay-hosted and permanent.
  */
-async function buildGalleryImages({ sourceImageUrls, scenePrompt, accessToken, marketplaceId, categoryId }) {
+async function buildGalleryImages({
+  sourceImageUrls,
+  scenePrompt,
+  scenePrompts,
+  accessToken,
+  marketplaceId,
+  categoryId,
+}) {
   const plan = slotPlan.planForCategory(categoryId);
+  // One brief per intended gallery slot. A single prompt still works (older
+  // callers, and the model's main shot) — it just yields a one-shot gallery.
+  const briefs = (scenePrompts?.length ? scenePrompts : [scenePrompt]).filter(Boolean);
 
   if (!sourceImageUrls.length) {
     return { imageUrls: [], warnings: ['This product had no source images to work from.'] };
@@ -72,30 +82,54 @@ async function buildGalleryImages({ sourceImageUrls, scenePrompt, accessToken, m
   const { usable: ranked, rejected } = imageScreen.rankScreened(reviewed);
 
   const usable = ranked.slice(0, plan.recommendedImages);
-  const compositeCount = slotPlan.compositeSlotCount(plan);
 
-  const finished = await Promise.all(
-    usable.map(async (image, index) => {
-      // Only the leading slots earn a generated scene; the rest ship as the
-      // real photo, normalized. Past the first few shots the payoff falls off
-      // sharply and the cost doesn't.
-      if (index >= compositeCount) return image;
-      try {
-        const treatedUrl = await treatGalleryImage(image.sourceUrl, scenePrompt);
-        if (treatedUrl === image.sourceUrl) return image;
-        // Re-prepare, because the treated image is a different file — and if
-        // the treatment produced something unusable, keep the screened
-        // original rather than losing the slot.
-        return (await imageOps.prepare(treatedUrl)) || image;
-      } catch (err) {
-        logger.warn('Image treatment failed — keeping the original photo', {
-          url: image.sourceUrl,
-          error: err.message,
-        });
-        return image;
+  // Supplier galleries rarely leave enough clean photography behind: a real
+  // iPhone-case listing had 10 of its 13 photos rejected as marketing
+  // graphics, leaving a single usable shot. A one-image listing looks
+  // abandoned next to a competitor's eight.
+  //
+  // So the gallery is BUILT rather than merely filtered. Each photography
+  // brief becomes a distinct generated scene from the best clean photo
+  // available — genuinely our own imagery, and the only honest way to match a
+  // competitor's gallery without touching their copyrighted photos.
+  const shots = [];
+  for (const [index, brief] of briefs.entries()) {
+    // Prefer a different real photo per brief while they last — real
+    // photography of the actual product beats a generated variation of the
+    // same shot. Past that, reuse the best photo with a new scene, which is
+    // where the extra gallery slots come from.
+    const reusingBase = index >= usable.length;
+    const base = usable[Math.min(index, usable.length - 1)];
+    if (!base) break;
+
+    try {
+      const treatedUrl = await treatGalleryImage(base.sourceUrl, brief);
+      if (treatedUrl === base.sourceUrl) {
+        // Nothing was generated (no key, or the provider failed). Keep the
+        // untouched original only if it isn't already in the gallery.
+        if (!reusingBase) shots.push(base);
+        continue;
       }
-    })
-  );
+      const prepared = await imageOps.prepare(treatedUrl);
+      if (prepared) shots.push(prepared);
+      else if (!reusingBase) shots.push(base);
+    } catch (err) {
+      logger.warn('Image treatment failed — keeping the original photo', {
+        url: base.sourceUrl,
+        error: err.message,
+      });
+      if (!reusingBase) shots.push(base);
+    }
+  }
+
+  // Any clean photo not already represented still belongs in the gallery.
+  const usedSources = new Set(shots.map((image) => image.sourceUrl));
+  for (const image of usable) {
+    if (shots.length >= plan.recommendedImages) break;
+    if (!usedSources.has(image.sourceUrl)) shots.push(image);
+  }
+
+  const finished = shots.slice(0, plan.recommendedImages);
 
   const warnings = [];
   const skipped = sourceImageUrls.length - screened.length;

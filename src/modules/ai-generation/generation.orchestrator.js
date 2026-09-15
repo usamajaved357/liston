@@ -23,6 +23,38 @@ const { PricingError } = require('../pricing/pricing.service');
 // live). When the cleaned values collide, fall back to the supplier's own
 // labels for ALL of them — those are the real purchasable options, so they're
 // unique by construction, and a consistent set beats a mix of tidied and raw.
+// Tidies the first axis's option labels via the model's mapping, keeping the
+// supplier's own labels whenever the tidied set would collide (see below).
+// Multi-axis products index by that axis's value rather than by position,
+// because the same colour repeats across every model in the matrix.
+// A source that predates `variantAxes` (or any caller passing plain variants)
+// still has the axis names sitting on the attributes themselves.
+function deriveAxesFromVariants(variants) {
+  const names = [...new Set(variants.flatMap((variant) => Object.keys(variant.attributes || {})))];
+  return names.map((name) => ({
+    name,
+    values: [...new Set(variants.map((variant) => variant.attributes[name]).filter(Boolean))],
+    hasImages: variants.some((variant) => Boolean(variant.imageUrl)),
+  }));
+}
+
+function cleanPrimaryAxisValues(variants, primaryAxis, content) {
+  const labels = variants.map((variant) => variant.attributes[primaryAxis.name]);
+  const distinctLabels = [...new Set(labels)];
+
+  const mapping = content.variantAspectValues || {};
+  const cleanedByLabel = new Map(distinctLabels.map((label) => [label, mapping[label] || label]));
+
+  // Two supplier options tidied to the same eBay value would collapse two
+  // real variations into one — eBay rejects the group. Fall back to the
+  // supplier's labels wholesale rather than mixing tidied and raw.
+  const cleanedValues = [...cleanedByLabel.values()].map((v) => String(v).trim().toLowerCase());
+  if (new Set(cleanedValues).size !== distinctLabels.length) {
+    return labels;
+  }
+  return labels.map((label) => cleanedByLabel.get(label));
+}
+
 function resolveVariantAspectValues(variants, variantAspectValues = {}) {
   const labels = variants.map((variant) => Object.values(variant.attributes)[0]);
   const cleaned = labels.map((label) => variantAspectValues[label] || label);
@@ -228,6 +260,7 @@ async function generateDraftInput({
   const { imageUrls: galleryImageUrls, warnings: imageWarnings } = await imagePipeline.buildGalleryImages({
     sourceImageUrls: source.imageUrls,
     scenePrompt: content.imageScenePrompt,
+    scenePrompts: content.imageScenePrompts,
     accessToken,
     marketplaceId,
     categoryId: competitor.categoryId,
@@ -260,26 +293,60 @@ async function generateDraftInput({
     };
   }
 
-  const aspectValues = resolveVariantAspectValues(source.variants, content.variantAspectValues);
+  // The supplier's axes, cleaned for eBay. The model tidies the FIRST axis's
+  // labels (it's the one that tends to be messy — "1PC Warm White"); later
+  // axes like Model or Size come through already clean, so they're used
+  // verbatim rather than risking the model rewriting "iPhone 15 Pro" into
+  // something eBay won't match.
+  // Two different names per axis, and conflating them silently emptied every
+  // variant's aspects: `name` is the SUPPLIER's key on the scraped attributes
+  // ("Color"), while `ebayName` is what the listing should call it
+  // ("Colour"). Only the primary axis gets renamed by the model; later axes
+  // keep the supplier's own naming, which is already listing-appropriate.
+  const sourceAxes = source.variantAxes?.length
+    ? source.variantAxes
+    : deriveAxesFromVariants(source.variants);
+  const axes = sourceAxes.map((axis, index) => ({
+    ...axis,
+    ebayName: index === 0 ? content.varyingAspectName || axis.name : axis.name,
+  }));
+  const primaryAxis = axes[0];
+  const cleanedPrimary = cleanPrimaryAxisValues(source.variants, primaryAxis, content);
 
-  const variants = await Promise.all(
-    source.variants.map(async (variant, index) => {
-      const imageUrl = await imagePipeline.buildVariantImage({
-        sourceImageUrl: variant.imageUrl,
-        accessToken,
-        marketplaceId,
-      });
-      return {
-        imageUrls: imageUrl ? [imageUrl] : [],
-        ownImage: Boolean(imageUrl),
-        aspects: { [content.varyingAspectName]: [aspectValues[index]] },
-        condition: content.condition,
-        quantity: 1,
-        price: { value: String(priced.variantPrices[index].sellPrice), currency: priced.currency },
-        priceBreakdown: priced.variantPrices[index],
-      };
-    })
+  // Per-variant photos come from ONE axis (colour), so a 6x27 matrix still
+  // only needs 6 images, not 162. Processing each distinct photo once also
+  // keeps the paid image calls proportional to real photos rather than to
+  // the size of the matrix.
+  const distinctImages = [...new Set(source.variants.map((v) => v.imageUrl).filter(Boolean))];
+  const builtImages = new Map(
+    await Promise.all(
+      distinctImages.map(async (url) => [
+        url,
+        await imagePipeline.buildVariantImage({ sourceImageUrl: url, accessToken, marketplaceId }),
+      ])
+    )
   );
+
+  const variants = source.variants.map((variant, index) => {
+    const imageUrl = variant.imageUrl ? builtImages.get(variant.imageUrl) : null;
+    // One value per axis — this is what lets a buyer pick BOTH their colour
+    // and their phone model, instead of guessing.
+    const aspects = {};
+    for (const axis of axes) {
+      const raw = variant.attributes[axis.name];
+      if (raw === undefined) continue;
+      aspects[axis.ebayName] = [axis === primaryAxis ? cleanedPrimary[index] : raw];
+    }
+    return {
+      imageUrls: imageUrl ? [imageUrl] : [],
+      ownImage: Boolean(imageUrl),
+      aspects,
+      condition: content.condition,
+      quantity: 1,
+      price: { value: String(priced.variantPrices[index].sellPrice), currency: priced.currency },
+      priceBreakdown: priced.variantPrices[index],
+    };
+  });
 
   // EVERY variant must carry at least one image: eBay rejects the whole
   // inventory item group outright with "imageUrls cannot be null or empty"
@@ -297,6 +364,18 @@ async function generateDraftInput({
   for (const variant of variants) {
     if (!variant.imageUrls.length) variant.imageUrls = fallbackImage;
     delete variant.ownImage;
+  }
+
+  // The supplier offered more combinations than a single eBay listing should
+  // carry, so some were dropped — said plainly, since a silently truncated
+  // matrix means options a buyer can see on AliExpress but can't buy here.
+  const offered = (source.variantAxes || []).reduce((total, axis) => total * (axis.values.length || 1), 1);
+  if (offered > variants.length) {
+    warnings.push(
+      `The supplier offers ${offered} combinations (${(source.variantAxes || [])
+        .map((axis) => `${axis.values.length} ${axis.name.toLowerCase()}`)
+        .join(' x ')}); this listing carries the first ${variants.length}.`
+    );
   }
 
   if (withoutOwnImage.length && fallbackImage.length) {
@@ -318,8 +397,19 @@ async function generateDraftInput({
       imageUrls: galleryImageUrls,
       variesBy: {
         aspects: content.sharedAspects,
-        aspectsImageVariesBy: [content.varyingAspectName],
-        specifications: [{ name: content.varyingAspectName, values: variants.map((v) => v.aspects[content.varyingAspectName][0]) }],
+        // Only the axis that actually carries a distinct photo per option
+        // changes the picture eBay shows. Naming an axis here that has no
+        // per-option photography (Size, Model) just makes eBay swap to the
+        // same image.
+        aspectsImageVariesBy: axes.filter((axis) => axis.hasImages).map((axis) => axis.ebayName),
+        // One entry PER AXIS — this is the list that makes eBay render a
+        // dropdown for each. Values are taken from the variants actually
+        // built, so a capped matrix never advertises an option that has no
+        // variation behind it.
+        specifications: axes.map((axis) => ({
+          name: axis.ebayName,
+          values: [...new Set(variants.map((v) => v.aspects[axis.ebayName]?.[0]).filter(Boolean))],
+        })),
       },
       variants,
       categoryId: competitor.categoryId,

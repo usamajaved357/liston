@@ -74,9 +74,13 @@ test('generateListingContent requests the single-item tool schema when the sourc
     'condition',
     'description',
     'imageScenePrompt',
+    'imageScenePrompts',
     'title',
   ]);
   assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompt'));
+  // Several distinct briefs, so a gallery can be built when the supplier's
+  // own photos are mostly unusable marketing graphics.
+  assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompts'));
   assert.ok(capturedArgs.messages[0].content.includes('Competitor widget'));
   assert.ok(capturedArgs.messages[0].content.includes('Source widget'));
   assert.strictEqual(result.title, 'A great widget');
@@ -120,11 +124,15 @@ test('generateListingContent requests the variation tool schema when the source 
     'commonTitle',
     'condition',
     'imageScenePrompt',
+    'imageScenePrompts',
     'sharedAspects',
     'variantAspectValues',
     'varyingAspectName',
   ]);
   assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompt'));
+  // Several distinct briefs, so a gallery can be built when the supplier's
+  // own photos are mostly unusable marketing graphics.
+  assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompts'));
   assert.strictEqual(result.varyingAspectName, 'Colour');
 });
 
