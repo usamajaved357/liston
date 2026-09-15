@@ -5,6 +5,9 @@ class EbayApiError extends Error {
     super(message);
     this.statusCode = statusCode;
     this.details = details;
+    // The message comes from eBay's own errors[].message — safe and useful
+    // to show the seller, rather than being masked as an internal error.
+    this.expose = true;
   }
 }
 

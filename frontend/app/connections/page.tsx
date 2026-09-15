@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, Connection, Platform, User } from "@/lib/api";
+import { landingPathForConnection } from "@/lib/permissions";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -38,6 +39,108 @@ function ConnectionBanner() {
     );
   }
   return null;
+}
+
+// A team member never manages connections (no add/remove, no plan/billing
+// context) — they only ever see the account(s) an owner granted them access
+// to, as a bare list (no admin affordances at all). Deliberately no
+// auto-redirect even with a single account: this page is also where
+// AccountShell's "Your accounts" link and its logout live, so it must always
+// be a real, working landing spot rather than something that immediately
+// bounces the viewer back to wherever they came from.
+function MemberAccountPicker({ user, connections }: { user: User; connections: Connection[] }) {
+  const router = useRouter();
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    try {
+      await api.deleteAccount();
+      localStorage.removeItem("token");
+      router.push("/login");
+    } catch {
+      setError("Couldn't remove your login. Try again.");
+      setConfirmDelete(false);
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <main className="min-h-screen px-6 py-10">
+      <div className="mx-auto max-w-lg">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Your accounts</h1>
+          <AccountMenu
+            email={user.email}
+            subtitle="Team member"
+            avatarUrl={user.avatar_url}
+            onLogout={() => setConfirmLogout(true)}
+            onDeleteAccount={() => setConfirmDelete(true)}
+          />
+        </div>
+
+        {error && (
+          <div className="mb-4">
+            <Alert>{error}</Alert>
+          </div>
+        )}
+
+        {connections.length === 0 ? (
+          <p className="text-sm text-[var(--color-muted)]">
+            You don&apos;t have access to any accounts yet — ask whoever manages Liston for your team to grant
+            you access.
+          </p>
+        ) : (
+          <ul className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden">
+            {connections.map((connection) => (
+              <li key={connection.id} className="border-b border-[var(--color-line)] last:border-b-0">
+                <Link
+                  href={landingPathForConnection(connection)}
+                  className="flex items-center gap-3.5 px-5 py-4 hover:bg-[var(--color-paper)] transition-colors"
+                >
+                  <PlatformIcon platformKey={connection.platform_key} size={40} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-[var(--color-ink)] truncate">{connection.label}</p>
+                    <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
+                  </div>
+                  <span
+                    className={`rounded-full border px-2.5 py-1 text-[11px] font-bold capitalize ${STATUS_STYLES[connection.status]}`}
+                  >
+                    {connection.status}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmLogout}
+        title="Log out?"
+        description="You'll need to log in again to access your accounts."
+        confirmLabel="Log out"
+        onCancel={() => setConfirmLogout(false)}
+        onConfirm={() => {
+          localStorage.removeItem("token");
+          router.push("/login");
+        }}
+      />
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Remove your login?"
+        description="This removes your own team-member login. It doesn't affect the accounts or data owned by whoever gave you access."
+        confirmLabel="Remove my login"
+        danger
+        loading={deleting}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={handleDeleteAccount}
+      />
+    </main>
+  );
 }
 
 export default function ConnectionsPage() {
@@ -127,6 +230,12 @@ export default function ConnectionsPage() {
     return null;
   }
 
+  // Connection management (add/remove, plan limits) is an owner-only
+  // concept — a member only ever sees the account(s) they were granted.
+  if (user.role === "member") {
+    return <MemberAccountPicker user={user} connections={connections} />;
+  }
+
   const connectionsUsed = connections.length;
   const maxConnections = user.max_connections ?? 0;
   const atLimit = connectionsUsed >= maxConnections;
@@ -152,7 +261,7 @@ export default function ConnectionsPage() {
           </div>
           <AccountMenu
             email={user.email}
-            planName={planName}
+            subtitle={`${planName} plan`}
             avatarUrl={user.avatar_url}
             onLogout={() => setConfirmAction("logout")}
             onDeleteAccount={() => setConfirmAction("delete")}

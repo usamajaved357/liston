@@ -1,6 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../../config');
 const { AiGenerationError } = require('./ai-generation.errors');
+const { validateAspects, describeSchemaForPrompt } = require('./aspect-validator');
 
 const MODEL = 'claude-sonnet-4-5';
 
@@ -94,8 +95,9 @@ const VARIATION_TOOL = {
   },
 };
 
-function buildPrompt({ competitor, source, costPrice, sellPrice, currency }) {
+function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema }) {
   const hasVariants = source.variants.length > 0;
+  const schemaText = describeSchemaForPrompt(aspectSchema);
   return (
     `You are drafting a new eBay listing for a seller. Compare a competitor's live eBay listing against the ` +
     `seller's own source product (from a supplier), and draft an ORIGINAL, improved listing for the source ` +
@@ -109,15 +111,25 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency }) {
           Object.keys(source.variants[0]?.attributes || {})[0] || 'Option'
         }": ${source.variants.map((v) => Object.values(v.attributes)[0]).join(', ')}. ` +
         `Draft ONE common title/description/shared aspects for the whole listing, choose which scraped ` +
-        `attribute is the real variation axis, and provide a clean eBay aspect value for every listed option.`
+        `attribute is the real variation axis, and provide a clean eBay aspect value for every listed option.\n` +
+        `CRITICAL: every option must map to a DIFFERENT value — eBay rejects a variation listing where two ` +
+        `variants share the same value. If the options combine two things (e.g. "2PCS Warm White" is a pack ` +
+        `size AND a colour), keep enough of both in the value to stay distinct, and name the axis accordingly.`
       : `Draft a single listing (title, description, condition, item specifics).`) +
+    (schemaText
+      ? `\n\n--- eBay's item specifics for this exact category ---\nFill these using the SOURCE product's real ` +
+        `attributes. Use these names verbatim, and only these — an item specific eBay doesn't list here will be ` +
+        `discarded. Fill every REQUIRED one you can genuinely determine from the source product; if a required ` +
+        `value genuinely isn't knowable from the information given, leave it out rather than inventing it.\n` +
+        `${schemaText}`
+      : '') +
     `\n\nAlso write a photography brief (imageScenePrompt) for the product photo background — a specific, ` +
     `concrete scene appropriate to this exact product category (not a generic phrase), aimed at making the ` +
     `product photo look more professional and appealing than the competitor's.`
   );
 }
 
-async function generateListingContent({ competitor, source, costPrice, sellPrice, currency }) {
+async function generateListingContent({ competitor, source, costPrice, sellPrice, currency, aspectSchema }) {
   const anthropic = client();
   const hasVariants = source.variants.length > 0;
   const tool = hasVariants ? VARIATION_TOOL : SINGLE_TOOL;
@@ -127,7 +139,9 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
     max_tokens: 2048,
     tools: [tool],
     tool_choice: { type: 'tool', name: tool.name },
-    messages: [{ role: 'user', content: buildPrompt({ competitor, source, costPrice, sellPrice, currency }) }],
+    messages: [
+      { role: 'user', content: buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema }) },
+    ],
   });
 
   const toolUse = response.content.find((block) => block.type === 'tool_use');
@@ -135,7 +149,16 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
     throw new AiGenerationError('The AI drafting model returned an unexpected response — try again.');
   }
 
-  return toolUse.input;
+  const content = toolUse.input;
+
+  // Telling the model the schema isn't enough on its own — it can still
+  // return an aspect eBay doesn't list, a free-text value for a fixed-list
+  // aspect, or several values where eBay takes one. Correct that here rather
+  // than letting eBay reject the publish after the user has approved it.
+  const aspectKey = hasVariants ? 'sharedAspects' : 'aspects';
+  const { aspects, warnings } = validateAspects(content[aspectKey], aspectSchema);
+
+  return { ...content, [aspectKey]: aspects, aspectWarnings: warnings };
 }
 
 module.exports = { generateListingContent };

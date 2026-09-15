@@ -5,8 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { BackHeader } from "@/components/BackHeader";
 import { Alert } from "@/components/Alert";
-import { api, ApiError, RawScrapedFields } from "@/lib/api";
-import { pingExtension, scrapeViaExtension } from "@/lib/extensionBridge";
+import { api, ApiError } from "@/lib/api";
 
 const inputClass =
   "w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-sm text-[var(--color-ink)]";
@@ -31,16 +30,10 @@ function ThinkingDots() {
 }
 
 const STATUS_MESSAGES = [
-  "Scraping the competitor listing…",
-  "Scraping the source product…",
+  "Reading the competitor listing…",
+  "Reading the source product…",
   "Drafting your listing with AI…",
-  "Almost done…",
-];
-
-const EXTENSION_STATUS_MESSAGES = [
-  "Reading the competitor listing in your browser…",
-  "Reading the source product in your browser…",
-  "Drafting your listing with AI…",
+  "Preparing your images…",
   "Almost done…",
 ];
 
@@ -50,18 +43,12 @@ export default function DraftListingPage() {
 
   const [competitorUrl, setCompetitorUrl] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [costPrice, setCostPrice] = useState("");
-  const [sellPrice, setSellPrice] = useState("");
-  const [currency, setCurrency] = useState("GBP");
   const [submitting, setSubmitting] = useState(false);
   const [statusIndex, setStatusIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [hasExtension, setHasExtension] = useState<boolean | null>(null);
-  const [statusMessages, setStatusMessages] = useState(STATUS_MESSAGES);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    pingExtension().then(setHasExtension);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
@@ -72,37 +59,14 @@ export default function DraftListingPage() {
     setSubmitting(true);
     setError(null);
     setStatusIndex(0);
-    const usingExtension = await pingExtension();
-    const messages = usingExtension ? EXTENSION_STATUS_MESSAGES : STATUS_MESSAGES;
-    setStatusMessages(messages);
     intervalRef.current = setInterval(() => {
-      setStatusIndex((i) => Math.min(i + 1, messages.length - 1));
+      setStatusIndex((i) => Math.min(i + 1, STATUS_MESSAGES.length - 1));
     }, 5000);
 
     try {
-      let competitorRaw: RawScrapedFields | undefined;
-      let sourceRaw: RawScrapedFields | undefined;
-
-      if (usingExtension) {
-        const [competitorResult, sourceResult] = await Promise.all([
-          scrapeViaExtension(competitorUrl),
-          scrapeViaExtension(sourceUrl),
-        ]);
-        // Only attach what the extension actually got — if either fetch
-        // failed, that side just falls back to the server scraping it
-        // itself, same as if the extension weren't installed at all.
-        if (competitorResult.ok) competitorRaw = competitorResult.data as RawScrapedFields;
-        if (sourceResult.ok) sourceRaw = sourceResult.data as RawScrapedFields;
-      }
-
       const { listing } = await api.generateDraftListing(params.id, {
         competitorUrl,
         sourceUrl,
-        competitorRaw,
-        sourceRaw,
-        costPrice: Number(costPrice),
-        sellPrice: Number(sellPrice),
-        currency,
       });
       router.push(`/accounts/${params.id}/listings/draft/${listing.id}`);
     } catch (err) {
@@ -119,22 +83,15 @@ export default function DraftListingPage() {
       <div className="max-w-2xl mx-auto px-6 py-12">
         <h1 className="text-2xl font-extrabold text-[var(--color-ink)]">Draft a listing</h1>
         <p className="mt-2 text-sm text-[var(--color-muted)] leading-relaxed">
-          Paste a competitor&apos;s eBay listing and your AliExpress source product — Liston scrapes both, drafts an
+          Paste a competitor&apos;s eBay listing and your AliExpress source product — Liston reads both, drafts an
           original, improved listing with AI (including real colour/size variations), and shows it to you here to
-          review before anything goes live. Make sure you&apos;ve set your default policies and shipping location in{" "}
+          review before anything goes live. Prices are worked out from the supplier&apos;s own cost to hit the target
+          return set in{" "}
           <Link href={`/accounts/${params.id}/settings`} className="text-[var(--color-accent)] hover:underline">
             Settings
-          </Link>{" "}
-          first.
+          </Link>
+          , where your policies and shipping location also need to be set first.
         </p>
-
-        {hasExtension === false && (
-          <p className="mt-3 text-xs text-[var(--color-muted)]">
-            Tip: install the Liston browser extension for more reliable drafting — it reads these pages through your
-            own browser instead of Liston's server. Works fine without it too, just less reliable against sites that
-            block automated requests.
-          </p>
-        )}
 
         {error && (
           <div className="mt-5">
@@ -168,45 +125,6 @@ export default function DraftListingPage() {
               required
             />
           </Field>
-          <div className="grid grid-cols-3 gap-4">
-            <Field label="Cost price">
-              <input
-                className={inputClass}
-                type="number"
-                min="0"
-                step="0.01"
-                value={costPrice}
-                onChange={(e) => setCostPrice(e.target.value)}
-                disabled={submitting}
-                required
-              />
-            </Field>
-            <Field label="Sell price">
-              <input
-                className={inputClass}
-                type="number"
-                min="0"
-                step="0.01"
-                value={sellPrice}
-                onChange={(e) => setSellPrice(e.target.value)}
-                disabled={submitting}
-                required
-              />
-            </Field>
-            <Field label="Currency">
-              <select
-                className={inputClass}
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                disabled={submitting}
-              >
-                <option value="GBP">GBP</option>
-                <option value="USD">USD</option>
-                <option value="EUR">EUR</option>
-              </select>
-            </Field>
-          </div>
-
           <button
             type="submit"
             disabled={submitting}
@@ -214,7 +132,7 @@ export default function DraftListingPage() {
           >
             {submitting ? (
               <span className="inline-flex items-center gap-2">
-                {statusMessages[statusIndex]}
+                {STATUS_MESSAGES[statusIndex]}
                 <ThinkingDots />
               </span>
             ) : (

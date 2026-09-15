@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useParams, useSearchParams } from "next/navigation";
 import { api, Order, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
@@ -220,11 +220,33 @@ function OrderCard({ order }: { order: Order }) {
 }
 
 export default function AccountOrdersPage() {
-  const params = useParams<{ id: string }>();
-  const { connection, loading: loadingConnection, error: connectionError } = useConnection(params.id);
+  return (
+    <Suspense fallback={null}>
+      <AccountOrdersContent />
+    </Suspense>
+  );
+}
 
-  const [range, setRange] = useState<OrderRange>("7d");
-  const [status, setStatus] = useState<OrderStatusFilter>("all");
+// Reads the optional ?status=&range= query params so a link from
+// Overview's operational summary (e.g. "12 awaiting dispatch") lands here
+// pre-filtered to the exact same numbers the viewer just saw, instead of
+// always resetting to the "last 7 days / all orders" defaults.
+function AccountOrdersContent() {
+  const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
+  const { connection, user, loading: loadingConnection, error: connectionError } = useConnection(params.id);
+
+  const initialRange = searchParams.get("range");
+  const initialStatus = searchParams.get("status");
+  const VALID_RANGES: OrderRange[] = ["7d", "30d", "90d"];
+  const VALID_STATUSES: OrderStatusFilter[] = ["all", "awaiting_payment", "awaiting_dispatch", "dispatched", "cancelled"];
+
+  const [range, setRange] = useState<OrderRange>(
+    initialRange && VALID_RANGES.includes(initialRange as OrderRange) ? (initialRange as OrderRange) : "7d"
+  );
+  const [status, setStatus] = useState<OrderStatusFilter>(
+    initialStatus && VALID_STATUSES.includes(initialStatus as OrderStatusFilter) ? (initialStatus as OrderStatusFilter) : "all"
+  );
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -299,7 +321,7 @@ export default function AccountOrdersPage() {
     );
   }
 
-  if (connectionError || !connection) {
+  if (connectionError || !connection || !user) {
     return (
       <main className="min-h-screen flex items-center justify-center px-6">
         <Alert>{connectionError || "This account connection doesn't exist, or isn't yours."}</Alert>
@@ -315,6 +337,7 @@ export default function AccountOrdersPage() {
       platformName={connection.platform_name}
       status={connection.status}
       permissions={connection.permissions}
+      user={user}
       header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Orders</h1>}
     >
       {/* Status tabs */}

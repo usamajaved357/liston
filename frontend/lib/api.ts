@@ -79,7 +79,7 @@ export interface Connection {
   status: "active" | "expired" | "error" | "suspended";
   platform_key: string;
   platform_name: string;
-  settings?: { ebay?: EbaySettings };
+  settings?: { ebay?: EbaySettings; pricing?: PricingSettings };
   permissions?: ConnectionPermissions;
   created_at: string;
   updated_at: string;
@@ -103,7 +103,11 @@ export interface TeamMember {
 export interface PermissionUpdate {
   connectionId: string | null;
   feature: string;
-  allowed: boolean;
+  // null is only valid when connectionId is set — it clears that
+  // connection's override so the global default takes over again. The
+  // global default itself (connectionId: null) must be a real boolean,
+  // since there's nothing higher for it to defer to.
+  allowed: boolean | null;
 }
 
 export interface Platform {
@@ -219,9 +223,14 @@ export interface SingleDraftContent {
   quantity: number;
   categoryId: string;
   price: OfferPrice;
+  priceBreakdown?: PriceBreakdown;
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
+  // Things the automated drafting steps couldn't do — dropped item specifics,
+  // supplier photos that were marketing graphics, variations with no photo of
+  // their own. Shown on the review page rather than failing the draft.
+  warnings?: string[];
 }
 
 export interface VariationDraftVariant {
@@ -231,6 +240,7 @@ export interface VariationDraftVariant {
   condition?: string;
   quantity: number;
   price: OfferPrice;
+  priceBreakdown?: PriceBreakdown;
 }
 
 export interface VariationDraftContent {
@@ -247,6 +257,7 @@ export interface VariationDraftContent {
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
+  warnings?: string[];
 }
 
 export type DraftContent = SingleDraftContent | VariationDraftContent;
@@ -255,22 +266,43 @@ export function isVariationDraft(content: DraftContent): content is VariationDra
   return "variants" in content;
 }
 
-// Raw, pre-normalize() page fields — matches src/modules/scraping/dom-extractors/*.js's
-// return shape exactly. Loosely typed since the backend re-validates/shapes
-// these via each scraper's own `normalize()`.
-export type RawScrapedFields = Record<string, unknown>;
-
 export interface GenerateDraftInput {
   competitorUrl: string;
   sourceUrl: string;
-  // Present only when the Liston browser extension supplied this side's data
-  // directly from the user's own browser — omitted (server scrapes instead)
-  // when the extension isn't installed or that fetch failed.
-  competitorRaw?: RawScrapedFields;
-  sourceRaw?: RawScrapedFields;
-  costPrice: number;
-  sellPrice: number;
+}
+
+// Listing settings — every sell price is derived from these plus the
+// supplier's own cost, so the seller never types a price per draft.
+export interface PricingSettings {
+  targetRoiPercent: number;
+  adsFeePercent: number;
+  processingFeePercent: number;
+  fixedFeePerOrder: number;
+  shippingCostPerOrder: number;
   currency: string;
+  roundTo99: boolean;
+  // The target ROI is a floor. When the competitor already sells above it,
+  // match their price and take the wider margin instead.
+  followCompetitorPrice: boolean;
+}
+
+// The full working behind one price, so the review page can show why a
+// number is what it is instead of asking the seller to trust it.
+export interface PriceBreakdown {
+  sellPrice: number;
+  itemCost: number;
+  shippingCost: number;
+  totalCost: number;
+  fees: { ads: number; processing: number; fixed: number };
+  profit: number;
+  roiPercent: number;
+  currency: string;
+  targetRoiPercent: number;
+  costIsExact?: boolean;
+  // Which rule set the price: our ROI floor, or the competitor's own price.
+  basis?: "target-roi" | "competitor";
+  floorPrice?: number;
+  competitorPrice?: number | null;
 }
 
 export interface DraftListing {
@@ -411,6 +443,12 @@ export const api = {
     request<{ settings: { ebay: EbaySettings } }>(`/api/connections/${id}/policies`, {
       method: "PUT",
       body: JSON.stringify(settings),
+    }),
+
+  updateConnectionPricing: (id: string, pricing: PricingSettings) =>
+    request<{ settings: { pricing: PricingSettings } }>(`/api/connections/${id}/pricing`, {
+      method: "PUT",
+      body: JSON.stringify(pricing),
     }),
 
   generateDraftListing: (connectionId: string, input: GenerateDraftInput) =>

@@ -28,23 +28,32 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
         </div>
 
         <nav className="flex flex-col gap-0.5">
-          <NavItem
-            href="/dashboard"
-            active={pathname === "/dashboard"}
-            label="Overview"
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
-              </svg>
-            }
-          />
+          {/* Overview (plan/billing usage) and Connections-management/Settings
+              are owner-only concepts — a member has no plan of their own and
+              can't add/remove connections or touch policies, so in practice
+              they never reach this shell at all (see /dashboard, /settings,
+              and the member branch of /connections). Gated here too as
+              defense in depth against a brief render before those redirects
+              land. */}
+          {role !== "member" && (
+            <NavItem
+              href="/dashboard"
+              active={pathname === "/dashboard"}
+              label="Overview"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                </svg>
+              }
+            />
+          )}
           <NavItem
             href="/connections"
             active={pathname === "/connections"}
-            label="Connections"
+            label={role === "member" ? "Accounts" : "Connections"}
             icon={
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                 <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
@@ -52,21 +61,23 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
               </svg>
             }
           />
-          <NavItem
-            href="/settings"
-            active={pathname === "/settings"}
-            label="Settings"
-            icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path
-                  d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                />
-              </svg>
-            }
-          />
+          {role !== "member" && (
+            <NavItem
+              href="/settings"
+              active={pathname === "/settings"}
+              label="Settings"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path
+                    d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              }
+            />
+          )}
           {role === "owner" && (
             <NavItem
               href="/team"

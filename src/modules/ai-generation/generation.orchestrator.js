@@ -1,52 +1,196 @@
-const ebayScraper = require('../scraping/ebay-listing.scraper');
-const aliexpressScraper = require('../scraping/aliexpress-listing.scraper');
+const ebaySource = require('../sourcing/ebay-listing.source');
+const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const aliexpressSource = require('../sourcing/aliexpress');
 const textGenerator = require('./text-generator.service');
-const imageTransformer = require('./image-transformer.service');
+const imagePipeline = require('./image-pipeline');
 const { ScrapingError } = require('../scraping/scraping.errors');
+const pricingService = require('../pricing/pricing.service');
+const priceParser = require('../pricing/price-parser');
+const { PricingError } = require('../pricing/pricing.service');
 
-// Cap per-listing gallery images — each one is a paid, non-instant Bria call,
-// and eBay listings don't benefit from more than a handful of good shots.
-// Per-variant images stay at exactly 1 each (the variant's own colour/size
-// photo), separate from this cap.
-const MAX_LISTING_IMAGES = 5;
+// How many gallery images to build, which of them get a paid AI treatment,
+// and the per-variation hero rule all live in the image pipeline's slot plan
+// (see image-pipeline/slot-plan.js) rather than as a bare cap here.
 
-// Ties scraping + AI text generation + image transformation together into a
-// draftInput-shaped object ready for listingService.createEbayDraft — SKUs
-// are intentionally left unset here; the caller (listingService) assigns
+// eBay requires every variation in a group to carry a DISTINCT value for the
+// varying aspect — two variants both labelled "Warm White" is a rejected
+// inventory item group, not a listing with a duplicate.
+//
+// The model is asked to tidy each supplier option into a clean eBay value,
+// and it can over-tidy: a real product with options "1PC Warm White" …
+// "4PCS Cold White" came back as four "Warm White"s and four "Cool White"s,
+// because it read the axis as colour and dropped the pack size (confirmed
+// live). When the cleaned values collide, fall back to the supplier's own
+// labels for ALL of them — those are the real purchasable options, so they're
+// unique by construction, and a consistent set beats a mix of tidied and raw.
+function resolveVariantAspectValues(variants, variantAspectValues = {}) {
+  const labels = variants.map((variant) => Object.values(variant.attributes)[0]);
+  const cleaned = labels.map((label) => variantAspectValues[label] || label);
+
+  const isDistinct = new Set(cleaned.map((value) => String(value).trim().toLowerCase())).size === cleaned.length;
+  return isDistinct ? cleaned : labels;
+}
+
+// Turns the supplier's own prices into eBay sell prices that hit the seller's
+// target return, per variant.
+//
+// The catch worth understanding: per-SKU costs are only reliably available
+// through AliExpress's official API. The browser scraper reads the ONE price
+// the page happens to be displaying — AliExpress moved its SKU data out of
+// the page globals, and driving the UI to read each option back failed on 7
+// of 8 options in testing. So when per-variant costs are missing, every
+// variant is priced from the single product cost, which is correct for
+// colour/size options and WRONG for quantity tiers ("1PC" vs "4PCS" are not
+// the same purchase). That case is detected and surfaced loudly rather than
+// quietly producing a 4-pack priced like a single unit.
+function resolvePricing({ source, competitor, pricing }) {
+  const settings = pricingService.settingsWithDefaults(pricing);
+  const currency = settings.currency;
+  const warnings = [];
+
+  // What the competitor actually charges — the market's own answer to "what
+  // does this sell for". It can only raise our price, never lower it (see
+  // priceForCost). Their lowest price is used as the reference: on a
+  // multi-variation competitor listing it's the "from" price buyers see, and
+  // it's the conservative choice, since matching their most expensive option
+  // would assume our variant is comparable to it.
+  const competitorPrice = lowestCompetitorPrice(competitor, currency);
+
+  const productPriceParsed = priceParser.parsePrice(source.priceText, currency);
+  if (!productPriceParsed.ok) {
+    throw new PricingError(pricingFailureMessage(productPriceParsed, currency, source.priceText));
+  }
+
+  const productCost = productPriceParsed.amount;
+  const productPrice = pricingService.priceForCost(productCost, settings, { competitorPrice });
+
+  // A variant that carries its own price is priced from it; otherwise it
+  // inherits the product-level cost.
+  const variantPrices = source.variants.map((variant) => {
+    const parsed = priceParser.parsePrice(variant.priceText, currency);
+    const cost = parsed.ok ? parsed.amount : productCost;
+    return { ...pricingService.priceForCost(cost, settings, { competitorPrice }), costIsExact: parsed.ok };
+  });
+
+  const anyExact = variantPrices.some((price) => price.costIsExact);
+  const labels = source.variants.map((variant) => Object.values(variant.attributes)[0]);
+
+  if (source.variants.length && !anyExact) {
+    if (pricingService.detectQuantityTiers(labels)) {
+      // The dangerous case, called out in plain terms: these options cost
+      // different amounts and we only know one of them.
+      warnings.push(
+        `⚠ These options look like different pack sizes (${labels.slice(0, 3).join(', ')}…), which cost different ` +
+          `amounts — but the supplier page only exposed one price (${currency} ${productCost.toFixed(2)}), so every ` +
+          `option has been priced from it. CHECK THE LARGER PACKS BEFORE PUBLISHING: they are almost certainly ` +
+          `underpriced. Connecting the AliExpress API would price each option from its real cost.`
+      );
+    } else {
+      warnings.push(
+        `Each option is priced from the supplier's single listed cost of ${currency} ${productCost.toFixed(2)}, ` +
+          `since the page didn't expose a price per option.`
+      );
+    }
+  }
+
+  if (productPriceParsed.isRange && !anyExact) {
+    warnings.push(
+      `The supplier shows a price range, so the lowest (${currency} ${productCost.toFixed(2)}) was used as the ` +
+        `cost — options that cost more than this will earn less than your target.`
+    );
+  }
+
+  if (competitorPrice === null) {
+    warnings.push(
+      `Couldn't read the competitor's price, so everything is priced at your ${settings.targetRoiPercent}% target ` +
+        `return. If they sell for more than that, you may be leaving margin on the table.`
+    );
+  } else if (settings.followCompetitorPrice) {
+    const followed = [productPrice, ...variantPrices].filter((price) => price.basis === 'competitor').length;
+    if (followed) {
+      warnings.push(
+        `The competitor sells at ${currency} ${competitorPrice.toFixed(2)}, which is above your ` +
+          `${settings.targetRoiPercent}% floor — so that price was matched instead, for a wider margin.`
+      );
+    } else {
+      warnings.push(
+        `The competitor sells at ${currency} ${competitorPrice.toFixed(2)}, below what your ` +
+          `${settings.targetRoiPercent}% target needs — your floor price was used instead rather than undercutting ` +
+          `into a loss.`
+      );
+    }
+  }
+
+  return { currency, productCost, productPrice, variantPrices, competitorPrice, warnings };
+}
+
+// The competitor's own asking price, in our currency. Browse quotes in the
+// marketplace's currency (GBP on EBAY_GB), but it's parsed and checked rather
+// than assumed — a mismatch returns null so the competitor signal is simply
+// dropped, never misread into a wrong price.
+function lowestCompetitorPrice(competitor, currency) {
+  if (!competitor) return null;
+
+  const candidates = [competitor.priceText, ...(competitor.variants || []).map((variant) => variant.priceText)]
+    .map((text) => priceParser.parsePrice(text, currency))
+    .filter((parsed) => parsed.ok)
+    .map((parsed) => parsed.amount);
+
+  return candidates.length ? Math.min(...candidates) : null;
+}
+
+function pricingFailureMessage(parsed, expectedCurrency, rawText) {
+  if (parsed.reason === 'wrong-currency') {
+    return (
+      `The supplier's price came back in ${parsed.currency} ("${rawText}") rather than ${expectedCurrency}, so it ` +
+      `can't be used to work out a sell price. Liston never converts currencies with an assumed rate. Try again, ` +
+      `or set the currency in Listing settings to match.`
+    );
+  }
+  if (parsed.reason === 'unknown-currency') {
+    return `Couldn't tell what currency the supplier's price ("${rawText}") is in, so it can't be priced safely.`;
+  }
+  return "Couldn't read a price from the supplier's page, so there's no cost to work a sell price out from.";
+}
+
+// Ties source ingestion + AI text generation + image transformation together
+// into a draftInput-shaped object ready for listingService.createEbayDraft —
+// SKUs are intentionally left unset here; the caller (listingService) assigns
 // them right before persisting, since SKU generation is a listing-lifecycle
 // concern, not a content-generation one.
 //
-// `competitorRaw`/`sourceRaw` are optional: when the Liston browser extension
-// is installed, the user's own browser (not this server) extracts these raw
-// fields — via the exact same shared functions in `dom-extractors/` that
-// `ebayScraper`/`aliexpressScraper` use internally — bypassing this server's
-// IP entirely for the pages that need it. Either way, the same `normalize()`
-// from each scraper module runs on the raw fields before use, so there's one
-// place (not two) that decides "does this look like a real listing" and
-// shapes the result — Playwright and the extension are just two different
-// ways of getting to the same raw-field input.
+// The two sides are deliberately asymmetric. The competitor is read through
+// eBay's official Browse API (an authenticated read of public data — fast,
+// and impossible to be bot-blocked); the AliExpress source still goes through
+// a real browser, because AliExpress has no equivalent open read API we're
+// registered for yet. Both return the same normalized shape.
 async function generateDraftInput({
   competitorUrl,
   sourceUrl,
-  competitorRaw,
-  sourceRaw,
-  costPrice,
-  sellPrice,
-  currency,
+  // The connection's Listing settings (target ROI, ads/processing fees, fixed
+  // fee, shipping). Prices are DERIVED from the supplier's own cost and these
+  // — the seller no longer types a cost or a sell price per draft.
+  pricing,
   merchantLocationKey,
+  marketplaceId = 'EBAY_GB',
+  // The seller's own eBay token. Needed because finished images are uploaded
+  // to eBay Picture Services under their account, which is what makes the
+  // URLs permanent (and is the only way eBay can serve images we generated).
+  accessToken,
 }) {
-  const [competitor, source] = await Promise.all([
-    competitorRaw
-      ? Promise.resolve({ ...ebayScraper.normalize(competitorRaw), sourceUrl: competitorUrl })
-      : ebayScraper.scrapeListing(competitorUrl),
-    sourceRaw
-      ? Promise.resolve({ ...aliexpressScraper.normalize(sourceRaw), sourceUrl })
-      : aliexpressScraper.scrapeListing(sourceUrl),
-  ]);
+  // The AliExpress scrape is by far the slowest step (a real browser, ~30s),
+  // so it starts first and everything cheap overlaps with it. Kept as a
+  // floating promise deliberately — awaited below.
+  const sourcePromise = aliexpressSource.fetchProduct(sourceUrl);
+  // Attached immediately so a scrape that rejects before we await it can't
+  // surface as an unhandled rejection and take the process down.
+  sourcePromise.catch(() => {});
+
+  const competitor = await ebaySource.fetchListing(competitorUrl, marketplaceId);
 
   // The AI never invents this — eBay category IDs aren't guessable from a
   // title/breadcrumb, and a wrong one gets the offer rejected (or silently
-  // mis-categorized). Use the competitor's real scraped category directly.
+  // mis-categorized). Browse returns the competitor's real leaf category id.
   if (!competitor.categoryId) {
     throw new ScrapingError(
       "Couldn't determine the competitor listing's eBay category — try a different competitor URL.",
@@ -54,60 +198,124 @@ async function generateDraftInput({
     );
   }
 
-  const content = await textGenerator.generateListingContent({ competitor, source, costPrice, sellPrice, currency });
+  // eBay publishes the exact item specifics it expects for this category —
+  // which are required, which accept only listed values. The model drafts
+  // against that real schema instead of guessing, and its answer is validated
+  // against it before the user ever sees the draft. Needs the competitor's
+  // category id, so it can't start any earlier than this — but it still
+  // finishes long before the source scrape does.
+  const [source, aspectSchema] = await Promise.all([
+    sourcePromise,
+    ebayTaxonomy.getAspectSchema(marketplaceId, competitor.categoryId),
+  ]);
+
+  // Costs and prices are worked out before drafting so the model can be told
+  // the real numbers, and so a pricing problem (wrong currency, unreadable
+  // price) fails fast instead of after a paid AI call.
+  const priced = resolvePricing({ source, competitor, pricing });
+
+  const content = await textGenerator.generateListingContent({
+    competitor,
+    source,
+    costPrice: priced.productCost,
+    sellPrice: priced.productPrice.sellPrice,
+    currency: priced.currency,
+    aspectSchema,
+  });
 
   const hasVariants = source.variants.length > 0;
 
+  const { imageUrls: galleryImageUrls, warnings: imageWarnings } = await imagePipeline.buildGalleryImages({
+    sourceImageUrls: source.imageUrls,
+    scenePrompt: content.imageScenePrompt,
+    accessToken,
+    marketplaceId,
+    categoryId: competitor.categoryId,
+  });
+
+  // Surfaced on the review page so the seller sees what the automated steps
+  // couldn't do, rather than discovering it on a live listing.
+  const warnings = [...priced.warnings, ...(content.aspectWarnings || []), ...imageWarnings];
+
   if (!hasVariants) {
-    const imageUrls = await imageTransformer.transformImages(
-      source.imageUrls.slice(0, MAX_LISTING_IMAGES),
-      content.imageScenePrompt
-    );
     return {
       draftInput: {
         title: content.title,
         description: content.description,
-        imageUrls,
+        imageUrls: galleryImageUrls,
         aspects: content.aspects,
         condition: content.condition,
         quantity: 1,
         categoryId: competitor.categoryId,
-        price: { value: String(sellPrice), currency },
+        price: { value: String(priced.productPrice.sellPrice), currency: priced.currency },
+        // The full working — cost, each fee, profit and realised ROI — so the
+        // review page can show WHY the price is what it is instead of a bare
+        // number the seller has to trust.
+        priceBreakdown: priced.productPrice,
         merchantLocationKey,
       },
+      warnings,
       competitor,
       source,
     };
   }
 
-  const groupImageUrls = await imageTransformer.transformImages(
-    source.imageUrls.slice(0, MAX_LISTING_IMAGES),
-    content.imageScenePrompt
-  );
+  const aspectValues = resolveVariantAspectValues(source.variants, content.variantAspectValues);
+
   const variants = await Promise.all(
-    source.variants.map(async (variant) => {
-      const label = Object.values(variant.attributes)[0];
-      const aspectValue = content.variantAspectValues[label] || label;
-      const [imageUrl] = await imageTransformer.transformImages(
-        variant.imageUrl ? [variant.imageUrl] : [],
-        content.imageScenePrompt
-      );
+    source.variants.map(async (variant, index) => {
+      const imageUrl = await imagePipeline.buildVariantImage({
+        sourceImageUrl: variant.imageUrl,
+        accessToken,
+        marketplaceId,
+      });
       return {
-        imageUrls: imageUrl ? [imageUrl] : groupImageUrls,
-        aspects: { [content.varyingAspectName]: [aspectValue] },
+        imageUrls: imageUrl ? [imageUrl] : [],
+        ownImage: Boolean(imageUrl),
+        aspects: { [content.varyingAspectName]: [aspectValues[index]] },
         condition: content.condition,
         quantity: 1,
-        price: { value: String(sellPrice), currency },
+        price: { value: String(priced.variantPrices[index].sellPrice), currency: priced.currency },
+        priceBreakdown: priced.variantPrices[index],
       };
     })
   );
+
+  // EVERY variant must carry at least one image: eBay rejects the whole
+  // inventory item group outright with "imageUrls cannot be null or empty"
+  // (confirmed live — it killed a real draft before the seller ever saw a
+  // review page). So a variant without its own photo falls back to the main
+  // gallery image rather than being left empty.
+  //
+  // That fallback is stated plainly rather than hidden, because it isn't
+  // harmless: showing several options the same photo is what drives "not as
+  // described" returns. The two cases read very differently to a buyer, so
+  // they're reported differently.
+  const withoutOwnImage = variants.filter((variant) => !variant.ownImage);
+  const fallbackImage = galleryImageUrls.slice(0, 1);
+
+  for (const variant of variants) {
+    if (!variant.imageUrls.length) variant.imageUrls = fallbackImage;
+    delete variant.ownImage;
+  }
+
+  if (withoutOwnImage.length && fallbackImage.length) {
+    warnings.push(
+      withoutOwnImage.length === variants.length
+        ? `The supplier has no separate photo per option, so every variation shows the main product photo. ` +
+          `Adding a photo per option would help buyers pick the right one.`
+        : `${withoutOwnImage.length} of ${variants.length} variations had no photo of their own, so they show the ` +
+          `main product photo while the others show theirs. Worth adding the missing ones before publishing — ` +
+          `mismatched variation photos are a common cause of returns.`
+    );
+  }
 
   return {
     draftInput: {
       groupKey: null, // assigned by the caller alongside SKUs
       commonTitle: content.commonTitle,
       commonDescription: content.commonDescription,
-      imageUrls: groupImageUrls,
+      imageUrls: galleryImageUrls,
       variesBy: {
         aspects: content.sharedAspects,
         aspectsImageVariesBy: [content.varyingAspectName],
@@ -117,9 +325,10 @@ async function generateDraftInput({
       categoryId: competitor.categoryId,
       merchantLocationKey,
     },
+    warnings,
     competitor,
     source,
   };
 }
 
-module.exports = { generateDraftInput };
+module.exports = { generateDraftInput, resolveVariantAspectValues, resolvePricing };

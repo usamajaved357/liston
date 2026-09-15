@@ -108,4 +108,27 @@ async function transformImages(imageUrls, scenePrompt) {
   return Promise.all(imageUrls.map((url) => transformImage(url, scenePrompt)));
 }
 
-module.exports = { transformImages };
+// Background removal only — no generated scene. Used for per-variant photos,
+// where every variant must get the IDENTICAL treatment so the colours stay
+// comparable; a scene generated separately per variant makes five colours of
+// one product look like five different products. Falls back the same way
+// transformImage does, ending at the untouched original.
+async function removeBackground(imageUrl) {
+  if (config.briaApiKey) {
+    try {
+      return await transformWithBria(imageUrl);
+    } catch (err) {
+      logger.warn('Bria background removal failed, falling back', { error: err.message });
+    }
+  }
+  if (config.photoroomApiKey) {
+    try {
+      return await transformWithPhotoroom(imageUrl);
+    } catch (err) {
+      logger.warn('Photoroom background removal failed, falling back to the raw image', { error: err.message });
+    }
+  }
+  return imageUrl;
+}
+
+module.exports = { transformImages, removeBackground };

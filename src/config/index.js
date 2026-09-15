@@ -66,6 +66,21 @@ const config = {
   briaApiKey: process.env.BRIA_API_KEY || null,
   photoroomApiKey: process.env.PHOTOROOM_API_KEY || null,
 
+  // How source products are read from AliExpress. 'scraper' drives a real
+  // browser (works today, no registration, but slow — ~30s — and exposed to
+  // anti-bot measures). 'ds-api' uses AliExpress's official Dropshipping API,
+  // which is far faster and more reliable but needs an approved Open Platform
+  // app: set ALIEXPRESS_SOURCE=ds-api along with the key/secret once you have
+  // one. eBay deliberately has no such switch — it's API-only.
+  aliexpress: {
+    source: process.env.ALIEXPRESS_SOURCE === 'ds-api' ? 'ds-api' : 'scraper',
+    appKey: process.env.ALIEXPRESS_APP_KEY || null,
+    appSecret: process.env.ALIEXPRESS_APP_SECRET || null,
+    accessToken: process.env.ALIEXPRESS_ACCESS_TOKEN || null,
+    shipToCountry: process.env.ALIEXPRESS_SHIP_TO || 'GB',
+    targetCurrency: process.env.ALIEXPRESS_CURRENCY || 'GBP',
+  },
+
   // Optional rotating-proxy service for the eBay/AliExpress scrapers (e.g.
   // Bright Data, Oxylabs, ScraperAPI). Without one, scraping requests come
   // from this server's own IP, which real-world anti-bot systems can rate-

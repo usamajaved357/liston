@@ -5,38 +5,6 @@ const listingService = require('./listing.service');
 // (title/description/price/category typed in by the user) — that's exactly
 // what eBay's own listing tools already do, so it added nothing. Liston's
 // value is doing this from two URLs with AI, not re-implementing eBay's form.
-//
-// competitorRaw/sourceRaw are optional: when the Liston browser extension is
-// installed, the frontend pre-fetches the raw page fields through the user's
-// own browser (see dom-extractors/) and attaches them here so the backend
-// skips server-side scraping for that side entirely — see Part 4 of the
-// session plan. Validated loosely (just enough to reject obvious garbage);
-// the real shaping/validation happens in each scraper's `normalize()`.
-const rawEbayFieldsSchema = z.object({
-  title: z.string().nullable(),
-  priceText: z.string().nullable().optional(),
-  imageUrls: z.array(z.string()).optional(),
-  specifics: z.record(z.string()).optional(),
-  categoryBreadcrumb: z.array(z.string()).optional(),
-  categoryId: z.string().nullable().optional(),
-});
-
-const rawAliexpressFieldsSchema = z.object({
-  title: z.string().nullable(),
-  priceText: z.string().nullable().optional(),
-  description: z.string().nullable().optional(),
-  imageUrls: z.array(z.string()).optional(),
-  specifics: z.record(z.string()).optional(),
-  variantGroups: z
-    .array(
-      z.object({
-        name: z.string().nullable(),
-        options: z.array(z.object({ label: z.string(), imageUrl: z.string().nullable() })),
-      })
-    )
-    .optional(),
-});
-
 const generateDraftSchema = z.object({
   competitorUrl: z
     .string()
@@ -46,11 +14,6 @@ const generateDraftSchema = z.object({
     .string()
     .url('Enter a valid AliExpress listing URL')
     .refine((u) => /aliexpress\./.test(u), "That doesn't look like an AliExpress listing URL"),
-  competitorRaw: rawEbayFieldsSchema.optional(),
-  sourceRaw: rawAliexpressFieldsSchema.optional(),
-  costPrice: z.coerce.number().positive('Cost price must be greater than 0'),
-  sellPrice: z.coerce.number().positive('Sell price must be greater than 0'),
-  currency: z.string().min(1).default('GBP'),
 });
 
 async function generateDraft(req, res, next) {

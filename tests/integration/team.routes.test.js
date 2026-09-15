@@ -147,6 +147,53 @@ test('a connection-scoped override can revoke what the global default grants', a
   assert.strictEqual(detail.status, 403);
 });
 
+test('PUT permissions with allowed: null clears a connection-scoped override back to the global default', async () => {
+  const { ownerToken, memberId, memberToken, connectionId } = await createOwnerWithMemberAndConnection();
+
+  await request(
+    'PUT',
+    `/api/team/members/${memberId}/permissions`,
+    { permissions: [{ connectionId: null, feature: 'orders', allowed: true }] },
+    ownerToken
+  );
+  await request(
+    'PUT',
+    `/api/team/members/${memberId}/permissions`,
+    { permissions: [{ connectionId, feature: 'orders', allowed: false }] },
+    ownerToken
+  );
+  const blocked = await request('GET', `/api/connections/${connectionId}`, undefined, memberToken);
+  assert.strictEqual(blocked.status, 403);
+
+  const clear = await request(
+    'PUT',
+    `/api/team/members/${memberId}/permissions`,
+    { permissions: [{ connectionId, feature: 'orders', allowed: null }] },
+    ownerToken
+  );
+  assert.strictEqual(clear.status, 200);
+  assert.strictEqual(
+    clear.data.permissions.find((p) => p.connection_id === connectionId && p.feature === 'orders'),
+    undefined
+  );
+
+  const restored = await request('GET', `/api/connections/${connectionId}`, undefined, memberToken);
+  assert.strictEqual(restored.status, 200);
+  assert.strictEqual(restored.data.connection.permissions.orders, true);
+});
+
+test('PUT permissions refuses allowed: null for the global default (no higher fallback to defer to)', async () => {
+  const { ownerToken, memberId } = await createOwnerWithMemberAndConnection();
+
+  const res = await request(
+    'PUT',
+    `/api/team/members/${memberId}/permissions`,
+    { permissions: [{ connectionId: null, feature: 'orders', allowed: null }] },
+    ownerToken
+  );
+  assert.strictEqual(res.status, 400);
+});
+
 test('PUT permissions refuses a connectionId that does not belong to the owner', async () => {
   const { ownerToken, memberId } = await createOwnerWithMemberAndConnection();
   const otherOwnerEmail = `other-${crypto.randomUUID()}@example.com`;

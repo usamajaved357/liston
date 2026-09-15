@@ -200,12 +200,13 @@ export default function AccountPage() {
       connectionsUsed={connectionsUsed}
       maxConnections={maxConnections}
       planName={planName}
+      role={user.role}
       header={
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Account settings</h1>
           <AccountMenu
             email={user.email}
-            planName={planName}
+            subtitle={`${planName} plan`}
             avatarUrl={user.avatar_url}
             onLogout={() => setConfirmAction("logout")}
             onDeleteAccount={() => setConfirmAction("delete")}

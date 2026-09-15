@@ -48,11 +48,15 @@ async function getMemberPermissions(memberId, ownerId) {
   return teamRepository.getPermissions(memberId);
 }
 
-// permissions: [{ connectionId: string|null, feature: string, allowed: boolean }]
+// permissions: [{ connectionId: string|null, feature: string, allowed: boolean|null }]
 // connectionId null sets/overrides the member's global default for that
-// feature; a real connectionId sets a per-connection override. Every
-// connectionId is verified to belong to this owner before being written, so
-// an admin can never grant a member access to someone else's connection.
+// feature (allowed must be a real boolean there — there's no higher-level
+// default for it to fall back to). A real connectionId sets a per-connection
+// override; `allowed: null` there means "clear the override and defer back
+// to the global default" rather than "explicitly deny," which a hard
+// `false` would be indistinguishable from once written. Every connectionId
+// is verified to belong to this owner before being written, so an admin can
+// never grant a member access to someone else's connection.
 async function updateMemberPermissions(memberId, ownerId, permissions) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
   if (!member) {
@@ -67,8 +71,16 @@ async function updateMemberPermissions(memberId, ownerId, permissions) {
         throw new TeamError('Connection not found', 404);
       }
     }
-    // eslint-disable-next-line no-await-in-loop
-    await teamRepository.setPermission({ memberId, connectionId: connectionId || null, feature, allowed });
+    if (allowed === null) {
+      if (!connectionId) {
+        throw new TeamError('The global default must be either allowed or denied', 400);
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await teamRepository.clearPermission({ memberId, connectionId, feature });
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await teamRepository.setPermission({ memberId, connectionId: connectionId || null, feature, allowed });
+    }
   }
 
   return teamRepository.getPermissions(memberId);

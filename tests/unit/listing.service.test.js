@@ -98,7 +98,7 @@ test('publish calls publishDraft for a single-SKU listing and updates status', a
     status: 'pending_review',
     platform_offer_id: 'offer-1',
     platform_group_key: null,
-    generated_data: { marketplaceId: 'EBAY_GB' },
+    generated_data: { marketplaceId: 'EBAY_GB', imageUrls: ['https://i.ebayimg.com/a.jpg'] },
   }));
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
   const publishDraftMock = mock.method(ebayService, 'publishDraft', async (credentials, offerId) => {
@@ -135,6 +135,7 @@ test('generateEbayDraftFromUrls assigns a SKU, forwards sourceData, and creates 
     };
   });
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
   mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1', status: 'drafted' }));
   const createDraftMock = mock.method(listingRepository, 'createDraft', async (row) => ({ id: 'listing-1', ...row }));
 
@@ -148,7 +149,10 @@ test('generateEbayDraftFromUrls assigns a SKU, forwards sourceData, and creates 
 
   const call = createDraftMock.mock.calls[0].arguments[0];
   assert.match(call.sku, /^AE1234567890-[0-9a-f]{6}$/);
-  assert.deepStrictEqual(call.sourceData, { competitor: { title: 'Competitor' }, source: { title: 'Source' }, costPrice: 5 });
+  // costPrice is no longer part of sourceData — the cost comes from the
+  // supplier's own price at draft time, and the derived price plus its full
+  // working is persisted in generated_data instead.
+  assert.deepStrictEqual(call.sourceData, { competitor: { title: 'Competitor' }, source: { title: 'Source' } });
 });
 
 test('generateEbayDraftFromUrls assigns per-variant SKUs and a group key for a variation draft', async () => {
@@ -170,6 +174,7 @@ test('generateEbayDraftFromUrls assigns per-variant SKUs and a group key for a v
     source: { title: 'Source' },
   }));
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
   mock.method(ebayService, 'draftVariationListing', async (credentials, input) => {
     assert.strictEqual(input.variants.length, 2);
     assert.ok(input.variants.every((v) => v.sku));

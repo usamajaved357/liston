@@ -81,6 +81,17 @@ async function setPermission({ memberId, connectionId, feature, allowed }) {
   return result.rows[0];
 }
 
+// Removes a connection-scoped override so the member's global default takes
+// over again for this feature/connection — the only way to undo an override
+// without it silently reading as an explicit "false" forever (which is
+// indistinguishable from "no opinion" once written as a row).
+async function clearPermission({ memberId, connectionId, feature }) {
+  await query(
+    `DELETE FROM member_permissions WHERE member_user_id = $1 AND connection_id = $2 AND feature = $3`,
+    [memberId, connectionId, feature]
+  );
+}
+
 // Deny-by-default resolution: a connection-scoped row wins if present,
 // otherwise the member's global default for this feature, otherwise denied.
 async function resolvePermission(memberId, connectionId, feature) {
@@ -127,6 +138,7 @@ module.exports = {
   deleteMember,
   getPermissions,
   setPermission,
+  clearPermission,
   resolvePermission,
   resolveAnyPermission,
   getResolvedPermissions,

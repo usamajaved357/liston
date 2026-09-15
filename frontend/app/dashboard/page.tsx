@@ -97,6 +97,12 @@ export default function DashboardPage() {
   async function loadAll() {
     try {
       const [meData, connectionsData] = await Promise.all([api.me(), api.listConnections()]);
+      // This dashboard is plan/billing usage — a member has none of their
+      // own and can't manage connections, so send them to their account(s).
+      if (meData.user.role === "member") {
+        router.replace("/connections");
+        return;
+      }
       setUser(meData.user);
       setConnections(connectionsData.connections);
     } catch (err) {
@@ -187,7 +193,7 @@ export default function DashboardPage() {
           <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
           <AccountMenu
             email={user.email}
-            planName={planName}
+            subtitle={`${planName} plan`}
             avatarUrl={user.avatar_url}
             onLogout={() => setConfirmAction("logout")}
             onDeleteAccount={() => setConfirmAction("delete")}

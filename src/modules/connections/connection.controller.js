@@ -147,6 +147,20 @@ const updatePoliciesSchema = z.object({
   merchantLocationKey: z.string().min(1).optional(),
 });
 
+// Listing settings: the numbers every sell price is derived from. Bounds are
+// there to stop a typo producing silently broken prices — a 1200% ads fee, or
+// a target ROI of 6000% because a decimal moved.
+const updatePricingSchema = z.object({
+  targetRoiPercent: z.coerce.number().min(0, 'Target ROI cannot be negative').max(1000, 'Target ROI looks too high'),
+  adsFeePercent: z.coerce.number().min(0).max(100, 'Ads fee must be a percentage'),
+  processingFeePercent: z.coerce.number().min(0).max(100, 'Processing fee must be a percentage'),
+  fixedFeePerOrder: z.coerce.number().min(0).max(100),
+  shippingCostPerOrder: z.coerce.number().min(0).max(10000),
+  currency: z.string().min(3).max(3).default('GBP'),
+  roundTo99: z.boolean().default(true),
+  followCompetitorPrice: z.boolean().default(true),
+});
+
 async function getPolicies(req, res, next) {
   try {
     const marketplaceId = typeof req.query.marketplaceId === 'string' ? req.query.marketplaceId : 'EBAY_GB';
@@ -196,6 +210,31 @@ async function updatePolicies(req, res, next) {
   }
 }
 
+async function updatePricing(req, res, next) {
+  try {
+    const parsed = updatePricingSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+
+    // Fees that add up to the whole sale price make every price impossible —
+    // caught here so the seller finds out on the settings page, not on their
+    // next draft.
+    if (parsed.data.adsFeePercent + parsed.data.processingFeePercent >= 100) {
+      return res
+        .status(400)
+        .json({ error: 'Ads and processing fees add up to 100% or more of the sale price — no price could be profitable.' });
+    }
+
+    const settings = await connectionService.updateConnectionSettings(req.params.id, req.ownerId, {
+      pricing: parsed.data,
+    });
+    res.status(200).json({ settings });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   list,
   listPlatforms,
@@ -207,4 +246,5 @@ module.exports = {
   getEarnings,
   getPolicies,
   updatePolicies,
+  updatePricing,
 };

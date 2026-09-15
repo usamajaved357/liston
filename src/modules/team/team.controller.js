@@ -13,7 +13,9 @@ const updatePermissionsSchema = z.object({
       z.object({
         connectionId: z.string().uuid().nullable().optional(),
         feature: z.string().min(1),
-        allowed: z.boolean(),
+        // null is valid only for a connectionId-scoped entry — it clears the
+        // override back to "inherit the global default" (see team.service.js).
+        allowed: z.boolean().nullable(),
       })
     )
     .min(1, 'At least one permission change is required'),

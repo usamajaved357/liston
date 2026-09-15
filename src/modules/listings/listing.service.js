@@ -3,6 +3,7 @@ const listingRepository = require('./listing.repository');
 const connectionService = require('../connections/connection.service');
 const ebayService = require('../ebay/ebay.service');
 const orchestrator = require('../ai-generation/generation.orchestrator');
+const imageGates = require('../ai-generation/image-pipeline/gates');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -30,7 +31,7 @@ function shortRandomSuffix() {
   return crypto.randomBytes(3).toString('hex');
 }
 
-async function createEbayDraft(connectionId, userId, draftInput, { sourceData } = {}) {
+async function createEbayDraft(connectionId, userId, draftInput, { sourceData, warnings } = {}) {
   const isVariation = Array.isArray(draftInput.variants) && draftInput.variants.length > 0;
 
   const result = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials, connection) => {
@@ -66,7 +67,12 @@ async function createEbayDraft(connectionId, userId, draftInput, { sourceData } 
     sku: isVariation ? null : draftInput.sku,
     platformOfferId: isVariation ? null : result.offerId,
     platformGroupKey: isVariation ? result.groupKey : null,
-    generatedData: { ...draftInput, marketplaceId: result.marketplaceId, listingPolicies: result.listingPolicies },
+    generatedData: {
+      ...draftInput,
+      marketplaceId: result.marketplaceId,
+      listingPolicies: result.listingPolicies,
+      ...(warnings?.length ? { warnings } : {}),
+    },
     sourceData,
   });
 
@@ -80,7 +86,7 @@ async function createEbayDraft(connectionId, userId, draftInput, { sourceData } 
 async function generateEbayDraftFromUrls(
   connectionId,
   userId,
-  { competitorUrl, sourceUrl, competitorRaw, sourceRaw, costPrice, sellPrice, currency }
+  { competitorUrl, sourceUrl }
 ) {
   const connection = await connectionService.getConnectionSummary(connectionId, userId);
   if (connection.platform_key !== 'ebay') {
@@ -94,15 +100,26 @@ async function generateEbayDraftFromUrls(
     );
   }
 
-  const { draftInput, competitor, source } = await orchestrator.generateDraftInput({
+  // The image pipeline uploads finished images to eBay Picture Services under
+  // this seller's account, so it needs their token before drafting starts.
+  const { accessToken } = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.ensureValidAccessToken(credentials)
+  );
+
+  const { draftInput, warnings, competitor, source } = await orchestrator.generateDraftInput({
     competitorUrl,
     sourceUrl,
-    competitorRaw,
-    sourceRaw,
-    costPrice,
-    sellPrice,
-    currency,
+    accessToken,
+    // Sell prices are derived from the supplier's own cost plus these
+    // settings, not typed per draft. Undefined is fine — the pricing service
+    // falls back to its documented defaults (60% ROI, 18% ads, 12%
+    // processing, £0.30 per order).
+    pricing: connection.settings?.pricing,
     merchantLocationKey: ebaySettings.merchantLocationKey,
+    // The competitor is read from — and the category schema fetched for —
+    // the same marketplace the listing will be published to, so the category
+    // ids and aspect names line up.
+    marketplaceId: ebaySettings.marketplaceId || 'EBAY_GB',
   });
 
   const baseSku = baseSkuFromSourceUrl(sourceUrl);
@@ -124,7 +141,13 @@ async function generateEbayDraftFromUrls(
       }
     : { ...draftInput, sku: `${baseSku}-${runSuffix}` };
 
-  return createEbayDraft(connectionId, userId, finalDraftInput, { sourceData: { competitor, source, costPrice } });
+  return createEbayDraft(connectionId, userId, finalDraftInput, {
+    sourceData: { competitor, source },
+    // What the automated steps couldn't do (dropped aspects, variants with no
+    // photo of their own). Persisted so the review page can show it rather
+    // than the seller finding out from a live listing.
+    warnings,
+  });
 }
 
 async function listPendingDrafts(connectionId, userId) {
@@ -160,6 +183,16 @@ async function publish(id, userId) {
   }
   if (listing.status !== 'pending_review') {
     throw new ListingError(`Only a listing pending review can be published (this one is "${listing.status}")`, 400);
+  }
+
+  // Images are the single biggest driver of whether a listing sells, so the
+  // ones that would produce a visibly broken gallery (no images at all, or
+  // variations with no photo of their own) block the publish rather than
+  // going live and underperforming. Neither is auto-fixable without lying to
+  // the buyer, so it's reported for the seller to resolve.
+  const imageCheck = imageGates.checkDraftImages(listing.generated_data || {});
+  if (!imageCheck.ok) {
+    throw new ListingError(imageCheck.errors.join(' '), 400);
   }
 
   const result = await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>

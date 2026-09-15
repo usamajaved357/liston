@@ -6,13 +6,16 @@ import { Avatar } from "@/components/Avatar";
 
 interface AccountMenuProps {
   email: string;
-  planName: string;
+  // Shown verbatim under the email — callers compose the full label (e.g.
+  // "Starter plan" for an owner, "Team member" for a member) since not
+  // every caller's subtitle is actually a billing plan.
+  subtitle: string;
   avatarUrl?: string | null;
   onLogout: () => void;
   onDeleteAccount: () => void;
 }
 
-export function AccountMenu({ email, planName, avatarUrl, onLogout, onDeleteAccount }: AccountMenuProps) {
+export function AccountMenu({ email, subtitle, avatarUrl, onLogout, onDeleteAccount }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -43,7 +46,7 @@ export function AccountMenu({ email, planName, avatarUrl, onLogout, onDeleteAcco
             <Avatar avatarUrl={avatarUrl} size={32} />
             <div className="min-w-0">
               <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{email}</p>
-              <p className="text-xs text-[var(--color-muted)]">{planName} plan</p>
+              <p className="text-xs text-[var(--color-muted)]">{subtitle}</p>
             </div>
           </div>
           <Link

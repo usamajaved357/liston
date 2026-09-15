@@ -2,9 +2,69 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ConnectionPolicies, DraftListing, isVariationDraft } from "@/lib/api";
+import { api, ApiError, ConnectionPolicies, DraftListing, PriceBreakdown, isVariationDraft } from "@/lib/api";
 import { Alert } from "@/components/Alert";
 import { BackHeader } from "@/components/BackHeader";
+
+// A price the seller didn't type needs to show its working, or it's just a
+// number they have to take on faith. This is the whole calculation: what the
+// item cost, what each fee takes, what's left, and the return that actually
+// results after rounding.
+function PriceBreakdownPanel({ breakdown }: { breakdown: PriceBreakdown }) {
+  const rows = [
+    { label: "Supplier cost", value: -breakdown.itemCost },
+    ...(breakdown.shippingCost ? [{ label: "Shipping", value: -breakdown.shippingCost }] : []),
+    { label: "eBay ads", value: -breakdown.fees.ads },
+    { label: "Order processing", value: -breakdown.fees.processing },
+    { label: "Fixed fee", value: -breakdown.fees.fixed },
+  ];
+  const hitTarget = breakdown.roiPercent >= breakdown.targetRoiPercent;
+
+  return (
+    <div className="mt-3 rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-4">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Sell price</span>
+        <span className="text-xl font-extrabold text-[var(--color-ink)]">
+          {breakdown.currency} {breakdown.sellPrice.toFixed(2)}
+        </span>
+      </div>
+      <div className="mt-3 space-y-1">
+        {rows.map((row) => (
+          <div key={row.label} className="flex justify-between text-sm">
+            <span className="text-[var(--color-muted)]">{row.label}</span>
+            <span className="text-[var(--color-muted)]">
+              −{breakdown.currency} {Math.abs(row.value).toFixed(2)}
+            </span>
+          </div>
+        ))}
+        <div className="flex justify-between border-t border-[var(--color-line)] pt-1.5 text-sm font-bold">
+          <span className="text-[var(--color-ink)]">Profit</span>
+          <span className={breakdown.profit > 0 ? "text-emerald-700" : "text-[var(--color-danger)]"}>
+            {breakdown.currency} {breakdown.profit.toFixed(2)}
+          </span>
+        </div>
+      </div>
+      <p className={`mt-2.5 text-xs font-semibold ${hitTarget ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
+        {breakdown.roiPercent.toFixed(0)}% ROI {hitTarget ? "— at or above" : "— BELOW"} your {breakdown.targetRoiPercent}% target
+      </p>
+      {/* Where the number came from. "Matched the competitor" and "hit your
+          floor" are very different situations and shouldn't look identical. */}
+      {breakdown.basis === "competitor" ? (
+        <p className="mt-1 text-xs text-[var(--color-muted)]">
+          Matched the competitor&apos;s {breakdown.currency} {breakdown.competitorPrice?.toFixed(2)} — above your floor
+          of {breakdown.currency} {breakdown.floorPrice?.toFixed(2)}.
+        </p>
+      ) : (
+        breakdown.competitorPrice != null && (
+          <p className="mt-1 text-xs text-[var(--color-muted)]">
+            Competitor sells at {breakdown.currency} {breakdown.competitorPrice.toFixed(2)}, below your floor — priced
+            at your target instead.
+          </p>
+        )
+      )}
+    </div>
+  );
+}
 
 function policyName(
   policies: ConnectionPolicies | null,
@@ -109,6 +169,24 @@ export default function DraftReviewPage() {
               </div>
             )}
 
+            {/* What the automated steps couldn't do: item specifics eBay
+                wouldn't accept, supplier photos that were marketing graphics,
+                variations with no photo of their own. Shown here so it's
+                fixable before publishing rather than discovered on a live
+                listing. */}
+            {content.warnings && content.warnings.length > 0 && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-800">Worth checking</p>
+                <ul className="mt-2 space-y-1">
+                  {content.warnings.map((warning) => (
+                    <li key={warning} className="text-sm text-amber-900 leading-relaxed">
+                      • {warning}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div className="mt-6 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
               <div className="flex gap-5">
                 <div className="flex gap-2 flex-wrap flex-shrink-0 w-40">
@@ -124,12 +202,16 @@ export default function DraftReviewPage() {
                   {single && (
                     <>
                       <p className="mt-1 text-sm text-[var(--color-muted)]">SKU {listing.sku || "—"}</p>
-                      <p className="mt-2 text-xl font-extrabold text-[var(--color-ink)]">
-                        {single.price.currency} {single.price.value}
-                      </p>
                       <p className="mt-1 text-xs text-[var(--color-muted)]">
                         Qty {single.quantity} · Condition {single.condition || "NEW"}
                       </p>
+                      {single.priceBreakdown ? (
+                        <PriceBreakdownPanel breakdown={single.priceBreakdown} />
+                      ) : (
+                        <p className="mt-2 text-xl font-extrabold text-[var(--color-ink)]">
+                          {single.price.currency} {single.price.value}
+                        </p>
+                      )}
                     </>
                   )}
                 </div>
@@ -171,9 +253,22 @@ export default function DraftReviewPage() {
                             .join(" · ")}
                         </div>
                         <p className="text-xs text-[var(--color-muted)] flex-shrink-0">SKU {v.sku || "—"}</p>
-                        <p className="text-sm font-bold text-[var(--color-ink)] flex-shrink-0">
-                          {v.price.currency} {v.price.value}
-                        </p>
+                        <div className="flex-shrink-0 text-right">
+                          <p className="text-sm font-bold text-[var(--color-ink)]">
+                            {v.price.currency} {v.price.value}
+                          </p>
+                          {v.priceBreakdown && (
+                            <p
+                              className={`text-xs ${
+                                v.priceBreakdown.roiPercent >= v.priceBreakdown.targetRoiPercent
+                                  ? "text-emerald-700"
+                                  : "text-[var(--color-danger)]"
+                              }`}
+                            >
+                              {v.priceBreakdown.profit.toFixed(2)} profit · {v.priceBreakdown.roiPercent.toFixed(0)}% ROI
+                            </p>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>

@@ -8,8 +8,16 @@ function errorHandler(err, req, res, next) { // eslint-disable-line no-unused-va
     logger.error('Unhandled error', { message: err.message, stack: err.stack, path: req.path });
   }
 
+  // A failure coming BACK from eBay isn't our server breaking, and hiding it
+  // behind "Internal server error" cost real debugging time — a draft was
+  // rejected with eBay's own, perfectly actionable "imageUrls cannot be null
+  // or empty" and the user saw nothing but "internal error". Errors marked
+  // `expose` carry a message that's safe and useful to show (upstream API
+  // messages, never our internals), so they're passed through even at 5xx.
+  const showMessage = statusCode < 500 || err.expose === true;
+
   res.status(statusCode).json({
-    error: statusCode >= 500 ? 'Internal server error' : err.message,
+    error: showMessage ? err.message : 'Internal server error',
   });
 }
 

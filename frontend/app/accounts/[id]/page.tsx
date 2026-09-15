@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { api, ApiError, EarningsRange, Money } from "@/lib/api";
+import Link from "next/link";
+import { api, ApiError, EarningsRange, Money, OrderCounts, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -135,10 +136,76 @@ function EarningsWidget({ connectionId }: { connectionId: string }) {
   );
 }
 
+// What a team member who manages orders actually needs on an account's
+// Overview: the operational state of the queue — what's waiting to be
+// shipped, what's unpaid, what's already gone out — not revenue, which is
+// the owner's concern and none of a fulfilment teammate's business. Each
+// tile links straight into the Orders tab pre-filtered to that status, over
+// the same 90-day window it counted (eBay's Trading API doesn't serve order
+// history further back than that).
+const ORDER_SUMMARY_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
+  {
+    key: "awaiting_dispatch",
+    label: "Awaiting dispatch",
+    hint: "Paid — needs shipping",
+    tone: "text-[var(--color-ink)]",
+  },
+  { key: "awaiting_payment", label: "Awaiting payment", hint: "New — not paid yet", tone: "text-amber-700" },
+  { key: "dispatched", label: "Paid and dispatched", hint: "Already shipped", tone: "text-emerald-700" },
+  { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-danger)]" },
+];
+
+const SUMMARY_RANGE = "90d";
+
+function OrdersSummaryWidget({ connectionId }: { connectionId: string }) {
+  const [counts, setCounts] = useState<OrderCounts | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    // perPage 1 because only `counts` is used here — the backend derives
+    // counts from the whole window regardless of the page size requested.
+    api
+      .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
+      .then((data) => setCounts(data.counts))
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."))
+      .finally(() => setLoading(false));
+  }, [connectionId]);
+
+  return (
+    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
+      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-5">
+        <h2 className="text-base font-bold text-[var(--color-ink)]">Orders</h2>
+        <span className="text-xs text-[var(--color-muted)]">Last 90 days</span>
+      </div>
+
+      {error ? (
+        <Alert>{error}</Alert>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {ORDER_SUMMARY_TILES.map((tile) => (
+            <Link
+              key={tile.key}
+              href={`/accounts/${connectionId}/orders?status=${tile.key}&range=${SUMMARY_RANGE}`}
+              className="rounded-xl border border-[var(--color-line)] p-4 transition-colors hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-paper)]"
+            >
+              <p className={`text-3xl font-extrabold ${tile.tone}`}>{loading ? "…" : counts?.[tile.key] ?? 0}</p>
+              <p className="mt-1.5 text-sm font-semibold text-[var(--color-ink)]">{tile.label}</p>
+              <p className="text-xs text-[var(--color-muted)]">{tile.hint}</p>
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AccountOverviewPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
-  const { connection, loading, error } = useConnection(params.id);
+  const { connection, user, loading, error } = useConnection(params.id);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -163,7 +230,7 @@ export default function AccountOverviewPage() {
     );
   }
 
-  if (error || !connection) {
+  if (error || !connection || !user) {
     return (
       <main className="min-h-screen flex items-center justify-center px-6">
         <Alert>{error || "This account connection doesn't exist, or isn't yours."}</Alert>
@@ -179,6 +246,7 @@ export default function AccountOverviewPage() {
       platformName={connection.platform_name}
       status={connection.status}
       permissions={connection.permissions}
+      user={user}
       header={
         <div className="flex items-center justify-between">
           <div>
@@ -193,12 +261,16 @@ export default function AccountOverviewPage() {
             >
               {connection.status}
             </span>
-            <button
-              onClick={() => setConfirmDelete(true)}
-              className="text-sm font-medium text-[var(--color-danger)] hover:underline"
-            >
-              Remove connection
-            </button>
+            {/* Disconnecting a whole eBay account is always admin-only —
+                connection.permissions is only ever set for a member. */}
+            {connection.permissions === undefined && (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="text-sm font-medium text-[var(--color-danger)] hover:underline"
+              >
+                Remove connection
+              </button>
+            )}
           </div>
         </div>
       }
@@ -209,7 +281,22 @@ export default function AccountOverviewPage() {
         </div>
       )}
 
-      <EarningsWidget connectionId={connection.id} />
+      {/* An owner owns the P&L, so Overview leads with Earnings for them. A
+          team member granted Orders is doing fulfilment work — revenue isn't
+          theirs to monitor, so they get the operational state of the order
+          queue instead. Anyone without Orders access has nothing to show
+          here at all (Overview is entirely order-derived today). */}
+      {connection.permissions === undefined ? (
+        <EarningsWidget connectionId={connection.id} />
+      ) : connection.permissions.orders ? (
+        <OrdersSummaryWidget connectionId={connection.id} />
+      ) : (
+        <div className="rounded-2xl border border-dashed border-[var(--color-line)] p-8 text-center">
+          <p className="text-sm text-[var(--color-muted)]">
+            Nothing to show here yet — check the sections in the sidebar you have access to.
+          </p>
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete}

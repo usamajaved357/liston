@@ -1,46 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const ebayScraper = require('../../src/modules/scraping/ebay-listing.scraper');
 const aliexpressScraper = require('../../src/modules/scraping/aliexpress-listing.scraper');
 const { ScrapingError } = require('../../src/modules/scraping/scraping.errors');
 
-// True end-to-end scraping (launching a real browser against live eBay/
-// AliExpress pages) is NOT run here or in CI — it's inherently flaky (site
+// True end-to-end scraping (launching a real browser against a live
+// AliExpress page) is NOT run here or in CI — it's inherently flaky (site
 // layout drift, bot detection, network) and shouldn't gate builds. These
 // tests cover only the pure normalization logic against fixture data; the
-// scrapers were verified manually against real live listings during
+// scraper was verified manually against real live listings during
 // implementation (see PROGRESS.md).
-
-test('ebay normalize throws ScrapingError when no title was found', () => {
-  assert.throws(() => ebayScraper.normalize({ title: null }), (err) => err instanceof ScrapingError && err.source === 'ebay');
-});
-
-test('ebay normalize builds the shared shape from raw extracted fields', () => {
-  const result = ebayScraper.normalize({
-    title: '  Great Widget  ',
-    priceText: '£4.49 each',
-    description: '  A great widget  ',
-    imageUrls: ['https://example.com/a.jpg'],
-    specifics: { Colour: 'Black' },
-    categoryBreadcrumb: ['Electronics', 'Widgets'],
-    categoryId: '20349',
-  });
-
-  assert.strictEqual(result.title, 'Great Widget');
-  assert.strictEqual(result.description, 'A great widget');
-  assert.deepStrictEqual(result.imageUrls, ['https://example.com/a.jpg']);
-  assert.strictEqual(result.priceText, '£4.49 each');
-  assert.deepStrictEqual(result.specifics, { Colour: 'Black' });
-  assert.deepStrictEqual(result.categoryBreadcrumb, ['Electronics', 'Widgets']);
-  assert.strictEqual(result.categoryId, '20349');
-  assert.deepStrictEqual(result.variants, []);
-});
-
-test('ebay normalize defaults categoryId to null when not scraped', () => {
-  const result = ebayScraper.normalize({ title: 'Widget' });
-  assert.strictEqual(result.categoryId, null);
-});
+//
+// eBay has no scraper any more — competitor listings come from the official
+// Browse API instead; see tests/unit/ebay-listing.source.test.js.
 
 test('aliexpress normalize throws ScrapingError when no title was found', () => {
   assert.throws(() => aliexpressScraper.normalize({ title: null }), ScrapingError);

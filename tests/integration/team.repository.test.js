@@ -67,6 +67,34 @@ test('a scoped override wins over the global default, in both directions', async
   assert.strictEqual(await teamRepository.resolvePermission(member.id, connectionId, 'listings'), true);
 });
 
+// The exact bug reported live: an admin set a connection-scoped override to
+// false while testing, then later turned the global default on — but the
+// stale false override kept silently winning since a hard `false` row is
+// indistinguishable from an intentional deny. clearPermission is the fix:
+// it removes the override entirely so the global default takes over again.
+test('clearPermission removes a scoped override so the global default takes over again', async () => {
+  const { ownerId, connectionId } = await createOwnerWithConnection();
+  const member = await teamRepository.createMember({
+    ownerId,
+    email: `member-${crypto.randomUUID()}@example.com`,
+    passwordHash: 'hash',
+  });
+
+  await teamRepository.setPermission({ memberId: member.id, connectionId, feature: 'listings', allowed: false });
+  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'listings', allowed: true });
+  assert.strictEqual(
+    await teamRepository.resolvePermission(member.id, connectionId, 'listings'),
+    false,
+    'the stale scoped override should still be winning at this point'
+  );
+
+  await teamRepository.clearPermission({ memberId: member.id, connectionId, feature: 'listings' });
+  assert.strictEqual(await teamRepository.resolvePermission(member.id, connectionId, 'listings'), true);
+
+  const rows = await teamRepository.getPermissions(member.id);
+  assert.strictEqual(rows.find((r) => r.connection_id === connectionId && r.feature === 'listings'), undefined);
+});
+
 test('setPermission upserts rather than duplicating rows on repeated writes', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
   const member = await teamRepository.createMember({

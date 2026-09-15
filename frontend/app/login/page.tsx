@@ -21,9 +21,12 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const { token } = await api.login(email, password);
+      const { user, token } = await api.login(email, password);
       localStorage.setItem("token", token);
-      router.push("/dashboard");
+      // A team member has no plan/billing of their own and can't manage
+      // connections — send them straight to their accessible account(s)
+      // instead of the owner-only overview dashboard.
+      router.push(user.role === "member" ? "/connections" : "/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't log you in. Try again.");
     } finally {

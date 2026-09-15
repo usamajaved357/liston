@@ -40,7 +40,15 @@ export default function WorkspaceSettingsPage() {
     }
     api
       .me()
-      .then(({ user }) => setUser(user))
+      .then(({ user }) => {
+        // Plan/billing workspace settings — a member has neither, and can't
+        // touch connection policies either (always admin-only).
+        if (user.role === "member") {
+          router.replace("/connections");
+          return;
+        }
+        setUser(user);
+      })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
           localStorage.removeItem("token");
@@ -102,7 +110,7 @@ export default function WorkspaceSettingsPage() {
           </div>
           <AccountMenu
             email={user.email}
-            planName={planName}
+            subtitle={`${planName} plan`}
             avatarUrl={user.avatar_url}
             onLogout={() => setConfirmAction("logout")}
             onDeleteAccount={() => setConfirmAction("delete")}

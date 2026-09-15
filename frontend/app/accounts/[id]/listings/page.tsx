@@ -60,7 +60,7 @@ function PaginationControls({
 export default function AccountListingsPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
-  const { connection, loading: loadingConnection, error: connectionError } = useConnection(params.id);
+  const { connection, user, loading: loadingConnection, error: connectionError } = useConnection(params.id);
 
   const initialFilter = searchParams.get("filter") === "draft" ? "draft" : "active";
   const [filter, setFilter] = useState<ListingStatusFilter | "draft">(initialFilter);
@@ -110,7 +110,7 @@ export default function AccountListingsPage() {
     );
   }
 
-  if (connectionError || !connection) {
+  if (connectionError || !connection || !user) {
     return (
       <main className="min-h-screen flex items-center justify-center px-6">
         <Alert>{connectionError || "This account connection doesn't exist, or isn't yours."}</Alert>
@@ -126,6 +126,7 @@ export default function AccountListingsPage() {
       platformName={connection.platform_name}
       status={connection.status}
       permissions={connection.permissions}
+      user={user}
       header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Listings</h1>}
     >
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">

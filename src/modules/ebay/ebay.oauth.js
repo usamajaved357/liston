@@ -6,6 +6,10 @@ const SCOPES = [
   'https://api.ebay.com/oauth/api_scope/sell.account',
 ];
 
+// The base "public data" scope. Note this identifier is literally api.ebay.com
+// even in sandbox — scopes are names, not endpoints we call.
+const APP_SCOPE = 'https://api.ebay.com/oauth/api_scope';
+
 const STATE_TTL = '10m';
 
 function isSandbox() {
@@ -101,6 +105,23 @@ async function exchangeCodeForToken(code) {
   return normalizeTokenResponse(data);
 }
 
+// Client-credentials grant: an APPLICATION token, tied to our developer keyset
+// rather than to any seller. It carries only the public read scope, which is
+// all the Browse/Taxonomy APIs need — reading public listings and category
+// schemas involves no seller's account, so there's nothing to consent to.
+async function requestApplicationToken() {
+  const data = await requestToken(
+    new URLSearchParams({
+      grant_type: 'client_credentials',
+      scope: APP_SCOPE,
+    })
+  );
+  return {
+    accessToken: data.access_token,
+    accessTokenExpiresAt: Date.now() + data.expires_in * 1000,
+  };
+}
+
 async function refreshAccessToken(refreshToken) {
   const data = await requestToken(
     new URLSearchParams({
@@ -134,4 +155,5 @@ module.exports = {
   buildAuthorizeUrl,
   exchangeCodeForToken,
   refreshAccessToken,
+  requestApplicationToken,
 };

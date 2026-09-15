@@ -7,7 +7,7 @@ import { Alert } from "@/components/Alert";
 
 export default function AccountInboxPage() {
   const params = useParams<{ id: string }>();
-  const { connection, loading, error } = useConnection(params.id);
+  const { connection, user, loading, error } = useConnection(params.id);
 
   if (loading) {
     return (
@@ -17,7 +17,7 @@ export default function AccountInboxPage() {
     );
   }
 
-  if (error || !connection) {
+  if (error || !connection || !user) {
     return (
       <main className="min-h-screen flex items-center justify-center px-6">
         <Alert>{error || "This account connection doesn't exist, or isn't yours."}</Alert>
@@ -33,6 +33,7 @@ export default function AccountInboxPage() {
       platformName={connection.platform_name}
       status={connection.status}
       permissions={connection.permissions}
+      user={user}
       header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Inbox</h1>}
     >
       <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">

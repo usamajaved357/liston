@@ -21,11 +21,17 @@ function featureLabel(feature: string) {
 
 // One row per (connectionId | null) — null is the member's global default,
 // applied to every connection unless a specific row below overrides it.
+// For the global row a missing value means "not granted" (false). For a
+// per-connection row a missing value means "inherit the global default" —
+// kept as `undefined`, distinct from an explicit `false` override, so the
+// UI can show and clear that third state instead of the two silently
+// collapsing into the same checkbox (the exact bug reported live: an old
+// explicit `false` override kept beating a later global `true`).
 function permissionsGrid(
   member: TeamMember,
   connections: Connection[],
   knownFeatures: string[]
-): { rowLabel: string; connectionId: string | null; values: Record<string, boolean> }[] {
+): { rowLabel: string; connectionId: string | null; values: Record<string, boolean | undefined> }[] {
   const byKey = new Map<string, Record<string, boolean>>();
   for (const p of member.permissions) {
     const key = p.connection_id ?? "__global__";
@@ -33,23 +39,24 @@ function permissionsGrid(
     byKey.get(key)![p.feature] = p.allowed;
   }
 
+  const globalValues = byKey.get("__global__") || {};
   const rows = [
     {
       rowLabel: "All accounts (default)",
       connectionId: null as string | null,
-      values: byKey.get("__global__") || {},
+      values: Object.fromEntries(knownFeatures.map((f) => [f, globalValues[f] ?? false])),
     },
-    ...connections.map((c) => ({
-      rowLabel: c.label,
-      connectionId: c.id,
-      values: byKey.get(c.id) || {},
-    })),
+    ...connections.map((c) => {
+      const scoped = byKey.get(c.id) || {};
+      return {
+        rowLabel: c.label,
+        connectionId: c.id,
+        values: Object.fromEntries(knownFeatures.map((f) => [f, scoped[f]])),
+      };
+    }),
   ];
 
-  return rows.map((row) => ({
-    ...row,
-    values: Object.fromEntries(knownFeatures.map((f) => [f, row.values[f] ?? false])),
-  }));
+  return rows;
 }
 
 function MemberCard({
@@ -68,10 +75,10 @@ function MemberCard({
   const [saving, setSaving] = useState(false);
   const rows = permissionsGrid(member, connections, knownFeatures);
 
-  async function toggle(connectionId: string | null, feature: string, current: boolean) {
+  async function setValue(connectionId: string | null, feature: string, allowed: boolean | null) {
     setSaving(true);
     try {
-      await onChange(member.id, [{ connectionId, feature, allowed: !current }]);
+      await onChange(member.id, [{ connectionId, feature, allowed }]);
     } finally {
       setSaving(false);
     }
@@ -99,6 +106,10 @@ function MemberCard({
         </p>
       ) : (
         <div className="overflow-x-auto">
+          <p className="text-xs text-[var(--color-muted)] mb-2">
+            Per-account checkboxes follow the default above until you tick one differently — click the{" "}
+            <strong>↺</strong> next to a changed box to go back to following the default.
+          </p>
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
@@ -111,22 +122,59 @@ function MemberCard({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.connectionId ?? "global"} className="border-t border-[var(--color-line)]">
-                  <td className="py-2.5 pr-4 font-medium text-[var(--color-ink)]">{row.rowLabel}</td>
-                  {knownFeatures.map((f) => (
-                    <td key={f} className="py-2.5 px-3 text-center">
-                      <input
-                        type="checkbox"
-                        checked={row.values[f]}
-                        disabled={saving}
-                        onChange={() => toggle(row.connectionId, f, row.values[f])}
-                        className="h-4 w-4 accent-[var(--color-accent)]"
-                      />
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {rows.map((row) => {
+                const globalValues = rows[0].values;
+                return (
+                  <tr key={row.connectionId ?? "global"} className="border-t border-[var(--color-line)]">
+                    <td className="py-2.5 pr-4 font-medium text-[var(--color-ink)]">{row.rowLabel}</td>
+                    {knownFeatures.map((f) => {
+                      if (row.connectionId === null) {
+                        return (
+                          <td key={f} className="py-2.5 px-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={row.values[f] ?? false}
+                              disabled={saving}
+                              onChange={() => setValue(null, f, !row.values[f])}
+                              className="h-4 w-4 accent-[var(--color-accent)]"
+                            />
+                          </td>
+                        );
+                      }
+                      // Undefined = following the default: the box shows and
+                      // updates with whatever the default row is set to.
+                      // Ticking it here creates an explicit override for
+                      // just this account — the ↺ clears that override.
+                      const override = row.values[f];
+                      const effective = override === undefined ? globalValues[f] ?? false : override;
+                      return (
+                        <td key={f} className="py-2.5 px-3">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <input
+                              type="checkbox"
+                              checked={effective}
+                              disabled={saving}
+                              onChange={() => setValue(row.connectionId, f, !effective)}
+                              className="h-4 w-4 accent-[var(--color-accent)]"
+                            />
+                            {override !== undefined && (
+                              <button
+                                type="button"
+                                title="Go back to following the default"
+                                disabled={saving}
+                                onClick={() => setValue(row.connectionId, f, null)}
+                                className="text-xs text-[var(--color-muted)] hover:text-[var(--color-ink)] disabled:opacity-60"
+                              >
+                                ↺
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
