@@ -210,6 +210,59 @@ async function updatePolicies(req, res, next) {
   }
 }
 
+// The store's description template — the branding, delivery and returns
+// copy that wraps every listing this account publishes.
+const updateTemplateSchema = z.object({
+  storeName: z.string().max(60).default(''),
+  tagline: z.string().max(60).default('Official UK Store'),
+  logoUrl: z.string().url().or(z.literal('')).default(''),
+  accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #FF6B2B').default('#FF6B2B'),
+  darkColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #1E1E2E').default('#1E1E2E'),
+  feedbackPercent: z.string().max(6).default(''),
+  dispatchTime: z.string().max(40).default('1–2 Business Days'),
+  dispatchNote: z.string().max(60).default('From our UK warehouse'),
+  carrier: z.string().max(40).default('Royal Mail / Evri'),
+  deliveryTime: z.string().max(40).default('2–4 Business Days'),
+  freePostage: z.boolean().default(true),
+  returnsDays: z.coerce.number().int().min(0).max(365).default(30),
+  recommendedCount: z.coerce.number().int().min(0).max(8).default(4),
+  responseTime: z.string().max(30).default('24 hours'),
+  reviews: z
+    .array(z.object({ stars: z.coerce.number().min(1).max(5).default(5), text: z.string().max(400), buyer: z.string().max(60).default(''), date: z.string().max(30).default('') }))
+    .max(3)
+    .default([]),
+});
+
+// What eBay knows about this store — name, logo, feedback — so the
+// template can be filled from the source of truth instead of typed.
+async function getStoreProfile(req, res, next) {
+  try {
+    const profile = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Store profiles aren't available for ${connection.platform_name} yet`, 400);
+      }
+      return ebayService.getStoreProfile(credentials);
+    });
+    const { credentials, credentialsChanged, ...safe } = profile;
+    res.status(200).json(safe);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateTemplate(req, res, next) {
+  try {
+    const parsed = updateTemplateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+    const settings = await connectionService.updateConnectionSettings(req.params.id, req.ownerId, { template: parsed.data });
+    res.status(200).json({ settings });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function updatePricing(req, res, next) {
   try {
     const parsed = updatePricingSchema.safeParse(req.body);
@@ -247,4 +300,6 @@ module.exports = {
   getPolicies,
   updatePolicies,
   updatePricing,
+  updateTemplate,
+  getStoreProfile,
 };

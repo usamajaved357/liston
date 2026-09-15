@@ -79,7 +79,7 @@ export interface Connection {
   status: "active" | "expired" | "error" | "suspended";
   platform_key: string;
   platform_name: string;
-  settings?: { ebay?: EbaySettings; pricing?: PricingSettings };
+  settings?: { ebay?: EbaySettings; pricing?: PricingSettings; template?: DescriptionTemplate };
   permissions?: ConnectionPermissions;
   created_at: string;
   updated_at: string;
@@ -222,6 +222,7 @@ export interface SingleDraftContent {
   condition?: string;
   quantity: number;
   categoryId: string;
+  categoryPath?: string[];
   price: OfferPrice;
   priceBreakdown?: PriceBreakdown;
   marketplaceId?: string;
@@ -254,6 +255,7 @@ export interface VariationDraftContent {
   };
   variants: VariationDraftVariant[];
   categoryId: string;
+  categoryPath?: string[];
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
@@ -266,13 +268,53 @@ export function isVariationDraft(content: DraftContent): content is VariationDra
   return "variants" in content;
 }
 
-export interface GenerateDraftInput {
-  competitorUrl: string;
-  sourceUrl: string;
+// Step one of drafting: both listings read, nothing generated. Enough for
+// the seller to choose which variations to list before anything is paid for.
+export interface DraftPreviewAxisValue {
+  value: string;
+  imageUrl: string | null;
+  combinations: number;
 }
+
+export interface DraftPreview {
+  previewId: string;
+  competitor: { title: string; priceText: string | null; categoryPath: string[] };
+  source: {
+    title: string;
+    priceText: string | null;
+    imageUrls: string[];
+    axes: { name: string; hasImages: boolean; values: DraftPreviewAxisValue[] }[];
+    totalCombinations: number;
+  };
+}
+
+export type GenerateDraftInput =
+  | { competitorUrl: string; sourceUrl: string }
+  | { previewId: string; variantSelection?: Record<string, string[]> };
 
 // Listing settings — every sell price is derived from these plus the
 // supplier's own cost, so the seller never types a price per draft.
+// The store's description template: branding, delivery and returns copy
+// that wraps every listing this account publishes. Per account — two
+// stores on one Liston get two different descriptions from the same draft.
+export interface DescriptionTemplate {
+  storeName: string;
+  tagline: string;
+  logoUrl: string;
+  accentColor: string;
+  darkColor: string;
+  feedbackPercent: string;
+  dispatchTime: string;
+  dispatchNote: string;
+  carrier: string;
+  deliveryTime: string;
+  freePostage: boolean;
+  returnsDays: number;
+  recommendedCount: number;
+  responseTime: string;
+  reviews: { stars: number; text: string; buyer: string; date: string }[];
+}
+
 export interface PricingSettings {
   targetRoiPercent: number;
   adsFeePercent: number;
@@ -316,6 +358,7 @@ export interface DraftPatch {
   aspects?: Record<string, string[]>;
   imageUrls?: string[];
   price?: OfferPrice;
+  quantity?: number;
   variants?: Record<string, { price?: OfferPrice; quantity?: number; imageUrls?: string[] }>;
   removeAxisValues?: { axis: string; value: string }[];
   variantSkusToRemove?: string[];
@@ -489,6 +532,28 @@ export const api = {
       body: JSON.stringify(pricing),
     }),
 
+  getStoreProfile: (id: string) =>
+    request<{
+      storeName: string | null;
+      logoUrl: string | null;
+      storeDescription: string | null;
+      storeUrl: string | null;
+      username: string | null;
+      feedbackScore: number | null;
+      feedbackPercent: string | null;
+    }>(`/api/connections/${id}/store-profile`),
+  updateConnectionTemplate: (id: string, template: DescriptionTemplate) =>
+    request<{ settings: { template: DescriptionTemplate } }>(`/api/connections/${id}/template`, {
+      method: "PUT",
+      body: JSON.stringify(template),
+    }),
+  previewDraftDescription: (listingId: string) =>
+    request<{ html: string }>(`/api/listings/${listingId}/description-preview`),
+  previewDraftListing: (connectionId: string, input: { competitorUrl: string; sourceUrl: string }) =>
+    request<DraftPreview>(`/api/connections/${connectionId}/listings/drafts/preview`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   generateDraftListing: (connectionId: string, input: GenerateDraftInput) =>
     request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/drafts`, {
       method: "POST",

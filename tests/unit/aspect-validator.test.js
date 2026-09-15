@@ -40,10 +40,13 @@ test('validateAspects corrects aspect-name casing to eBay spelling', () => {
   assert.deepStrictEqual(result.aspects, { Type: ['Night light'], Brand: ['Acme'] });
 });
 
-test('validateAspects drops an aspect eBay does not list for the category', () => {
-  const result = validateAspects({ Type: ['Lamp'], Nonsense: ['x'] }, SCHEMA);
-  assert.ok(!('Nonsense' in result.aspects));
-  assert.match(result.warnings.join(' '), /Nonsense/);
+// eBay accepts seller-defined specifics beyond the category schema, and a
+// competitor's extra specifics are what buyers filter on — so they're kept as
+// custom specifics (one value, tidied) rather than dropped.
+test('validateAspects keeps an aspect eBay does not list as a custom specific', () => {
+  const result = validateAspects({ Type: ['Lamp'], 'Battery life:': ['365 days', '1 year'] }, SCHEMA);
+  assert.deepStrictEqual(result.aspects['Battery life'], ['365 days']);
+  assert.ok(!result.warnings.some((w) => /Battery life/.test(w)), 'kept silently — the table shows it');
 });
 
 test('validateAspects keeps only one value for a single-value aspect', () => {

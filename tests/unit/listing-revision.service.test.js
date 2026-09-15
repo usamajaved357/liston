@@ -72,3 +72,29 @@ test('mapChangesForDraft passes through fields it does not rename', () => {
   const mapped = revision.mapChangesForDraft({ aspects: { Colour: ['Black'] } }, true);
   assert.deepStrictEqual(mapped, { aspects: { Colour: ['Black'] } });
 });
+
+// Scene and background edits in the editor use the same generator as
+// drafting, so an edited photo matches the gallery it sits in.
+test('reviseImage sends scene edits to the OpenAI generator', async () => {
+  const openaiImage = require('../../src/modules/ai-generation/image-generation/openai-image.service');
+  const imageOps = require('../../src/modules/ai-generation/image-pipeline/image.ops');
+  const Anthropic = require('@anthropic-ai/sdk');
+
+  const source = await makeImage(900, 900);
+  const generated = await makeImage(1024, 1024);
+
+  const messagesProto = Object.getPrototypeOf(new Anthropic({ apiKey: 'test-key' }).messages);
+  mock.method(messagesProto, 'create', async () => ({
+    content: [{ type: 'tool_use', input: { operation: 'scene', scenePrompt: 'on a wooden desk', summary: 'Placed on a desk' } }],
+  }));
+  mock.method(imageOps, 'prepare', async () => ({ buffer: source, sourceUrl: 'https://example.test/a.jpg' }));
+  mock.method(openaiImage, 'isConfigured', () => true);
+  const generate = mock.method(openaiImage, 'generateProductShot', async () => generated);
+
+  const result = await revision.reviseImage({ imageUrl: 'https://example.test/a.jpg', instruction: 'put it on a wooden desk' });
+
+  assert.strictEqual(generate.mock.callCount(), 1);
+  assert.strictEqual(generate.mock.calls[0].arguments[0].extraInstruction, 'on a wooden desk');
+  assert.strictEqual(result.operation, 'scene');
+  assert.ok(result.previewDataUrl.startsWith('data:image/jpeg;base64,'));
+});

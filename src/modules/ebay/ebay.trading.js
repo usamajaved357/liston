@@ -198,4 +198,28 @@ async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber
   };
 }
 
-module.exports = { EbayTradingError, getActiveListings, getUnsoldListings, getOrders, getItemSummary };
+// The seller's own store profile, straight from eBay: the store's name and
+// the logo they uploaded to it, plus the account's real feedback figures.
+// This is what fills the description template's branding without the seller
+// typing any of it — and it can't drift from what eBay shows, because it IS
+// what eBay shows.
+async function getStoreProfile(accessToken) {
+  const [store, user] = await Promise.all([
+    tradingRequest(accessToken, 'GetStore', '').catch(() => null),
+    tradingRequest(accessToken, 'GetUser', ''),
+  ]);
+
+  return {
+    // Not every seller has an eBay Store subscription; those fall back to
+    // their username below.
+    storeName: store?.Store?.Name || null,
+    logoUrl: store?.Store?.Logo?.URL || null,
+    storeDescription: store?.Store?.Description || null,
+    storeUrl: user.User?.SellerInfo?.StoreURL || null,
+    username: user.User?.UserID || null,
+    feedbackScore: user.User?.FeedbackScore != null ? Number(user.User.FeedbackScore) : null,
+    feedbackPercent: user.User?.PositiveFeedbackPercent != null ? String(user.User.PositiveFeedbackPercent) : null,
+  };
+}
+
+module.exports = { EbayTradingError, getActiveListings, getUnsoldListings, getOrders, getItemSummary, getStoreProfile };

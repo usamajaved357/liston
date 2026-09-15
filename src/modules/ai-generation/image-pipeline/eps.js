@@ -6,9 +6,8 @@ const logger = require('../../../utils/logger');
 // eBay-hosted URL. This is the step that makes generated images actually
 // usable, and it solves three separate problems at once:
 //
-//  1. Bria returns its results on `temp.bria.ai`, which is temporary. A draft
-//     reviewed today and published next week would otherwise point at dead
-//     images.
+//  1. Generated images exist only as bytes in memory — nothing serves them.
+//     A draft reviewed today and published next week needs a durable URL.
 //  2. AliExpress's CDN enforces a Referer ACL, so alicdn URLs can 403 for
 //     anyone but AliExpress itself.
 //  3. We process images (square, 1600px, composited) into buffers that exist

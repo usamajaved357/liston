@@ -1,4 +1,7 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const logger = require('../../../utils/logger');
 const config = require('../../../config');
 const { ScrapingError } = require('../../scraping/scraping.errors');
 
@@ -7,12 +10,10 @@ const { ScrapingError } = require('../../scraping/scraping.errors');
 // and it returns per-SKU data (price, stock, option labels, per-option image)
 // far more reliably than reading it out of the page.
 //
-// NOT LIVE-VERIFIED: this needs an approved AliExpress Open Platform app, and
-// no key exists in this environment yet. The signing rule, gateway, envelope
-// shape and per-SKU price behaviour below are ported from a working
-// implementation that was verified live against real products, but treat the
-// first real call as the verification step. `config.aliexpress.source`
-// defaults to 'scraper', so nothing routes here until it's switched on.
+// LIVE-VERIFIED 2026-09-15 against a real product: 1.64s, 10 variants with
+// per-SKU GBP prices and per-option photos, 16 specifics — on the same URL
+// the browser scraper had just failed on three times. `config.aliexpress.source`
+// defaults to 'scraper'; set ALIEXPRESS_SOURCE=ds-api to route here.
 
 const IOP_GATEWAY = 'https://api-sg.aliexpress.com/sync';
 
@@ -27,19 +28,166 @@ function sign(params, appSecret) {
   return crypto.createHmac('sha256', appSecret).update(ordered, 'utf8').digest('hex').toUpperCase();
 }
 
+// Tokens can come from .env or from the file the consent script writes —
+// checking only .env sent a freshly authorised app straight to "not
+// configured". Confirmed live.
 function assertConfigured() {
-  const { appKey, appSecret, accessToken } = config.aliexpress;
-  if (!appKey || !appSecret || !accessToken) {
+  const { appKey, appSecret } = config.aliexpress;
+  const state = loadTokenState();
+  if (!appKey || !appSecret || !(state.accessToken || state.refreshToken)) {
     throw new ScrapingError(
-      'The AliExpress API is selected but not configured — set ALIEXPRESS_APP_KEY, ALIEXPRESS_APP_SECRET and ALIEXPRESS_ACCESS_TOKEN.',
+      'The AliExpress API is selected but not configured — set ALIEXPRESS_APP_KEY and ALIEXPRESS_APP_SECRET, then run `node scripts/aliexpress-auth.js` to authorise.',
       { source: 'aliexpress' }
     );
   }
 }
 
+// --- token lifecycle ---------------------------------------------------------
+// AliExpress access tokens are short-lived; a static one in .env would stop
+// working within hours. The refresh token is the durable credential. Refreshed
+// tokens are persisted to a local file so a restart doesn't burn a refresh,
+// and refreshed 5 minutes early so a call never lands on an expired token.
+//
+// Expiry comes from the epoch-ms `expire_time` / `refresh_token_valid_time`
+// fields, not the misleading `expires_in` label — the live shape, per the
+// implementation this was ported from.
+const TOKEN_FILE = path.join(process.cwd(), '.cache', 'aliexpress-token.json');
+const REFRESH_SKEW_MS = 5 * 60 * 1000;
+let tokenState = null;
+let refreshing = null;
+
+function loadTokenState() {
+  if (tokenState) return tokenState;
+  try {
+    tokenState = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+  } catch {
+    tokenState = {
+      accessToken: config.aliexpress.accessToken,
+      refreshToken: config.aliexpress.refreshToken,
+      accessExpiresMs: config.aliexpress.accessTokenExpiresMs,
+    };
+  }
+  return tokenState;
+}
+
+function saveTokenState(state) {
+  tokenState = state;
+  try {
+    fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(state), { mode: 0o600 });
+  } catch (err) {
+    logger.warn('Could not persist the refreshed AliExpress token', { error: err.message });
+  }
+}
+
+// System auth calls are signed the same way but carry no access_token.
+async function signedPost(apiName, bizParams, { accessToken } = {}) {
+  const { appKey, appSecret } = config.aliexpress;
+  const params = { app_key: appKey, timestamp: String(Date.now()), sign_method: 'sha256', method: apiName };
+  if (accessToken) params.access_token = accessToken;
+  for (const [key, value] of Object.entries(bizParams)) params[key] = String(value);
+  params.sign = sign(params, appSecret);
+
+  const res = await fetch(IOP_GATEWAY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(30 * 1000),
+  });
+  if (!res.ok) throw new ScrapingError(`AliExpress API request failed (${res.status})`, { source: 'aliexpress' });
+  return res.json();
+}
+
+async function refreshAccessToken(state) {
+  if (!state.refreshToken) {
+    throw new ScrapingError('The AliExpress access token has expired and no refresh token is set.', { source: 'aliexpress' });
+  }
+  const raw = await signedPost('/auth/token/security/refresh', { refresh_token: state.refreshToken });
+  raiseIfError(raw);
+  const data = unwrapEnvelope(raw);
+  if (!data.access_token) {
+    throw new ScrapingError('AliExpress did not return a new access token — the refresh token may have expired; re-authorise the app.', {
+      source: 'aliexpress',
+    });
+  }
+  const next = {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || state.refreshToken,
+    accessExpiresMs: Number(data.expire_time) || Date.now() + 60 * 60 * 1000,
+    refreshExpiresMs: Number(data.refresh_token_valid_time) || state.refreshExpiresMs || null,
+  };
+  saveTokenState(next);
+  logger.info('Refreshed the AliExpress access token');
+  return next;
+}
+
+// A Test-status app gets rolling tokens: access 24h, refresh 48h (confirmed
+// live). Refreshing only on demand means two quiet days end in a forced
+// re-consent, so the server also refreshes on a timer. Every refresh rolls the
+// refresh token forward, so the chain never breaks while the server runs.
+const KEEP_ALIVE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+function startTokenKeepAlive() {
+  if (config.aliexpress.source !== 'ds-api') return null;
+  const tick = async () => {
+    try {
+      const state = loadTokenState();
+      if (!state.refreshToken) return;
+      await refreshAccessToken(state);
+    } catch (err) {
+      logger.warn('AliExpress token keep-alive failed', { error: err.message });
+    }
+  };
+  tick();
+  const timer = setInterval(tick, KEEP_ALIVE_INTERVAL_MS);
+  timer.unref();
+  return timer;
+}
+
+// One-time consent. The seller opens this URL, approves the app under their
+// AliExpress account, and is sent to the app's registered callback with a
+// `code` — exchangeCode turns that into the durable refresh token.
+function authorizeUrl() {
+  const { appKey, callbackUrl } = config.aliexpress;
+  if (!appKey || !callbackUrl) throw new Error('Set ALIEXPRESS_APP_KEY and ALIEXPRESS_CALLBACK first');
+  const params = new URLSearchParams({ response_type: 'code', force_auth: 'true', redirect_uri: callbackUrl, client_id: appKey });
+  return `https://api-sg.aliexpress.com/oauth/authorize?${params}`;
+}
+
+async function exchangeCode(code) {
+  const raw = await signedPost('/auth/token/security/create', { code });
+  raiseIfError(raw);
+  const data = unwrapEnvelope(raw);
+  if (!data.access_token || !data.refresh_token) {
+    throw new Error(`AliExpress returned no tokens for that code: ${JSON.stringify(raw).slice(0, 300)}`);
+  }
+  const next = {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    accessExpiresMs: Number(data.expire_time) || Date.now() + 60 * 60 * 1000,
+    refreshExpiresMs: Number(data.refresh_token_valid_time) || null,
+  };
+  saveTokenState(next);
+  return next;
+}
+
+async function getValidAccessToken() {
+  const state = loadTokenState();
+  const fresh = state.accessToken && state.accessExpiresMs && Date.now() < state.accessExpiresMs - REFRESH_SKEW_MS;
+  if (fresh) return state.accessToken;
+
+  // Concurrent callers share one refresh rather than racing.
+  if (!refreshing) {
+    refreshing = refreshAccessToken(state).finally(() => {
+      refreshing = null;
+    });
+  }
+  return (await refreshing).accessToken;
+}
+
 async function call(apiName, bizParams) {
   assertConfigured();
-  const { appKey, appSecret, accessToken } = config.aliexpress;
+  const accessToken = await getValidAccessToken();
+  const { appKey, appSecret } = config.aliexpress;
 
   const params = {
     app_key: appKey,
@@ -193,7 +341,43 @@ function normalizeProduct(raw, productId, sourceUrl) {
     // A product with no options yields an empty array — common and expected,
     // not an error.
     variants,
+    variantAxes: deriveVariantAxes(variants),
   };
+}
+
+// The variation structure the picker and the eBay group need — same shape
+// the scraper returns. The API gives only flat SKUs, so the axes are derived
+// from them: one axis per attribute name, values in first-seen order. Without
+// this the variation picker showed "one variation" for a ten-SKU product and
+// drafted all of them unasked. Confirmed live.
+function deriveVariantAxes(variants) {
+  const axes = new Map();
+  for (const variant of variants) {
+    for (const [name, value] of Object.entries(variant.attributes)) {
+      if (!axes.has(name)) axes.set(name, { name, values: [], hasImages: false });
+      const axis = axes.get(name);
+      if (!axis.values.includes(value)) axis.values.push(value);
+    }
+  }
+  // Only the axis whose values actually carry distinct photos is flagged
+  // (colour usually does, size never does) — that decides eBay's
+  // `aspectsImageVariesBy`.
+  for (const axis of axes.values()) {
+    const imagesByValue = new Map();
+    for (const variant of variants) {
+      const value = variant.attributes[axis.name];
+      if (variant.imageUrl && value != null) {
+        if (!imagesByValue.has(value)) imagesByValue.set(value, new Set());
+        imagesByValue.get(value).add(variant.imageUrl);
+      }
+    }
+    // A photo per SKU is attached to every attribute of that SKU, so "One
+    // Size" would look image-bearing too. It only counts if the photo
+    // actually changes with this axis's value (or it's the sole axis).
+    const distinct = new Set([...imagesByValue.values()].map((set) => [...set][0]));
+    axis.hasImages = distinct.size > 1 || (axes.size === 1 && imagesByValue.size > 0);
+  }
+  return [...axes.values()];
 }
 
 async function fetchProduct(productId, sourceUrl) {
@@ -206,4 +390,4 @@ async function fetchProduct(productId, sourceUrl) {
   return normalizeProduct(raw, productId, sourceUrl);
 }
 
-module.exports = { fetchProduct, sign, raiseIfError, unwrapEnvelope, normalizeProduct, decodeSkuOptions };
+module.exports = { fetchProduct, sign, raiseIfError, unwrapEnvelope, normalizeProduct, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };

@@ -63,15 +63,13 @@ const config = {
   },
 
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
-  briaApiKey: process.env.BRIA_API_KEY || null,
   openaiApiKey: process.env.OPENAI_API_KEY || null,
 
-  // Listing image generation. 'openai' produces genuine product photography
+  // Listing image generation: gpt-image-1 produces genuine product photography
   // (a person holding the product, pure white background) from the supplier
-  // photo as a reference; 'bria' only re-backgrounds the supplier cutout.
-  // Selected automatically: openai when its key is set, else bria.
+  // photo as a reference. Without a key, drafts keep the clean supplier photos.
   imageGeneration: {
-    provider: process.env.IMAGE_PROVIDER || (process.env.OPENAI_API_KEY ? 'openai' : 'bria'),
+    provider: process.env.OPENAI_API_KEY ? 'openai' : 'none',
     // The seller asked for these on the image. eBay's picture policy
     // discourages badges and borders on listing images, so they're each
     // switchable and the draft carries a warning when any are on.
@@ -81,7 +79,6 @@ const config = {
     showPerson: process.env.IMAGE_SHOW_PERSON !== 'false',
     quality: process.env.IMAGE_QUALITY || 'high',
   },
-  photoroomApiKey: process.env.PHOTOROOM_API_KEY || null,
 
   // How source products are read from AliExpress. 'scraper' drives a real
   // browser (works today, no registration, but slow — ~30s — and exposed to
@@ -94,6 +91,15 @@ const config = {
     appKey: process.env.ALIEXPRESS_APP_KEY || null,
     appSecret: process.env.ALIEXPRESS_APP_SECRET || null,
     accessToken: process.env.ALIEXPRESS_ACCESS_TOKEN || null,
+    // Access tokens are short-lived; the refresh token is what keeps the
+    // integration alive without re-consenting. Set at least this one.
+    refreshToken: process.env.ALIEXPRESS_REFRESH_TOKEN || null,
+    // The redirect URL registered on the Open Platform app — used only to
+    // build the one-time consent link and exchange its code.
+    callbackUrl: process.env.ALIEXPRESS_CALLBACK || null,
+    // Epoch ms, if known (from the friend's token file: access_expire_ms).
+    // Unknown = treated as expired, so the first call refreshes.
+    accessTokenExpiresMs: Number(process.env.ALIEXPRESS_ACCESS_TOKEN_EXPIRES_MS) || 0,
     shipToCountry: process.env.ALIEXPRESS_SHIP_TO || 'GB',
     targetCurrency: process.env.ALIEXPRESS_CURRENCY || 'GBP',
   },

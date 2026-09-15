@@ -5,7 +5,7 @@ const listingService = require('./listing.service');
 // (title/description/price/category typed in by the user) — that's exactly
 // what eBay's own listing tools already do, so it added nothing. Liston's
 // value is doing this from two URLs with AI, not re-implementing eBay's form.
-const generateDraftSchema = z.object({
+const urlsSchema = z.object({
   competitorUrl: z
     .string()
     .url('Enter a valid eBay listing URL')
@@ -15,6 +15,31 @@ const generateDraftSchema = z.object({
     .url('Enter a valid AliExpress listing URL')
     .refine((u) => /aliexpress\./.test(u), "That doesn't look like an AliExpress listing URL"),
 });
+
+// Two ways in: URLs directly (single-call path), or a preview id from step
+// one plus the variations the seller ticked.
+const generateDraftSchema = z.union([
+  urlsSchema,
+  z.object({
+    previewId: z.string().min(1),
+    // { axisName: [value, ...] } — only combinations whose value on every
+    // listed axis was chosen are drafted.
+    variantSelection: z.record(z.array(z.string().min(1))).optional(),
+  }),
+]);
+
+async function previewDraft(req, res, next) {
+  try {
+    const parsed = urlsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+    const preview = await listingService.previewDraftSources(req.params.id, req.ownerId, parsed.data);
+    res.status(200).json(preview);
+  } catch (err) {
+    next(err);
+  }
+}
 
 async function generateDraft(req, res, next) {
   try {
@@ -48,6 +73,16 @@ async function getOne(req, res, next) {
   }
 }
 
+// The branded HTML a draft will publish with — for the editor's preview.
+async function descriptionPreview(req, res, next) {
+  try {
+    const html = await listingService.previewDescription(req.params.listingId, req.ownerId);
+    res.status(200).json({ html });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function publish(req, res, next) {
   try {
     const listing = await listingService.publish(req.params.listingId, req.ownerId);
@@ -74,6 +109,7 @@ const updateDraftSchema = z
     // Order matters: position 0 is the search thumbnail.
     imageUrls: z.array(z.string().url()).optional(),
     price: offerPriceSchema.optional(),
+    quantity: z.number().int().min(0).optional(),
     // Keyed by the variant's index in the current draft — a local draft has
     // no SKUs yet to key on.
     variants: z
@@ -158,4 +194,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, listDrafts, getOne, update, remove, reviseText, reviseImage, acceptImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, publish };

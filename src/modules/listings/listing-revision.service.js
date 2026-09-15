@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const sharp = require('sharp');
 const config = require('../../config');
-const imageTransformer = require('../ai-generation/image-transformer.service');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
 const openaiImage = require('../ai-generation/image-generation/openai-image.service');
 const { AiGenerationError } = require('../ai-generation/ai-generation.errors');
@@ -191,17 +190,20 @@ async function reviseImage({ imageUrl, instruction }) {
     if (!plan.text) throw new AiGenerationError("Tell me what text you'd like on the image.");
     buffer = await overlayText(await imageOps.download(imageUrl), plan);
   } else {
-    const producedUrl =
-      plan.operation === 'background'
-        ? await imageTransformer.removeBackground(imageUrl)
-        : (await imageTransformer.transformImages([imageUrl], plan.scenePrompt || instruction))[0];
-
-    if (producedUrl === imageUrl) {
-      throw new AiGenerationError("The image service couldn't apply that change — try describing it differently.");
+    if (!openaiImage.isConfigured()) {
+      throw new AiGenerationError('AI image editing is not configured on this server (OPENAI_API_KEY).');
     }
-    const prepared = await imageOps.prepare(producedUrl);
-    if (!prepared) throw new AiGenerationError('The edited image came back unusable — try again.');
-    buffer = prepared.buffer;
+    // Same model and fidelity settings as drafting, so an edited photo stays
+    // the same product as the rest of the gallery. The seller's instruction
+    // is appended to the standard brief rather than replacing it — the
+    // white-background / no-supplier-marks rules still apply to an edit.
+    const reference = await imageOps.prepare(imageUrl);
+    if (!reference) throw new AiGenerationError("That image couldn't be read — try another one.");
+    const extraInstruction =
+      plan.operation === 'background'
+        ? 'Replace the background with a clean, pure white studio background. Change nothing else.'
+        : plan.scenePrompt || instruction;
+    buffer = await openaiImage.generateProductShot({ referenceImages: [reference.buffer], variant: 'hero', extraInstruction });
   }
 
   // Normalised to eBay's shape before the seller sees it, so the preview is

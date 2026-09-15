@@ -1,4 +1,5 @@
 const { withPage } = require('./browser');
+const logger = require('../../utils/logger');
 const { ScrapingError } = require('./scraping.errors');
 const { extractAliexpressFields } = require('./dom-extractors/aliexpress');
 
@@ -12,9 +13,11 @@ function upscaleImage(src) {
 // Pure function so it's unit-testable without launching a real browser.
 function normalize({ title, priceText, description, imageUrls, specifics, variantGroups }) {
   if (!title) {
-    throw new ScrapingError("This doesn't look like a live AliExpress product page — it may have been removed.", {
-      source: 'aliexpress',
-    });
+    throw new ScrapingError(
+      "Couldn't read that AliExpress product. Check the link opens a product page in your browser — it needs to be a " +
+        'full www.aliexpress.com/item/… link (not an app share link or a search page), and the product must still be live.',
+      { source: 'aliexpress' }
+    );
   }
 
   // EVERY selectable property is a real purchasable axis, not just the first.
@@ -53,10 +56,35 @@ function normalize({ title, priceText, description, imageUrls, specifics, varian
 }
 
 // eBay caps variations per listing at 250. Well before that, every extra
-// variant is another inventory-item API call at draft time, so a 6x27 matrix
-// would be both slow and mostly unsellable stock — capped, and the caller
-// reports the trim rather than silently losing options.
+// variant is another inventory-item API call at publish, so a 6x27 matrix
+// would be both slow and mostly unsellable stock. The cap is applied AFTER
+// the seller has chosen what to list (see capVariants) — never at read time,
+// where it would hide options from the picker before they could be chosen.
 const MAX_VARIANTS = 120;
+
+// Trims to WHOLE rows of the first axis. A flat slice cuts mid-row, which on
+// a real product left one colour offering only 12 of 27 phone models — a
+// buyer picks that colour and can't find their phone, which reads as broken
+// rather than merely limited. Better to offer four complete colours than
+// four and a half.
+function capVariants(source) {
+  const variants = source.variants || [];
+  if (variants.length <= MAX_VARIANTS) return source;
+
+  const axes = source.variantAxes || [];
+  const rowSize = axes.slice(1).reduce((total, axis) => total * (axis.values.length || 1), 1);
+  const wholeRows = Math.max(1, Math.floor(MAX_VARIANTS / rowSize));
+  const kept = variants.slice(0, Math.min(variants.length, wholeRows * rowSize));
+
+  return {
+    ...source,
+    variants: kept,
+    variantAxes: axes.map((axis) => ({
+      ...axis,
+      values: axis.values.filter((value) => kept.some((v) => v.attributes[axis.name] === value)),
+    })),
+  };
+}
 
 // The cartesian product of every axis: Colour x Model x Size. Combinations
 // are unique by construction, which also satisfies eBay's requirement that
@@ -82,17 +110,6 @@ function buildVariantMatrix(groups) {
     combos = next;
   }
 
-  // Trim to WHOLE rows of the first axis. A flat slice cuts mid-row, which
-  // on a real product left one colour offering only 12 of 27 phone models —
-  // a buyer picks that colour and can't find their phone, which looks broken
-  // rather than merely limited. Better to offer four complete colours than
-  // four and a half.
-  if (combos.length > MAX_VARIANTS) {
-    const rowSize = groups.slice(1).reduce((total, group) => total * group.options.length, 1);
-    const wholeRows = Math.max(1, Math.floor(MAX_VARIANTS / rowSize));
-    combos = combos.slice(0, Math.min(combos.length, wholeRows * rowSize));
-  }
-
   return combos.map((combo) => ({ ...combo, priceText: null }));
 }
 
@@ -114,9 +131,12 @@ async function scrapeListing(url, attempts = 3) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     raw = await withPage(url, extractFromPage, { source: 'aliexpress' });
     if (raw.title) break;
+    // The URL is the single most useful fact when a scrape fails and it
+    // wasn't being logged — a product link isn't sensitive.
+    logger.warn('AliExpress page yielded no product', { url, attempt, attempts });
     if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
   }
   return { ...normalize(raw), sourceUrl: url };
 }
 
-module.exports = { scrapeListing, normalize, buildVariantMatrix, MAX_VARIANTS };
+module.exports = { scrapeListing, normalize, buildVariantMatrix, capVariants, MAX_VARIANTS };

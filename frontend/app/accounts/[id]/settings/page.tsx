@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ConnectionPolicies, MerchantLocation, Policy, PricingSettings } from "@/lib/api";
+import { api, ApiError, ConnectionPolicies, DescriptionTemplate, MerchantLocation, Policy, PricingSettings } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
@@ -19,6 +19,39 @@ const DEFAULT_PRICING: PricingSettings = {
   roundTo99: true,
   followCompetitorPrice: true,
 };
+
+const DEFAULT_TEMPLATE: DescriptionTemplate = {
+  storeName: "",
+  tagline: "Official UK Store",
+  logoUrl: "",
+  accentColor: "#FF6B2B",
+  darkColor: "#1E1E2E",
+  feedbackPercent: "",
+  dispatchTime: "1–2 Business Days",
+  dispatchNote: "From our UK warehouse",
+  carrier: "Royal Mail / Evri",
+  deliveryTime: "2–4 Business Days",
+  freePostage: true,
+  returnsDays: 30,
+  recommendedCount: 4,
+  responseTime: "24 hours",
+  reviews: [],
+};
+
+function TextField({ label, hint, value, onChange, placeholder }: { label: string; hint?: string; value: string; onChange: (v: string) => void; placeholder?: string }) {
+  return (
+    <div>
+      <label className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">{label}</label>
+      <input
+        className="mt-1.5 w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-sm text-[var(--color-ink)]"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {hint && <p className="mt-1 text-xs text-[var(--color-muted)] leading-relaxed">{hint}</p>}
+    </div>
+  );
+}
 
 const numberInputClass =
   "w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-sm text-[var(--color-ink)]";
@@ -154,6 +187,32 @@ export default function AccountSettingsPage() {
   const [savingPricing, setSavingPricing] = useState(false);
   const [pricingSaved, setPricingSaved] = useState(false);
   const [pricingError, setPricingError] = useState<string | null>(null);
+  const [template, setTemplate] = useState<DescriptionTemplate>(DEFAULT_TEMPLATE);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [templateSaved, setTemplateSaved] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [fetchingProfile, setFetchingProfile] = useState(false);
+
+  // Pulls the store's name, logo and feedback from eBay itself and drops them
+  // into the form — the seller can still edit before saving.
+  async function handleFillFromEbay() {
+    if (!connection) return;
+    setFetchingProfile(true);
+    setTemplateError(null);
+    try {
+      const profile = await api.getStoreProfile(connection.id);
+      setTemplate((t) => ({
+        ...t,
+        storeName: profile.storeName || t.storeName,
+        logoUrl: profile.logoUrl || t.logoUrl,
+        feedbackPercent: profile.feedbackPercent || t.feedbackPercent,
+      }));
+    } catch (err) {
+      setTemplateError(err instanceof ApiError ? err.message : "Couldn't read your store from eBay.");
+    } finally {
+      setFetchingProfile(false);
+    }
+  }
 
   useEffect(() => {
     if (!connection) return;
@@ -163,6 +222,8 @@ export default function AccountSettingsPage() {
     }
 
     setPricing({ ...DEFAULT_PRICING, ...(connection.settings?.pricing || {}) });
+    // Store name defaults to the connection's label — the seller named it.
+    setTemplate({ ...DEFAULT_TEMPLATE, storeName: connection.label, ...(connection.settings?.template || {}) });
 
     const marketplaceId = connection.settings?.ebay?.marketplaceId || "EBAY_GB";
     api
@@ -200,6 +261,21 @@ export default function AccountSettingsPage() {
       setError(err instanceof ApiError ? err.message : "Couldn't save your policies. Try again.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveTemplate() {
+    if (!connection) return;
+    setSavingTemplate(true);
+    setTemplateSaved(false);
+    setTemplateError(null);
+    try {
+      await api.updateConnectionTemplate(connection.id, template);
+      setTemplateSaved(true);
+    } catch (err) {
+      setTemplateError(err instanceof ApiError ? err.message : "Couldn't save your template. Try again.");
+    } finally {
+      setSavingTemplate(false);
     }
   }
 
@@ -433,6 +509,118 @@ export default function AccountSettingsPage() {
               {savingPricing ? "Saving…" : "Save listing settings"}
             </button>
             {pricingSaved && <span className="text-sm text-emerald-700">Saved</span>}
+          </div>
+        </div>
+      )}
+
+      {connection.platform_key === "ebay" && (
+        <div className="mt-6 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="text-sm font-bold text-[var(--color-ink)]">Description template</h2>
+            <button
+              type="button"
+              onClick={handleFillFromEbay}
+              disabled={fetchingProfile}
+              className="flex-shrink-0 rounded-md border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink)] hover:border-[var(--color-accent)]/50 disabled:opacity-40"
+            >
+              {fetchingProfile ? "Reading store…" : "Fill from my eBay store"}
+            </button>
+          </div>
+          <p className="mt-1 text-sm text-[var(--color-muted)] leading-relaxed">
+            Every listing this account publishes wraps its description in this branding — header, trust badges,
+            delivery, returns, and a &ldquo;You may also like&rdquo; row of this account&apos;s own live listings,
+            pulled fresh at publish time. Each account has its own.
+          </p>
+
+          {templateError && (
+            <div className="mt-4">
+              <Alert>{templateError}</Alert>
+            </div>
+          )}
+
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <TextField label="Store name" value={template.storeName} onChange={(v) => setTemplate({ ...template, storeName: v })} />
+            <TextField label="Tagline" value={template.tagline} onChange={(v) => setTemplate({ ...template, tagline: v })} />
+            <TextField
+              label="Logo image URL"
+              hint="Blank means your eBay store's own logo is used automatically. Or paste any eBay-hosted image URL."
+              value={template.logoUrl}
+              onChange={(v) => setTemplate({ ...template, logoUrl: v })}
+              placeholder="https://i.ebayimg.com/…"
+            />
+            <TextField
+              label="Feedback %"
+              hint="Blank means your live eBay feedback score is used automatically."
+              value={template.feedbackPercent}
+              onChange={(v) => setTemplate({ ...template, feedbackPercent: v })}
+              placeholder="99.7"
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Accent</label>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <input type="color" value={template.accentColor} onChange={(e) => setTemplate({ ...template, accentColor: e.target.value })} className="h-9 w-12 cursor-pointer rounded border border-[var(--color-line)]" />
+                  <span className="text-xs text-[var(--color-muted)]">{template.accentColor}</span>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Header</label>
+                <div className="mt-1.5 flex items-center gap-2">
+                  <input type="color" value={template.darkColor} onChange={(e) => setTemplate({ ...template, darkColor: e.target.value })} className="h-9 w-12 cursor-pointer rounded border border-[var(--color-line)]" />
+                  <span className="text-xs text-[var(--color-muted)]">{template.darkColor}</span>
+                </div>
+              </div>
+            </div>
+            <TextField label="Dispatch time" value={template.dispatchTime} onChange={(v) => setTemplate({ ...template, dispatchTime: v })} />
+            <TextField label="Dispatch note" value={template.dispatchNote} onChange={(v) => setTemplate({ ...template, dispatchNote: v })} />
+            <TextField label="Carrier" value={template.carrier} onChange={(v) => setTemplate({ ...template, carrier: v })} />
+            <TextField label="Delivery time" value={template.deliveryTime} onChange={(v) => setTemplate({ ...template, deliveryTime: v })} />
+            <NumberField label="Returns window" suffix="days" hint="0 hides the returns section." value={template.returnsDays} onChange={(v) => setTemplate({ ...template, returnsDays: v })} />
+            <NumberField label="Recommended listings" suffix="cards" hint="How many of this account's live listings to show. 0 hides the row." value={template.recommendedCount} onChange={(v) => setTemplate({ ...template, recommendedCount: v })} />
+            <TextField label="Reply time" value={template.responseTime} onChange={(v) => setTemplate({ ...template, responseTime: v })} />
+            <div>
+              <label className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Postage</label>
+              <label className="mt-2.5 flex items-center gap-2 text-sm text-[var(--color-ink)]">
+                <input type="checkbox" checked={template.freePostage} onChange={(e) => setTemplate({ ...template, freePostage: e.target.checked })} />
+                Free P&amp;P on all UK orders
+              </label>
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <div className="flex items-baseline justify-between">
+              <label className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Customer reviews (up to 3)</label>
+              {template.reviews.length < 3 && (
+                <button type="button" onClick={() => setTemplate({ ...template, reviews: [...template.reviews, { stars: 5, text: "", buyer: "", date: "" }] })} className="text-xs text-[var(--color-accent)] hover:underline">
+                  + Add review
+                </button>
+              )}
+            </div>
+            <p className="mt-1 text-xs text-[var(--color-muted)] leading-relaxed">
+              Real feedback only, copied from your eBay feedback page. The section is left out entirely when empty —
+              invented reviews get listings removed.
+            </p>
+            {template.reviews.map((review, i) => (
+              <div key={i} className="mt-3 grid gap-2 rounded-lg border border-[var(--color-line)] p-3 sm:grid-cols-[1fr_140px_110px_auto]">
+                <input className="rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-sm text-[var(--color-ink)]" placeholder="What they said" value={review.text} onChange={(e) => setTemplate({ ...template, reviews: template.reviews.map((r, j) => (j === i ? { ...r, text: e.target.value } : r)) })} />
+                <input className="rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-sm text-[var(--color-ink)]" placeholder="Buyer ID" value={review.buyer} onChange={(e) => setTemplate({ ...template, reviews: template.reviews.map((r, j) => (j === i ? { ...r, buyer: e.target.value } : r)) })} />
+                <input className="rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1.5 text-sm text-[var(--color-ink)]" placeholder="Month Year" value={review.date} onChange={(e) => setTemplate({ ...template, reviews: template.reviews.map((r, j) => (j === i ? { ...r, date: e.target.value } : r)) })} />
+                <button type="button" onClick={() => setTemplate({ ...template, reviews: template.reviews.filter((_, j) => j !== i) })} className="text-xs text-[var(--color-danger)] hover:underline">
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-6 flex items-center gap-3">
+            <button
+              onClick={handleSaveTemplate}
+              disabled={savingTemplate}
+              className="rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-40 transition-colors"
+            >
+              {savingTemplate ? "Saving…" : "Save template"}
+            </button>
+            {templateSaved && <span className="text-sm text-emerald-700">Saved</span>}
           </div>
         </div>
       )}

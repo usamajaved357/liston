@@ -131,7 +131,9 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
     `You are drafting a new eBay listing for a seller. Compare a competitor's live eBay listing against the ` +
     `seller's own source product (from a supplier), and draft an ORIGINAL, improved listing for the source ` +
     `product — better organized and clearer than the competitor's, adapted to fit the source product's own ` +
-    `real attributes. Never copy the competitor's text verbatim.\n\n` +
+    `real attributes. Never copy the competitor's text verbatim.\n` +
+    `The seller is a UK business dispatching from the UK. Never mention China, AliExpress, overseas shipping, ` +
+    `import, or any supplier in the title, description or item specifics.\n\n` +
     `The seller pays ${currency} ${costPrice} per unit and will sell at ${currency} ${sellPrice}.\n\n` +
     `--- Competitor's eBay listing ---\n${summarizeListing(competitor)}\n\n` +
     `--- Source product (what will actually be sold) ---\n${summarizeListing(source)}\n\n` +
@@ -145,6 +147,16 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
         `variants share the same value. If the options combine two things (e.g. "2PCS Warm White" is a pack ` +
         `size AND a colour), keep enough of both in the value to stay distinct, and name the axis accordingly.`
       : `Draft a single listing (title, description, condition, item specifics).`) +
+    (Object.keys(competitor.specifics || {}).length
+      ? `\n\n--- Item specifics the competitor filled in ---\nThe competitor's listing carries these ${
+          Object.keys(competitor.specifics).length
+        } item specifics: ${Object.keys(competitor.specifics).join(', ')}. These are what buyers filter and ` +
+        `search by in this category, so a listing missing them ranks below one that has them. Fill EVERY one of ` +
+        `these for the source product, with the source product's own real value — never copy the competitor's ` +
+        `value blindly, but do use theirs as the answer when the fact is about the product type rather than ` +
+        `their specific item (e.g. Type, Compatible Brand, Material, Features). Then add any further specifics ` +
+        `the source product's details support.`
+      : '') +
     (schemaText
       ? `\n\n--- eBay's item specifics for this exact category ---\nFill these using the SOURCE product's real ` +
         `attributes. Use these names verbatim, and only these — an item specific eBay doesn't list here will be ` +
@@ -165,7 +177,9 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
 
   const response = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 2048,
+    // A phone case's Compatible Model alone can be 27 values; 2048 tokens was
+    // truncating the aspect list and silently dropping specifics.
+    max_tokens: 4096,
     tools: [tool],
     tool_choice: { type: 'tool', name: tool.name },
     messages: [
@@ -186,6 +200,23 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   // than letting eBay reject the publish after the user has approved it.
   const aspectKey = hasVariants ? 'sharedAspects' : 'aspects';
   const { aspects, warnings } = validateAspects(content[aspectKey], aspectSchema);
+
+  // Parity check against the competitor: anything they filled that we
+  // didn't is a filter buyers can use to find them and not us.
+  const ours = new Set(Object.keys(aspects).map((name) => name.toLowerCase()));
+  const variationAxes = new Set(
+    hasVariants ? [content.varyingAspectName, ...Object.keys(source.variants[0]?.attributes || {})].map((n) => String(n).toLowerCase()) : []
+  );
+  const missing = Object.keys(competitor.specifics || {}).filter(
+    (name) => !ours.has(name.toLowerCase()) && !variationAxes.has(name.toLowerCase())
+  );
+  if (missing.length) {
+    const shown = missing.slice(0, 6).join(', ') + (missing.length > 6 ? ` and ${missing.length - 6} more` : '');
+    warnings.push(
+      `The competitor fills ${missing.length} item specific${missing.length === 1 ? '' : 's'} this draft doesn't ` +
+        `(${shown}) — add any the product supports.`
+    );
+  }
 
   return { ...content, [aspectKey]: aspects, aspectWarnings: warnings };
 }

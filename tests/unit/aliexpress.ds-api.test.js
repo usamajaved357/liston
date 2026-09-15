@@ -135,3 +135,53 @@ test('productIdFromUrl rejects a non-AliExpress URL', () => {
     (err) => err instanceof ScrapingError && err.source === 'aliexpress'
   );
 });
+
+// The picker and the eBay group read `variantAxes`; the API only gives flat
+// SKUs. A ten-SKU product came back without axes and the picker reported
+// "one variation" while the draft carried all ten.
+test('deriveVariantAxes builds ordered axes and flags only the image-varying one', () => {
+  const variants = [
+    { attributes: { Color: 'Red', Size: 'S' }, imageUrl: 'https://red.jpg' },
+    { attributes: { Color: 'Red', Size: 'M' }, imageUrl: 'https://red.jpg' },
+    { attributes: { Color: 'Blue', Size: 'S' }, imageUrl: 'https://blue.jpg' },
+    { attributes: { Color: 'Blue', Size: 'M' }, imageUrl: 'https://blue.jpg' },
+  ];
+  const axes = dsApi.deriveVariantAxes(variants);
+
+  assert.deepStrictEqual(
+    axes.map((a) => ({ name: a.name, values: a.values, hasImages: a.hasImages })),
+    [
+      { name: 'Color', values: ['Red', 'Blue'], hasImages: true },
+      { name: 'Size', values: ['S', 'M'], hasImages: false },
+    ]
+  );
+});
+
+test('deriveVariantAxes does not treat a single-value axis as image-bearing', () => {
+  const variants = [
+    { attributes: { Color: 'Red', 'Gloves Size': 'One Size' }, imageUrl: 'https://red.jpg' },
+    { attributes: { Color: 'Blue', 'Gloves Size': 'One Size' }, imageUrl: 'https://blue.jpg' },
+  ];
+  const axes = dsApi.deriveVariantAxes(variants);
+  assert.strictEqual(axes.find((a) => a.name === 'Color').hasImages, true);
+  assert.strictEqual(axes.find((a) => a.name === 'Gloves Size').hasImages, false);
+});
+
+test('normalizeProduct returns variantAxes alongside variants', () => {
+  const raw = {
+    aliexpress_ds_product_get_response: {
+      rsp_code: 200,
+      result: {
+        ae_item_base_info_dto: { subject: 'Gloves' },
+        ae_item_sku_info_dtos: {
+          ae_item_sku_info_d_t_o: [
+            { sku_id: '1', offer_sale_price: '2', currency_code: 'GBP', ae_sku_property_dtos: { ae_sku_property_d_t_o: [{ sku_property_name: 'Color', sku_property_value: 'A', sku_image: 'https://a.jpg' }] } },
+            { sku_id: '2', offer_sale_price: '2', currency_code: 'GBP', ae_sku_property_dtos: { ae_sku_property_d_t_o: [{ sku_property_name: 'Color', sku_property_value: 'B', sku_image: 'https://b.jpg' }] } },
+          ],
+        },
+      },
+    },
+  };
+  const result = dsApi.normalizeProduct(raw, '1', 'https://aliexpress.com/item/1.html');
+  assert.deepStrictEqual(result.variantAxes, [{ name: 'Color', values: ['A', 'B'], hasImages: true }]);
+});

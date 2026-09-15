@@ -6,6 +6,7 @@ const orchestrator = require('../ai-generation/generation.orchestrator');
 const imageGates = require('../ai-generation/image-pipeline/gates');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
+const descriptionTemplate = require('./description-template');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -85,6 +86,58 @@ async function createEbayDraft(connectionId, userId, draftInput, { sourceData, w
   });
 }
 
+// Read listings are held between the two drafting steps so step two doesn't
+// scrape AliExpress a second time (~30s, and flaky). In memory: a preview is
+// regenerable, and losing one to a restart costs a re-read, not data. Keyed
+// to the user so one seller's preview can never be drafted by another.
+const PREVIEW_TTL_MS = 30 * 60 * 1000;
+const previews = new Map();
+
+function prunePreviews() {
+  const now = Date.now();
+  for (const [id, preview] of previews) if (preview.expiresAt <= now) previews.delete(id);
+}
+
+// STEP ONE: read both listings, cost nothing, return what the seller needs to
+// choose from — the supplier's variation axes with their options and photos.
+async function previewDraftSources(connectionId, userId, { competitorUrl, sourceUrl }) {
+  prunePreviews();
+  const connection = await connectionService.getConnectionSummary(connectionId, userId);
+  if (connection.platform_key !== 'ebay') {
+    throw new ListingError(`Drafting listings isn't available for ${connection.platform_name} yet`, 400);
+  }
+  const marketplaceId = connection.settings?.ebay?.marketplaceId || 'EBAY_GB';
+
+  const { competitor, source } = await orchestrator.readSources({ competitorUrl, sourceUrl, marketplaceId });
+
+  const previewId = crypto.randomUUID();
+  previews.set(previewId, { competitor, source, userId, connectionId, competitorUrl, sourceUrl, expiresAt: Date.now() + PREVIEW_TTL_MS });
+
+  // Per option, a thumbnail where the supplier has one, so a colour can be
+  // chosen by eye rather than by name.
+  const axes = (source.variantAxes || []).map((axis) => ({
+    name: axis.name,
+    hasImages: axis.hasImages,
+    values: axis.values.map((value) => ({
+      value,
+      imageUrl: (source.variants || []).find((v) => v.attributes[axis.name] === value && v.imageUrl)?.imageUrl || null,
+      combinations: (source.variants || []).filter((v) => v.attributes[axis.name] === value).length,
+    })),
+  }));
+
+  return {
+    previewId,
+    competitor: { title: competitor.title, priceText: competitor.priceText, categoryPath: competitor.categoryBreadcrumb },
+    source: {
+      title: source.title,
+      priceText: source.priceText,
+      imageUrls: (source.imageUrls || []).slice(0, 8),
+      axes,
+      totalCombinations: (source.variants || []).length,
+    },
+  };
+}
+
 // The single entry point for the "paste a competitor URL + a source URL"
 // flow: scrapes both, drafts content + variations with AI, then reuses
 // createEbayDraft's existing policy-resolution/eBay-drafting/persist path
@@ -92,8 +145,21 @@ async function createEbayDraft(connectionId, userId, draftInput, { sourceData, w
 async function generateEbayDraftFromUrls(
   connectionId,
   userId,
-  { competitorUrl, sourceUrl }
+  { competitorUrl, sourceUrl, previewId, variantSelection }
 ) {
+  // STEP TWO picks up the listings read in step one. A preview belongs to the
+  // user and connection that made it; anything else is treated as expired.
+  let preRead = null;
+  if (previewId) {
+    prunePreviews();
+    const preview = previews.get(previewId);
+    if (!preview || preview.userId !== userId || preview.connectionId !== connectionId) {
+      throw new ListingError('That preview has expired — read the listings again.', 400);
+    }
+    preRead = preview;
+    competitorUrl = preview.competitorUrl;
+    sourceUrl = preview.sourceUrl;
+  }
   const connection = await connectionService.getConnectionSummary(connectionId, userId);
   if (connection.platform_key !== 'ebay') {
     throw new ListingError(`Drafting listings isn't available for ${connection.platform_name} yet`, 400);
@@ -115,6 +181,9 @@ async function generateEbayDraftFromUrls(
   const { draftInput, warnings, competitor, source } = await orchestrator.generateDraftInput({
     competitorUrl,
     sourceUrl,
+    competitor: preRead?.competitor,
+    source: preRead?.source,
+    variantSelection,
     accessToken,
     // Sell prices are derived from the supplier's own cost plus these
     // settings, not typed per draft. Undefined is fine — the pricing service
@@ -126,6 +195,7 @@ async function generateEbayDraftFromUrls(
     // the same marketplace the listing will be published to, so the category
     // ids and aspect names line up.
     marketplaceId: ebaySettings.marketplaceId || 'EBAY_GB',
+    countryOfOrigin: connection.settings?.listing?.countryOfOrigin || 'United Kingdom',
   });
 
   // Only the SKU BASE is decided here; the actual SKUs are stamped at publish
@@ -238,11 +308,22 @@ async function updateDraft(id, userId, patch) {
     draft = removeAxisValue(draft, removal.axis, removal.value);
   }
 
-  for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'aspects', 'imageUrls']) {
+  for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'imageUrls']) {
     if (patch[field] !== undefined) draft[field] = patch[field];
+  }
+  // Shared item specifics live under variesBy on a variation draft, at the
+  // top level on a plain one — the editor sends one `aspects` either way.
+  if (patch.aspects !== undefined) {
+    if (draft.variesBy) draft.variesBy = { ...draft.variesBy, aspects: patch.aspects };
+    else draft.aspects = patch.aspects;
   }
 
   if (patch.price !== undefined) draft.price = patch.price;
+  if (patch.quantity !== undefined) draft.quantity = patch.quantity;
+  // Condition is carried per variant on a variation draft.
+  if (patch.condition !== undefined && Array.isArray(draft.variants)) {
+    draft.variants = draft.variants.map((variant) => ({ ...variant, condition: patch.condition }));
+  }
 
   // An axis-wide removal can leave a specification value with no variation
   // behind it; the same tidy-up covers single-row removals too.
@@ -325,6 +406,73 @@ async function removeDraft(id, userId) {
   return listingRepository.deleteDraft(id, userId);
 }
 
+// The account's own live listings, for the "You may also like" cards. Read
+// at render time so the carousel is always current, and never includes the
+// listing being published. Failure here costs the carousel, not the publish.
+async function recommendedListings(credentials, connection, { exclude, count }) {
+  try {
+    const { items } = await ebayService.listActiveListings(credentials, { pageNumber: 1, entriesPerPage: 25 });
+    return (items || [])
+      .filter((item) => item.viewItemUrl && item.itemId !== exclude)
+      .slice(0, count)
+      .map((item) => ({
+        url: item.viewItemUrl,
+        imageUrl: item.imageUrl,
+        name: item.title,
+        price: item.price ? `£${Number(item.price.amount).toFixed(2)}` : null,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// The branded description for a draft: the AI copy inside this account's
+// template, with this account's live listings recommended underneath.
+async function renderDraftDescription(listing, userId) {
+  const draft = listing.generated_data || {};
+  const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+
+  return connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials, connection) => {
+    let template = descriptionTemplate.templateWithDefaults(connection.settings?.template);
+
+    // Anything the seller hasn't filled in comes from the store itself —
+    // eBay already holds the store's name, the logo they uploaded and the
+    // live feedback score. A blank field means "use eBay's", never "leave a
+    // hole". Failure here just leaves the blanks blank.
+    if (!template.storeName || !template.logoUrl || !template.feedbackPercent) {
+      try {
+        const profile = await ebayService.getStoreProfile(credentials);
+        template = {
+          ...template,
+          storeName: template.storeName || profile.storeName || connection.label,
+          logoUrl: template.logoUrl || profile.logoUrl || '',
+          feedbackPercent: template.feedbackPercent || profile.feedbackPercent || '',
+        };
+      } catch {
+        template = { ...template, storeName: template.storeName || connection.label };
+      }
+    }
+
+    const recommended = await recommendedListings(credentials, connection, {
+      exclude: listing.external_product_id,
+      count: template.recommendedCount,
+    });
+    return descriptionTemplate.renderDescription({
+      template,
+      productName: isVariation ? draft.commonTitle : draft.title,
+      description: isVariation ? draft.commonDescription : draft.description,
+      recommended,
+      condition: draft.condition || draft.variants?.[0]?.condition || 'NEW',
+    });
+  });
+}
+
+async function previewDescription(id, userId) {
+  const listing = await listingRepository.findByIdForUser(id, userId);
+  if (!listing) throw new ListingError('Listing not found', 404);
+  return renderDraftDescription(listing, userId);
+}
+
 async function publish(id, userId) {
   const listing = await listingRepository.findByIdForUser(id, userId);
   if (!listing) {
@@ -362,7 +510,12 @@ async function publish(id, userId) {
       // leaves half-created SKUs behind, and eBay's SKU index is eventually
       // consistent enough that reusing them on a retry fails. A fresh run
       // suffix each attempt sidesteps that entirely.
-      const built = withSkus(draft, listing.connection_id);
+      const html = await renderDraftDescription(listing, userId);
+      const branded = {
+        ...draft,
+        ...(Array.isArray(draft.variants) && draft.variants.length ? { commonDescription: html } : { description: html }),
+      };
+      const built = withSkus(branded, listing.connection_id);
       const isVariation = Array.isArray(built.variants) && built.variants.length > 0;
 
       const created = isVariation
@@ -412,11 +565,14 @@ function withSkus(draft, connectionId) {
 }
 
 module.exports = {
+  renderDraftDescription,
   ListingError,
   createEbayDraft,
+  previewDraftSources,
   generateEbayDraftFromUrls,
   listPendingDrafts,
   getDraftDetail,
+  previewDescription,
   updateDraft,
   removeDraft,
   proposeTextRevision,

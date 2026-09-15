@@ -303,6 +303,12 @@ async function listActiveListings(credentials, opts) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
+async function getStoreProfile(credentials) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const profile = await ebayTrading.getStoreProfile(accessToken);
+  return { ...profile, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function listUnsoldListings(credentials, opts) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
   const result = await ebayTrading.getUnsoldListings(accessToken, opts);
@@ -568,6 +574,7 @@ module.exports = {
   publishGroup,
   withdrawDraft,
   listActiveListings,
+  getStoreProfile,
   listUnsoldListings,
   listOrders,
   listOrdersDetailed,

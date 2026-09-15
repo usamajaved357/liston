@@ -1,4 +1,3 @@
-const imageTransformer = require('../image-transformer.service');
 const imageOps = require('./image.ops');
 const eps = require('./eps');
 const slotPlan = require('./slot-plan');
@@ -13,15 +12,34 @@ const logger = require('../../../utils/logger');
 // use, the back. Each is a separate generation from the same reference photo.
 const GALLERY_SHOTS = ['hero', 'angle', 'detail', 'in_use', 'back'];
 
+// Three at once: enough to make a 5-shot gallery a ~1-2 minute job instead of
+// four, few enough that a paid-tier account shouldn't see 429s. The
+// per-variant heroes in the orchestrator are already parallel across
+// distinct photos.
+const GENERATION_CONCURRENCY = 3;
+
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await fn(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 function useOpenAi() {
   return config.imageGeneration.provider === 'openai' && openaiImage.isConfigured();
 }
 
 // One generated photograph, normalised to eBay's shape. Returns null on any
 // failure so the caller can fall back rather than lose the slot.
-async function generateShot(referenceBuffers, variant) {
+async function generateShot(referenceBuffers, variant, extraInstruction) {
   try {
-    const png = await openaiImage.generateProductShot({ referenceImages: referenceBuffers, variant });
+    const png = await openaiImage.generateProductShot({ referenceImages: referenceBuffers, variant, extraInstruction });
     const squared = await imageOps.padToSquare(png);
     const check = await imageOps.validate(squared);
     if (!check.ok) return null;
@@ -34,30 +52,15 @@ async function generateShot(referenceBuffers, variant) {
 
 // The listing image pipeline, in one place.
 //
-//   source photo → AI treatment (selective) → 1600² square JPEG → eBay EPS
+//   clean supplier photo → gpt-image-1 product shot (high input fidelity)
+//     → 1600² square JPEG → eBay EPS
 //
-// Two deliberate decisions about the AI step, both about consistency:
-//
-//  * GALLERY images get a generated scene. That's where a supplier snapshot
-//    becomes something that looks professionally shot, and where the payoff
-//    is largest.
-//  * PER-VARIANT images do NOT. A generated scene is different every time, so
-//    compositing each colour separately makes them look like photos of
-//    different products rather than one product in five colours. Those get
-//    background removal onto white instead, which is the same treatment every
-//    time — the colours stay comparable, which is the entire point of showing
-//    them side by side.
-//
-// Cost falls out of the same decision: a handful of paid calls per draft
-// instead of one per variant.
-
-// Sourcing priority, per slot: a real photo of the actual product beats a
-// generated one for buyer trust and return rates, so AI only ever *treats* a
-// real photo — it never invents a product shot from nothing.
-async function treatGalleryImage(url, scenePrompt) {
-  const [treated] = await imageTransformer.transformImages([url], scenePrompt);
-  return treated || url;
-}
+// One generator, no second tier. Gallery slots are distinct shots (hero,
+// angle, detail, in use, back) from the same references so the product is
+// identical across the set; each variant gets its own hero from its own
+// supplier photo with the same prompt, so colours read as one product in
+// several colours. When generation isn't configured or a shot fails, the
+// clean supplier photo takes the slot — never a lesser model's output.
 
 /**
  * Prepares the shared gallery images for a listing.
@@ -110,59 +113,23 @@ async function buildGalleryImages({
 
   const usable = ranked.slice(0, plan.recommendedImages);
 
-  if (useOpenAi() && usable.length) {
+  if (useOpenAi() && (usable.length || rejected.length)) {
     return buildGeneratedGallery({ usable, rejected, sourceImageUrls, screened, accessToken, marketplaceId, plan });
   }
 
-  // Supplier galleries rarely leave enough clean photography behind: a real
-  // iPhone-case listing had 10 of its 13 photos rejected as marketing
-  // graphics, leaving a single usable shot. A one-image listing looks
-  // abandoned next to a competitor's eight.
-  //
-  // So the gallery is BUILT rather than merely filtered. Each photography
-  // brief becomes a distinct generated scene from the best clean photo
-  // available — genuinely our own imagery, and the only honest way to match a
-  // competitor's gallery without touching their copyrighted photos.
-  const shots = [];
-  for (const [index, brief] of briefs.entries()) {
-    // Prefer a different real photo per brief while they last — real
-    // photography of the actual product beats a generated variation of the
-    // same shot. Past that, reuse the best photo with a new scene, which is
-    // where the extra gallery slots come from.
-    const reusingBase = index >= usable.length;
-    const base = usable[Math.min(index, usable.length - 1)];
-    if (!base) break;
-
-    try {
-      const treatedUrl = await treatGalleryImage(base.sourceUrl, brief);
-      if (treatedUrl === base.sourceUrl) {
-        // Nothing was generated (no key, or the provider failed). Keep the
-        // untouched original only if it isn't already in the gallery.
-        if (!reusingBase) shots.push(base);
-        continue;
-      }
-      const prepared = await imageOps.prepare(treatedUrl);
-      if (prepared) shots.push(prepared);
-      else if (!reusingBase) shots.push(base);
-    } catch (err) {
-      logger.warn('Image treatment failed — keeping the original photo', {
-        url: base.sourceUrl,
-        error: err.message,
-      });
-      if (!reusingBase) shots.push(base);
-    }
-  }
-
-  // Any clean photo not already represented still belongs in the gallery.
-  const usedSources = new Set(shots.map((image) => image.sourceUrl));
-  for (const image of usable) {
-    if (shots.length >= plan.recommendedImages) break;
-    if (!usedSources.has(image.sourceUrl)) shots.push(image);
-  }
-
+  // No generator configured: the gallery is the clean supplier photography,
+  // screened and normalised, and nothing else. There is deliberately no
+  // second-tier image model here — the earlier background-removal /
+  // scene-compositing fallback produced images visibly worse than the source
+  // photos it was meant to improve, so an untouched clean photo is the better
+  // outcome. The draft carries a warning so the seller knows why.
+  const shots = [...usable];
   const finished = shots.slice(0, plan.recommendedImages);
 
   const warnings = [];
+  if (!useOpenAi()) {
+    warnings.push('AI product photography is not configured (OPENAI_API_KEY) — the gallery uses the supplier photos as they are.');
+  }
   const skipped = sourceImageUrls.length - screened.length;
   if (skipped > 0) {
     warnings.push(`${skipped} of the supplier's ${sourceImageUrls.length} photos were too small to use.`);
@@ -188,20 +155,54 @@ async function buildGalleryImages({
   return { imageUrls, warnings };
 }
 
+// Among rejected slides, the ones that at least photograph the whole product
+// make better references than collages or screenshots.
+function rankRejectedForReference(rejected) {
+  const score = (image) => {
+    const screen = image.screen || {};
+    if (screen.isCollage) return 3;
+    if (screen.kind === 'product_photo' && screen.showsWholeProduct) return 0;
+    if (screen.kind === 'product_photo') return 1;
+    return 2;
+  };
+  return [...rejected].sort((a, b) => score(a) - score(b));
+}
+
 // The OpenAI path. The best clean supplier photo (plus a second one when the
 // gallery has it, e.g. front + back) is the reference for every shot, so the
 // product stays identical across the set. If a shot fails, the clean supplier
 // photo takes that slot rather than leaving a hole.
 async function buildGeneratedGallery({ usable, rejected, sourceImageUrls, screened, accessToken, marketplaceId, plan }) {
-  const references = usable.slice(0, 2).map((image) => image.buffer);
+  // Up to three clean supplier photos go in as references — front, back and
+  // a detail where the gallery has them. A single reference showed the glove
+  // from one side, and the model invented the other; with the palm shot
+  // alongside, the grip pattern has somewhere to come from.
+  // When the supplier gallery is nothing but infographic slides (a GPS tag
+  // listing shipped seven — every one with headline text and callouts), the
+  // slides are still the only pictures of the product that exist. They go in
+  // as references for the generator, which reproduces the physical product
+  // and not the slide, and they are never published themselves. Without this
+  // the draft had no images at all. Confirmed live.
+  const slidesOnly = !usable.length;
+  const referenceSet = slidesOnly ? rankRejectedForReference(rejected) : usable;
+  const references = referenceSet.slice(0, 3).map((image) => image.buffer);
+  const extraInstruction = slidesOnly
+    ? 'The reference images are marketing slides. Reproduce ONLY the physical product they show — ignore and omit every ' +
+      'piece of text, headline, callout, arrow, icon, logo, watermark and decorative graphic. Output a clean photograph.'
+    : undefined;
   const shots = [];
 
-  // Generated sequentially: each is a ~20-40s call and OpenAI rate-limits
-  // image edits, so a burst of five would mostly get 429s.
-  for (const variant of GALLERY_SHOTS.slice(0, plan.recommendedImages)) {
-    const shot = await generateShot(references, variant);
-    if (shot) shots.push(shot);
-  }
+  // Generated concurrently. Each shot is ~40s, so five in sequence was four
+  // minutes of the seller staring at a spinner — confirmed on a real draft.
+  // Bounded so a burst can't trip OpenAI's per-minute image limit outright;
+  // the service retries a 429 with backoff for anything that does. Order is
+  // preserved, so the hero stays first.
+  const results = await mapWithConcurrency(
+    GALLERY_SHOTS.slice(0, plan.recommendedImages),
+    GENERATION_CONCURRENCY,
+    (variant) => generateShot(references, variant, extraInstruction)
+  );
+  for (const shot of results) if (shot) shots.push(shot);
 
   // Clean supplier photos not already represented fill any remaining slots —
   // a real photo of the actual product is still worth showing.
@@ -220,8 +221,16 @@ async function buildGeneratedGallery({ usable, rejected, sourceImageUrls, screen
     );
   }
   const generated = shots.filter((image) => image.sourceUrl.startsWith('generated:')).length;
-  if (generated < GALLERY_SHOTS.length) {
+  if (slidesOnly) {
+    warnings.push(
+      `Every supplier photo was a marketing slide, so the ${generated} listing image(s) were generated from them — ` +
+        `check the product looks right before publishing.`
+    );
+  } else if (generated < GALLERY_SHOTS.length) {
     warnings.push(`${GALLERY_SHOTS.length - generated} generated shot(s) failed and were replaced with supplier photos.`);
+  }
+  if (!shots.length) {
+    warnings.push('No usable listing images could be produced — add photos before publishing.');
   }
   const overlays = openaiImage.activeOverlays();
   if (overlays.length) {
@@ -263,18 +272,10 @@ async function buildVariantImage({ sourceImageUrl, accessToken, marketplaceId })
     }
   }
 
-  let treated = sourceImageUrl;
-  try {
-    // Background removal, not scene generation — see the note at the top.
-    treated = await imageTransformer.removeBackground(sourceImageUrl);
-  } catch (err) {
-    logger.warn('Variant background removal failed — keeping the original photo', {
-      url: sourceImageUrl,
-      error: err.message,
-    });
-  }
-
-  const prepared = await imageOps.prepare(treated);
+  // Without a generator (or when it failed above) the variant's own supplier
+  // photo, normalised, is the honest choice — it is at least a real photo of
+  // that exact colour.
+  const prepared = await imageOps.prepare(sourceImageUrl);
   if (!prepared) return null;
 
   try {

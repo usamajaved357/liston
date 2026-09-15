@@ -32,3 +32,4 @@ coverage/
 ARCHITECTURE.md
 PHASE-2.md
 PROGRESS.md
+.cache/

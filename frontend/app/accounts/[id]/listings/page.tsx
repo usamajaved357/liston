@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
@@ -63,7 +63,13 @@ export default function AccountListingsPage() {
   const searchParams = useSearchParams();
   const { connection, user, loading: loadingConnection, error: connectionError } = useConnection(params.id);
 
-  const initialFilter = searchParams.get("filter") === "draft" ? "draft" : "active";
+  const router = useRouter();
+  // The selected tab lives in the URL, so opening a draft (or an inactive
+  // listing) and coming back lands on the same tab rather than resetting to
+  // Active. Every page that links back here carries the tab it came from.
+  const urlFilter = searchParams.get("filter");
+  const initialFilter: ListingStatusFilter | "draft" =
+    urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active";
   const [filter, setFilter] = useState<ListingStatusFilter | "draft">(initialFilter);
   const [items, setItems] = useState<Listing[]>([]);
   const [drafts, setDrafts] = useState<DraftListing[]>([]);
@@ -117,6 +123,8 @@ export default function AccountListingsPage() {
   function changeFilter(next: ListingStatusFilter | "draft") {
     setFilter(next);
     setPage(1);
+    // Keep the URL in step so the tab survives navigating away and back.
+    router.replace(`/accounts/${params.id}/listings${next === "active" ? "" : `?filter=${next}`}`, { scroll: false });
   }
 
   if (loadingConnection) {

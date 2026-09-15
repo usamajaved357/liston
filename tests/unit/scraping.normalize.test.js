@@ -81,9 +81,9 @@ test('aliexpress normalize reports each axis and which one carries photos', () =
   ]);
 });
 
-test('aliexpress normalize caps a runaway matrix instead of building thousands of variants', () => {
+test('aliexpress normalize returns the FULL matrix — the cap is applied only after the seller chooses', () => {
   const many = (n, prefix) => Array.from({ length: n }, (_, i) => ({ label: `${prefix}${i}` }));
-  const result = aliexpressScraper.normalize({
+  const full = aliexpressScraper.normalize({
     title: 'Case',
     imageUrls: [],
     specifics: {},
@@ -92,6 +92,22 @@ test('aliexpress normalize caps a runaway matrix instead of building thousands o
       { name: 'Model', options: many(30, 'm') },
     ],
   });
+  // Capping here would hide options from the variation picker before they
+  // could be chosen — a real product lost two colours that way.
+  assert.strictEqual(full.variants.length, 600);
+});
+
+test('capVariants trims a runaway matrix to whole rows of the first axis', () => {
+  const many = (n, prefix) => Array.from({ length: n }, (_, i) => ({ label: `${prefix}${i}` }));
+  const result = aliexpressScraper.capVariants(aliexpressScraper.normalize({
+    title: 'Case',
+    imageUrls: [],
+    specifics: {},
+    variantGroups: [
+      { name: 'Color', options: many(20, 'c') },
+      { name: 'Model', options: many(30, 'm') },
+    ],
+  }));
 
   // 600 combinations would be hundreds of eBay API calls and well past what
   // one listing should carry — and the trim lands on a whole number of

@@ -4,13 +4,13 @@ const logger = require('../../../utils/logger');
 // Real product photography from a supplier photo, via OpenAI's image model
 // in EDIT mode: the supplier photo goes in as the reference, the prompt says
 // what to make of it, and a new photograph comes back with the product
-// preserved. This is a different job from Bria's lifestyle mode, which only
-// ever re-backgrounds the cutout it's given — the difference the seller saw
-// between "shift" and a listing that looks shot in a studio.
+// preserved. This is the only image generator in the pipeline: the earlier
+// background-removal / scene-compositing service was removed because its
+// output was visibly worse than the supplier photos it was meant to improve.
 //
 // Implemented against OpenAI's public images/edits contract with native
-// fetch + FormData (no SDK). NOT live-verified: no OPENAI_API_KEY exists in
-// this environment yet, so the first real call is the verification step.
+// fetch + FormData (no SDK). LIVE-VERIFIED: gloves and phone-case drafts
+// produced faithful hero shots at ~40s / ~$0.17 per high-quality image.
 
 const OPENAI_EDITS_URL = 'https://api.openai.com/v1/images/edits';
 const MODEL = 'gpt-image-1';
@@ -19,6 +19,8 @@ const MODEL = 'gpt-image-1';
 // fire on these — that's the model's ceiling, not a pipeline fault.
 const SIZE = '1024x1024';
 const REQUEST_TIMEOUT_MS = 120 * 1000;
+const MAX_ATTEMPTS = 4;
+const RETRY_BASE_MS = 5000;
 
 function isConfigured() {
   return Boolean(config.openaiApiKey);
@@ -49,12 +51,21 @@ function buildPrompt({ variant = 'hero', settings = config.imageGeneration, extr
   ].filter(Boolean);
 
   return [
+    `This is an EDIT of the provided product photograph, not a new illustration of a similar product. The product ` +
+      `in the output must be the very same physical item shown in the reference — reproduce it faithfully, as if ` +
+      `the reference photo were re-shot in a new setting. Only the surroundings, pose, framing and lighting change.`,
+    ``,
     `Create a premium, ultra-realistic 4K HD eBay product image using the provided product image as the exact product reference.`,
     ``,
     subject + angle,
     ``,
+    `Show the product's distinctive features clearly and exactly as they appear in the reference (grip patterns, ` +
+      `textures, seams, logos moulded into the product, colour blocks, buttons, ports). If the reference shows ` +
+      `several sides of the product, keep the features of each side where they belong.`,
+    ``,
     `Product Accuracy — CRITICAL`,
     `- Preserve the exact original product design, shape, colour, dimensions, proportions, texture, material, patterns, buttons, attachments, and all visible details.`,
+    `- Do not simplify, smooth over, or "clean up" any detail of the product. A pattern that is bold in the reference must be equally bold in the output.`,
     `- Do not redesign, modify, recolour, replace, or distort the product.`,
     `- Do not invent any features or accessories.`,
     `- Keep the product clearly visible and as the primary focus.`,
@@ -106,22 +117,39 @@ async function generateProductShot({ referenceImages, variant = 'hero', settings
   form.append('model', MODEL);
   form.append('prompt', buildPrompt({ variant, settings, extraInstruction }));
   form.append('size', SIZE);
+  // The model's own control for how faithfully the reference is preserved.
+  // Without it a glove came back with its distinctive palm-grip pattern
+  // replaced by a faint generic one — a different product. Every other
+  // instruction in the prompt is advisory; this is the mechanism.
+  form.append('input_fidelity', 'high');
   form.append('quality', (settings || config.imageGeneration).quality || 'high');
   form.append('n', '1');
   for (const [index, buffer] of referenceImages.entries()) {
     form.append('image[]', new Blob([buffer], { type: 'image/png' }), `reference-${index}.png`);
   }
 
-  const res = await fetch(OPENAI_EDITS_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${config.openaiApiKey}` },
-    body: form,
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
+  // Shots are generated concurrently (see the pipeline), so a burst can hit
+  // OpenAI's per-minute image limit. A 429 is retried with backoff rather
+  // than surfacing as a lost gallery slot; anything else fails immediately.
+  let data;
+  for (let attempt = 1; ; attempt += 1) {
+    const res = await fetch(OPENAI_EDITS_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.openaiApiKey}` },
+      body: form,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
+    data = await res.json().catch(() => ({}));
+    if (res.ok) break;
+
     const message = data.error?.message || `OpenAI image request failed (${res.status})`;
+    if (res.status === 429 && attempt < MAX_ATTEMPTS) {
+      const wait = RETRY_BASE_MS * 2 ** (attempt - 1);
+      logger.warn('OpenAI rate-limited an image request — retrying', { attempt, waitMs: wait });
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      continue;
+    }
     logger.warn('OpenAI image generation failed', { status: res.status, message });
     throw new Error(message);
   }

@@ -1,0 +1,269 @@
+// Renders a listing description as branded HTML in the seller's own store
+// template — header, trust strip, delivery, returns, a carousel of the
+// account's OTHER live listings, footer — with the AI-drafted copy in the
+// middle. eBay accepts HTML descriptions; this is what "use a template" on
+// eBay's own listing form does, done per account.
+//
+// Nothing in here is hardcoded to a store. Every value comes from that
+// connection's template settings, and the "You may also like" cards come
+// from that account's live listings at render time. Two sellers on the same
+// Liston install get two different descriptions from the same draft.
+
+const DEFAULT_TEMPLATE = {
+  storeName: '',
+  tagline: 'Official UK Store',
+  logoUrl: '',
+  accentColor: '#FF6B2B',
+  darkColor: '#1E1E2E',
+  feedbackPercent: '',
+  dispatchTime: '1–2 Business Days',
+  dispatchNote: 'From our UK warehouse',
+  carrier: 'Royal Mail / Evri',
+  deliveryTime: '2–4 Business Days',
+  freePostage: true,
+  returnsDays: 30,
+  recommendedCount: 4,
+  // Only genuine reviews the seller has entered are shown. A section of
+  // fabricated five-star quotes is the kind of thing that gets a listing
+  // removed; the section is simply omitted when there are none.
+  reviews: [],
+  responseTime: '24 hours',
+};
+
+function templateWithDefaults(template = {}) {
+  return { ...DEFAULT_TEMPLATE, ...template };
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// The model writes plain text — paragraphs separated by blank lines, bullet
+// lines starting with "•" or "-", and short ALL-CAPS lines as headings.
+// Turned into the HTML the template's styles expect, with everything escaped.
+function textToHtml(text) {
+  const blocks = String(text || '').split(/\n\s*\n/);
+  return blocks
+    .map((block) => {
+      const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+      if (!lines.length) return '';
+      const bullets = lines.filter((l) => /^[•\-*]\s+/.test(l));
+      if (bullets.length === lines.length) {
+        return `<ul>${lines.map((l) => `<li>${escapeHtml(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
+      }
+      const isHeading = (line) => /^[A-Z0-9 &:\-–]{4,60}:?$/.test(line);
+      const headingHtml = (line) => `<p><strong>${escapeHtml(line.replace(/:$/, ''))}</strong></p>`;
+      if (lines.length === 1 && isHeading(lines[0])) return headingHtml(lines[0]);
+      // A block mixing a lead line with bullets — "KEY FEATURES:" straight
+      // into its list is how the model writes it. The lead renders as a
+      // heading when it looks like one, otherwise as a paragraph.
+      if (bullets.length) {
+        const lead = lines.filter((l) => !/^[•\-*]\s+/.test(l));
+        const leadHtml = lead.length === 1 && isHeading(lead[0]) ? headingHtml(lead[0]) : lead.length ? `<p>${lead.map(escapeHtml).join('<br/>')}</p>` : '';
+        return leadHtml + `<ul>${bullets.map((l) => `<li>${escapeHtml(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
+      }
+      return `<p>${lines.map(escapeHtml).join('<br/>')}</p>`;
+    })
+    .join('');
+}
+
+function styles(t) {
+  const a = t.accentColor;
+  const d = t.darkColor;
+  return `<style>
+.eb{max-width:700px;width:100%;margin:0 auto;font-family:Nunito,'Segoe UI',Helvetica,Arial,sans-serif;color:#1C1C1C;background:#fff;border:1px solid #E0E0E0;overflow-x:hidden}
+.eb *{box-sizing:border-box}
+.eb-header{background:${d};padding:0;overflow:hidden}
+.eb-header-top{padding:14px 22px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.eb-logo-wrap{display:flex;align-items:center;gap:11px}
+.eb-logo-img{width:42px;height:42px;border-radius:10px;overflow:hidden;flex-shrink:0;border:2px solid ${a};background:${a}}
+.eb-logo-img img{width:100%;height:100%;object-fit:cover;display:block}
+.eb-logo-fallback{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:20px}
+.eb-logo-name{font-size:21px;font-weight:800;color:#fff;letter-spacing:-0.5px;line-height:1}
+.eb-logo-tag{font-size:9px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#7A7A9A;margin-top:3px}
+.eb-header-badges{display:flex;gap:7px;flex-shrink:0}
+.eb-hbadge{background:rgba(255,255,255,0.08);border:1px solid ${a}59;border-radius:20px;padding:4px 11px;font-size:10px;color:${a};font-weight:700;white-space:nowrap}
+.eb-header-bar{background:${a};padding:6px 22px;display:flex;gap:20px;align-items:center;overflow:hidden}
+.eb-bar-item{font-size:10px;font-weight:700;color:#fff;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap}
+.eb-bar-dot{color:rgba(255,255,255,0.4);font-size:12px}
+.eb-hero{background:#F7F7FA;padding:20px 22px;border-left:5px solid ${a}}
+.eb-pname{font-size:18px;font-weight:800;color:${d};line-height:1.4}
+.eb-pill-row{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
+.eb-pill{background:${a};color:#fff;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:0.5px}
+.eb-pill.outline{background:transparent;color:${a};border:1.5px solid ${a}}
+.eb-sec{padding:18px 22px;border-bottom:1px solid #EBEBEB}
+.eb-stitle{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:${a};margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.eb-stitle::after{content:'';flex:1;height:1.5px;background:#F0F0F0}
+.eb-desc{font-size:13px;color:#2D2D2D;line-height:1.8}
+.eb-desc p{margin:0 0 10px}
+.eb-desc ul{padding-left:18px;margin:0 0 10px}
+.eb-desc li{margin-bottom:5px}
+.eb-desc strong{color:${d};font-weight:700}
+.eb-trust{background:${d};padding:14px 18px;display:flex;gap:6px;flex-wrap:wrap}
+.eb-tbadge{flex:1;min-width:100px;background:rgba(255,255,255,0.06);border:1px solid ${a}33;border-radius:10px;padding:10px 8px;text-align:center}
+.eb-ticon{font-size:18px;display:block}
+.eb-ttitle{color:#fff;font-size:11px;font-weight:700;display:block;margin-top:5px}
+.eb-tsub{color:#7A7A9A;font-size:9px;display:block;margin-top:2px}
+.eb-drow{display:flex;gap:10px;flex-wrap:wrap}
+.eb-ditem{flex:1;min-width:120px;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:13px 14px;border-bottom:3px solid ${a}}
+.eb-dlbl{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;color:#9090A0}
+.eb-dval{font-size:13px;font-weight:800;color:${d};margin-top:5px}
+.eb-dnote{font-size:10px;color:#9090A0;margin-top:2px}
+.eb-policy{font-size:13px;line-height:1.8;color:#3D3D3D;margin:0}
+.eb-policy strong{color:${d}}
+.eb-policy-note{font-size:11px;color:#9090A0;margin:8px 0 0;line-height:1.6}
+.eb-fgrid{display:flex;gap:10px;flex-wrap:wrap}
+.eb-fcard{flex:1;min-width:140px;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:14px;border-top:3px solid ${a}}
+.eb-fstars{color:${a};font-size:14px;letter-spacing:1px}
+.eb-ftext{font-size:12px;color:#3D3D3D;line-height:1.65;margin-top:8px;font-style:italic}
+.eb-fname{font-size:11px;font-weight:700;color:${d};margin-top:10px}
+.eb-fdate{font-size:10px;color:#9090A0;margin-top:2px}
+.eb-rgrid{display:flex;gap:10px;flex-wrap:wrap}
+.eb-rcard{flex:1;min-width:120px;max-width:155px;border:1.5px solid #E8E8E8;border-radius:12px;overflow:hidden;text-decoration:none;display:block;background:#fff}
+.eb-rimg{width:100%;height:105px;object-fit:cover;background:#F7F7FA;display:block}
+.eb-rinfo{padding:9px 11px;border-top:2px solid ${a}}
+.eb-rname{font-size:11px;font-weight:700;color:${d};line-height:1.4}
+.eb-rfrom{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#9090A0;display:block;margin-top:5px}
+.eb-rprice{font-size:14px;font-weight:800;color:${a}}
+.eb-footer{background:${d};padding:14px 22px;text-align:center;border-top:3px solid ${a}}
+.eb-footer p{font-size:11px;color:#7A7A9A;margin:0}
+.eb-footer strong{color:#fff}
+.eb-save{font-size:11px;color:${a};margin-top:5px;display:block;font-weight:700}
+@media(max-width:480px){.eb-header-badges{display:none}.eb-fcard{min-width:100%}.eb-rcard{min-width:100px;max-width:130px}.eb-rimg{height:85px}}
+</style>`;
+}
+
+/**
+ * @param template     the connection's template settings (partial ok)
+ * @param productName  the listing title
+ * @param description  the AI-drafted plain-text description
+ * @param recommended  [{ url, imageUrl, name, price }] — the account's own
+ *                     live listings, fetched by the caller
+ * @param condition    'NEW' etc.
+ */
+function renderDescription({ template, productName, description, recommended = [], condition = 'NEW' }) {
+  const t = templateWithDefaults(template);
+  const storeName = escapeHtml(t.storeName || 'Our Store');
+  const feedback = t.feedbackPercent ? `${escapeHtml(String(t.feedbackPercent).replace('%', ''))}% Positive` : null;
+  const postage = t.freePostage ? 'Free P&amp;P' : 'Tracked P&amp;P';
+  const returns = Number(t.returnsDays) > 0 ? `${Number(t.returnsDays)}-Day Returns` : null;
+
+  const logo = t.logoUrl
+    ? `<img src="${escapeHtml(t.logoUrl)}" alt="${storeName}" />`
+    : `<div class="eb-logo-fallback">${escapeHtml((t.storeName || 'S').slice(0, 1).toUpperCase())}</div>`;
+
+  const barItems = [
+    '🇬🇧 UK Based',
+    '⚡ Fast Dispatch',
+    `📦 ${postage}`,
+    returns ? `↩ ${returns}` : null,
+    feedback ? `⭐ ${feedback.replace(' Positive', ' Feedback')}` : null,
+  ].filter(Boolean);
+
+  const trust = [
+    ['🇬🇧', 'UK Based', 'Local dispatch'],
+    ['⚡', 'Fast Dispatch', escapeHtml(t.dispatchTime)],
+    returns ? ['↩', returns, 'Hassle-free'] : null,
+    ['📦', postage, 'All UK orders'],
+    feedback ? ['⭐', feedback, 'Verified feedback'] : null,
+  ].filter(Boolean);
+
+  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 3);
+
+  return `${styles(t)}
+<div class="eb">
+  <div class="eb-header">
+    <div class="eb-header-top">
+      <div class="eb-logo-wrap">
+        <div class="eb-logo-img">${logo}</div>
+        <div>
+          <div class="eb-logo-name">${storeName}</div>
+          <div class="eb-logo-tag">${escapeHtml(t.tagline)}</div>
+        </div>
+      </div>
+      <div class="eb-header-badges">
+        ${feedback ? `<span class="eb-hbadge">${feedback}</span>` : ''}
+        <span class="eb-hbadge">${postage}</span>
+      </div>
+    </div>
+    <div class="eb-header-bar">${barItems.map((i) => `<span class="eb-bar-item">${i}</span>`).join('<span class="eb-bar-dot">·</span>')}</div>
+  </div>
+
+  <div class="eb-hero">
+    <div class="eb-pname">${escapeHtml(productName)}</div>
+    <div class="eb-pill-row">
+      <span class="eb-pill">${escapeHtml(String(condition).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).replace('New', 'New'))}</span>
+      <span class="eb-pill outline">UK Stock</span>
+      <span class="eb-pill outline">${postage}</span>
+    </div>
+  </div>
+
+  <div class="eb-sec">
+    <div class="eb-stitle">Description</div>
+    <div class="eb-desc">${textToHtml(description)}</div>
+  </div>
+
+  <div class="eb-trust">${trust
+    .map(([icon, title, sub]) => `<div class="eb-tbadge"><span class="eb-ticon">${icon}</span><span class="eb-ttitle">${title}</span><span class="eb-tsub">${sub}</span></div>`)
+    .join('')}</div>
+
+  <div class="eb-sec">
+    <div class="eb-stitle">Delivery &amp; Dispatch</div>
+    <div class="eb-drow">
+      <div class="eb-ditem"><div class="eb-dlbl">Dispatch</div><div class="eb-dval">${escapeHtml(t.dispatchTime)}</div><div class="eb-dnote">${escapeHtml(t.dispatchNote)}</div></div>
+      <div class="eb-ditem"><div class="eb-dlbl">Carrier</div><div class="eb-dval">${escapeHtml(t.carrier)}</div><div class="eb-dnote">Tracked service</div></div>
+      <div class="eb-ditem"><div class="eb-dlbl">Delivery</div><div class="eb-dval">${escapeHtml(t.deliveryTime)}</div><div class="eb-dnote">After dispatch</div></div>
+      <div class="eb-ditem"><div class="eb-dlbl">Postage</div><div class="eb-dval">${postage}</div><div class="eb-dnote">All UK addresses</div></div>
+    </div>
+  </div>
+
+  ${
+    returns
+      ? `<div class="eb-sec">
+    <div class="eb-stitle">Returns Policy</div>
+    <p class="eb-policy">We offer a <strong>${Number(t.returnsDays)}-day hassle-free return policy</strong> on all items. Not completely satisfied? Message us through eBay and we'll sort it immediately — no fuss, no stress, guaranteed.</p>
+    <p class="eb-policy-note">Items must be returned in original condition and packaging. Buyer pays return postage unless the item is faulty or not as described. Refunds processed within 2 business days of receiving the return.</p>
+  </div>`
+      : ''
+  }
+
+  ${
+    reviews.length
+      ? `<div class="eb-sec">
+    <div class="eb-stitle">What Customers Say</div>
+    <div class="eb-fgrid">${reviews
+      .map(
+        (r) => `<div class="eb-fcard"><div class="eb-fstars">${'★'.repeat(Math.min(5, Math.max(1, Number(r.stars) || 5)))}</div><div class="eb-ftext">"${escapeHtml(r.text)}"</div><div class="eb-fname">${escapeHtml(r.buyer || 'eBay buyer')}</div><div class="eb-fdate">${escapeHtml(r.date || '')}${r.date ? ' · ' : ''}Verified Purchase</div></div>`
+      )
+      .join('')}</div>
+  </div>`
+      : ''
+  }
+
+  ${
+    recommended.length
+      ? `<div class="eb-sec">
+    <div class="eb-stitle">You May Also Like</div>
+    <div class="eb-rgrid">${recommended
+      .slice(0, Number(t.recommendedCount) || 4)
+      .map(
+        (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard">${
+          item.imageUrl ? `<img class="eb-rimg" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : '<div class="eb-rimg"></div>'
+        }<div class="eb-rinfo"><div class="eb-rname">${escapeHtml(item.name)}</div>${
+          item.price ? `<span class="eb-rfrom">From</span><div class="eb-rprice">${escapeHtml(item.price)}</div>` : ''
+        }</div></a>`
+      )
+      .join('')}</div>
+  </div>`
+      : ''
+  }
+
+  <div class="eb-footer">
+    <p>© <strong>${storeName}</strong> &nbsp;·&nbsp; UK Business &nbsp;·&nbsp; All items sold new &amp; unused</p>
+    <p style="margin-top:4px;">Questions? <strong>Message us on eBay</strong> — we respond within ${escapeHtml(t.responseTime)}.</p>
+    <span class="eb-save">⭐ Love ${storeName}? Click "Save seller" to never miss a new listing or deal</span>
+  </div>
+</div>`;
+}
+
+module.exports = { renderDescription, textToHtml, templateWithDefaults, DEFAULT_TEMPLATE };

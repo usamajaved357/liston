@@ -379,3 +379,131 @@ test('generateDraftInput falls every variant back to the main photo when the sup
   assert.deepStrictEqual(draftInput.variants[1].imageUrls, ['https://example.com/group.jpg']);
   assert.match(warnings.join(' '), /no separate photo per option/);
 });
+
+// --- two-step drafting: read, choose, then generate -------------------------
+
+const twoAxisSource = {
+  title: 'Case',
+  priceText: '£2.00',
+  imageUrls: ['https://x/g.jpg'],
+  variants: [
+    { attributes: { Colour: 'Black', Model: '15' }, imageUrl: 'https://x/b.jpg' },
+    { attributes: { Colour: 'Black', Model: '16' }, imageUrl: 'https://x/b.jpg' },
+    { attributes: { Colour: 'Pink', Model: '15' }, imageUrl: 'https://x/p.jpg' },
+    { attributes: { Colour: 'Pink', Model: '16' }, imageUrl: 'https://x/p.jpg' },
+  ],
+  variantAxes: [
+    { name: 'Colour', values: ['Black', 'Pink'], hasImages: true },
+    { name: 'Model', values: ['15', '16'], hasImages: false },
+  ],
+};
+
+test('selectVariants keeps only combinations whose value on every axis was chosen', () => {
+  const selected = orchestrator.selectVariants(twoAxisSource, { Colour: ['Black'], Model: ['16'] });
+
+  assert.strictEqual(selected.variants.length, 1);
+  assert.deepStrictEqual(selected.variants[0].attributes, { Colour: 'Black', Model: '16' });
+  // The axes shrink to match, so eBay is never told about an option nobody can buy.
+  assert.deepStrictEqual(selected.variantAxes.map((a) => a.values), [['Black'], ['16']]);
+});
+
+test('selectVariants treats an unmentioned axis as "keep everything on it"', () => {
+  const selected = orchestrator.selectVariants(twoAxisSource, { Colour: ['Pink'] });
+  assert.strictEqual(selected.variants.length, 2);
+  assert.ok(selected.variants.every((v) => v.attributes.Colour === 'Pink'));
+  assert.deepStrictEqual(selected.variantAxes[1].values, ['15', '16']);
+});
+
+test('selectVariants with no selection returns the source untouched', () => {
+  assert.strictEqual(orchestrator.selectVariants(twoAxisSource, undefined), twoAxisSource);
+  assert.strictEqual(orchestrator.selectVariants(twoAxisSource, {}), twoAxisSource);
+});
+
+test('generateDraftInput uses pre-read listings and drafts only the chosen variations', async () => {
+  // Step two must not read anything again — the whole point is that the
+  // ~30s AliExpress scrape happened once, in step one.
+  const fetchListing = mock.method(ebaySource, 'fetchListing', async () => {
+    throw new Error('must not re-read the competitor');
+  });
+  const fetchProduct = mock.method(aliexpressSource, 'fetchProduct', async () => {
+    throw new Error('must not re-read the source');
+  });
+  mock.method(textGenerator, 'generateListingContent', async () => ({
+    commonTitle: 'T',
+    commonDescription: 'D',
+    condition: 'NEW',
+    sharedAspects: {},
+    varyingAspectName: 'Colour',
+    variantAspectValues: { Black: 'Black', Pink: 'Pink' },
+    imageScenePrompt: 's',
+    aspectWarnings: [],
+  }));
+  mock.method(imagePipeline, 'buildGalleryImages', async ({ sourceImageUrls }) => ({ imageUrls: sourceImageUrls, warnings: [] }));
+  const variantImage = mock.method(imagePipeline, 'buildVariantImage', async ({ sourceImageUrl }) => sourceImageUrl);
+
+  const { draftInput } = await orchestrator.generateDraftInput({
+    competitor: { title: 'Comp', categoryId: '123', priceText: 'GBP 9.99', specifics: {}, variants: [], referenceImages: [] },
+    source: twoAxisSource,
+    variantSelection: { Colour: ['Black'] },
+    merchantLocationKey: 'main',
+  });
+
+  assert.strictEqual(fetchListing.mock.calls.length, 0);
+  assert.strictEqual(fetchProduct.mock.calls.length, 0);
+  assert.strictEqual(draftInput.variants.length, 2);
+  assert.ok(draftInput.variants.every((v) => v.aspects.Colour[0] === 'Black'));
+  // One distinct photo among the kept variants → one image build, not four.
+  assert.strictEqual(variantImage.mock.calls.length, 1);
+});
+
+test('generateDraftInput refuses a selection that matches nothing rather than drafting an empty listing', async () => {
+  await assert.rejects(
+    () =>
+      orchestrator.generateDraftInput({
+        competitor: { title: 'Comp', categoryId: '123', specifics: {}, variants: [] },
+        source: twoAxisSource,
+        variantSelection: { Colour: ['Green'] },
+        merchantLocationKey: 'main',
+      }),
+    /None of the variations you selected/
+  );
+});
+
+test('generateDraftInput drafts a single chosen combination as a plain listing, not a 1-variant group', async () => {
+  mock.method(textGenerator, 'generateListingContent', async ({ source }) => {
+    // The chosen colour/model must reach the model as ordinary specifics.
+    assert.strictEqual(source.specifics.Colour, 'Black');
+    assert.strictEqual(source.specifics.Model, '16');
+    return { title: 'T', description: 'D', condition: 'NEW', aspects: { Colour: ['Black'] }, imageScenePrompt: 's', aspectWarnings: [] };
+  });
+  mock.method(imagePipeline, 'buildGalleryImages', async ({ sourceImageUrls }) => ({ imageUrls: sourceImageUrls, warnings: [] }));
+  const variantImage = mock.method(imagePipeline, 'buildVariantImage', async () => 'x');
+
+  const { draftInput } = await orchestrator.generateDraftInput({
+    competitor: { title: 'Comp', categoryId: '123', priceText: 'GBP 9.99', specifics: {}, variants: [], referenceImages: [] },
+    source: twoAxisSource,
+    variantSelection: { Colour: ['Black'], Model: ['16'] },
+    merchantLocationKey: 'main',
+  });
+
+  assert.strictEqual(draftInput.variants, undefined);
+  assert.strictEqual(draftInput.title, 'T');
+  // Its own photo leads the gallery, and no per-variant image work runs.
+  assert.strictEqual(draftInput.imageUrls[0], 'https://x/b.jpg');
+  assert.strictEqual(variantImage.mock.calls.length, 0);
+});
+
+test('applyOrigin replaces any origin-shaped aspect with the seller’s country', () => {
+  // Supplier and competitor data both said China and it was copied straight
+  // into the listing. The seller dispatches from the UK.
+  const result = orchestrator.applyOrigin(
+    { 'Country of Origin': ['China'], 'Country/Region of Manufacture': ['China'], Brand: ['X'] },
+    'United Kingdom'
+  );
+  assert.deepStrictEqual(result, { Brand: ['X'], 'Country/Region of Manufacture': ['United Kingdom'] });
+});
+
+test('applyOrigin adds the standard eBay origin aspect when none was present', () => {
+  const result = orchestrator.applyOrigin({ Brand: ['X'] }, 'United Kingdom');
+  assert.deepStrictEqual(result['Country/Region of Manufacture'], ['United Kingdom']);
+});

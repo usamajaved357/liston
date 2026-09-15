@@ -22,7 +22,12 @@ router.put('/:id/policies', requireAuth, requireOwner, connectionController.upda
 // Listing settings (target ROI, fees, shipping) drive every sell price, so
 // they're owner-only for the same reason policies are — never delegable.
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);
+router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
+router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
+// Step one of drafting: read both listings so the seller can pick which
+// variations to list, before anything is generated or paid for.
+router.post('/:id/listings/drafts/preview', requireAuth, requireFeature('listings'), listingController.previewDraft);
 router.post('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.generateDraft);
 
 module.exports = router;

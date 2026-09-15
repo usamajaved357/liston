@@ -232,12 +232,14 @@ function VariationsEditor({
   removedIndexes,
   removedAxisValues,
   priceOverrides,
+  quantityOverrides,
   imageOverrides,
   onRemoveRow,
   onRestoreRow,
   onRemoveAxisValue,
   onRestoreAxisValue,
   onPriceChange,
+  onQuantityChange,
   onImageChange,
   disabled,
 }: {
@@ -247,12 +249,14 @@ function VariationsEditor({
   removedIndexes: Set<number>;
   removedAxisValues: AxisRemoval[];
   priceOverrides: Record<number, string>;
+  quantityOverrides: Record<number, string>;
   imageOverrides: Record<number, string>;
   onRemoveRow: (index: number) => void;
   onRestoreRow: (index: number) => void;
   onRemoveAxisValue: (r: AxisRemoval) => void;
   onRestoreAxisValue: (r: AxisRemoval) => void;
   onPriceChange: (index: number, value: string) => void;
+  onQuantityChange: (index: number, value: string) => void;
   onImageChange: (index: number, url: string) => void;
   disabled: boolean;
 }) {
@@ -353,6 +357,18 @@ function VariationsEditor({
                   disabled={disabled || gone}
                   onChange={(e) => onPriceChange(i, e.target.value)}
                   className="w-20 rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1 text-right text-sm text-[var(--color-ink)]"
+                />
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-1 text-sm" title="Quantity">
+                <span className="text-xs text-[var(--color-muted)]">Qty</span>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={quantityOverrides[i] ?? String(v.quantity)}
+                  disabled={disabled || gone}
+                  onChange={(e) => onQuantityChange(i, e.target.value)}
+                  className="w-14 rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-1 text-right text-sm text-[var(--color-ink)]"
                 />
               </div>
               {v.priceBreakdown && !gone && (
@@ -573,11 +589,20 @@ export default function DraftEditorPage() {
   // build the PATCH on save, so Discard is just clearing this state.
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [editingDescription, setEditingDescription] = useState(false);
+  // Item specifics as an ordered list so rows can be renamed, added and
+  // removed in place. Multi-value aspects are edited as "a, b".
+  const [specifics, setSpecifics] = useState<{ name: string; value: string }[]>([]);
   const [images, setImages] = useState<string[]>([]);
   const [selectedImage, setSelectedImage] = useState(0);
   const [removedRows, setRemovedRows] = useState<Set<number>>(new Set());
   const [removedAxisValues, setRemovedAxisValues] = useState<AxisRemoval[]>([]);
   const [priceOverrides, setPriceOverrides] = useState<Record<number, string>>({});
+  const [quantityOverrides, setQuantityOverrides] = useState<Record<number, string>>({});
+  const [condition, setCondition] = useState("NEW");
+  const [singlePrice, setSinglePrice] = useState("");
+  const [singleQuantity, setSingleQuantity] = useState("1");
+  const [showNotes, setShowNotes] = useState(false);
   const [imageOverrides, setImageOverrides] = useState<Record<number, string>>({});
   const [imageCheck, setImageCheck] = useState<ImageCheck | null>(null);
 
@@ -592,6 +617,10 @@ export default function DraftEditorPage() {
   const [textProposal, setTextProposal] = useState<TextProposal | null>(null);
   const [imageProposal, setImageProposal] = useState<ImageProposal | null>(null);
   const [imageProposalTarget, setImageProposalTarget] = useState<string | null>(null);
+  // The branded HTML this draft will publish with — the plain description
+  // above wrapped in the account's template with its live listings beneath.
+  const [descriptionPreview, setDescriptionPreview] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   const content = listing?.generated_data as DraftContent | undefined;
   const variation = content && isVariationDraft(content) ? content : null;
@@ -602,11 +631,18 @@ export default function DraftEditorPage() {
     const c = row.generated_data as DraftContent;
     setTitle(isVariationDraft(c) ? c.commonTitle : c.title);
     setDescription(isVariationDraft(c) ? c.commonDescription : c.description);
+    setEditingDescription(false);
+    const aspects = isVariationDraft(c) ? c.variesBy.aspects : c.aspects;
+    setSpecifics(Object.entries(aspects || {}).map(([name, values]) => ({ name, value: values.join(", ") })));
     setImages(c.imageUrls || []);
     setSelectedImage(0);
     setRemovedRows(new Set());
     setRemovedAxisValues([]);
     setPriceOverrides({});
+    setQuantityOverrides({});
+    setCondition((isVariationDraft(c) ? c.variants[0]?.condition : c.condition) || "NEW");
+    setSinglePrice(isVariationDraft(c) ? "" : c.price.value);
+    setSingleQuantity(isVariationDraft(c) ? "1" : String(c.quantity ?? 1));
     setImageOverrides({});
   }, []);
 
@@ -622,6 +658,21 @@ export default function DraftEditorPage() {
       .finally(() => setLoading(false));
   }, [params.offerId, resetFrom]);
 
+  const originalAspects = useMemo(
+    () => (variation ? variation.variesBy.aspects : single?.aspects) || {},
+    [variation, single]
+  );
+  const editedAspects = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const row of specifics) {
+      const name = row.name.trim();
+      const values = row.value.split(",").map((v) => v.trim()).filter(Boolean);
+      if (name && values.length) out[name] = values;
+    }
+    return out;
+  }, [specifics]);
+  const aspectsChanged = JSON.stringify(editedAspects) !== JSON.stringify(originalAspects);
+
   const dirty = useMemo(() => {
     if (!content) return false;
     const origTitle = variation ? variation.commonTitle : single!.title;
@@ -629,13 +680,17 @@ export default function DraftEditorPage() {
     return (
       title !== origTitle ||
       description !== origDesc ||
+      aspectsChanged ||
+      condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW") ||
+      (single ? singlePrice !== single.price.value || singleQuantity !== String(single.quantity ?? 1) : false) ||
       JSON.stringify(images) !== JSON.stringify(content.imageUrls) ||
       removedRows.size > 0 ||
       removedAxisValues.length > 0 ||
       Object.keys(priceOverrides).length > 0 ||
+      Object.keys(quantityOverrides).length > 0 ||
       Object.keys(imageOverrides).length > 0
     );
-  }, [content, variation, single, title, description, images, removedRows, removedAxisValues, priceOverrides, imageOverrides]);
+  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides]);
 
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
@@ -647,6 +702,12 @@ export default function DraftEditorPage() {
       if (description !== single.description) patch.description = description;
     }
     if (content && JSON.stringify(images) !== JSON.stringify(content.imageUrls)) patch.imageUrls = images;
+    if (aspectsChanged) patch.aspects = editedAspects;
+    if (condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW")) patch.condition = condition;
+    if (single) {
+      if (singlePrice !== single.price.value) patch.price = { value: singlePrice, currency: single.price.currency };
+      if (singleQuantity !== String(single.quantity ?? 1)) patch.quantity = Math.max(0, parseInt(singleQuantity, 10) || 0);
+    }
 
     const variantChanges: DraftPatch["variants"] = {};
     for (const [index, value] of Object.entries(priceOverrides)) {
@@ -654,6 +715,11 @@ export default function DraftEditorPage() {
       if (v && value !== v.price.value) {
         variantChanges[index] = { ...(variantChanges[index] || {}), price: { value, currency: v.price.currency } };
       }
+    }
+    for (const [index, value] of Object.entries(quantityOverrides)) {
+      const v = variation?.variants[Number(index)];
+      const qty = Math.max(0, parseInt(value, 10) || 0);
+      if (v && qty !== v.quantity) variantChanges[index] = { ...(variantChanges[index] || {}), quantity: qty };
     }
     for (const [index, url] of Object.entries(imageOverrides)) {
       variantChanges[index] = { ...(variantChanges[index] || {}), imageUrls: [url] };
@@ -663,6 +729,25 @@ export default function DraftEditorPage() {
     if (removedAxisValues.length) patch.removeAxisValues = removedAxisValues;
     return patch;
   }
+
+  // Shown by default: the plain textarea alone made it look as though the
+  // account's branded template wasn't being applied. Rebuilt after every
+  // save so the preview always matches what Publish would send.
+  const loadDescriptionPreview = useCallback(async (listingId: string) => {
+    setLoadingPreview(true);
+    try {
+      const { html } = await api.previewDraftDescription(listingId);
+      setDescriptionPreview(html);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't build the description preview.");
+    } finally {
+      setLoadingPreview(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (listing?.id) loadDescriptionPreview(listing.id);
+  }, [listing?.id, listing?.updated_at, loadDescriptionPreview]);
 
   async function handleSave() {
     if (!listing) return;
@@ -700,7 +785,7 @@ export default function DraftEditorPage() {
     setDeleting(true);
     try {
       await api.deleteDraftListing(listing.id);
-      router.push(`/accounts/${params.id}/listings`);
+      router.push(`/accounts/${params.id}/listings?filter=draft`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't delete this draft.");
       setDeleting(false);
@@ -752,6 +837,18 @@ export default function DraftEditorPage() {
     const newDesc = c.description ?? c.commonDescription;
     if (newTitle !== undefined) setTitle(newTitle);
     if (newDesc !== undefined) setDescription(newDesc);
+    if (c.aspects) {
+      setSpecifics((rows) => {
+        const next = [...rows];
+        for (const [name, values] of Object.entries(c.aspects!)) {
+          const i = next.findIndex((r) => r.name === name);
+          const row = { name, value: values.join(", ") };
+          if (i >= 0) next[i] = row;
+          else next.push(row);
+        }
+        return next;
+      });
+    }
     setTextProposal(null);
   }
   async function acceptImage() {
@@ -794,7 +891,7 @@ export default function DraftEditorPage() {
 
   return (
     <main className="min-h-screen pb-28">
-      <BackHeader backHref={`/accounts/${params.id}/listings`} backLabel="Back to listings" />
+      <BackHeader backHref={`/accounts/${params.id}/listings?filter=draft`} backLabel="Back to drafts" />
 
       <div className="mx-auto max-w-6xl px-6 py-8">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -809,6 +906,15 @@ export default function DraftEditorPage() {
               <span className="rounded-full bg-[var(--color-accent)]/10 px-3 py-1 text-xs font-bold uppercase tracking-wide text-[var(--color-accent)]">
                 {listing.status.replace("_", " ")}
               </span>
+              {content.warnings && content.warnings.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowNotes((v) => !v)}
+                  className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800 hover:bg-amber-200"
+                >
+                  {content.warnings.length} {content.warnings.length === 1 ? "note" : "notes"}
+                </button>
+              )}
             </div>
           </div>
           {editable && (
@@ -839,12 +945,17 @@ export default function DraftEditorPage() {
           </div>
         )}
 
-        {content.warnings && content.warnings.length > 0 && (
-          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4">
-            <p className="text-xs font-bold uppercase tracking-wide text-amber-800">Worth checking</p>
+        {showNotes && content.warnings && content.warnings.length > 0 && (
+          <div className="mt-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
+            <div className="flex items-baseline justify-between">
+              <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Drafting notes</p>
+              <button type="button" onClick={() => setShowNotes(false)} className="text-xs text-[var(--color-muted)] hover:underline">
+                Hide
+              </button>
+            </div>
             <ul className="mt-2 space-y-1">
               {content.warnings.map((w) => (
-                <li key={w} className="text-sm leading-relaxed text-amber-900">• {w}</li>
+                <li key={w} className="text-sm leading-relaxed text-[var(--color-ink)]">• {w}</li>
               ))}
             </ul>
           </div>
@@ -906,27 +1017,58 @@ export default function DraftEditorPage() {
               />
             </div>
 
-            <div className="mt-5">
-              <label className={labelClass}>Description</label>
-              <textarea
-                className={`${inputClass} mt-1.5 min-h-[14rem] leading-relaxed`}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                disabled={!editable || busy}
-              />
-            </div>
-
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <div>
                 <p className={labelClass}>Category</p>
-                <p className="mt-1.5 text-sm text-[var(--color-ink)]">{content.categoryId}</p>
+                <p className="mt-1.5 text-sm text-[var(--color-ink)]">
+                  {content.categoryPath?.length ? content.categoryPath.join(" › ") : `Category ${content.categoryId}`}
+                </p>
+                {content.categoryPath?.length ? (
+                  <p className="text-xs text-[var(--color-muted)]">eBay category {content.categoryId}</p>
+                ) : null}
               </div>
               <div>
-                <p className={labelClass}>Condition</p>
-                <p className="mt-1.5 text-sm text-[var(--color-ink)]">
-                  {(single?.condition || variation?.variants[0]?.condition || "NEW").replace(/_/g, " ")}
-                </p>
+                <label className={labelClass}>Condition</label>
+                <select
+                  className={`${inputClass} mt-1.5`}
+                  value={condition}
+                  onChange={(e) => setCondition(e.target.value)}
+                  disabled={!editable || busy}
+                >
+                  <option value="NEW">New</option>
+                  <option value="USED_EXCELLENT">Used — excellent</option>
+                  <option value="USED_GOOD">Used — good</option>
+                  <option value="USED_ACCEPTABLE">Used — acceptable</option>
+                </select>
               </div>
+              {single && (
+                <>
+                  <div>
+                    <label className={labelClass}>Price ({single.price.currency})</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className={`${inputClass} mt-1.5`}
+                      value={singlePrice}
+                      onChange={(e) => setSinglePrice(e.target.value)}
+                      disabled={!editable || busy}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelClass}>Quantity</label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="0"
+                      className={`${inputClass} mt-1.5`}
+                      value={singleQuantity}
+                      onChange={(e) => setSingleQuantity(e.target.value)}
+                      disabled={!editable || busy}
+                    />
+                  </div>
+                </>
+              )}
             </div>
 
             {single?.priceBreakdown && (
@@ -935,23 +1077,99 @@ export default function DraftEditorPage() {
               </div>
             )}
 
-            {(() => {
-              const aspects = single ? single.aspects : variation?.variesBy.aspects;
-              if (!aspects || !Object.keys(aspects).length) return null;
-              return (
-                <div className="mt-6">
-                  <h3 className={labelClass}>Item specifics</h3>
-                  <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1.5">
-                    {Object.entries(aspects).map(([name, values]) => (
-                      <div key={name} className="flex justify-between border-b border-[var(--color-line)] py-1 text-sm">
-                        <span className="text-[var(--color-muted)]">{name}</span>
-                        <span className="font-medium text-[var(--color-ink)]">{values.join(", ")}</span>
-                      </div>
-                    ))}
-                  </div>
+            {/* Item specifics — editable in place. Buyers filter on these, so
+                they sit above the description rather than below it. */}
+            <div className="mt-6">
+              <div className="flex items-baseline justify-between">
+                <h3 className={labelClass}>Item specifics ({specifics.length})</h3>
+                {editable && (
+                  <button
+                    type="button"
+                    onClick={() => setSpecifics((rows) => [...rows, { name: "", value: "" }])}
+                    disabled={busy}
+                    className="text-xs font-semibold text-[var(--color-accent)] hover:underline disabled:opacity-40"
+                  >
+                    + Add specific
+                  </button>
+                )}
+              </div>
+              {specifics.length === 0 ? (
+                <p className="mt-2 text-sm text-[var(--color-muted)]">No item specifics yet.</p>
+              ) : (
+                <div className="mt-2 grid gap-x-6 gap-y-1.5 md:grid-cols-2">
+                  {specifics.map((row, i) => (
+                    <div key={i} className="flex items-center gap-2 border-b border-[var(--color-line)] py-1 text-sm">
+                      <input
+                        className="w-[42%] min-w-0 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-[var(--color-muted)] hover:border-[var(--color-line)] focus:border-[var(--color-accent)] focus:outline-none"
+                        value={row.name}
+                        placeholder="Name"
+                        onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
+                        disabled={!editable || busy}
+                      />
+                      <input
+                        className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-accent)] focus:outline-none"
+                        value={row.value}
+                        placeholder="Value"
+                        onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
+                        disabled={!editable || busy}
+                      />
+                      {editable && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${row.name || "specific"}`}
+                          onClick={() => setSpecifics((rows) => rows.filter((_, j) => j !== i))}
+                          disabled={busy}
+                          className="shrink-0 rounded-md px-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-danger)] disabled:opacity-40"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              );
-            })()}
+              )}
+            </div>
+
+            {/* Description — shown as it will appear on eBay (the account's
+                branded template around the text). The raw text is only
+                exposed when the seller asks to edit it. */}
+            <div className="mt-6">
+              <div className="flex items-baseline justify-between">
+                <h3 className={labelClass}>Description</h3>
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="text-[var(--color-muted)]">
+                    {loadingPreview ? "Building preview…" : dirty ? "Save to refresh the preview" : "As it will appear on eBay"}
+                  </span>
+                  {editable && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingDescription((v) => !v)}
+                      className="font-semibold text-[var(--color-accent)] hover:underline"
+                    >
+                      {editingDescription ? "Hide text editor" : "Edit text"}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {editingDescription && (
+                <textarea
+                  className={`${inputClass} mt-2 min-h-[12rem] leading-relaxed`}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  disabled={!editable || busy}
+                />
+              )}
+              {descriptionPreview !== null ? (
+                <iframe
+                  title="Description preview"
+                  sandbox=""
+                  srcDoc={`<!doctype html><meta name="viewport" content="width=device-width"><body style="margin:0;padding:12px;background:#f3f3f3">${descriptionPreview}</body>`}
+                  className={`mt-2 h-[40rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${dirty ? "opacity-60" : ""}`}
+                />
+              ) : (
+                <div className="mt-2 h-[40rem] w-full animate-pulse rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)]" />
+              )}
+            </div>
 
             {variation && (
               <VariationsEditor
@@ -961,6 +1179,7 @@ export default function DraftEditorPage() {
                 removedIndexes={removedRows}
                 removedAxisValues={removedAxisValues}
                 priceOverrides={priceOverrides}
+                quantityOverrides={quantityOverrides}
                 imageOverrides={imageOverrides}
                 onRemoveRow={(i) => setRemovedRows((s) => new Set([...s, i]))}
                 onRestoreRow={(i) =>
@@ -975,6 +1194,7 @@ export default function DraftEditorPage() {
                   setRemovedAxisValues((list) => list.filter((x) => !(x.axis === r.axis && x.value === r.value)))
                 }
                 onPriceChange={(i, value) => setPriceOverrides((p) => ({ ...p, [i]: value }))}
+                onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
                 onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
                 disabled={!editable || busy}
               />

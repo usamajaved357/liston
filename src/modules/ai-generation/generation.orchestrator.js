@@ -1,6 +1,7 @@
 const ebaySource = require('../sourcing/ebay-listing.source');
 const ebayTaxonomy = require('../ebay/ebay.taxonomy');
 const aliexpressSource = require('../sourcing/aliexpress');
+const { capVariants } = require('../scraping/aliexpress-listing.scraper');
 const textGenerator = require('./text-generator.service');
 const imagePipeline = require('./image-pipeline');
 const { ScrapingError } = require('../scraping/scraping.errors');
@@ -137,21 +138,9 @@ function resolvePricing({ source, competitor, pricing }) {
       `Couldn't read the competitor's price, so everything is priced at your ${settings.targetRoiPercent}% target ` +
         `return. If they sell for more than that, you may be leaving margin on the table.`
     );
-  } else if (settings.followCompetitorPrice) {
-    const followed = [productPrice, ...variantPrices].filter((price) => price.basis === 'competitor').length;
-    if (followed) {
-      warnings.push(
-        `The competitor sells at ${currency} ${competitorPrice.toFixed(2)}, which is above your ` +
-          `${settings.targetRoiPercent}% floor — so that price was matched instead, for a wider margin.`
-      );
-    } else {
-      warnings.push(
-        `The competitor sells at ${currency} ${competitorPrice.toFixed(2)}, below what your ` +
-          `${settings.targetRoiPercent}% target needs — your floor price was used instead rather than undercutting ` +
-          `into a loss.`
-      );
-    }
   }
+  // Which basis won (competitor price vs. ROI floor) is shown in the price
+  // breakdown on the draft itself, so it isn't repeated as a warning.
 
   return { currency, productCost, productPrice, variantPrices, competitorPrice, warnings };
 }
@@ -196,20 +185,22 @@ function pricingFailureMessage(parsed, expectedCurrency, rawText) {
 // and impossible to be bot-blocked); the AliExpress source still goes through
 // a real browser, because AliExpress has no equivalent open read API we're
 // registered for yet. Both return the same normalized shape.
-async function generateDraftInput({
-  competitorUrl,
-  sourceUrl,
-  // The connection's Listing settings (target ROI, ads/processing fees, fixed
-  // fee, shipping). Prices are DERIVED from the supplier's own cost and these
-  // — the seller no longer types a cost or a sell price per draft.
-  pricing,
-  merchantLocationKey,
-  marketplaceId = 'EBAY_GB',
-  // The seller's own eBay token. Needed because finished images are uploaded
-  // to eBay Picture Services under their account, which is what makes the
-  // URLs permanent (and is the only way eBay can serve images we generated).
-  accessToken,
-}) {
+const ORIGIN_ASPECT = 'Country/Region of Manufacture';
+
+function applyOrigin(aspects = {}, countryOfOrigin) {
+  if (!countryOfOrigin) return aspects;
+  const cleaned = Object.fromEntries(
+    Object.entries(aspects).filter(([name]) => !/country|origin|region of manufacture/i.test(name))
+  );
+  return { ...cleaned, [ORIGIN_ASPECT]: [countryOfOrigin] };
+}
+
+// STEP ONE of drafting: read both listings and nothing else. No AI, no
+// images, no cost — just enough for the seller to see what the supplier
+// offers and choose which variations to actually list. Nobody lists all 162
+// combinations of a phone case, and generating photography for variations
+// that get deleted afterwards is money and minutes thrown away.
+async function readSources({ competitorUrl, sourceUrl, marketplaceId = 'EBAY_GB' }) {
   // The AliExpress scrape is by far the slowest step (a real browser, ~30s),
   // so it starts first and everything cheap overlaps with it. Kept as a
   // floating promise deliberately — awaited below.
@@ -230,16 +221,89 @@ async function generateDraftInput({
     );
   }
 
+  const source = await sourcePromise;
+  return { competitor, source };
+}
+
+// Keeps only the variations whose value on EVERY axis was selected. A
+// selection of {Colour: [Black], Model: [15 Pro, 16]} yields exactly the two
+// Black combinations — the cartesian product of what was ticked, restricted
+// to combinations the supplier actually offers.
+function selectVariants(source, selection) {
+  if (!selection || !Object.keys(selection).length) return source;
+
+  const variants = (source.variants || []).filter((variant) =>
+    Object.entries(variant.attributes).every(([axis, value]) => {
+      const chosen = selection[axis];
+      return !chosen || chosen.includes(value);
+    })
+  );
+
+  const variantAxes = (source.variantAxes || []).map((axis) => ({
+    ...axis,
+    values: axis.values.filter((value) => !selection[axis.name] || selection[axis.name].includes(value)),
+  }));
+
+  return { ...source, variants, variantAxes };
+}
+
+// STEP TWO: everything that costs something — AI text, image generation,
+// eBay uploads — run only over the variations the seller kept.
+async function generateDraftInput({
+  competitorUrl,
+  sourceUrl,
+  // Already-read listings (from readSources) and the seller's variation
+  // choice. When absent, both listings are read here — the single-call path
+  // is still valid for callers that don't need a selection step.
+  competitor: competitorIn,
+  source: sourceIn,
+  variantSelection,
+  // The connection's Listing settings (target ROI, ads/processing fees, fixed
+  // fee, shipping). Prices are DERIVED from the supplier's own cost and these
+  // — the seller no longer types a cost or a sell price per draft.
+  pricing,
+  merchantLocationKey,
+  marketplaceId = 'EBAY_GB',
+  countryOfOrigin = 'United Kingdom',
+  // The seller's own eBay token. Needed because finished images are uploaded
+  // to eBay Picture Services under their account, which is what makes the
+  // URLs permanent (and is the only way eBay can serve images we generated).
+  accessToken,
+}) {
+  const read =
+    competitorIn && sourceIn ? { competitor: competitorIn, source: sourceIn } : await readSources({ competitorUrl, sourceUrl, marketplaceId });
+  const competitor = read.competitor;
+  // Selection first, cap second: the seller sees every option the supplier
+  // offers, and only what survives their choice is subject to the listing
+  // size limit.
+  let source = capVariants(selectVariants(read.source, variantSelection));
+
+  if ((read.source.variants || []).length && !source.variants.length) {
+    throw new ScrapingError('None of the variations you selected exist on the supplier listing.', { source: 'aliexpress' });
+  }
+
+  // Exactly one combination chosen is not a variation listing — it's a
+  // plain listing of that combination. Built as a one-variant group, its
+  // colour and model sat on the variant instead of the listing, so eBay's
+  // required "Colour" came up empty (confirmed on a real draft). Fold the
+  // chosen attributes into the item specifics and draft it as a single SKU.
+  if (source.variants.length === 1) {
+    const [only] = source.variants;
+    source = {
+      ...source,
+      specifics: { ...(source.specifics || {}), ...only.attributes },
+      imageUrls: only.imageUrl ? [only.imageUrl, ...(source.imageUrls || []).filter((u) => u !== only.imageUrl)] : source.imageUrls,
+      priceText: only.priceText || source.priceText,
+      variants: [],
+      variantAxes: [],
+    };
+  }
+
   // eBay publishes the exact item specifics it expects for this category —
   // which are required, which accept only listed values. The model drafts
   // against that real schema instead of guessing, and its answer is validated
-  // against it before the user ever sees the draft. Needs the competitor's
-  // category id, so it can't start any earlier than this — but it still
-  // finishes long before the source scrape does.
-  const [source, aspectSchema] = await Promise.all([
-    sourcePromise,
-    ebayTaxonomy.getAspectSchema(marketplaceId, competitor.categoryId),
-  ]);
+  // against it before the user ever sees the draft.
+  const aspectSchema = await ebayTaxonomy.getAspectSchema(marketplaceId, competitor.categoryId);
 
   // Costs and prices are worked out before drafting so the model can be told
   // the real numbers, and so a pricing problem (wrong currency, unreadable
@@ -256,6 +320,13 @@ async function generateDraftInput({
   });
 
   const hasVariants = source.variants.length > 0;
+
+  // The seller's stated origin, always. Supplier and competitor data both say
+  // China, and it was being copied straight into "Country of Origin". eBay's
+  // aspect for this is "Country/Region of Manufacture"; any origin-shaped
+  // aspect the model produced is replaced, and the standard one is set.
+  const aspectsKey = hasVariants ? 'sharedAspects' : 'aspects';
+  content[aspectsKey] = applyOrigin(content[aspectsKey], countryOfOrigin);
 
   const { imageUrls: galleryImageUrls, warnings: imageWarnings } = await imagePipeline.buildGalleryImages({
     sourceImageUrls: source.imageUrls,
@@ -280,6 +351,7 @@ async function generateDraftInput({
         condition: content.condition,
         quantity: 1,
         categoryId: competitor.categoryId,
+        categoryPath: competitor.categoryBreadcrumb || [],
         price: { value: String(priced.productPrice.sellPrice), currency: priced.currency },
         // The full working — cost, each fee, profit and realised ROI — so the
         // review page can show WHY the price is what it is instead of a bare
@@ -369,12 +441,11 @@ async function generateDraftInput({
   // The supplier offered more combinations than a single eBay listing should
   // carry, so some were dropped — said plainly, since a silently truncated
   // matrix means options a buyer can see on AliExpress but can't buy here.
-  const offered = (source.variantAxes || []).reduce((total, axis) => total * (axis.values.length || 1), 1);
-  if (offered > variants.length) {
+  const chosen = selectVariants(read.source, variantSelection).variants.length;
+  if (chosen > variants.length) {
     warnings.push(
-      `The supplier offers ${offered} combinations (${(source.variantAxes || [])
-        .map((axis) => `${axis.values.length} ${axis.name.toLowerCase()}`)
-        .join(' x ')}); this listing carries the first ${variants.length}.`
+      `You chose ${chosen} combinations, more than one listing should carry; this draft has the first ` +
+        `${variants.length}. Split the rest into a second listing, or narrow the selection.`
     );
   }
 
@@ -413,6 +484,7 @@ async function generateDraftInput({
       },
       variants,
       categoryId: competitor.categoryId,
+      categoryPath: competitor.categoryBreadcrumb || [],
       merchantLocationKey,
     },
     warnings,
@@ -421,4 +493,4 @@ async function generateDraftInput({
   };
 }
 
-module.exports = { generateDraftInput, resolveVariantAspectValues, resolvePricing };
+module.exports = { generateDraftInput, readSources, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };

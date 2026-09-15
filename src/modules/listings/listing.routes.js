@@ -30,6 +30,7 @@ router.delete(
 );
 const editGuard = [requireAuth, requireFeature('listings', { resolveConnectionId: resolveConnectionIdFromListing })];
 
+router.get('/:listingId/description-preview', ...editGuard, listingController.descriptionPreview);
 router.post('/:listingId/revise', ...editGuard, listingController.reviseText);
 router.post('/:listingId/images/revise', ...editGuard, listingController.reviseImage);
 router.post('/:listingId/images/accept', ...editGuard, listingController.acceptImage);

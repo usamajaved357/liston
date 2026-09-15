@@ -32,13 +32,23 @@ function validateAspects(aspects, schema) {
   const byName = new Map(schema.map((entry) => [normalizeForCompare(entry.name), entry]));
   const validated = {};
   const warnings = [];
+  const custom = [];
 
   for (const [name, rawValues] of Object.entries(aspects || {})) {
     const entry = byName.get(normalizeForCompare(name));
     if (!entry) {
-      // eBay silently ignores unknown aspects on some categories and rejects
-      // the call on others — dropping them is the only consistently safe move.
-      warnings.push(`Dropped "${name}" — eBay doesn't use that item specific in this category.`);
+      // Not in eBay's schema, but eBay accepts seller-defined item specifics
+      // beyond it — a live competitor in "Other GPS & Sat Nav Devices" carries
+      // 25 of them (Battery life, Compatible Devices…). Dropping these threw
+      // away exactly the spec parity the seller asked for, and they're what
+      // buyers filter on. Kept as custom specifics, tidied to eBay's limits:
+      // one value, name and value each ≤65 characters, no trailing colon.
+      const customName = String(name).replace(/\s*:\s*$/, '').trim().slice(0, 65);
+      const customValues = (Array.isArray(rawValues) ? rawValues : [rawValues]).map((v) => String(v).trim().slice(0, 65)).filter(Boolean);
+      if (customName && customValues.length) {
+        validated[customName] = [customValues[0]];
+        custom.push(customName);
+      }
       continue;
     }
 
