@@ -142,3 +142,37 @@ test('account settings endpoints require auth', async () => {
   });
   assert.strictEqual(password.status, 401);
 });
+
+const TINY_PNG_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+test('PATCH /api/users/me/avatar accepts a valid data URL and DELETE clears it', async () => {
+  const email = `test-${crypto.randomUUID()}@example.com`;
+  const token = await signupAndLogin(email, 'testpassword123');
+
+  const set = await request('PATCH', '/api/users/me/avatar', { avatarUrl: TINY_PNG_DATA_URL }, token);
+  assert.strictEqual(set.status, 200);
+
+  const me = await request('GET', '/api/users/me', undefined, token);
+  assert.strictEqual(me.data.user.avatar_url, TINY_PNG_DATA_URL);
+
+  const cleared = await request('DELETE', '/api/users/me/avatar', undefined, token);
+  assert.strictEqual(cleared.status, 200);
+
+  const meAfter = await request('GET', '/api/users/me', undefined, token);
+  assert.strictEqual(meAfter.data.user.avatar_url, null);
+});
+
+test('PATCH /api/users/me/avatar rejects a non-image data URL', async () => {
+  const email = `test-${crypto.randomUUID()}@example.com`;
+  const token = await signupAndLogin(email, 'testpassword123');
+
+  const { status, data } = await request(
+    'PATCH',
+    '/api/users/me/avatar',
+    { avatarUrl: 'data:text/plain;base64,aGVsbG8=' },
+    token
+  );
+  assert.strictEqual(status, 400);
+  assert.strictEqual(data.error, 'Avatar must be a PNG, JPEG or WebP image');
+});

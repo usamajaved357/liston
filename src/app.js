@@ -1,18 +1,33 @@
+const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const logger = require('./utils/logger');
+const config = require('./config');
 const errorHandler = require('./middleware/errorHandler.middleware');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const userRoutes = require('./modules/users/user.routes');
+const connectionRoutes = require('./modules/connections/connection.routes');
+const ebayRoutes = require('./modules/ebay/ebay.routes');
+const listingRoutes = require('./modules/listings/listing.routes');
+const teamRoutes = require('./modules/team/team.routes');
 
 function createApp() {
   const app = express();
 
   app.use(helmet());
-  app.use(cors());
-  app.use(express.json());
+  // Open in development; in production only the deployed frontend may call
+  // the API with a browser (server-to-server callers like eBay's
+  // notifications don't send an Origin and are unaffected).
+  app.use(
+    cors({
+      origin: config.env === 'production' ? [config.frontendUrl] : true,
+      exposedHeaders: ['Content-Disposition'],
+    })
+  );
+  // 2mb accommodates base64 profile-photo uploads (src/modules/users) on top of normal JSON bodies
+  app.use(express.json({ limit: '2mb' }));
 
   // Lightweight request log — no bodies (may contain passwords/credentials)
   app.use((req, res, next) => {
@@ -24,8 +39,16 @@ function createApp() {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // Static legal pages (e.g. the privacy policy URL required by eBay's
+  // "User Tokens (eBay Sign-In)" OAuth setup).
+  app.use(express.static(path.join(__dirname, 'public')));
+
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
+  app.use('/api/connections', connectionRoutes);
+  app.use('/api/ebay', ebayRoutes);
+  app.use('/api/listings', listingRoutes);
+  app.use('/api/team', teamRoutes);
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

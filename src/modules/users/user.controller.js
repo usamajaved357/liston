@@ -11,6 +11,10 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(8, 'New password must be at least 8 characters'),
 });
 
+const updateAvatarSchema = z.object({
+  avatarUrl: z.string().min(1, 'Avatar image is required'),
+});
+
 async function getMe(req, res, next) {
   try {
     const user = await userService.getCurrentUser(req.userId);
@@ -55,4 +59,26 @@ async function updatePassword(req, res, next) {
   }
 }
 
-module.exports = { getMe, deleteAccount, updateEmail, updatePassword };
+async function updateAvatar(req, res, next) {
+  try {
+    const parsed = updateAvatarSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+    await userService.updateAvatar(req.userId, parsed.data.avatarUrl);
+    res.status(200).json({ message: 'Profile photo updated' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteAvatar(req, res, next) {
+  try {
+    await userService.removeAvatar(req.userId);
+    res.status(200).json({ message: 'Profile photo removed' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getMe, deleteAccount, updateEmail, updatePassword, updateAvatar, deleteAvatar };

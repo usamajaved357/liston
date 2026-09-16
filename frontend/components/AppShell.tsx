@@ -1,0 +1,119 @@
+"use client";
+
+import { usePathname } from "next/navigation";
+import { Logo } from "@/components/Logo";
+import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
+
+interface AppShellProps {
+  children: React.ReactNode;
+  header?: React.ReactNode;
+  connectionsUsed: number;
+  maxConnections: number;
+  planName: string;
+  // Team management is owner-only — the nav item (and the page itself) is
+  // hidden for a member, who never has a role other than "member" here.
+  role?: "owner" | "member";
+}
+
+export function AppShell({ children, header, connectionsUsed, maxConnections, planName, role }: AppShellProps) {
+  const pathname = usePathname();
+  const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
+
+  return (
+    <div className="h-screen flex overflow-hidden">
+      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-7">
+        <div className="flex items-center gap-2.5 px-2">
+          <Logo size={30} />
+          <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
+        </div>
+
+        <nav className="flex flex-col gap-0.5">
+          {/* Overview (plan/billing usage) and Connections-management/Settings
+              are owner-only concepts — a member has no plan of their own and
+              can't add/remove connections or touch policies, so in practice
+              they never reach this shell at all (see /dashboard, /settings,
+              and the member branch of /connections). Gated here too as
+              defense in depth against a brief render before those redirects
+              land. */}
+          {role !== "member" && (
+            <NavItem
+              href="/dashboard"
+              active={pathname === "/dashboard"}
+              label="Overview"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                </svg>
+              }
+            />
+          )}
+          <NavItem
+            href="/connections"
+            active={pathname === "/connections"}
+            label={role === "member" ? "Accounts" : "Connections"}
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18M3 12h18" stroke="currentColor" strokeWidth="1.4" />
+              </svg>
+            }
+          />
+          {role !== "member" && (
+            <NavItem
+              href="/settings"
+              active={pathname === "/settings"}
+              label="Settings"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path
+                    d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              }
+            />
+          )}
+          {role === "owner" && (
+            <NavItem
+              href="/team"
+              active={pathname === "/team"}
+              label="Team"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <circle cx="17" cy="8.5" r="2.3" stroke="currentColor" strokeWidth="1.6" />
+                  <path d="M15.5 14c2.5 0 5 1.6 5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
+        </nav>
+
+        <div className="mt-auto rounded-lg bg-[var(--color-paper)] p-3 flex flex-col gap-1">
+          <span className="text-[10.5px] font-bold uppercase tracking-wide text-[var(--color-accent)]">
+            {planName} plan
+          </span>
+          <div className="h-1 rounded-full bg-[var(--color-line)] overflow-hidden">
+            <div className="h-full bg-[var(--color-accent)]" style={{ width: `${connectionsPct}%` }} />
+          </div>
+          <span className="text-[10.5px] text-[var(--color-muted)]">
+            {connectionsUsed} of {maxConnections} connections used
+          </span>
+        </div>
+      </aside>
+
+      <div className="flex-1 min-w-0 h-screen flex flex-col">
+        {header && (
+          <div className="flex-shrink-0 px-10 pt-8 pb-6 bg-[var(--color-paper)]">{header}</div>
+        )}
+        <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>{children}</div>
+      </div>
+    </div>
+  );
+}

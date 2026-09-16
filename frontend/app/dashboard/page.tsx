@@ -1,20 +1,121 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { api, ApiError, User } from "@/lib/api";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { api, ApiError, Connection, User } from "@/lib/api";
+import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
+import { PlatformIcon } from "@/components/PlatformIcon";
+
+const STATUS_STYLES: Record<Connection["status"], string> = {
+  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  expired: "bg-amber-50 text-amber-800 border-amber-200",
+  error: "bg-red-50 text-red-700 border-red-200",
+  suspended: "bg-red-50 text-red-700 border-red-200",
+};
+
+const RING_RADIUS = 36;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+function RingStat({
+  label,
+  sublabel,
+  value,
+  pct,
+}: {
+  label: string;
+  sublabel: string;
+  value: string;
+  pct: number;
+}) {
+  const offset = RING_CIRCUMFERENCE * (1 - pct / 100);
+
+  return (
+    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5 flex items-center gap-5">
+      <div className="relative w-[84px] h-[84px] flex-shrink-0">
+        <svg width="84" height="84" viewBox="0 0 84 84" className="-rotate-90">
+          <circle cx="42" cy="42" r={RING_RADIUS} fill="none" stroke="var(--color-line)" strokeWidth="8" />
+          <circle
+            cx="42"
+            cy="42"
+            r={RING_RADIUS}
+            fill="none"
+            stroke="var(--color-accent)"
+            strokeWidth="8"
+            strokeLinecap="round"
+            strokeDasharray={RING_CIRCUMFERENCE}
+            strokeDashoffset={offset}
+            className="transition-all"
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center text-[17px] font-extrabold text-[var(--color-ink)]">
+          {value}
+        </div>
+      </div>
+      <div>
+        <span className="text-sm font-bold text-[var(--color-ink)] block">{label}</span>
+        <span className="text-xs text-[var(--color-muted)] leading-relaxed block mt-1">{sublabel}</span>
+      </div>
+    </div>
+  );
+}
+
+function ConnectionBanner() {
+  const searchParams = useSearchParams();
+  const connected = searchParams.get("connected");
+  const ebayError = searchParams.get("ebayError");
+
+  if (connected === "ebay") {
+    return (
+      <div className="mt-4">
+        <Alert variant="success">Your eBay account is connected.</Alert>
+      </div>
+    );
+  }
+  if (ebayError) {
+    return (
+      <div className="mt-4">
+        <Alert>Couldn&apos;t connect your eBay account ({ebayError}). Try again below.</Alert>
+      </div>
+    );
+  }
+  return null;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  const [connections, setConnections] = useState<Connection[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
   const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
+
+  async function loadAll() {
+    try {
+      const [meData, connectionsData] = await Promise.all([api.me(), api.listConnections()]);
+      // This dashboard is plan/billing usage — a member has none of their
+      // own and can't manage connections, so send them to their account(s).
+      if (meData.user.role === "member") {
+        router.replace("/connections");
+        return;
+      }
+      setUser(meData.user);
+      setConnections(connectionsData.connections);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        localStorage.removeItem("token");
+        router.replace("/login");
+        return;
+      }
+      setError("Couldn't load your dashboard. Try refreshing.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -22,21 +123,16 @@ export default function DashboardPage() {
       router.replace("/login");
       return;
     }
-
-    api
-      .me()
-      .then(({ user }) => setUser(user))
-      .catch(() => {
-        localStorage.removeItem("token");
-        router.replace("/login");
-      })
-      .finally(() => setLoading(false));
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   function handleLogout() {
     localStorage.removeItem("token");
     router.push("/login");
   }
+
+  const [actionLoading, setActionLoading] = useState(false);
 
   async function handleDeleteAccount() {
     setActionLoading(true);
@@ -73,99 +169,124 @@ export default function DashboardPage() {
     return null;
   }
 
-  const connectionsUsed = Number(user.connections_used ?? 0);
+  const connectionsUsed = connections.length;
   const maxConnections = user.max_connections ?? 0;
   const listingsUsed = user.listings_used_this_month ?? 0;
   const listingsIncluded = user.listings_included_per_month ?? 0;
   const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
   const listingsPct = listingsIncluded ? Math.min(100, (listingsUsed / listingsIncluded) * 100) : 0;
+  const atLimit = connectionsUsed >= maxConnections;
+  const planName = user.plan_name ?? "Unassigned";
+
+  const sortedConnections = [...connections].sort((a, b) =>
+    a.platform_name === b.platform_name ? a.label.localeCompare(b.label) : a.platform_name.localeCompare(b.platform_name)
+  );
 
   return (
-    <main className="min-h-screen">
-      <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)]">
-        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-[var(--color-primary)] text-white text-sm font-semibold">
-              L
-            </div>
-            <span className="font-semibold text-[var(--color-ink)]">Liston</span>
-          </div>
+    <AppShell
+      connectionsUsed={connectionsUsed}
+      maxConnections={maxConnections}
+      planName={planName}
+      role={user.role}
+      header={
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
           <AccountMenu
+            email={user.email}
+            subtitle={`${planName} plan`}
+            avatarUrl={user.avatar_url}
             onLogout={() => setConfirmAction("logout")}
             onDeleteAccount={() => setConfirmAction("delete")}
           />
         </div>
-      </header>
-
-      <div className="max-w-4xl mx-auto px-6 py-10">
-        <h1 className="text-2xl font-semibold text-[var(--color-ink)]">
-          Welcome, {user.email}
-        </h1>
-        {error && (
-          <div className="mt-3">
-            <Alert>{error}</Alert>
-          </div>
-        )}
-
-        {!user.email_verified_at && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-            <p className="text-sm text-amber-900">
-              Verify your email to secure your account.
-              {resendState === "sent" && " Check your inbox for the new link."}
-            </p>
-            <button
-              onClick={handleResendVerification}
-              disabled={resendState !== "idle"}
-              className="text-sm font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:text-amber-950 disabled:opacity-60"
-            >
-              {resendState === "sending"
-                ? "Sending…"
-                : resendState === "sent"
-                  ? "Sent"
-                  : "Resend verification email"}
-            </button>
-          </div>
-        )}
-
-        <div className="mt-8 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-sm font-medium text-[var(--color-muted)]">Plan</h2>
-              <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-accent)]">
-                {user.plan_name ?? "Unassigned"}
-              </span>
-            </div>
-            <p className="mt-3 text-sm text-[var(--color-ink)]">
-              Connected accounts: {connectionsUsed} of {maxConnections}
-            </p>
-            <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
-              <div
-                className="h-full bg-[var(--color-accent)]"
-                style={{ width: `${connectionsPct}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] p-5">
-            <h2 className="text-sm font-medium text-[var(--color-muted)]">Listings this month</h2>
-            <p className="mt-3 text-sm text-[var(--color-ink)]">
-              {listingsUsed} of {listingsIncluded} included
-            </p>
-            <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--color-line)] overflow-hidden">
-              <div
-                className="h-full bg-[var(--color-accent)]"
-                style={{ width: `${listingsPct}%` }}
-              />
-            </div>
-          </div>
+      }
+    >
+      {error && (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
         </div>
+      )}
 
-        <div className="mt-8 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
-          <p className="text-sm text-[var(--color-muted)]">
-            Connections aren&apos;t built yet. This is where you&apos;ll add a store to track
-            once the Connections module ships.
+      <Suspense fallback={null}>
+        <ConnectionBanner />
+      </Suspense>
+
+      {!user.email_verified_at && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm text-amber-900">
+            Verify your email to secure your account.
+            {resendState === "sent" && " Check your inbox for the new link."}
           </p>
+          <button
+            onClick={handleResendVerification}
+            disabled={resendState !== "idle"}
+            className="text-sm font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:text-amber-950 disabled:opacity-60"
+          >
+            {resendState === "sending" ? "Sending…" : resendState === "sent" ? "Sent" : "Resend verification email"}
+          </button>
         </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2 mb-7">
+        <RingStat
+          label="Connected accounts"
+          value={`${connectionsUsed}/${maxConnections}`}
+          sublabel={
+            atLimit
+              ? "You've used all the connections your plan includes."
+              : "marketplace accounts linked to Liston."
+          }
+          pct={connectionsPct}
+        />
+        <RingStat
+          label="Listings this month"
+          value={`${listingsUsed}/${listingsIncluded}`}
+          sublabel="Included in your plan — resets each billing cycle."
+          pct={listingsPct}
+        />
+      </div>
+
+      <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-line)]">
+          <div>
+            <span className="text-[15px] font-extrabold text-[var(--color-ink)] block">Connected accounts</span>
+            <span className="text-xs text-[var(--color-muted)]">Sorted by marketplace</span>
+          </div>
+        </div>
+
+        {sortedConnections.length === 0 ? (
+          <div className="px-5 py-8 text-center">
+            <p className="text-sm text-[var(--color-muted)] mb-3">No accounts connected yet.</p>
+            <Link
+              href="/connections"
+              className="inline-flex rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-colors"
+            >
+              Connect an account
+            </Link>
+          </div>
+        ) : (
+          <ul>
+            {sortedConnections.map((connection) => (
+              <li
+                key={connection.id}
+                className="flex items-center gap-3.5 px-5 py-4 border-b border-[var(--color-line)] last:border-b-0 transition-colors hover:bg-[var(--color-paper)]"
+              >
+                <Link href={`/accounts/${connection.id}`} className="flex items-center gap-3.5 flex-1 min-w-0">
+                  <PlatformIcon platformKey={connection.platform_key} size={40} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-[var(--color-ink)] truncate">{connection.label}</p>
+                    <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
+                  </div>
+                </Link>
+                <span
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-bold capitalize flex-shrink-0 ${STATUS_STYLES[connection.status]}`}
+                >
+                  {connection.status}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <ConfirmDialog
@@ -186,6 +307,6 @@ export default function DashboardPage() {
         onCancel={() => setConfirmAction(null)}
         onConfirm={handleDeleteAccount}
       />
-    </main>
+    </AppShell>
   );
 }

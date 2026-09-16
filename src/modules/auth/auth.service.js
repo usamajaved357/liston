@@ -153,7 +153,7 @@ async function resetPassword(rawToken, newPassword) {
 
 async function login({ email, password }) {
   const result = await query(
-    'SELECT id, email, password_hash, plan_id FROM users WHERE email = $1',
+    'SELECT id, email, password_hash, plan_id, role FROM users WHERE email = $1',
     [email]
   );
   if (result.rows.length === 0) {
@@ -168,7 +168,10 @@ async function login({ email, password }) {
 
   const token = issueToken(user);
   return {
-    user: { id: user.id, email: user.email, plan_id: user.plan_id },
+    // `role` lets the frontend send a team member straight to their
+    // accessible connection(s) instead of the owner-only dashboard/
+    // connections-management pages — see frontend/app/login/page.tsx.
+    user: { id: user.id, email: user.email, plan_id: user.plan_id, role: user.role },
     token,
   };
 }

@@ -1,16 +1,41 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   Liston design tokens.
+
+   Brand: a confident indigo for action, a teal accent for progress/success,
+   slate neutrals. Every page reads colours from these variables, so a change
+   here re-skins the whole app — never hard-code a hex in a component.
+   --------------------------------------------------------------------------- */
 :root {
-  --color-ink: #12161f;
-  --color-paper: #f6f7f9;
-  --color-panel: #ffffff;
-  --color-line: #e2e5eb;
-  --color-primary: #0f2e4c;
-  --color-primary-hover: #0a2038;
-  --color-accent: #0f9b8e;
-  --color-accent-hover: #0c7d72;
-  --color-danger: #c0392b;
-  --color-muted: #5b6472;
+  /* neutrals */
+  --color-ink: #0f172a; /* slate-900 — headings, primary text */
+  --color-muted: #64748b; /* slate-500 — secondary text, labels */
+  --color-paper: #f4f6fb; /* page background, slightly cool */
+  --color-panel: #ffffff; /* cards, inputs */
+  --color-line: #e2e8f0; /* slate-200 — borders */
+  --color-line-strong: #cbd5e1; /* slate-300 — hover borders */
+
+  /* brand */
+  --color-primary: #4f46e5; /* indigo-600 — primary actions */
+  --color-primary-hover: #4338ca; /* indigo-700 */
+  --color-primary-soft: #eef2ff; /* indigo-50 — selected states, tints */
+
+  --color-accent: #0d9488; /* teal-600 — links, progress, positive */
+  --color-accent-hover: #0f766e; /* teal-700 */
+  --color-accent-soft: #f0fdfa; /* teal-50 */
+
+  --color-success: #059669; /* emerald-600 */
+  --color-warning: #d97706; /* amber-600 */
+  --color-warning-soft: #fffbeb; /* amber-50 */
+  --color-danger: #e11d48; /* rose-600 */
+  --color-danger-soft: #fff1f2; /* rose-50 */
+
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px -8px rgba(15, 23, 42, 0.08);
+  --shadow-pop: 0 12px 32px -12px rgba(15, 23, 42, 0.25);
+  --radius-card: 16px;
+  --radius-control: 999px; /* capsule buttons and inputs */
+  --radius-field: 14px; /* multi-line fields */
 
   --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-body: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
@@ -28,6 +53,7 @@ body {
   background: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
 }
 
 a {
@@ -35,8 +61,197 @@ a {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Shared controls (Tailwind v4 @utility, so they compose with utilities like
+   w-24 or text-right). Use these instead of re-typing Tailwind stacks so
+   inputs and buttons look identical on every page.
+   --------------------------------------------------------------------------- */
+@utility card {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+@utility input {
+  width: 100%;
+  height: 38px;
+  padding: 0 14px;
+  font-size: 14px;
+  color: var(--color-ink);
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+  &::placeholder {
+    color: #94a3b8;
+  }
+  &:hover:not(:disabled) {
+    border-color: var(--color-line-strong);
+  }
+  /* The input draws its own focus state (border colour), so the global
+     :focus-visible outline must not stack a second ring outside it. */
+  &:focus,
+  &:focus-visible {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: none;
+  }
+  &:disabled {
+    opacity: 0.6;
+  }
+  &:is(textarea) {
+    height: auto;
+    padding: 12px 16px;
+    line-height: 1.6;
+    border-radius: var(--radius-field);
+  }
+  &:is(select) {
+    appearance: none;
+    padding-right: 36px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+  }
+}
+@utility input-sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+@utility label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+@utility btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+@utility btn-sm {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+/* Square icon-only buttons: pair with btn + a variant. */
+@utility btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+@utility btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  &:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+  }
+}
+@utility btn-secondary {
+  background: var(--color-panel);
+  color: var(--color-ink);
+  border-color: var(--color-line);
+  &:hover:not(:disabled) {
+    border-color: var(--color-line-strong);
+    background: var(--color-paper);
+  }
+}
+@utility btn-ghost {
+  background: transparent;
+  color: var(--color-muted);
+  &:hover:not(:disabled) {
+    background: var(--color-paper);
+    color: var(--color-ink);
+  }
+}
+@utility btn-danger-ghost {
+  background: transparent;
+  color: var(--color-danger);
+  &:hover:not(:disabled) {
+    background: var(--color-danger-soft);
+  }
+}
+
+/* Slim, prominent message bars — one line, dismissable, never a big block. */
+@utility notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+@utility notice-danger {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  border-color: #fecdd3;
+}
+@utility notice-warning {
+  background: var(--color-warning-soft);
+  color: #92400e;
+  border-color: #fde68a;
+}
+@utility notice-success {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+  border-color: #99f6e4;
+}
+
+@utility chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  border: 1px solid var(--color-line);
+}
+@utility chip-primary {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  border-color: transparent;
+}
+@utility chip-accent {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+  border-color: transparent;
+}
+@utility chip-warning {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  border-color: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -63,4 +63,29 @@ async function changePassword(userId, currentPassword, newPassword) {
   await userRepository.updatePasswordHash(userId, passwordHash);
 }
 
-module.exports = { getCurrentUser, deleteAccount, changeEmail, changePassword, UserError };
+const AVATAR_DATA_URL_PATTERN = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/;
+const MAX_AVATAR_BASE64_LENGTH = 1_400_000; // ~1MB decoded, comfortably under the route's JSON body limit
+
+async function updateAvatar(userId, avatarDataUrl) {
+  if (!AVATAR_DATA_URL_PATTERN.test(avatarDataUrl)) {
+    throw new UserError('Avatar must be a PNG, JPEG or WebP image', 400);
+  }
+  if (avatarDataUrl.length > MAX_AVATAR_BASE64_LENGTH) {
+    throw new UserError('Avatar image is too large — please use one under 1MB', 400);
+  }
+  await userRepository.updateAvatar(userId, avatarDataUrl);
+}
+
+async function removeAvatar(userId) {
+  await userRepository.updateAvatar(userId, null);
+}
+
+module.exports = {
+  getCurrentUser,
+  deleteAccount,
+  changeEmail,
+  changePassword,
+  updateAvatar,
+  removeAvatar,
+  UserError,
+};
