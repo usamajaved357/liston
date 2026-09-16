@@ -85,9 +85,9 @@ const Icon = {
 
 const CONDITIONS = [
   { value: "NEW", label: "New" },
-  { value: "USED_EXCELLENT", label: "Used — excellent" },
-  { value: "USED_GOOD", label: "Used — good" },
-  { value: "USED_ACCEPTABLE", label: "Used — acceptable" },
+  { value: "USED_EXCELLENT", label: "Used, excellent" },
+  { value: "USED_GOOD", label: "Used, good" },
+  { value: "USED_ACCEPTABLE", label: "Used, acceptable" },
 ];
 
 // A price the seller didn't type needs to show its working, or it's just a
@@ -123,18 +123,18 @@ function PriceBreakdownPanel({ breakdown }: { breakdown: PriceBreakdown }) {
         </div>
       </div>
       <p className={`mt-2.5 text-xs font-semibold ${hitTarget ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
-        {breakdown.roiPercent.toFixed(0)}% ROI {hitTarget ? "— at or above" : "— BELOW"} your{" "}
+        {breakdown.roiPercent.toFixed(0)}% ROI {hitTarget ? "is at or above" : "is BELOW"} your{" "}
         {breakdown.targetRoiPercent}% target
       </p>
       {breakdown.basis === "competitor" ? (
         <p className="mt-1 text-xs text-[var(--color-muted)]">
-          Matched the competitor&apos;s {formatPrice(breakdown.competitorPrice ?? 0, breakdown.currency)} — above your floor
+          Matched the competitor&apos;s {formatPrice(breakdown.competitorPrice ?? 0, breakdown.currency)}, above your floor
           of {formatPrice(breakdown.floorPrice ?? 0, breakdown.currency)}.
         </p>
       ) : (
         breakdown.competitorPrice != null && (
           <p className="mt-1 text-xs text-[var(--color-muted)]">
-            Competitor sells at {formatPrice(breakdown.competitorPrice, breakdown.currency)}, below your floor — priced
+            Competitor sells at {formatPrice(breakdown.competitorPrice, breakdown.currency)}, below your floor, so priced
             at your target instead.
           </p>
         )
@@ -422,7 +422,7 @@ function GalleryGrid({
 
       {count === 0 ? (
         <div className="mt-4 flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--color-line)]">
-          <p className="text-sm text-[var(--color-muted)]">No photos yet — eBay needs at least one.</p>
+          <p className="text-sm text-[var(--color-muted)]">No photos yet. eBay needs at least one.</p>
           <FileButton label="Upload photos" multiple disabled={disabled || uploading} onFiles={onUpload} className={smallButton} />
         </div>
       ) : (
@@ -1005,7 +1005,7 @@ function PublishedDialog({ listing, onClose }: { listing: DraftListing; onClose:
   const currency = variation ? variation.variants[0]?.price.currency || "GBP" : single!.price.currency;
   const priceText = variation
     ? prices.length
-      ? `${formatPrice(Math.min(...prices), currency)}${Math.max(...prices) !== Math.min(...prices) ? ` – ${formatPrice(Math.max(...prices), currency)}` : ""}`
+      ? `${formatPrice(Math.min(...prices), currency)}${Math.max(...prices) !== Math.min(...prices) ? ` to ${formatPrice(Math.max(...prices), currency)}` : ""}`
       : "—"
     : formatPrice(single!.price.value, currency);
   const itemId = listing.external_product_id;
@@ -1522,7 +1522,7 @@ export default function DraftEditorPage() {
               )}
               {listing.status === "published" && (
                 <div className="notice notice-success">
-                  <span className="flex-1">Live on eBay{listing.external_product_id ? ` — item ${listing.external_product_id}` : ""}.</span>
+                  <span className="flex-1">Live on eBay{listing.external_product_id ? `, item ${listing.external_product_id}` : ""}.</span>
                 </div>
               )}
             </div>
@@ -1608,7 +1608,7 @@ export default function DraftEditorPage() {
                   />
                   {title.length > TITLE_MAX && (
                     <p className="mt-1.5 text-xs font-semibold text-[var(--color-danger)]">
-                      {title.length - TITLE_MAX} characters over eBay&apos;s 80-character limit — shorten it to save.
+                      {title.length - TITLE_MAX} characters over eBay&apos;s 80-character limit. Shorten it to save.
                     </p>
                   )}
                 </div>
@@ -1649,7 +1649,7 @@ export default function DraftEditorPage() {
                   ) : (
                     <div className="sm:col-span-2">
                       <p className={labelClass}>Pricing</p>
-                      <p className="mt-1.5 text-sm text-[var(--color-ink)]">Per variation — edit in the table below.</p>
+                      <p className="mt-1.5 text-sm text-[var(--color-ink)]">Per variation, edit in the table below.</p>
                     </div>
                   )}
                 </div>

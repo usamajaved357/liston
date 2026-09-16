@@ -108,7 +108,7 @@ async function getAspectSchema(marketplaceId, categoryId) {
   try {
     return summarizeAspects(await getItemAspectsForCategory(marketplaceId, categoryId));
   } catch (err) {
-    logger.warn('Could not load the eBay aspect schema — drafting without it', {
+    logger.warn('Could not load the eBay aspect schema. Drafting without it', {
       categoryId,
       error: err.message,
     });

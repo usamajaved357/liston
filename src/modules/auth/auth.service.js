@@ -48,7 +48,7 @@ async function signup({ email, password, name, accessNote }) {
   // Everyone starts on the lowest tier; upgrading happens through billing (Phase 8)
   const starterPlan = await query('SELECT id FROM plans WHERE name = $1', ['starter']);
   if (starterPlan.rows.length === 0) {
-    throw new AuthError('No starter plan configured — run the seed script', 500);
+    throw new AuthError('No starter plan configured. Run the seed script', 500);
   }
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);

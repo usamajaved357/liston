@@ -67,7 +67,7 @@ async function request(accessToken, method, path, body, marketplaceId) {
     });
   } catch (err) {
     if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-      throw new EbayApiError('eBay API request timed out — try again in a moment.', 504);
+      throw new EbayApiError('eBay API request timed out. Try again in a moment.', 504);
     }
     throw err;
   }

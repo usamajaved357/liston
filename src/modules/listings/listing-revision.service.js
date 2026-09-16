@@ -16,7 +16,7 @@ const MODEL = config.aiModel;
 
 function client() {
   if (!config.anthropicApiKey) {
-    throw new AiGenerationError("AI editing isn't configured on this server — set ANTHROPIC_API_KEY.");
+    throw new AiGenerationError("AI editing isn't configured on this server. Set ANTHROPIC_API_KEY.");
   }
   return new Anthropic({ apiKey: config.anthropicApiKey });
 }
@@ -73,7 +73,7 @@ async function reviseText({ draft, instruction }) {
 
   const toolUse = response.content.find((block) => block.type === 'tool_use');
   if (!toolUse?.input) {
-    throw new AiGenerationError('The AI editor returned an unexpected response — try rewording your instruction.');
+    throw new AiGenerationError('The AI editor returned an unexpected response. Try rewording your instruction.');
   }
 
   const { summary, ...changes } = toolUse.input;
@@ -180,7 +180,7 @@ async function reviseImage({ imageUrl, instruction }) {
 
   const plan = response.content.find((block) => block.type === 'tool_use')?.input;
   if (!plan) {
-    throw new AiGenerationError('The AI editor returned an unexpected response — try rewording your instruction.');
+    throw new AiGenerationError('The AI editor returned an unexpected response. Try rewording your instruction.');
   }
 
   let buffer;

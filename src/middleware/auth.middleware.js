@@ -44,7 +44,7 @@ function requireAccess(req, res, next) {
   const message =
     req.accessStatus === 'rejected'
       ? "This account's access request was declined."
-      : "Your access request is still under review — you'll get an email once it's approved.";
+      : "Your access request is still under review. You'll get an email once it's approved.";
   return res.status(403).json({ error: message, accessStatus: req.accessStatus || 'pending' });
 }
 

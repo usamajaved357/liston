@@ -55,7 +55,7 @@ async function up(pool) {
       ranAny = true;
     } catch (err) {
       await client.query('ROLLBACK');
-      throw new Error(`Migration failed: ${name} — ${err.message}`);
+      throw new Error(`Migration failed: ${name} - ${err.message}`);
     } finally {
       client.release();
     }

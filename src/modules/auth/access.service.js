@@ -47,7 +47,7 @@ function verifyDecisionToken(token) {
 // admin approving vouches for it either way (see setStatus/decide).
 async function notifyAdmins(user) {
   if (!config.adminEmails.length) {
-    logger.warn('ADMIN_EMAILS is not set — no one will receive access requests', { userId: user.id });
+    logger.warn('ADMIN_EMAILS is not set. No one will receive access requests', { userId: user.id });
     return;
   }
   const base = `${config.apiUrl}/api/auth/access`;

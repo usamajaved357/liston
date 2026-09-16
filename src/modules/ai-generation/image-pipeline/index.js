@@ -93,7 +93,7 @@ async function buildGalleryImages({ sourceImageUrls, accessToken, marketplaceId,
       try {
         buffer = await heroBadges.brandHero(buffer, settings);
       } catch (err) {
-        logger.warn('Hero badges failed — hero left plain', { error: err.message });
+        logger.warn('Hero badges failed. Hero left plain', { error: err.message });
       }
     }
     shots.push({ ...image, buffer });
@@ -157,7 +157,7 @@ async function buildVariantImage({ sourceImageUrl, accessToken, marketplaceId })
   try {
     return await eps.upload(accessToken, buffer, { marketplaceId });
   } catch (err) {
-    logger.warn('EPS upload failed for a variant image — falling back to the source URL', { error: err.message });
+    logger.warn('EPS upload failed for a variant image. Falling back to the source URL', { error: err.message });
     return prepared.sourceUrl;
   }
 }

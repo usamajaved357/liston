@@ -76,18 +76,26 @@ const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month'
 async function getListings(req, res, next) {
   try {
     const status = req.query.status === 'inactive' ? 'inactive' : 'active';
-    const pageNumber = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    // perPage=all puts everything on one page.
+    const perPage = req.query.perPage === 'all' ? 0 : Math.min(200, Math.max(1, parseInt(req.query.perPage, 10) || 25));
+    const search = typeof req.query.q === 'string' ? req.query.q : '';
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Listings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return status === 'active'
-        ? ebayService.listActiveListings(credentials, { pageNumber, entriesPerPage: 25 })
-        : ebayService.listUnsoldListings(credentials, { pageNumber, entriesPerPage: 25 });
+      return ebayService.listListingsDetailed(credentials, { connectionId: req.params.id, status, search, page, perPage });
     });
 
-    res.status(200).json({ items: result.items, totalEntries: result.totalEntries, totalPages: result.totalPages });
+    res.status(200).json({
+      items: result.items,
+      totalEntries: result.totalEntries,
+      totalPages: result.totalPages,
+      page: result.page,
+      perPage: result.perPage,
+      allCount: result.allCount,
+    });
   } catch (err) {
     next(err);
   }
@@ -130,7 +138,7 @@ async function getEarnings(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Earnings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.getEarningsSummary(credentials, { range, from, to });
+      return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to });
     });
 
     res.status(200).json({ earnings: result.earnings, orderCount: result.orderCount, truncated: result.truncated });

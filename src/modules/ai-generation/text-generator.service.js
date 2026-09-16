@@ -7,7 +7,7 @@ const MODEL = config.aiModel;
 
 function client() {
   if (!config.anthropicApiKey) {
-    throw new AiGenerationError("AI drafting isn't configured on this server — set ANTHROPIC_API_KEY.");
+    throw new AiGenerationError("AI drafting isn't configured on this server. Set ANTHROPIC_API_KEY.");
   }
   return new Anthropic({ apiKey: config.anthropicApiKey });
 }
@@ -142,7 +142,7 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
 
   const toolUse = response.content.find((block) => block.type === 'tool_use');
   if (!toolUse || !toolUse.input) {
-    throw new AiGenerationError('The AI drafting model returned an unexpected response — try again.');
+    throw new AiGenerationError('The AI drafting model returned an unexpected response. Try again.');
   }
 
   const content = toolUse.input;
@@ -178,7 +178,7 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   if (typeof content[titleKey] === 'string' && content[titleKey].length > 80) {
     const cut = content[titleKey].slice(0, 80);
     content[titleKey] = (cut.lastIndexOf(' ') > 60 ? cut.slice(0, cut.lastIndexOf(' ')) : cut).trim();
-    warnings.push('The title was longer than eBay\'s 80-character limit and has been shortened — check it still reads well.');
+    warnings.push('The title was longer than eBay\'s 80-character limit and has been shortened. Check it still reads well.');
   }
 
   return { ...content, [aspectKey]: aspects, aspectWarnings: warnings };

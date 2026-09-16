@@ -183,7 +183,7 @@ export default function AccountListingsPage() {
           <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-10 text-center">
             <p className="text-sm font-semibold text-[var(--color-ink)] mb-1">No drafts yet</p>
             <p className="text-sm text-[var(--color-muted)] max-w-sm mx-auto">
-              Listings Liston drafts — before you review and publish them to eBay — will show up here.
+              Listings Liston drafts will show up here, ready for you to review and publish to eBay.
             </p>
             <Link
               href={`/accounts/${connection.id}/listings/new`}

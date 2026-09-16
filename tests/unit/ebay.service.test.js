@@ -62,7 +62,7 @@ test('ensureValidAccessToken refreshes when the token is expired', async () => {
 
 test('ensureValidAccessToken throws a clear error when there is no refresh token to fall back on', async () => {
   const credentials = freshCredentials({ accessTokenExpiresAt: Date.now() - 1000, refreshToken: undefined });
-  await assert.rejects(() => ebayService.ensureValidAccessToken(credentials), /reconnect the account/);
+  await assert.rejects(() => ebayService.ensureValidAccessToken(credentials), /Reconnect the account/);
 });
 
 test('createOfferWithRetry retries on the SKU-propagation-delay error and eventually succeeds', async () => {
@@ -234,7 +234,7 @@ function makeOrder(overrides = {}) {
   return {
     orderId: 'ORD-1',
     status: 'Completed',
-    createdAt: '2026-01-05T00:00:00.000Z',
+    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), // inside every named range
     total: { amount: 10, currency: 'GBP' },
     subtotal: { amount: 10, currency: 'GBP' },
     buyerName: 'Jane Doe',

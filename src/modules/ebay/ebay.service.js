@@ -1,6 +1,7 @@
 const ebayClient = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 const ebayTrading = require('./ebay.trading');
+const { createSwrCache } = require('./swr-cache');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -48,7 +49,7 @@ async function ensureValidAccessToken(credentials) {
   }
 
   if (!credentials.refreshToken) {
-    throw new EbayError('This eBay connection has no refresh token — reconnect the account', 401);
+    throw new EbayError('This eBay connection has no refresh token. Reconnect the account', 401);
   }
 
   const refreshed = await ebayOauth.refreshAccessToken(credentials.refreshToken);
@@ -401,79 +402,119 @@ function resolveRangeWindow(range, from, to) {
   }
 }
 
-// Sums every order's total within one <=90-day window, paging through all
-// results rather than just the first page — a single page undercounts
-// earnings whenever a window has more orders than one page holds.
-async function sumOrdersInWindow(accessToken, createTimeFrom, createTimeTo) {
-  let pageNumber = 1;
-  let amount = 0;
-  let count = 0;
-  let currency = null;
-
-  for (;;) {
-    const { orders, totalPages } = await ebayTrading.getOrders(accessToken, {
-      createTimeFrom,
-      createTimeTo,
-      pageNumber,
-      entriesPerPage: MAX_ORDER_PAGE_SIZE,
-    });
-    for (const order of orders) {
-      if (order.total) {
-        amount += order.total.amount;
-        currency = currency || order.total.currency;
-      }
-    }
-    count += orders.length;
-    if (orders.length === 0 || pageNumber >= totalPages) break;
-    pageNumber += 1;
-  }
-
-  return { amount, count, currency };
-}
-
 // Fetches every order in a <=90-day window (paging through all of them) as
 // full mapped objects — used by the Orders page, which needs to classify,
 // search and paginate itself since eBay's OrderStatus filter doesn't cover
 // the payment/dispatch distinctions the UI shows.
-async function fetchAllOrdersInWindow(accessToken, createTimeFrom, createTimeTo) {
-  let pageNumber = 1;
-  const all = [];
-  for (;;) {
-    const { orders, totalPages } = await ebayTrading.getOrders(accessToken, {
-      createTimeFrom,
-      createTimeTo,
-      pageNumber,
-      entriesPerPage: MAX_ORDER_PAGE_SIZE,
-    });
-    all.push(...orders);
-    if (orders.length === 0 || pageNumber >= totalPages) break;
-    pageNumber += 1;
-  }
-  return all;
+// `expectedPages` is the page count from the previous fetch of the same
+// window: with it, every page is requested at once (a guess that's too high
+// just returns an empty page), so a refresh costs one round trip.
+async function fetchAllOrdersInWindow(accessToken, createTimeFrom, createTimeTo, expectedPages = 1) {
+  const opts = { createTimeFrom, createTimeTo, entriesPerPage: MAX_ORDER_PAGE_SIZE };
+  const firstBatch = await Promise.all(
+    Array.from({ length: Math.max(1, expectedPages) }, (_, i) => ebayTrading.getOrders(accessToken, { ...opts, pageNumber: i + 1 }))
+  );
+  const totalPages = firstBatch[0].totalPages;
+  const orders = firstBatch.flatMap((r) => r.orders);
+  if (totalPages <= firstBatch.length) return { orders, totalPages };
+  // More pages than expected: fetch the remainder together.
+  const rest = await Promise.all(
+    Array.from({ length: totalPages - firstBatch.length }, (_, i) => ebayTrading.getOrders(accessToken, { ...opts, pageNumber: firstBatch.length + i + 1 }))
+  );
+  return { orders: orders.concat(...rest.map((r) => r.orders)), totalPages };
 }
 
-// Switching status tab, page, or search on the Orders page all re-derive
-// from the same underlying order set for a given (connection, range) — with
-// no cache, each of those was a full eBay refetch (2+ GetOrders calls plus
-// up to `perPage` GetItem calls), which is what made the UI feel like it
-// hung. These are process-local, short-lived caches — fine for a
-// single-instance deployment; would need a shared store (Redis) once this
-// runs on more than one process.
-const ordersWindowCache = new Map(); // `${connectionId}:${range}` -> { fetchedAt, orders }
-const ORDERS_CACHE_TTL_MS = 60 * 1000;
+// Every number on the account dashboard and the Orders page comes from the
+// same thing: the connection's orders for the last 90 days (eBay won't serve
+// anything older). So that set is fetched once per connection and every
+// range, status tab, search and earnings figure is derived from it in
+// memory. See swr-cache.js for how it stays warm.
+const ordersCache = createSwrCache({
+  freshMs: 2 * 60 * 1000,
+  staleMs: 30 * 60 * 1000,
+  warmWindowMs: 30 * 60 * 1000,
+  fetcher: async (accessToken, meta) => {
+    const now = new Date();
+    const start = new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
+    const { orders, totalPages } = await fetchAllOrdersInWindow(accessToken, start.toISOString(), now.toISOString(), meta?.totalPages);
+    return { value: orders, meta: { totalPages } };
+  },
+});
+
+function getOrdersLast90Cached(connectionId, accessToken) {
+  return ordersCache.get(connectionId, accessToken);
+}
 
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
 const ITEM_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
 
-async function getOrdersWindowCached(connectionId, accessToken, range, start, end) {
-  const key = `${connectionId}:${range}`;
-  const cached = ordersWindowCache.get(key);
-  if (cached && Date.now() - cached.fetchedAt < ORDERS_CACHE_TTL_MS) {
-    return cached.orders;
+// The listings tab works the same way: the whole active (or unsold) set is
+// pulled once, so paging, page size and search never go back to eBay.
+const MAX_LISTING_PAGE_SIZE = 200;
+async function fetchAllListings(accessToken, status, expectedPages = 1) {
+  const call = status === 'inactive' ? ebayTrading.getUnsoldListings : ebayTrading.getActiveListings;
+  const opts = { entriesPerPage: MAX_LISTING_PAGE_SIZE };
+  const firstBatch = await Promise.all(
+    Array.from({ length: Math.max(1, expectedPages) }, (_, i) => call(accessToken, { ...opts, pageNumber: i + 1 }))
+  );
+  const totalPages = firstBatch[0].totalPages;
+  const items = firstBatch.flatMap((r) => r.items);
+  if (totalPages <= firstBatch.length) return { items, totalPages };
+  const rest = await Promise.all(
+    Array.from({ length: totalPages - firstBatch.length }, (_, i) => call(accessToken, { ...opts, pageNumber: firstBatch.length + i + 1 }))
+  );
+  return { items: items.concat(...rest.map((r) => r.items)), totalPages };
+}
+
+const listingsCache = createSwrCache({
+  freshMs: 2 * 60 * 1000,
+  staleMs: 30 * 60 * 1000,
+  warmWindowMs: 30 * 60 * 1000,
+  fetcher: async ({ accessToken, status }, meta) => {
+    const { items, totalPages } = await fetchAllListings(accessToken, status, meta?.totalPages);
+    return { value: items, meta: { totalPages } };
+  },
+});
+
+/**
+ * Listings for the Listings tab: the cached full set, searched and paged in
+ * memory. `perPage` of 0 means everything on one page.
+ */
+async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25 }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const all = await listingsCache.get(`${connectionId}:${status}`, { accessToken, status });
+
+  let filtered = all;
+  if (search && search.trim()) {
+    const needle = search.trim().toLowerCase();
+    filtered = all.filter(
+      (item) => (item.title || '').toLowerCase().includes(needle) || (item.sku || '').toLowerCase().includes(needle) || item.itemId.includes(needle)
+    );
   }
-  const orders = await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString());
-  ordersWindowCache.set(key, { fetchedAt: Date.now(), orders });
-  return orders;
+
+  const totalEntries = filtered.length;
+  const size = perPage > 0 ? perPage : Math.max(1, totalEntries);
+  const totalPages = Math.max(1, Math.ceil(totalEntries / size));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const items = filtered.slice((safePage - 1) * size, safePage * size);
+
+  return { items, totalEntries, totalPages, page: safePage, perPage: size, allCount: all.length, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// A publish or withdraw changes the live set; drop the copy so the next
+// look at the tab is accurate rather than up to two minutes behind.
+function invalidateListings(connectionId) {
+  listingsCache.invalidate(`${connectionId}:active`);
+  listingsCache.invalidate(`${connectionId}:inactive`);
+}
+
+function ordersWithin(orders, start, end) {
+  const s = start.getTime();
+  const e = end.getTime();
+  return orders.filter((o) => {
+    const t = new Date(o.createdAt).getTime();
+    return t >= s && t <= e;
+  });
 }
 
 async function getItemSummaryCached(accessToken, itemId) {
@@ -510,7 +551,7 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
 async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25 }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
-  const rawOrders = await getOrdersWindowCached(connectionId, accessToken, range, start, end);
+  const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken), start, end);
 
   const tagged = rawOrders.map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order) }));
 
@@ -571,16 +612,27 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
 // is, honestly, "as far back as eBay lets us look": the last 90 days. The
 // `truncated` flag lets the frontend say so instead of implying a true
 // lifetime total.
-async function getEarningsSummary(credentials, { range, from, to }) {
+async function getEarningsSummary(credentials, { connectionId, range, from, to }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   const effectiveRange = range === 'all_time' ? '90d' : range;
   const [start, end] = resolveRangeWindow(effectiveRange, from, to);
-  const sum = await sumOrdersInWindow(accessToken, start.toISOString(), end.toISOString());
+  const orders = connectionId
+    ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken), start, end)
+    : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString())).orders;
+
+  let amount = 0;
+  let currency = null;
+  for (const order of orders) {
+    if (order.total) {
+      amount += order.total.amount;
+      currency = currency || order.total.currency;
+    }
+  }
 
   return {
-    earnings: { amount: Math.round(sum.amount * 100) / 100, currency: sum.currency },
-    orderCount: sum.count,
+    earnings: { amount: Math.round(amount * 100) / 100, currency },
+    orderCount: orders.length,
     truncated: range === 'all_time',
     credentialsChanged,
     credentials: refreshedCredentials,
@@ -604,6 +656,8 @@ module.exports = {
   getStoreProfile,
   listUnsoldListings,
   listOrders,
+  listListingsDetailed,
+  invalidateListings,
   listOrdersDetailed,
   getEarningsSummary,
   resolveRangeWindow,

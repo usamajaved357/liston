@@ -35,7 +35,7 @@ async function request(path, params, marketplaceId) {
     });
   } catch (err) {
     if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-      throw new EbayBrowseError('eBay took too long to respond — try again in a moment.', 504);
+      throw new EbayBrowseError('eBay took too long to respond. Try again in a moment.', 504);
     }
     throw err;
   }

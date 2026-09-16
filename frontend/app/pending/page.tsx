@@ -98,7 +98,7 @@ export default function PendingPage() {
       subtitle={
         rejected
           ? "We're not able to open access for this account right now."
-          : "It's with the Liston team now. We'll email you the moment it's approved — usually within a day."
+          : "It's with the Liston team now. We'll email you the moment it's approved, usually within a day."
       }
       footer={
         <span className="text-[var(--color-muted)]">
@@ -134,10 +134,10 @@ export default function PendingPage() {
                 <>
                   <p>
                     We sent a link to <span className="font-medium text-[var(--color-ink)]">{user.email}</span>. If it hasn&apos;t arrived,
-                    don&apos;t worry — your request is already with us.
+                    don&apos;t worry, your request is already with us.
                   </p>
                   <button type="button" onClick={resend} disabled={resent !== "idle"} className="btn btn-secondary btn-sm mt-3">
-                    {resent === "sent" ? "Sent — check your inbox" : resent === "sending" ? "Sending…" : "Resend the email"}
+                    {resent === "sent" ? "Sent, check your inbox" : resent === "sending" ? "Sending…" : "Resend the email"}
                   </button>
                 </>
               )}

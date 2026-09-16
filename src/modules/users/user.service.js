@@ -73,7 +73,7 @@ async function updateAvatar(userId, avatarDataUrl) {
     throw new UserError('Avatar must be a PNG, JPEG or WebP image', 400);
   }
   if (avatarDataUrl.length > MAX_AVATAR_BASE64_LENGTH) {
-    throw new UserError('Avatar image is too large — please use one under 1MB', 400);
+    throw new UserError('Avatar image is too large. Please use one under 1MB', 400);
   }
   await userRepository.updateAvatar(userId, avatarDataUrl);
 }

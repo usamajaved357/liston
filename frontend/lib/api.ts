@@ -533,10 +533,13 @@ export const api = {
 
   deleteAvatar: () => request<{ message: string }>("/api/users/me/avatar", { method: "DELETE" }),
 
-  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1) =>
-    request<{ items: Listing[]; totalEntries: number; totalPages: number }>(
-      `/api/connections/${id}/listings?status=${status}&page=${page}`
-    ),
+  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "") => {
+    const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage) });
+    if (search) params.set("q", search);
+    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number }>(
+      `/api/connections/${id}/listings?${params.toString()}`
+    );
+  },
 
   getConnectionOrders: (
     id: string,

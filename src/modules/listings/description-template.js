@@ -243,7 +243,7 @@ function renderDescription({ template, productName, description, recommended = [
     returns
       ? `<div class="eb-sec">
     <div class="eb-stitle">Returns Policy</div>
-    <p class="eb-policy">We offer a <strong>${Number(t.returnsDays)}-day hassle-free return policy</strong> on all items. Not completely satisfied? Message us through eBay and we'll sort it immediately — no fuss, no stress, guaranteed.</p>
+    <p class="eb-policy">We offer a <strong>${Number(t.returnsDays)}-day hassle-free return policy</strong> on all items. Not completely satisfied? Message us through eBay and we'll sort it immediately. No fuss, no stress, guaranteed.</p>
     <p class="eb-policy-note">Items must be returned in original condition and packaging. Buyer pays return postage unless the item is faulty or not as described. Refunds processed within 2 business days of receiving the return.</p>
   </div>`
       : ''
@@ -283,7 +283,7 @@ function renderDescription({ template, productName, description, recommended = [
 
   <div class="eb-footer">
     <p>© <strong>${storeName}</strong> &nbsp;·&nbsp; UK Business &nbsp;·&nbsp; All items sold new &amp; unused</p>
-    <p style="margin-top:4px;">Questions? <strong>Message us on eBay</strong> — we respond within ${escapeHtml(t.responseTime)}.</p>
+    <p style="margin-top:4px;">Questions? <strong>Message us on eBay</strong>. We respond within ${escapeHtml(t.responseTime)}.</p>
     <span class="eb-save">⭐ Love ${storeName}? Click "Save seller" to never miss a new listing or deal</span>
   </div>
 </div>`;

@@ -101,7 +101,7 @@ function sendPasswordResetEmail(to, link) {
       intro: 'We received a request to reset the password on your Liston account. Choose a new one below.',
       action: button('Choose a new password', link),
       afterAction: linkFallback(link),
-      footnote: `This link expires in 1 hour. If you didn't request a reset, no action is needed — your password stays as it is.`,
+      footnote: `This link expires in 1 hour. If you didn't request a reset, no action is needed and your password stays as it is.`,
     }),
   });
 }
@@ -111,9 +111,9 @@ function sendAccessRequestEmail(to, { applicantEmail, applicantName, note, appro
   const row = (label, value) =>
     `<tr><td style="padding:8px 12px;font-size:13px;color:${BRAND.muted};border-bottom:1px solid ${BRAND.line};white-space:nowrap">${label}</td><td style="padding:8px 12px;font-size:14px;color:${BRAND.ink};border-bottom:1px solid ${BRAND.line}">${value}</td></tr>`;
   const details = `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border:1px solid ${BRAND.line};border-radius:12px;border-collapse:separate;overflow:hidden">
-      ${row('Name', escape(applicantName || '—'))}
+      ${row('Name', escape(applicantName || 'Not given'))}
       ${row('Email', `<a href="mailto:${escape(applicantEmail)}" style="color:${BRAND.primary};text-decoration:none">${escape(applicantEmail)}</a>`)}
-      ${row('Email verified', emailVerified ? '<span style="color:' + BRAND.accent + ';font-weight:600">Yes</span>' : 'Not yet — approving accepts it')}
+      ${row('Email verified', emailVerified ? '<span style="color:' + BRAND.accent + ';font-weight:600">Yes</span>' : 'Not yet, approving accepts it')}
       <tr><td style="padding:8px 12px;font-size:13px;color:${BRAND.muted};vertical-align:top;white-space:nowrap">About their business</td><td style="padding:8px 12px;font-size:14px;line-height:1.5;color:${BRAND.ink}">${note ? escape(note) : '<span style="color:' + BRAND.muted + '">No note left</span>'}</td></tr>
     </table>`;
   const actions = `<table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr>

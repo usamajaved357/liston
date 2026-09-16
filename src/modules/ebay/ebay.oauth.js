@@ -30,7 +30,7 @@ function apiBaseUrl() {
 // checked separately rather than lumped into one blanket "not configured".
 function assertAppCredentials() {
   if (!config.ebay.clientId || !config.ebay.clientSecret) {
-    const err = new Error("eBay isn't configured yet — set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in .env");
+    const err = new Error("eBay isn't configured yet. Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in .env");
     err.statusCode = 500;
     throw err;
   }
@@ -39,7 +39,7 @@ function assertAppCredentials() {
 function assertRedirectConfigured() {
   assertAppCredentials();
   if (!config.ebay.ruName) {
-    const err = new Error("eBay redirect isn't configured yet — set EBAY_RU_NAME in .env");
+    const err = new Error("eBay redirect isn't configured yet. Set EBAY_RU_NAME in .env");
     err.statusCode = 500;
     throw err;
   }

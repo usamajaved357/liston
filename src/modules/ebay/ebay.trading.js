@@ -183,6 +183,33 @@ async function getItemSummary(accessToken, itemId) {
   };
 }
 
+// Only the fields mapOrder/mapLineItem read. A full GetOrders response is
+// several times larger (shipping addresses, fee breakdowns, monetary
+// details) and the parse time was most of what the dashboard waited on.
+const GET_ORDERS_FIELDS = [
+  'PaginationResult',
+  'HasMoreOrders',
+  'OrderArray.Order.OrderID',
+  'OrderArray.Order.OrderStatus',
+  'OrderArray.Order.CreatedTime',
+  'OrderArray.Order.Total',
+  'OrderArray.Order.Subtotal',
+  'OrderArray.Order.BuyerUserID',
+  'OrderArray.Order.CheckoutStatus.Status',
+  'OrderArray.Order.PaidTime',
+  'OrderArray.Order.ShippedTime',
+  'OrderArray.Order.CancelStatus',
+  'OrderArray.Order.TransactionArray.Transaction.Item.ItemID',
+  'OrderArray.Order.TransactionArray.Transaction.Item.Title',
+  'OrderArray.Order.TransactionArray.Transaction.QuantityPurchased',
+  'OrderArray.Order.TransactionArray.Transaction.TransactionPrice',
+  'OrderArray.Order.TransactionArray.Transaction.Variation.VariationSpecifics',
+  'OrderArray.Order.TransactionArray.Transaction.Buyer.UserFirstName',
+  'OrderArray.Order.TransactionArray.Transaction.Buyer.UserLastName',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingDetails.ShipmentTrackingDetails',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.HandleByTime',
+];
+
 // createTimeFrom/createTimeTo are ISO 8601 strings; eBay caps this range at
 // 90 days per request.
 async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber = 1, entriesPerPage = 50 } = {}) {
@@ -190,7 +217,8 @@ async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber
     `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom>` +
     `<CreateTimeTo>${createTimeTo}</CreateTimeTo>` +
     `<OrderStatus>All</OrderStatus>` +
-    `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination>`;
+    `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination>` +
+    GET_ORDERS_FIELDS.map((f) => `<OutputSelector>${f}</OutputSelector>`).join('');
   const res = await tradingRequest(accessToken, 'GetOrders', body);
   return {
     orders: toArray(res.OrderArray?.Order).map(mapOrder),

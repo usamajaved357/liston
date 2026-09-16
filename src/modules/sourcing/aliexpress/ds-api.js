@@ -94,7 +94,7 @@ async function saveTokenState(state) {
   try {
     await appState.set(TOKEN_KEY, state);
   } catch (err) {
-    logger.warn('Could not persist the AliExpress token to the database — keeping the file copy', { error: err.message });
+    logger.warn('Could not persist the AliExpress token to the database. Keeping the file copy', { error: err.message });
   }
   try {
     fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
@@ -319,7 +319,7 @@ function normalizeProduct(raw, productId, sourceUrl) {
   const title = base.subject || base.title || '';
 
   if (!title) {
-    throw new ScrapingError("That AliExpress product couldn't be read — it may have been removed.", {
+    throw new ScrapingError("That AliExpress product couldn't be read. It may have been removed.", {
       source: 'aliexpress',
     });
   }

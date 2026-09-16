@@ -129,7 +129,7 @@ function LoginDetails({ email, password, onDismiss }: { email: string; password:
     <div className="card border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-semibold text-[var(--color-ink)]">Login details — share these with them now</p>
+          <p className="text-sm font-semibold text-[var(--color-ink)]">Login details, ready to share</p>
           <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">The password is shown only this once. If it&apos;s lost, change it from the padlock on the member&apos;s card.</p>
         </div>
         <button type="button" onClick={onDismiss} className="btn btn-ghost btn-icon" aria-label="Dismiss">
@@ -196,7 +196,7 @@ function ResetPasswordDialog({ member, onClose, onDone }: { member: TeamMember |
       <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="card w-full max-w-md p-6">
         <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Change password for {member.name || member.email}</h2>
         <p className="mt-1 text-[13px] text-[var(--color-muted)]">
-          Passwords are stored scrambled, so the current one can&apos;t be shown. Set a new one here — it replaces the old one straight away and you&apos;ll see it once, to pass on.
+          Passwords are stored scrambled, so the current one can&apos;t be shown. Set a new one here. It replaces the old one straight away and you&apos;ll see it once, to pass on.
         </p>
         <label className="label mt-5" htmlFor="rp-password">New password</label>
         <div className="mt-1 flex items-center gap-2">

@@ -241,7 +241,7 @@ export default function DashboardPage() {
       {failed.map((a) => (
         <div key={a.id} className="notice notice-warning mb-4">
           <span className="flex-1">
-            <strong>{a.label}</strong> couldn&apos;t be read — its numbers are left out of the totals. {a.error}
+            <strong>{a.label}</strong> couldn&apos;t be read, so its numbers are left out of the totals. {a.error}
           </span>
           <Link href="/connections" className="btn btn-secondary btn-sm">
             Connections

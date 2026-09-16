@@ -132,7 +132,7 @@ function MemberAccountPicker({ user, connections }: { user: User; connections: C
 
         {connections.length === 0 ? (
           <p className="text-sm text-[var(--color-muted)]">
-            You don&apos;t have access to any accounts yet — ask whoever manages Liston for your team to grant
+            You don&apos;t have access to any accounts yet. Ask whoever manages Liston for your team to grant
             you access.
           </p>
         ) : (

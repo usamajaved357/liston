@@ -155,7 +155,7 @@ async function generateEbayDraftFromUrls(
     prunePreviews();
     const preview = previews.get(previewId);
     if (!preview || preview.userId !== userId || preview.connectionId !== connectionId) {
-      throw new ListingError('That preview has expired — read the listings again.', 400);
+      throw new ListingError('That preview has expired. Read the listings again.', 400);
     }
     preRead = preview;
     competitorUrl = preview.competitorUrl;
@@ -332,7 +332,7 @@ async function updateDraft(id, userId, patch) {
         !has(policies.paymentPolicies, 'paymentPolicyId', patch.listingPolicies.paymentPolicyId) ||
         !has(policies.returnPolicies, 'returnPolicyId', patch.listingPolicies.returnPolicyId)
       ) {
-        throw new ListingError("One of those policies isn't on this eBay account any more — refresh and pick again.", 400);
+        throw new ListingError("One of those policies isn't on this eBay account any more. Refresh and pick again.", 400);
       }
       return policies;
     });
@@ -358,7 +358,7 @@ async function updateDraft(id, userId, patch) {
   }
 
   if (Array.isArray(draft.variants) && draft.variants.length === 0) {
-    throw new ListingError("A variation listing needs at least one variation — you've removed them all.", 400);
+    throw new ListingError("A variation listing needs at least one variation. You've removed them all.", 400);
   }
 
   const updated = await listingRepository.updateGeneratedData(id, draft);
@@ -398,7 +398,7 @@ async function acceptImageRevision(id, userId, { proposalId, replaces }) {
   const listing = await loadEditableDraft(id, userId);
   const proposal = revisionService.takeProposal(proposalId);
   if (!proposal) {
-    throw new ListingError('That edit has expired — run it again.', 400);
+    throw new ListingError('That edit has expired. Run it again.', 400);
   }
 
   const draft = { ...(listing.generated_data || {}) };
@@ -614,6 +614,7 @@ async function publish(id, userId) {
       });
     }
 
+    ebayService.invalidateListings(listing.connection_id);
     return listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way

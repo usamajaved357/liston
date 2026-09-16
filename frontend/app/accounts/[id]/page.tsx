@@ -26,8 +26,8 @@ const RANGES: { key: EarningsRange; label: string }[] = [
 const SUMMARY_RANGE = "90d";
 
 const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
-  { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid — needs shipping", tone: "text-[var(--color-primary)]" },
-  { key: "awaiting_payment", label: "Awaiting payment", hint: "New — not paid yet", tone: "text-amber-700" },
+  { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid, needs shipping", tone: "text-[var(--color-primary)]" },
+  { key: "awaiting_payment", label: "Awaiting payment", hint: "New, not paid yet", tone: "text-amber-700" },
   { key: "dispatched", label: "Dispatched", hint: "Already shipped", tone: "text-emerald-700" },
   { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-muted)]" },
 ];
@@ -79,17 +79,15 @@ function Stat({
 
 function ComingSoonCard({ title, blurb, icon }: { title: string; blurb: string; icon: React.ReactNode }) {
   return (
-    <div className="card relative overflow-hidden p-5 opacity-60">
-      <span className="absolute right-4 top-4 rounded-full bg-[var(--color-paper)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
+    <div className="card flex items-center gap-4 p-4 opacity-60">
+      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--color-paper)] text-[var(--color-muted)]">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-[var(--color-ink)]">{title}</p>
+        <p className="truncate text-[12.5px] text-[var(--color-muted)]">{blurb}</p>
+      </div>
+      <span className="flex-shrink-0 rounded-full bg-[var(--color-paper)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
         Coming soon
       </span>
-      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-paper)] text-[var(--color-muted)]">{icon}</span>
-      <p className="mt-4 text-[15px] font-semibold text-[var(--color-ink)]">{title}</p>
-      <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">{blurb}</p>
-      <div className="mt-4 space-y-2">
-        <div className="h-2.5 w-3/4 rounded-full bg-[var(--color-line)]" />
-        <div className="h-2.5 w-1/2 rounded-full bg-[var(--color-line)]" />
-      </div>
     </div>
   );
 }
@@ -262,8 +260,8 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
       <section>
         <h2 className="mb-3 text-[13px] font-semibold text-[var(--color-ink)]">On the way</h2>
         <div className="grid gap-4 md:grid-cols-2">
-          <ComingSoonCard title="Inbox" blurb="Buyer messages from eBay in one place, with AI-suggested replies you can send in a tap." icon={Icons.inbox} />
-          <ComingSoonCard title="Campaigns" blurb="Promoted listings and sales events, with what each one earned you against what it cost." icon={Icons.campaigns} />
+          <ComingSoonCard title="Inbox" blurb="Buyer messages from eBay in one place, with suggested replies." icon={Icons.inbox} />
+          <ComingSoonCard title="Campaigns" blurb="Promoted listings and sales events, with what each one earned." icon={Icons.campaigns} />
         </div>
       </section>
     </div>

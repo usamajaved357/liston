@@ -162,7 +162,7 @@ function PolicySelect({
   return (
     <PickerField
       label={label}
-      emptyCopy={`You have no ${label.toLowerCase()} on eBay yet — create one in Seller Hub, then refresh this page.`}
+      emptyCopy={`You have no ${label.toLowerCase()} on eBay yet. Create one in Seller Hub, then refresh this page.`}
       options={policies.map((p) => ({ id: policyId(p), label: p.name }))}
       value={value}
       onChange={onChange}
@@ -329,7 +329,7 @@ export default function AccountSettingsPage() {
         <div className="max-w-lg rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
           <h2 className="text-sm font-bold text-[var(--color-ink)]">Default listing policies</h2>
           <p className="mt-1 text-xs text-[var(--color-muted)] leading-relaxed">
-            Every listing Liston drafts and publishes to eBay carries these — eBay won&apos;t accept a listing without
+            Every listing Liston drafts and publishes to eBay carries these. eBay won&apos;t accept a listing without
             them attached.
           </p>
 
@@ -368,7 +368,7 @@ export default function AccountSettingsPage() {
                 />
                 <PickerField
                   label="Shipping location"
-                  emptyCopy="You have no inventory location set up on eBay yet — add one in Seller Hub, then refresh this page."
+                  emptyCopy="You have no inventory location set up on eBay yet. Add one in Seller Hub, then refresh this page."
                   options={(policies?.merchantLocations || []).map((l: MerchantLocation) => ({
                     id: l.merchantLocationKey,
                     label: l.name || l.merchantLocationKey,
@@ -414,7 +414,7 @@ export default function AccountSettingsPage() {
             <NumberField
               label="eBay ads fee"
               suffix="%"
-              hint="Your Promoted Listings rate. Typically 12–18% — set it to the highest rate you bid, so a lower one beats target."
+              hint="Your Promoted Listings rate. Typically 12 to 18%. Set it to the highest rate you bid, so a lower one beats target."
               value={pricing.adsFeePercent}
               onChange={(v) => setPricing({ ...pricing, adsFeePercent: v })}
             />
@@ -527,7 +527,7 @@ export default function AccountSettingsPage() {
             </button>
           </div>
           <p className="mt-1 text-sm text-[var(--color-muted)] leading-relaxed">
-            Every listing this account publishes wraps its description in this branding — header, trust badges,
+            Every listing this account publishes wraps its description in this branding: header, trust badges,
             delivery, returns, and a &ldquo;You may also like&rdquo; row of this account&apos;s own live listings,
             pulled fresh at publish time. Each account has its own.
           </p>
@@ -597,7 +597,7 @@ export default function AccountSettingsPage() {
               )}
             </div>
             <p className="mt-1 text-xs text-[var(--color-muted)] leading-relaxed">
-              Real feedback only, copied from your eBay feedback page. The section is left out entirely when empty —
+              Real feedback only, copied from your eBay feedback page. The section is left out entirely when empty,
               invented reviews get listings removed.
             </p>
             {template.reviews.map((review, i) => (

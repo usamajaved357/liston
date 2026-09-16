@@ -112,7 +112,7 @@ export function AuthLayout({ eyebrow, title, subtitle, children, footer }: AuthL
             From two links to a live eBay listing.
           </h2>
           <p className="mt-2 max-w-md text-[14px] leading-relaxed text-white/70">
-            Paste a competitor and a supplier — Liston does the rest.
+            Paste a competitor and a supplier. Liston does the rest.
           </p>
 
           <Chart />

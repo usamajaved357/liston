@@ -199,7 +199,7 @@ export default function AccountPage() {
             </div>
           </SettingRow>
 
-          <SettingRow title="Login email" description="The address you sign in with. It's fixed to the account — contact us if it needs to change." last>
+          <SettingRow title="Login email" description="The address you sign in with. It's fixed to the account. Contact us if it needs to change." last>
             <div className="input flex items-center justify-between bg-[var(--color-paper)] text-[var(--color-muted)]">
               <span className="truncate">{user.email}</span>
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0">

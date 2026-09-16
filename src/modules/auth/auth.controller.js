@@ -125,10 +125,10 @@ async function accessDecision(req, res) {
       ? 'approved and emailed a login link'
       : user.deleted
         ? 'notified and their account removed'
-        : "notified and their access revoked — their data is kept";
+        : "notified and their access revoked. Their data is kept";
     decisionPage(res, approved ? 'Access approved' : 'Access rejected', `${user.email} has been ${outcome}.`);
   } catch (err) {
-    decisionPage(res, "That link didn't work", err.message || 'It may have expired — use the Access requests page in Liston instead.');
+    decisionPage(res, "That link didn't work", err.message || 'It may have expired. Use the Access requests page in Liston instead.');
   }
 }
 
