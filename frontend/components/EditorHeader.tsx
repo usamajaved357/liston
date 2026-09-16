@@ -35,7 +35,7 @@ export function EditorHeader({
           </svg>
         </Link>
         <div className="flex min-w-0 max-w-[56vw] items-center justify-center gap-2.5">
-          <h1 className="truncate text-[15px] font-bold leading-none text-[var(--color-ink)]">{title}</h1>
+          <h1 className="truncate text-lg font-bold leading-none text-[var(--color-ink)]">{title}</h1>
           {chips && <div className="flex flex-shrink-0 items-center gap-1.5">{chips}</div>}
         </div>
         <div className="justify-self-end flex items-center gap-2">{actions}</div>

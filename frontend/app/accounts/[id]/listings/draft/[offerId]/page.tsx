@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   api,
@@ -160,6 +160,160 @@ function policyName(
   return list.find((p) => p[kind] === id)?.name || id;
 }
 
+// --- Description formatting ---------------------------------------------------
+//
+// The description is plain text with a few inline markers the template
+// renders (**bold**, ==highlight==, [color=#hex]…[/color], [size=lg]…[/size]).
+// The toolbar wraps the current selection in the textarea with those markers,
+// so what's stored stays safe text and the AI can still rewrite it.
+
+const TEXT_COLOURS = ["#e11d48", "#d97706", "#059669", "#2563eb", "#7c3aed", "#0f172a"];
+
+// Each marker kind knows how to detect itself around (or inside) a selection,
+// so a second click toggles it off and a different colour/size REPLACES the
+// current one rather than nesting another wrapper.
+const MARKERS = {
+  bold: { open: /\*\*$/, close: /^\*\*/, inner: /^\*\*([\s\S]*)\*\*$/ },
+  highlight: { open: /==$/, close: /^==/, inner: /^==([\s\S]*)==$/ },
+  color: { open: /\[color=#[0-9a-fA-F]{6}\]$/, close: /^\[\/color\]/, inner: /^\[color=#[0-9a-fA-F]{6}\]([\s\S]*)\[\/color\]$/ },
+  size: { open: /\[size=(?:sm|lg|xl)\]$/, close: /^\[\/size\]/, inner: /^\[size=(?:sm|lg|xl)\]([\s\S]*)\[\/size\]$/ },
+} as const;
+type MarkerKind = keyof typeof MARKERS;
+
+function applyMarker(value: string, start: number, end: number, kind: MarkerKind, open: string, close: string, toggle: boolean) {
+  const m = MARKERS[kind];
+  let before = value.slice(0, start);
+  let selected = value.slice(start, end);
+  let after = value.slice(end);
+
+  // Already wrapped: either the wrapper sits just outside the selection, or
+  // the selection includes it. Strip it first.
+  let wasWrapped = false;
+  const outsideOpen = before.match(m.open);
+  const outsideClose = after.match(m.close);
+  if (outsideOpen && outsideClose) {
+    before = before.slice(0, before.length - outsideOpen[0].length);
+    after = after.slice(outsideClose[0].length);
+    wasWrapped = true;
+  } else {
+    const inside = selected.match(m.inner);
+    if (inside) {
+      selected = inside[1];
+      wasWrapped = true;
+    }
+  }
+  if (!selected) selected = "text";
+  // Toggle kinds (bold, highlight) come off on a second click; replace kinds
+  // (colour, size) swap to the new value.
+  const wrapNow = !(toggle && wasWrapped);
+  const next = before + (wrapNow ? open : "") + selected + (wrapNow ? close : "") + after;
+  const selStart = before.length + (wrapNow ? open.length : 0);
+  return { next, selStart, selEnd: selStart + selected.length };
+}
+
+function FormatToolbar({
+  textarea,
+  value,
+  onChange,
+  disabled,
+}: {
+  textarea: React.RefObject<HTMLTextAreaElement | null>;
+  value: string;
+  onChange: (next: string) => void;
+  disabled: boolean;
+}) {
+  const [showColours, setShowColours] = useState(false);
+
+  function apply(kind: MarkerKind, open: string, close: string, toggle: boolean) {
+    const el = textarea.current;
+    if (!el) return;
+    const { next, selStart, selEnd } = applyMarker(value, el.selectionStart, el.selectionEnd, kind, open, close, toggle);
+    onChange(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(selStart, selEnd);
+    });
+  }
+
+  const tool =
+    "flex h-8 min-w-8 items-center justify-center px-2 text-[var(--color-ink)] transition-colors hover:bg-[var(--color-paper)] disabled:opacity-40";
+  const divider = <span className="mx-0.5 h-5 w-px bg-[var(--color-line)]" />;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3">
+      <div className="inline-flex items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+        <button type="button" disabled={disabled} title="Bold (click again to remove)" aria-label="Bold" onClick={() => apply("bold", "**", "**", true)} className={`${tool} rounded-full font-extrabold`}>
+          B
+        </button>
+        <button type="button" disabled={disabled} title="Highlight (click again to remove)" aria-label="Highlight" onClick={() => apply("highlight", "==", "==", true)} className={`${tool} rounded-full`}>
+          <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]">
+            <rect x="3" y="18.5" width="18" height="3" rx="1.5" fill="#fde047" />
+            <path d="M14.5 4.5l5 5-8 8H6.5v-5l8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="#fef3c7" />
+            <path d="M12 7l5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </button>
+        {divider}
+        <button type="button" disabled={disabled} title="Normal size" aria-label="Normal size" onClick={() => apply("size", "", "", true)} className={`${tool} rounded-full text-[12px] font-semibold`}>
+          T
+        </button>
+        <button type="button" disabled={disabled} title="Large" aria-label="Large text" onClick={() => apply("size", "[size=lg]", "[/size]", false)} className={`${tool} rounded-full text-[15px] font-semibold`}>
+          T
+        </button>
+        <button type="button" disabled={disabled} title="Extra large" aria-label="Extra large text" onClick={() => apply("size", "[size=xl]", "[/size]", false)} className={`${tool} rounded-full text-[18px] font-bold`}>
+          T
+        </button>
+        {divider}
+        <div className="relative">
+          <button type="button" disabled={disabled} title="Text colour" aria-label="Text colour" onClick={() => setShowColours((v) => !v)} className={`${tool} gap-1 rounded-full`}>
+            <span className="flex flex-col items-center leading-none">
+              <span className="text-[13px] font-bold">A</span>
+              <span className="mt-0.5 h-[3px] w-4 rounded-sm bg-gradient-to-r from-[#e11d48] via-[#059669] to-[#2563eb]" />
+            </span>
+            <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 text-[var(--color-muted)]">
+              <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {showColours && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowColours(false)} aria-hidden />
+              <div className="absolute left-0 top-full z-50 mt-2 flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5" style={{ boxShadow: "var(--shadow-pop)" }}>
+                {TEXT_COLOURS.map((hex) => (
+                  <button
+                    key={hex}
+                    type="button"
+                    aria-label={`Colour ${hex}`}
+                    title={hex}
+                    onClick={() => {
+                      apply("color", `[color=${hex}]`, "[/color]", false);
+                      setShowColours(false);
+                    }}
+                    className="h-6 w-6 rounded-full ring-2 ring-white transition-transform hover:scale-110"
+                    style={{ background: hex, boxShadow: "0 0 0 1px var(--color-line)" }}
+                  />
+                ))}
+                <span className="mx-0.5 h-5 w-px bg-[var(--color-line)]" />
+                <button
+                  type="button"
+                  title="Remove colour"
+                  aria-label="Remove colour"
+                  onClick={() => {
+                    apply("color", "", "", true);
+                    setShowColours(false);
+                  }}
+                  className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
+                >
+                  {Icon.close}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      <span className="text-xs text-[var(--color-muted)]">Select text, then apply. Click again to remove. Shows in the preview after saving.</span>
+    </div>
+  );
+}
+
 // --- Gallery ----------------------------------------------------------------
 //
 // Every image at once, not a carousel: the seller is deciding what to keep,
@@ -231,6 +385,17 @@ function GalleryGrid({
   const count = images.length;
   const current = images[selected];
 
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || count < 2) return;
+      if (e.key === "ArrowLeft") onSelect((selected - 1 + count) % count);
+      if (e.key === "ArrowRight") onSelect((selected + 1) % count);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, count, onSelect]);
+
   return (
     <div className={cardClass}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -263,9 +428,9 @@ function GalleryGrid({
       ) : (
         <>
           {/* Selected image, large */}
-          <div className="relative mt-4 aspect-square overflow-hidden rounded-xl border border-[var(--color-line)] bg-white">
+          <div className="relative mt-4 aspect-square rounded-xl border border-[var(--color-line)] bg-white">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={current} alt="" className="h-full w-full object-contain" />
+            <img src={current} alt="" className="h-full w-full rounded-xl object-contain" />
             {selected === 0 && (
               <span className="chip chip-primary absolute left-3 top-3">
                 Main photo
@@ -274,6 +439,30 @@ function GalleryGrid({
             <span className="absolute right-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-white">
               {selected + 1} / {count}
             </span>
+            {count > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onSelect((selected - 1 + count) % count)}
+                  aria-label="Previous photo"
+                  className="absolute -left-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white text-[var(--color-ink)] shadow-md transition-colors hover:border-[var(--color-line-strong)]"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                    <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelect((selected + 1) % count)}
+                  aria-label="Next photo"
+                  className="absolute -right-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white text-[var(--color-ink)] shadow-md transition-colors hover:border-[var(--color-line-strong)]"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                    <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
 
           {/* Actions for the selected image — icons only, labels on hover */}
@@ -818,6 +1007,7 @@ export default function DraftEditorPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [editingDescription, setEditingDescription] = useState(false);
+  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
   // Item specifics as an ordered list so rows can be renamed, added and
   // removed in place. Multi-value aspects are edited as "a, b".
   const [specifics, setSpecifics] = useState<{ name: string; value: string }[]>([]);
@@ -830,6 +1020,11 @@ export default function DraftEditorPage() {
   const [condition, setCondition] = useState("NEW");
   const [singlePrice, setSinglePrice] = useState("");
   const [singleQuantity, setSingleQuantity] = useState("1");
+  const [policyIds, setPolicyIds] = useState<{ fulfillmentPolicyId: string; paymentPolicyId: string; returnPolicyId: string }>({
+    fulfillmentPolicyId: "",
+    paymentPolicyId: "",
+    returnPolicyId: "",
+  });
   const [showNotes, setShowNotes] = useState(false);
   const [imageOverrides, setImageOverrides] = useState<Record<number, string>>({});
   const [imageCheck, setImageCheck] = useState<ImageCheck | null>(null);
@@ -872,6 +1067,11 @@ export default function DraftEditorPage() {
     setCondition((isVariationDraft(c) ? c.variants[0]?.condition : c.condition) || "NEW");
     setSinglePrice(isVariationDraft(c) ? "" : c.price.value);
     setSingleQuantity(isVariationDraft(c) ? "1" : String(c.quantity ?? 1));
+    setPolicyIds({
+      fulfillmentPolicyId: c.listingPolicies?.fulfillmentPolicyId || "",
+      paymentPolicyId: c.listingPolicies?.paymentPolicyId || "",
+      returnPolicyId: c.listingPolicies?.returnPolicyId || "",
+    });
     setImageOverrides({});
   }, []);
 
@@ -927,6 +1127,12 @@ export default function DraftEditorPage() {
   }, [specifics, originalAspects]);
   const aspectsChanged = JSON.stringify(editedAspects) !== JSON.stringify(originalAspects);
 
+  const policiesChanged =
+    !!content?.listingPolicies &&
+    (policyIds.fulfillmentPolicyId !== content.listingPolicies.fulfillmentPolicyId ||
+      policyIds.paymentPolicyId !== content.listingPolicies.paymentPolicyId ||
+      policyIds.returnPolicyId !== content.listingPolicies.returnPolicyId);
+
   const dirty = useMemo(() => {
     if (!content) return false;
     const origTitle = variation ? variation.commonTitle : single!.title;
@@ -937,6 +1143,7 @@ export default function DraftEditorPage() {
       aspectsChanged ||
       condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW") ||
       (single ? singlePrice !== single.price.value || singleQuantity !== String(single.quantity ?? 1) : false) ||
+      policiesChanged ||
       JSON.stringify(images) !== JSON.stringify(content.imageUrls) ||
       removedRows.size > 0 ||
       removedAxisValues.length > 0 ||
@@ -944,7 +1151,7 @@ export default function DraftEditorPage() {
       Object.keys(quantityOverrides).length > 0 ||
       Object.keys(imageOverrides).length > 0
     );
-  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides]);
+  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides]);
 
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
@@ -958,6 +1165,7 @@ export default function DraftEditorPage() {
     if (content && JSON.stringify(images) !== JSON.stringify(content.imageUrls)) patch.imageUrls = images;
     if (aspectsChanged) patch.aspects = editedAspects;
     if (condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW")) patch.condition = condition;
+    if (policiesChanged) patch.listingPolicies = policyIds;
     if (single) {
       if (singlePrice !== single.price.value) patch.price = { value: singlePrice, currency: single.price.currency };
       if (singleQuantity !== String(single.quantity ?? 1)) patch.quantity = Math.max(0, parseInt(singleQuantity, 10) || 0);
@@ -1180,16 +1388,25 @@ export default function DraftEditorPage() {
       <EditorHeader
         backHref={`/accounts/${params.id}/listings?filter=draft`}
         backLabel="Back to drafts"
-        title={editable ? "Edit draft" : "Listing"}
+        title={editable ? "Edit listing" : "Listing"}
         chips={
-          <>
-            {variation && <span className="chip">{variation.variants.length} variations</span>}
-            {notes.length > 0 && (
-              <button type="button" onClick={() => setShowNotes((v) => !v)} className="chip chip-warning">
-                {notes.length} {notes.length === 1 ? "note" : "notes"}
-              </button>
-            )}
-          </>
+          notes.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowNotes((v) => !v)}
+              title={`${notes.length} drafting ${notes.length === 1 ? "note" : "notes"}`}
+              aria-label="Drafting notes"
+              className="relative flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning-soft)]"
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M12 11v5M12 8h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              <span className="absolute -right-0.5 -top-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-[var(--color-warning)] px-[2px] text-[8px] font-bold leading-none text-white ring-2 ring-[var(--color-panel)]">
+                {notes.length}
+              </span>
+            </button>
+          ) : null
         }
         actions={
           editable ? (
@@ -1382,15 +1599,45 @@ export default function DraftEditorPage() {
                 )}
 
                 {content.listingPolicies && (
-                  <div className="mt-3 grid gap-3 rounded-2xl bg-[var(--color-paper)] px-4 py-2.5 sm:grid-cols-3">
-                    {(["fulfillmentPolicyId", "paymentPolicyId", "returnPolicyId"] as const).map((kind) => (
-                      <div key={kind} className="min-w-0">
-                        <p className={labelClass}>{kind.replace("PolicyId", "")}</p>
-                        <p className="mt-0.5 truncate text-xs text-[var(--color-ink)]" title={policyName(policies, kind, content.listingPolicies![kind])}>
-                          {policyName(policies, kind, content.listingPolicies![kind])}
-                        </p>
-                      </div>
-                    ))}
+                  <div className="mt-4">
+                    <div className="flex items-baseline justify-between">
+                      <p className={labelClass}>Business policies</p>
+                      <span className="text-xs text-[var(--color-muted)]">Defaults come from Settings; change them for this listing only.</span>
+                    </div>
+                    <div className="mt-2 grid gap-3 sm:grid-cols-3">
+                      {(
+                        [
+                          ["fulfillmentPolicyId", "Postage", policies?.fulfillmentPolicies || []],
+                          ["paymentPolicyId", "Payment", policies?.paymentPolicies || []],
+                          ["returnPolicyId", "Returns", policies?.returnPolicies || []],
+                        ] as const
+                      ).map(([key, label, list]) => (
+                        <div key={key}>
+                          <label className="text-xs font-semibold text-[var(--color-muted)]">{label}</label>
+                          {editable && list.length > 0 ? (
+                            <select
+                              className="input input-sm mt-1"
+                              value={policyIds[key]}
+                              onChange={(e) => setPolicyIds((p) => ({ ...p, [key]: e.target.value }))}
+                              disabled={busy}
+                            >
+                              {!list.some((p) => p[key] === policyIds[key]) && policyIds[key] && (
+                                <option value={policyIds[key]}>{policyIds[key]} (no longer on account)</option>
+                              )}
+                              {list.map((p) => (
+                                <option key={p[key]} value={p[key]}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <p className="mt-1 truncate text-sm text-[var(--color-ink)]" title={policyName(policies, key, policyIds[key])}>
+                              {policyName(policies, key, policyIds[key])}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1460,12 +1707,16 @@ export default function DraftEditorPage() {
                   </div>
                 </div>
                 {editingDescription && (
-                  <textarea
-                    className={`${inputClass} mt-3 min-h-[12rem] leading-relaxed`}
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    disabled={!editable || busy}
-                  />
+                  <>
+                    <FormatToolbar textarea={descriptionRef} value={description} onChange={setDescription} disabled={!editable || busy} />
+                    <textarea
+                      ref={descriptionRef}
+                      className={`${inputClass} mt-2 min-h-[14rem] leading-relaxed`}
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      disabled={!editable || busy}
+                    />
+                  </>
                 )}
                 {descriptionPreview !== null ? (
                   <iframe

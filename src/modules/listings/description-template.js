@@ -70,7 +70,7 @@ function textToHtml(text) {
       }
       // "**Key Features:**" — a bold-only line — is a heading too.
       const isHeading = (line) => /^[A-Z0-9 &:\-–]{4,60}:?$/.test(line) || /^\*\*[^*]{2,60}\*\*:?$/.test(line);
-      const headingHtml = (line) => `<p><strong>${inline(line.replace(/:$/, ''))}</strong></p>`;
+      const headingHtml = (line) => `<p><strong>${inline(line.replace(/^\*\*|\*\*:?$/g, '').replace(/:$/, ''))}</strong></p>`;
       if (lines.length === 1 && isHeading(lines[0])) return headingHtml(lines[0]);
       // A block mixing a lead line with bullets — "KEY FEATURES:" straight
       // into its list is how the model writes it. The lead renders as a

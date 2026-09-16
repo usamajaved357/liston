@@ -72,3 +72,22 @@ test('textToHtml turns the model’s plain text into paragraphs, headings and li
 test('textToHtml escapes markup inside the description', () => {
   assert.ok(textToHtml('<img src=x onerror=alert(1)>').includes('&lt;img'));
 });
+
+// The model writes **bold** markdown and sellers want highlight/colour/size
+// controls; the description stays plain text with these markers and the
+// template renders them. Anything else is escaped, never HTML.
+test('textToHtml renders inline formatting markers and nothing else', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  const html = textToHtml('A **bold** ==hi== [color=#ff0000]red[/color] [size=lg]big[/size] <b>x</b> [color=red]no[/color]');
+  assert.match(html, /<strong>bold<\/strong>/);
+  assert.match(html, /<mark[^>]*>hi<\/mark>/);
+  assert.match(html, /<span style="color:#ff0000">red<\/span>/);
+  assert.match(html, /font-size:18px">big<\/span>/);
+  assert.match(html, /&lt;b&gt;x&lt;\/b&gt;/, 'raw HTML is escaped');
+  assert.match(html, /\[color=red\]no\[\/color\]/, 'non-hex colour is left as text');
+});
+
+test('textToHtml treats a bold-only line as a heading without doubling the tags', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  assert.strictEqual(textToHtml('**Key Features:**\n• A'), '<p><strong>Key Features</strong></p><ul><li>A</li></ul>');
+});

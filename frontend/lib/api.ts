@@ -359,6 +359,7 @@ export interface DraftPatch {
   imageUrls?: string[];
   price?: OfferPrice;
   quantity?: number;
+  listingPolicies?: ListingPolicies;
   variants?: Record<string, { price?: OfferPrice; quantity?: number; imageUrls?: string[] }>;
   removeAxisValues?: { axis: string; value: string }[];
   variantSkusToRemove?: string[];

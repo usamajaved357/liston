@@ -321,6 +321,23 @@ async function updateDraft(id, userId, patch) {
 
   if (patch.price !== undefined) draft.price = patch.price;
   if (patch.quantity !== undefined) draft.quantity = patch.quantity;
+  if (patch.listingPolicies !== undefined) {
+    // Only IDs the account really has — a typo'd or stale ID would fail at
+    // publish with an opaque eBay error instead of here.
+    await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
+      const policies = await ebayService.getBusinessPolicies(credentials, draft.marketplaceId || 'EBAY_GB');
+      const has = (list, key, id) => list.some((policy) => policy[key] === id);
+      if (
+        !has(policies.fulfillmentPolicies, 'fulfillmentPolicyId', patch.listingPolicies.fulfillmentPolicyId) ||
+        !has(policies.paymentPolicies, 'paymentPolicyId', patch.listingPolicies.paymentPolicyId) ||
+        !has(policies.returnPolicies, 'returnPolicyId', patch.listingPolicies.returnPolicyId)
+      ) {
+        throw new ListingError("One of those policies isn't on this eBay account any more — refresh and pick again.", 400);
+      }
+      return policies;
+    });
+    draft.listingPolicies = patch.listingPolicies;
+  }
   // Condition is carried per variant on a variation draft.
   if (patch.condition !== undefined && Array.isArray(draft.variants)) {
     draft.variants = draft.variants.map((variant) => ({ ...variant, condition: patch.condition }));

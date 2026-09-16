@@ -110,6 +110,15 @@ const updateDraftSchema = z
     imageUrls: z.array(z.string().url()).optional(),
     price: offerPriceSchema.optional(),
     quantity: z.number().int().min(0).optional(),
+    // Policies can differ per listing (a fragile item ships differently);
+    // the IDs must be ones this account actually has — checked in the service.
+    listingPolicies: z
+      .object({
+        fulfillmentPolicyId: z.string().min(1),
+        paymentPolicyId: z.string().min(1),
+        returnPolicyId: z.string().min(1),
+      })
+      .optional(),
     // Keyed by the variant's index in the current draft — a local draft has
     // no SKUs yet to key on.
     variants: z
