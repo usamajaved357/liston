@@ -316,3 +316,56 @@ test('listOrdersDetailed caches the fetched order window per connection+range, s
 
   assert.strictEqual(getOrdersMock.mock.calls.length, 1);
 });
+
+// eBay caps the inventory item's description at 4,000 characters; the
+// branded HTML belongs on the offer. Confirmed live: "Invalid value for
+// description. The length should be between 1 and 4000 characters."
+test('buildInventoryItem strips HTML and caps at 4000 while buildOffer carries the HTML', () => {
+  const { buildInventoryItem, buildOffer } = require('../../src/modules/ebay/ebay.service');
+  const html = `<div class="eb">${'<p>lorem ipsum</p>'.repeat(600)}</div>`;
+  const item = buildInventoryItem({ title: 'T', description: html, imageUrls: [], aspects: {}, condition: 'NEW', quantity: 1 });
+  assert.ok(item.product.description.length <= 4000);
+  assert.ok(!item.product.description.includes('<'));
+
+  const offer = buildOffer({ sku: 's', categoryId: '1', description: 'plain', listingDescription: html, price: { value: '1', currency: 'GBP' }, merchantLocationKey: 'm', quantity: 1 });
+  assert.strictEqual(offer.listingDescription, html);
+  const fallback = buildOffer({ sku: 's', categoryId: '1', description: 'plain', price: { value: '1', currency: 'GBP' }, merchantLocationKey: 'm', quantity: 1 });
+  assert.strictEqual(fallback.listingDescription, 'plain');
+});
+
+// A variation listing's item specifics live on the GROUP; each SKU carries
+// only the varying aspect. Publishing with the shared aspects on the SKUs
+// alone failed live with "The item specific Type is missing".
+test('draftVariationListing puts shared aspects on the group and merged aspects on each SKU', async () => {
+  let group = null;
+  const items = [];
+  mock.method(ebayClient, 'getInventoryLocations', async () => ({ locations: [{ merchantLocationKey: 'main' }] }));
+  mock.method(ebayClient, 'createOrReplaceInventoryItem', async (token, sku, item) => {
+    items.push([sku, item]);
+  });
+  mock.method(ebayClient, 'createOffer', async (token, offer) => ({ offerId: `offer-${offer.sku}` }));
+  mock.method(ebayClient, 'createOrReplaceInventoryItemGroup', async (token, key, payload) => {
+    group = payload;
+  });
+
+  await ebayService.draftVariationListing(freshCredentials(), {
+    groupKey: 'G1',
+    commonTitle: 'Hanger',
+    commonDescription: 'plain',
+    commonListingDescription: '<p>html</p>',
+    imageUrls: ['https://example.com/a.jpg'],
+    variesBy: { aspects: { Type: ['Clothes Drying Rack'], Brand: ['Unbranded'] }, aspectsImageVariesBy: ['Colour'], specifications: [{ name: 'Colour', values: ['Silver', 'Black'] }] },
+    variants: [
+      { sku: 'G1-1', imageUrls: ['https://example.com/s.jpg'], aspects: { Colour: ['Silver'] }, quantity: 1, price: { value: '9.99', currency: 'GBP' } },
+      { sku: 'G1-2', imageUrls: ['https://example.com/b.jpg'], aspects: { Colour: ['Black'] }, quantity: 1, price: { value: '9.99', currency: 'GBP' } },
+    ],
+    marketplaceId: 'EBAY_GB',
+    categoryId: '81241',
+    merchantLocationKey: 'main',
+    listingPolicies: validListingPolicies(),
+  });
+
+  assert.deepStrictEqual(group.aspects, { Type: ['Clothes Drying Rack'], Brand: ['Unbranded'] });
+  assert.strictEqual(group.description, '<p>html</p>', 'the group carries the branded HTML — it becomes the live description');
+  assert.deepStrictEqual(items[0][1].product.aspects, { Type: ['Clothes Drying Rack'], Brand: ['Unbranded'], Colour: ['Silver'] });
+});

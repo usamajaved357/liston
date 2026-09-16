@@ -487,7 +487,7 @@ async function removeDraft(id, userId) {
 // listing being published. Failure here costs the carousel, not the publish.
 async function recommendedListings(credentials, connection, { exclude, count }) {
   try {
-    const { items } = await ebayService.listActiveListings(credentials, { pageNumber: 1, entriesPerPage: 25 });
+    const { items } = await ebayService.listActiveListings(credentials, { pageNumber: 1, entriesPerPage: 50 });
     return (items || [])
       .filter((item) => item.viewItemUrl && item.itemId !== exclude)
       .slice(0, count)
@@ -586,10 +586,12 @@ async function publish(id, userId) {
       // leaves half-created SKUs behind, and eBay's SKU index is eventually
       // consistent enough that reusing them on a retry fails. A fresh run
       // suffix each attempt sidesteps that entirely.
+      // The branded HTML is the offer's listingDescription; the plain text
+      // stays as the inventory item's (4,000-char) description.
       const html = await renderDraftDescription(listing, userId);
       const branded = {
         ...draft,
-        ...(Array.isArray(draft.variants) && draft.variants.length ? { commonDescription: html } : { description: html }),
+        ...(Array.isArray(draft.variants) && draft.variants.length ? { commonListingDescription: html } : { listingDescription: html }),
       };
       const built = withSkus(branded, listing.connection_id);
       const isVariation = Array.isArray(built.variants) && built.variants.length > 0;

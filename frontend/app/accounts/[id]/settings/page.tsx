@@ -33,7 +33,7 @@ const DEFAULT_TEMPLATE: DescriptionTemplate = {
   deliveryTime: "2–4 Business Days",
   freePostage: true,
   returnsDays: 30,
-  recommendedCount: 4,
+  recommendedCount: 12,
   responseTime: "24 hours",
   reviews: [],
 };
@@ -576,7 +576,7 @@ export default function AccountSettingsPage() {
             <TextField label="Carrier" value={template.carrier} onChange={(v) => setTemplate({ ...template, carrier: v })} />
             <TextField label="Delivery time" value={template.deliveryTime} onChange={(v) => setTemplate({ ...template, deliveryTime: v })} />
             <NumberField label="Returns window" suffix="days" hint="0 hides the returns section." value={template.returnsDays} onChange={(v) => setTemplate({ ...template, returnsDays: v })} />
-            <NumberField label="Recommended listings" suffix="cards" hint="How many of this account's live listings to show. 0 hides the row." value={template.recommendedCount} onChange={(v) => setTemplate({ ...template, recommendedCount: v })} />
+            <NumberField label="Recommended listings" suffix="cards" hint="How many of this account's live listings to show in the scrolling row (up to 24). 0 hides it." value={template.recommendedCount} onChange={(v) => setTemplate({ ...template, recommendedCount: v })} />
             <TextField label="Reply time" value={template.responseTime} onChange={(v) => setTemplate({ ...template, responseTime: v })} />
             <div>
               <label className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Postage</label>

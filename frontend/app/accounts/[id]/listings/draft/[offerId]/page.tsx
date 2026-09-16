@@ -991,6 +991,71 @@ function AiPanel({
   );
 }
 
+// --- Published popup ----------------------------------------------------------
+
+const EBAY_ITEM_HOSTS: Record<string, string> = { EBAY_GB: "www.ebay.co.uk", EBAY_US: "www.ebay.com", EBAY_DE: "www.ebay.de", EBAY_AU: "www.ebay.com.au" };
+
+function PublishedDialog({ listing, onClose }: { listing: DraftListing; onClose: () => void }) {
+  const c = listing.generated_data as DraftContent;
+  const variation = isVariationDraft(c) ? c : null;
+  const single = isVariationDraft(c) ? null : c;
+  const title = variation ? variation.commonTitle : single!.title;
+  const image = c.imageUrls?.[0];
+  const prices = variation ? variation.variants.map((v) => parseFloat(v.price.value)).filter((n) => !Number.isNaN(n)) : [];
+  const currency = variation ? variation.variants[0]?.price.currency || "GBP" : single!.price.currency;
+  const priceText = variation
+    ? prices.length
+      ? `${formatPrice(Math.min(...prices), currency)}${Math.max(...prices) !== Math.min(...prices) ? ` – ${formatPrice(Math.max(...prices), currency)}` : ""}`
+      : "—"
+    : formatPrice(single!.price.value, currency);
+  const itemId = listing.external_product_id;
+  const host = EBAY_ITEM_HOSTS[c.marketplaceId || "EBAY_GB"] || "www.ebay.co.uk";
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(15,23,42,0.45)] p-4" role="dialog" aria-modal="true">
+      <div className="card w-full max-w-md p-6" style={{ boxShadow: "var(--shadow-pop)" }}>
+        <div className="flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+              <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <div>
+            <h2 className="text-base font-bold text-[var(--color-ink)]">Your listing is live on eBay</h2>
+            {itemId && <p className="text-xs text-[var(--color-muted)]">Item {itemId}</p>}
+          </div>
+        </div>
+
+        <div className="mt-5 flex gap-4 rounded-2xl border border-[var(--color-line)] p-3">
+          {image && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={image} alt="" className="h-20 w-20 flex-shrink-0 rounded-xl border border-[var(--color-line)] bg-white object-contain" />
+          )}
+          <div className="min-w-0">
+            <p className="line-clamp-2 text-sm font-semibold leading-snug text-[var(--color-ink)]">{title}</p>
+            <p className="mt-1.5 text-sm text-[var(--color-ink)]">
+              <span className="font-bold">{priceText}</span>
+              {variation && <span className="text-[var(--color-muted)]"> · {variation.variants.length} variations</span>}
+            </p>
+            <p className="mt-0.5 text-xs text-[var(--color-muted)]">{c.imageUrls?.length || 0} photos</p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          {itemId && (
+            <a href={`https://${host}/itm/${itemId}`} target="_blank" rel="noreferrer" className="btn btn-secondary btn-sm">
+              View on eBay
+            </a>
+          )}
+          <button type="button" onClick={onClose} className="btn btn-primary btn-sm">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // --- Page ------------------------------------------------------------------
 
 export default function DraftEditorPage() {
@@ -1033,6 +1098,7 @@ export default function DraftEditorPage() {
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [confirmPublish, setConfirmPublish] = useState(false);
+  const [published, setPublished] = useState<DraftListing | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -1217,6 +1283,7 @@ export default function DraftEditorPage() {
     try {
       const data = await api.publishDraftListing(listing.id);
       setListing(data.listing);
+      setPublished(data.listing);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't publish this listing. Try again.");
     } finally {
@@ -1722,11 +1789,11 @@ export default function DraftEditorPage() {
                   <iframe
                     title="Description preview"
                     sandbox=""
-                    srcDoc={`<!doctype html><meta name="viewport" content="width=device-width"><body style="margin:0;padding:12px;background:#f3f3f3">${descriptionPreview}</body>`}
-                    className={`mt-3 h-[36rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${dirty ? "opacity-60" : ""}`}
+                    srcDoc={`<!doctype html><meta name="viewport" content="width=device-width"><body style="margin:0;padding:16px;background:#f3f3f3">${descriptionPreview}</body>`}
+                    className={`mt-3 h-[48rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${dirty ? "opacity-60" : ""}`}
                   />
                 ) : (
-                  <div className="mt-3 h-[36rem] w-full animate-pulse rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]" />
+                  <div className="mt-3 h-[48rem] w-full animate-pulse rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]" />
                 )}
               </div>
             </div>
@@ -1789,6 +1856,8 @@ export default function DraftEditorPage() {
           </div>
         </footer>
       )}
+
+      {published && <PublishedDialog listing={published} onClose={() => router.push(`/accounts/${params.id}/listings`)} />}
 
       <ConfirmDialog
         open={confirmPublish}

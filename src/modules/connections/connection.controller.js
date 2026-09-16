@@ -225,7 +225,7 @@ const updateTemplateSchema = z.object({
   deliveryTime: z.string().max(40).default('2–4 Business Days'),
   freePostage: z.boolean().default(true),
   returnsDays: z.coerce.number().int().min(0).max(365).default(30),
-  recommendedCount: z.coerce.number().int().min(0).max(8).default(4),
+  recommendedCount: z.coerce.number().int().min(0).max(24).default(12),
   responseTime: z.string().max(30).default('24 hours'),
   reviews: z
     .array(z.object({ stars: z.coerce.number().min(1).max(5).default(5), text: z.string().max(400), buyer: z.string().max(60).default(''), date: z.string().max(30).default('') }))

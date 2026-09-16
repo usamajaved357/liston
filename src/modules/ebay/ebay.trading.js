@@ -222,4 +222,18 @@ async function getStoreProfile(accessToken) {
   };
 }
 
-module.exports = { EbayTradingError, getActiveListings, getUnsoldListings, getOrders, getItemSummary, getStoreProfile };
+// Replaces the description of a LIVE listing. Republishing an inventory
+// item group doesn't revise the description of an already-live listing
+// (confirmed live), so a description change has to go through Trading's
+// ReviseFixedPriceItem. Also the only way to repair a listing that went up
+// with the plain text.
+async function reviseDescription(accessToken, itemId, descriptionHtml) {
+  const body = await tradingRequest(
+    accessToken,
+    'ReviseFixedPriceItem',
+    `<Item><ItemID>${itemId}</ItemID><Description><![CDATA[${descriptionHtml}]]></Description></Item>`
+  );
+  return { itemId: String(body.ItemID || itemId) };
+}
+
+module.exports = { EbayTradingError, getActiveListings, getUnsoldListings, getOrders, getItemSummary, getStoreProfile, reviseDescription };

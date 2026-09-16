@@ -79,6 +79,20 @@ async function ensureInventoryLocation(accessToken, merchantLocationKey, locatio
   });
 }
 
+// eBay keeps two descriptions. The inventory item's `product.description`
+// is plain text capped at 4,000 characters (the catalogue record); the
+// offer's `listingDescription` is the HTML buyers see, capped at 500,000.
+// Sending the branded template to both failed at publish: "Invalid value
+// for description. The length should be between 1 and 4000 characters."
+const INVENTORY_DESCRIPTION_MAX = 4000;
+function plainDescription(text) {
+  return String(text || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, INVENTORY_DESCRIPTION_MAX);
+}
+
 function buildInventoryItem({ title, description, imageUrls, aspects, condition, quantity }) {
   return {
     availability: {
@@ -87,21 +101,21 @@ function buildInventoryItem({ title, description, imageUrls, aspects, condition,
     condition: condition || 'NEW',
     product: {
       title,
-      description,
+      description: plainDescription(description),
       imageUrls,
       aspects,
     },
   };
 }
 
-function buildOffer({ sku, marketplaceId, categoryId, description, price, merchantLocationKey, quantity, listingPolicies }) {
+function buildOffer({ sku, marketplaceId, categoryId, description, listingDescription, price, merchantLocationKey, quantity, listingPolicies }) {
   return {
     sku,
     marketplaceId: marketplaceId || 'EBAY_GB',
     format: 'FIXED_PRICE',
     availableQuantity: quantity,
     categoryId,
-    listingDescription: description,
+    listingDescription: listingDescription || description,
     pricingSummary: { price },
     merchantLocationKey,
     ...(listingPolicies ? { listingPolicies } : {}),
@@ -201,7 +215,7 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, merchantLocationKey, locationInput, listingPolicies }) {
+async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, merchantLocationKey, locationInput, listingPolicies }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   ensureListingPolicies(listingPolicies);
@@ -234,6 +248,7 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         marketplaceId,
         categoryId,
         description: commonDescription,
+        listingDescription: commonListingDescription,
         price: variant.price,
         merchantLocationKey,
         quantity: variant.quantity,
@@ -250,8 +265,18 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
     groupKey,
     {
       title: commonTitle,
-      description: commonDescription,
+      // For a multi-variation listing eBay builds the LIVE description from
+      // the group's description (HTML, 500k limit) — not from the offers'
+      // listingDescription. Sending plain text here published a listing
+      // without the branded template. Confirmed live.
+      description: commonListingDescription || commonDescription,
       imageUrls,
+      // The listing's own item specifics come from the GROUP, not the SKUs
+      // — eBay reads shared aspects (Type, Brand, Material…) here and only
+      // the varying ones (Colour, Size) from each SKU. Without this, publish
+      // failed with "The item specific Type is missing" even though every
+      // SKU carried it. Confirmed live.
+      aspects: variesBy.aspects || {},
       variantSKUs: variants.map((v) => v.sku),
       variesBy: { aspectsImageVariesBy: variesBy.aspectsImageVariesBy, specifications: variesBy.specifications },
     },
@@ -566,6 +591,8 @@ module.exports = {
   EbayError,
   ensureValidAccessToken,
   createOfferWithRetry,
+  buildInventoryItem,
+  buildOffer,
   draftListing,
   draftVariationListing,
   getBusinessPolicies,

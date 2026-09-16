@@ -22,7 +22,7 @@ const DEFAULT_TEMPLATE = {
   deliveryTime: '2–4 Business Days',
   freePostage: true,
   returnsDays: 30,
-  recommendedCount: 4,
+  recommendedCount: 12,
   // Only genuine reviews the seller has entered are shown. A section of
   // fabricated five-star quotes is the kind of thing that gets a listing
   // removed; the section is simply omitted when there are none.
@@ -89,65 +89,69 @@ function styles(t) {
   const a = t.accentColor;
   const d = t.darkColor;
   return `<style>
-.eb{max-width:700px;width:100%;margin:0 auto;font-family:Nunito,'Segoe UI',Helvetica,Arial,sans-serif;color:#1C1C1C;background:#fff;border:1px solid #E0E0E0;overflow-x:hidden}
+.eb{max-width:1400px;width:100%;margin:0 auto;font-family:Nunito,'Segoe UI',Helvetica,Arial,sans-serif;color:#1C1C1C;background:#fff;border:1px solid #E0E0E0;overflow-x:hidden}
 .eb *{box-sizing:border-box}
 .eb-header{background:${d};padding:0;overflow:hidden}
-.eb-header-top{padding:14px 22px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.eb-header-top{padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .eb-logo-wrap{display:flex;align-items:center;gap:11px}
-.eb-logo-img{width:42px;height:42px;border-radius:10px;overflow:hidden;flex-shrink:0;border:2px solid ${a};background:${a}}
+.eb-logo-img{width:52px;height:52px;border-radius:10px;overflow:hidden;flex-shrink:0;border:2px solid ${a};background:${a}}
 .eb-logo-img img{width:100%;height:100%;object-fit:cover;display:block}
 .eb-logo-fallback{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:20px}
-.eb-logo-name{font-size:21px;font-weight:800;color:#fff;letter-spacing:-0.5px;line-height:1}
-.eb-logo-tag{font-size:9px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#7A7A9A;margin-top:3px}
+.eb-logo-name{font-size:26px;font-weight:800;color:#fff;letter-spacing:-0.5px;line-height:1}
+.eb-logo-tag{font-size:10px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#7A7A9A;margin-top:3px}
 .eb-header-badges{display:flex;gap:7px;flex-shrink:0}
-.eb-hbadge{background:rgba(255,255,255,0.08);border:1px solid ${a}59;border-radius:20px;padding:4px 11px;font-size:10px;color:${a};font-weight:700;white-space:nowrap}
-.eb-header-bar{background:${a};padding:6px 22px;display:flex;gap:20px;align-items:center;overflow:hidden}
-.eb-bar-item{font-size:10px;font-weight:700;color:#fff;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap}
+.eb-hbadge{background:rgba(255,255,255,0.08);border:1px solid ${a}59;border-radius:20px;padding:6px 14px;font-size:12px;color:${a};font-weight:700;white-space:nowrap}
+.eb-header-bar{background:${a};padding:9px 28px;display:flex;gap:20px;align-items:center;overflow:hidden}
+.eb-bar-item{font-size:12px;font-weight:700;color:#fff;letter-spacing:0.8px;text-transform:uppercase;white-space:nowrap}
 .eb-bar-dot{color:rgba(255,255,255,0.4);font-size:12px}
-.eb-hero{background:#F7F7FA;padding:20px 22px;border-left:5px solid ${a}}
-.eb-pname{font-size:18px;font-weight:800;color:${d};line-height:1.4}
+.eb-hero{background:#F7F7FA;padding:26px 28px;border-left:5px solid ${a}}
+.eb-pname{font-size:26px;font-weight:800;color:${d};line-height:1.4}
 .eb-pill-row{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
-.eb-pill{background:${a};color:#fff;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:0.5px}
+.eb-pill{background:${a};color:#fff;font-size:12px;font-weight:700;padding:5px 13px;border-radius:20px;letter-spacing:0.5px}
 .eb-pill.outline{background:transparent;color:${a};border:1.5px solid ${a}}
-.eb-sec{padding:18px 22px;border-bottom:1px solid #EBEBEB}
-.eb-stitle{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:${a};margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.eb-sec{padding:24px 28px;border-bottom:1px solid #EBEBEB}
+.eb-stitle{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:2px;color:${a};margin-bottom:14px;display:flex;align-items:center;gap:8px}
 .eb-stitle::after{content:'';flex:1;height:1.5px;background:#F0F0F0}
-.eb-desc{font-size:13px;color:#2D2D2D;line-height:1.8}
+.eb-desc{font-size:16px;color:#2D2D2D;line-height:1.8}
 .eb-desc p{margin:0 0 10px}
 .eb-desc ul{padding-left:18px;margin:0 0 10px}
 .eb-desc li{margin-bottom:5px}
 .eb-desc strong{color:${d};font-weight:700}
-.eb-trust{background:${d};padding:14px 18px;display:flex;gap:6px;flex-wrap:wrap}
+.eb-trust{background:${d};padding:18px 24px;display:flex;gap:6px;flex-wrap:wrap}
 .eb-tbadge{flex:1;min-width:100px;background:rgba(255,255,255,0.06);border:1px solid ${a}33;border-radius:10px;padding:10px 8px;text-align:center}
-.eb-ticon{font-size:18px;display:block}
-.eb-ttitle{color:#fff;font-size:11px;font-weight:700;display:block;margin-top:5px}
-.eb-tsub{color:#7A7A9A;font-size:9px;display:block;margin-top:2px}
+.eb-ticon{font-size:22px;display:block}
+.eb-ttitle{color:#fff;font-size:13px;font-weight:700;display:block;margin-top:5px}
+.eb-tsub{color:#7A7A9A;font-size:11px;display:block;margin-top:2px}
 .eb-drow{display:flex;gap:10px;flex-wrap:wrap}
 .eb-ditem{flex:1;min-width:120px;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:13px 14px;border-bottom:3px solid ${a}}
-.eb-dlbl{font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;color:#9090A0}
-.eb-dval{font-size:13px;font-weight:800;color:${d};margin-top:5px}
-.eb-dnote{font-size:10px;color:#9090A0;margin-top:2px}
-.eb-policy{font-size:13px;line-height:1.8;color:#3D3D3D;margin:0}
+.eb-dlbl{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:1.2px;color:#9090A0}
+.eb-dval{font-size:15px;font-weight:800;color:${d};margin-top:5px}
+.eb-dnote{font-size:12px;color:#9090A0;margin-top:2px}
+.eb-policy{font-size:15px;line-height:1.8;color:#3D3D3D;margin:0}
 .eb-policy strong{color:${d}}
-.eb-policy-note{font-size:11px;color:#9090A0;margin:8px 0 0;line-height:1.6}
+.eb-policy-note{font-size:12px;color:#9090A0;margin:8px 0 0;line-height:1.6}
 .eb-fgrid{display:flex;gap:10px;flex-wrap:wrap}
 .eb-fcard{flex:1;min-width:140px;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:14px;border-top:3px solid ${a}}
 .eb-fstars{color:${a};font-size:14px;letter-spacing:1px}
 .eb-ftext{font-size:12px;color:#3D3D3D;line-height:1.65;margin-top:8px;font-style:italic}
 .eb-fname{font-size:11px;font-weight:700;color:${d};margin-top:10px}
 .eb-fdate{font-size:10px;color:#9090A0;margin-top:2px}
-.eb-rgrid{display:flex;gap:10px;flex-wrap:wrap}
-.eb-rcard{flex:1;min-width:120px;max-width:155px;border:1.5px solid #E8E8E8;border-radius:12px;overflow:hidden;text-decoration:none;display:block;background:#fff}
-.eb-rimg{width:100%;height:105px;object-fit:cover;background:#F7F7FA;display:block}
-.eb-rinfo{padding:9px 11px;border-top:2px solid ${a}}
-.eb-rname{font-size:11px;font-weight:700;color:${d};line-height:1.4}
-.eb-rfrom{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#9090A0;display:block;margin-top:5px}
-.eb-rprice{font-size:14px;font-weight:800;color:${a}}
-.eb-footer{background:${d};padding:14px 22px;text-align:center;border-top:3px solid ${a}}
-.eb-footer p{font-size:11px;color:#7A7A9A;margin:0}
+.eb-rgrid{display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding:4px 2px 14px;scrollbar-width:thin;scrollbar-color:${a} #F0F0F0}
+.eb-rgrid::-webkit-scrollbar{height:8px}
+.eb-rgrid::-webkit-scrollbar-track{background:#F0F0F0;border-radius:8px}
+.eb-rgrid::-webkit-scrollbar-thumb{background:${a};border-radius:8px}
+.eb-rcard{flex:0 0 200px;width:200px;scroll-snap-align:start;border:1.5px solid #E8E8E8;border-radius:12px;overflow:hidden;text-decoration:none;display:block;background:#fff}
+.eb-rimg{width:100%;height:200px;object-fit:cover;background:#F7F7FA;display:block}
+.eb-rinfo{padding:10px 12px;border-top:2px solid ${a}}
+.eb-rname{font-size:13px;font-weight:700;color:${d};line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.eb-rfrom{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;color:#9090A0;display:block;margin-top:6px}
+.eb-rprice{font-size:16px;font-weight:800;color:${a}}
+.eb-rhint{font-size:11px;color:#9090A0;margin:0 0 10px}
+.eb-footer{background:${d};padding:18px 28px;text-align:center;border-top:3px solid ${a}}
+.eb-footer p{font-size:13px;color:#7A7A9A;margin:0}
 .eb-footer strong{color:#fff}
-.eb-save{font-size:11px;color:${a};margin-top:5px;display:block;font-weight:700}
-@media(max-width:480px){.eb-header-badges{display:none}.eb-fcard{min-width:100%}.eb-rcard{min-width:100px;max-width:130px}.eb-rimg{height:85px}}
+.eb-save{font-size:13px;color:${a};margin-top:5px;display:block;font-weight:700}
+@media(max-width:480px){.eb-header-badges{display:none}.eb-fcard{min-width:100%}.eb-rcard{flex-basis:150px;width:150px}.eb-rimg{height:150px}.eb-pname{font-size:20px}.eb-sec{padding:18px}}
 </style>`;
 }
 
@@ -261,9 +265,10 @@ function renderDescription({ template, productName, description, recommended = [
   ${
     recommended.length
       ? `<div class="eb-sec">
-    <div class="eb-stitle">You May Also Like</div>
+    <div class="eb-stitle">More From Our Store</div>
+    <p class="eb-rhint">Scroll to see more →</p>
     <div class="eb-rgrid">${recommended
-      .slice(0, Number(t.recommendedCount) || 4)
+      .slice(0, Number(t.recommendedCount) || 12)
       .map(
         (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard">${
           item.imageUrl ? `<img class="eb-rimg" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : '<div class="eb-rimg"></div>'
