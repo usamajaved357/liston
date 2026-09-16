@@ -3,7 +3,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const sharp = require('sharp');
 const config = require('../../config');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
-const openaiImage = require('../ai-generation/image-generation/openai-image.service');
+const heroBadges = require('../ai-generation/image-pipeline/hero-badges');
 const { AiGenerationError } = require('../ai-generation/ai-generation.errors');
 
 // "Make the description shorter", "add a heading to the main image" — the
@@ -12,7 +12,7 @@ const { AiGenerationError } = require('../ai-generation/ai-generation.errors');
 // generated image can come back wrong, and overwriting the original would
 // lose a shot that was already good.
 
-const MODEL = 'claude-sonnet-4-5';
+const MODEL = config.aiModel;
 
 function client() {
   if (!config.anthropicApiKey) {
@@ -106,14 +106,12 @@ const IMAGE_OP_TOOL = {
     properties: {
       operation: {
         type: 'string',
-        enum: ['scene', 'background', 'text_overlay'],
+        enum: ['text_overlay', 'enhance', 'badges', 'unsupported'],
         description:
-          '"scene" regenerates the background/setting from a description. "background" removes the background onto ' +
-          'plain white. "text_overlay" prints text onto the image.',
-      },
-      scenePrompt: {
-        type: 'string',
-        description: 'For "scene": a concrete photography brief for the new setting.',
+          '"text_overlay" prints the seller\'s words onto the image. "enhance" sharpens, brightens and trims the ' +
+          'margins so the product fills the frame. "badges" adds the store\'s UK flag / FREE SHIPPING label. ' +
+          '"unsupported" for anything that would change the photo itself (new background, new scene, remove or add ' +
+          'objects, change the product) — those are not available.',
       },
       text: { type: 'string', description: 'For "text_overlay": the exact words to print. Keep it short.' },
       position: { type: 'string', enum: ['top', 'bottom'], description: 'For "text_overlay": where it goes.' },
@@ -189,21 +187,17 @@ async function reviseImage({ imageUrl, instruction }) {
   if (plan.operation === 'text_overlay') {
     if (!plan.text) throw new AiGenerationError("Tell me what text you'd like on the image.");
     buffer = await overlayText(await imageOps.download(imageUrl), plan);
+  } else if (plan.operation === 'enhance') {
+    buffer = await imageOps.enhance(await imageOps.download(imageUrl));
+  } else if (plan.operation === 'badges') {
+    buffer = await heroBadges.brandHero(await imageOps.enhance(await imageOps.download(imageUrl)));
   } else {
-    if (!openaiImage.isConfigured()) {
-      throw new AiGenerationError('AI image editing is not configured on this server (OPENAI_API_KEY).');
-    }
-    // Same model and fidelity settings as drafting, so an edited photo stays
-    // the same product as the rest of the gallery. The seller's instruction
-    // is appended to the standard brief rather than replacing it — the
-    // white-background / no-supplier-marks rules still apply to an edit.
-    const reference = await imageOps.prepare(imageUrl);
-    if (!reference) throw new AiGenerationError("That image couldn't be read — try another one.");
-    const extraInstruction =
-      plan.operation === 'background'
-        ? 'Replace the background with a clean, pure white studio background. Change nothing else.'
-        : plan.scenePrompt || instruction;
-    buffer = await openaiImage.generateProductShot({ referenceImages: [reference.buffer], variant: 'hero', extraInstruction });
+    // There is deliberately no generative model here (see image-pipeline):
+    // say so plainly rather than pretend.
+    throw new AiGenerationError(
+      'Image edits are limited to sharpening/framing, badges and text — changing the background, scene or the ' +
+        'product itself isn\'t available. Upload your own photo for that.'
+    );
   }
 
   // Normalised to eBay's shape before the seller sees it, so the preview is

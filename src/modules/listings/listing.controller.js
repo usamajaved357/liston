@@ -185,6 +185,38 @@ async function acceptImage(req, res, next) {
   }
 }
 
+const uploadImageSchema = z.object({
+  // A data: URL. JSON rather than multipart so no extra parser is needed;
+  // the route carries its own larger body limit.
+  dataUrl: z.string().min(30).max(20 * 1024 * 1024),
+  replaces: z.string().url().optional(),
+  variantIndex: z.number().int().min(0).optional(),
+});
+
+async function uploadImage(req, res, next) {
+  try {
+    const parsed = uploadImageSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    const result = await listingService.uploadDraftImage(req.params.listingId, req.ownerId, parsed.data);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function downloadImage(req, res, next) {
+  try {
+    const url = typeof req.query.url === 'string' ? req.query.url : '';
+    const index = Math.max(1, parseInt(req.query.n, 10) || 1);
+    const { buffer, contentType, extension } = await listingService.fetchDraftImage(req.params.listingId, req.ownerId, url);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="listing-${req.params.listingId.slice(0, 8)}-image-${index}.${extension}"`);
+    res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function remove(req, res, next) {
   try {
     await listingService.removeDraft(req.params.listingId, req.ownerId);
@@ -194,4 +226,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };

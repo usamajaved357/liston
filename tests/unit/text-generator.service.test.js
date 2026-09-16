@@ -73,18 +73,11 @@ test('generateListingContent requests the single-item tool schema when the sourc
     'aspects',
     'condition',
     'description',
-    'imageScenePrompt',
-    'imageScenePrompts',
     'title',
   ]);
-  assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompt'));
-  // Several distinct briefs, so a gallery can be built when the supplier's
-  // own photos are mostly unusable marketing graphics.
-  assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompts'));
   assert.ok(capturedArgs.messages[0].content.includes('Competitor widget'));
   assert.ok(capturedArgs.messages[0].content.includes('Source widget'));
   assert.strictEqual(result.title, 'A great widget');
-  assert.strictEqual(result.imageScenePrompt, 'clean white studio background with soft shadow');
 });
 
 test('generateListingContent requests the variation tool schema when the source has variants', async () => {
@@ -123,16 +116,10 @@ test('generateListingContent requests the variation tool schema when the source 
     'commonDescription',
     'commonTitle',
     'condition',
-    'imageScenePrompt',
-    'imageScenePrompts',
     'sharedAspects',
     'variantAspectValues',
     'varyingAspectName',
   ]);
-  assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompt'));
-  // Several distinct briefs, so a gallery can be built when the supplier's
-  // own photos are mostly unusable marketing graphics.
-  assert.ok(capturedArgs.tools[0].input_schema.required.includes('imageScenePrompts'));
   assert.strictEqual(result.varyingAspectName, 'Colour');
 });
 

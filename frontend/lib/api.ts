@@ -594,6 +594,37 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ proposalId, replaces }),
     }),
+  // The seller's own photo, sent as a data: URL. `replaces` swaps an existing
+  // image wherever it appears; `variantIndex` sets a variation's photo;
+  // neither appends to the gallery.
+  uploadDraftImage: (listingId: string, file: File, target: { replaces?: string; variantIndex?: number } = {}) =>
+    new Promise<{ listing: DraftListing; imageUrl: string }>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new ApiError("Couldn't read that file.", 400));
+      reader.onload = () =>
+        request<{ listing: DraftListing; imageUrl: string }>(`/api/listings/${listingId}/images/upload`, {
+          method: "POST",
+          body: JSON.stringify({ dataUrl: reader.result, ...target }),
+        }).then(resolve, reject);
+      reader.readAsDataURL(file);
+    }),
+  // Downloads go through the API (eBay's CDN won't let the browser force a
+  // cross-origin download); the token has to ride along, so it's fetched as
+  // a blob and saved from an object URL.
+  downloadDraftImage: async (listingId: string, url: string, n: number) => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    const res = await fetch(`${API_URL}/api/listings/${listingId}/images/download?url=${encodeURIComponent(url)}&n=${n}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new ApiError("Couldn't download that image.", res.status);
+    const blob = await res.blob();
+    const name = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || `image-${n}.jpg`;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  },
 
   listTeamMembers: () =>
     request<{ members: TeamMember[]; knownFeatures: string[] }>("/api/team/members"),

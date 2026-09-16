@@ -238,6 +238,8 @@ function screened(overrides) {
     sourceUrl: overrides.sourceUrl || 'https://example.com/a.jpg',
     screen: {
       hasTextOrGraphics: false,
+      overlayTextLanguage: 'none',
+      hasSupplierBranding: false,
       isCollage: false,
       kind: 'product_photo',
       showsWholeProduct: true,
@@ -246,30 +248,40 @@ function screened(overrides) {
   };
 }
 
-test('rankScreened rejects images carrying overlaid text', () => {
-  // A real AliExpress gallery served a "Need 3 AAA Batteries / Swipe up to
-  // remove back cover" slide among its product shots. eBay demotes listings
-  // whose images carry text.
+test('rankScreened keeps supplier feature shots with English text, but never first', () => {
+  // Competitor listings carry these as secondary images and buyers use them.
+  // A rule that dropped every image with text left a listing with 2 of 6
+  // photos. They stay — ranked after the clean photography.
   const { usable, rejected } = imageScreen.rankScreened([
+    screened({ sourceUrl: 'infographic.jpg', hasTextOrGraphics: true, overlayTextLanguage: 'english', kind: 'product_photo' }),
     screened({ sourceUrl: 'clean.jpg' }),
-    screened({ sourceUrl: 'infographic.jpg', hasTextOrGraphics: true, kind: 'infographic' }),
   ]);
 
-  assert.deepStrictEqual(usable.map((i) => i.sourceUrl), ['clean.jpg']);
-  assert.deepStrictEqual(rejected.map((i) => i.sourceUrl), ['infographic.jpg']);
+  assert.deepStrictEqual(usable.map((i) => i.sourceUrl), ['clean.jpg', 'infographic.jpg']);
+  assert.deepStrictEqual(rejected, []);
+  assert.strictEqual(imageScreen.isHeroEligible(usable[0].screen), true);
+  assert.strictEqual(imageScreen.isHeroEligible(usable[1].screen), false);
 });
 
-test('rankScreened rejects a photo collage even though it carries no text', () => {
-  // The same gallery served a seven-panel grid of customer photos — text-free,
-  // so the text check alone let it through, but it renders the product tiny
-  // and eBay disallows collage layouts.
+test('rankScreened rejects supplier branding, non-English text and size charts outright', () => {
   const { usable, rejected } = imageScreen.rankScreened([
     screened({ sourceUrl: 'clean.jpg' }),
-    screened({ sourceUrl: 'grid.jpg', isCollage: true, kind: 'lifestyle_photo' }),
+    screened({ sourceUrl: 'watermark.jpg', hasSupplierBranding: true }),
+    screened({ sourceUrl: 'chinese.jpg', hasTextOrGraphics: true, overlayTextLanguage: 'other' }),
+    screened({ sourceUrl: 'sizes.jpg', kind: 'size_chart' }),
   ]);
 
   assert.deepStrictEqual(usable.map((i) => i.sourceUrl), ['clean.jpg']);
-  assert.deepStrictEqual(rejected.map((i) => i.sourceUrl), ['grid.jpg']);
+  assert.deepStrictEqual(rejected.map((i) => i.sourceUrl), ['watermark.jpg', 'chinese.jpg', 'sizes.jpg']);
+});
+
+test('rankScreened keeps a collage but ranks it last and never as the hero', () => {
+  const { usable } = imageScreen.rankScreened([
+    screened({ sourceUrl: 'grid.jpg', isCollage: true, kind: 'lifestyle_photo' }),
+    screened({ sourceUrl: 'clean.jpg' }),
+  ]);
+  assert.deepStrictEqual(usable.map((i) => i.sourceUrl), ['clean.jpg', 'grid.jpg']);
+  assert.strictEqual(imageScreen.isHeroEligible(usable[1].screen), false);
 });
 
 test('rankScreened puts the best whole-product shot first', () => {
@@ -309,76 +321,109 @@ test('the screen tool requires a verdict on text and collage for every image', (
   assert.ok(required.includes('isCollage'));
 });
 
-// --- provider dispatch -----------------------------------------------------
+// --- gallery assembly (no generator) --------------------------------------
 
 const pipeline = require('../../src/modules/ai-generation/image-pipeline');
-const openaiImage = require('../../src/modules/ai-generation/image-generation/openai-image.service');
+const heroBadges = require('../../src/modules/ai-generation/image-pipeline/hero-badges');
 const config = require('../../src/config');
 
-test('with OpenAI configured, the gallery is generated from the best clean supplier photo', async () => {
-  const previousKey = config.openaiApiKey;
-  const previousProvider = config.imageGeneration.provider;
-  config.openaiApiKey = 'test-key';
-  config.imageGeneration.provider = 'openai';
-
-  const source = await makeImage(900, 900);
-  const generated = await makeImage(1024, 1024);
+test('the gallery is the supplier photos exactly as they are — no retouching, no badges by default', async () => {
+  const source = await makeImage(900, 700);
   mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
   const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
   mock.method(screen, 'screenImages', async (images) => images.map((i) => ({ ...i, screen: null })));
-  const shotMock = mock.method(openaiImage, 'generateProductShot', async () => generated);
-  mock.method(eps, 'uploadAll', async (token, prepared) => prepared.map((p) => p.sourceUrl));
+  const enhanceMock = mock.method(imageOps, 'enhance', async (b) => b);
+  const badgeMock = mock.method(heroBadges, 'brandHero', async (b) => b);
+  let uploaded = [];
+  mock.method(eps, 'uploadAll', async (token, prepared) => {
+    uploaded = prepared;
+    return prepared.map((p) => p.sourceUrl);
+  });
 
-  try {
-    const { imageUrls } = await pipeline.buildGalleryImages({
-      sourceImageUrls: ['https://example.com/a.jpg'],
-      scenePrompt: 'x',
-      accessToken: 't',
-      marketplaceId: 'EBAY_GB',
-      categoryId: '20349',
-    });
+  const { imageUrls } = await pipeline.buildGalleryImages({
+    sourceImageUrls: ['https://example.com/a.jpg', 'https://example.com/b.jpg', 'https://example.com/c.jpg'],
+    accessToken: 't',
+    marketplaceId: 'EBAY_GB',
+    categoryId: '20349',
+  });
 
-    // One generation per gallery slot, each a different shot type.
-    assert.strictEqual(shotMock.mock.calls.length, 5);
-    assert.deepStrictEqual(
-      shotMock.mock.calls.map((c) => c.arguments[0].variant),
-      ['hero', 'angle', 'detail', 'in_use', 'back']
-    );
-    assert.ok(imageUrls.every((u) => u.startsWith('generated:')));
-  } finally {
-    config.openaiApiKey = previousKey;
-    config.imageGeneration.provider = previousProvider;
-  }
+  assert.strictEqual(imageUrls.length, 3);
+  assert.strictEqual(enhanceMock.mock.callCount(), 0, 'nothing is retouched');
+  assert.strictEqual(badgeMock.mock.callCount(), 0, 'badges are off by default');
+  // The original bytes go up — not a padded square.
+  const meta = await sharp(uploaded[0].buffer).metadata();
+  assert.deepStrictEqual([meta.width, meta.height], [900, 700]);
 });
 
-test('a failed generation falls back to the clean supplier photo instead of a hole', async () => {
-  const previousKey = config.openaiApiKey;
-  const previousProvider = config.imageGeneration.provider;
-  config.openaiApiKey = 'test-key';
-  config.imageGeneration.provider = 'openai';
-
+test('when every supplier photo is branded or foreign, they are still listed with a loud warning', async () => {
   const source = await makeImage(900, 900);
   mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
   const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
-  mock.method(screen, 'screenImages', async (images) => images.map((i) => ({ ...i, screen: null })));
-  mock.method(openaiImage, 'generateProductShot', async () => {
-    throw new Error('rate limited');
-  });
+  mock.method(screen, 'screenImages', async (images) =>
+    images.map((i) => ({ ...i, screen: { hasTextOrGraphics: true, overlayTextLanguage: 'other', hasSupplierBranding: true, isCollage: false, kind: 'product_photo', showsWholeProduct: true } }))
+  );
+  mock.method(imageOps, 'enhance', async (b) => b);
+  mock.method(heroBadges, 'brandHero', async (b) => b);
   mock.method(eps, 'uploadAll', async (token, prepared) => prepared.map((p) => p.sourceUrl));
 
-  try {
-    const { imageUrls, warnings } = await pipeline.buildGalleryImages({
-      sourceImageUrls: ['https://example.com/a.jpg'],
-      scenePrompt: 'x',
-      accessToken: 't',
-      marketplaceId: 'EBAY_GB',
-      categoryId: '20349',
-    });
+  const { imageUrls, warnings } = await pipeline.buildGalleryImages({
+    sourceImageUrls: ['https://example.com/a.jpg'],
+    accessToken: 't',
+    marketplaceId: 'EBAY_GB',
+    categoryId: '20349',
+  });
 
-    assert.deepStrictEqual(imageUrls, ['https://example.com/a.jpg']);
-    assert.match(warnings.join(' '), /5 generated shot\(s\) failed/);
-  } finally {
-    config.openaiApiKey = previousKey;
-    config.imageGeneration.provider = previousProvider;
-  }
+  assert.strictEqual(imageUrls.length, 1);
+  assert.match(warnings.join(' '), /Every supplier photo carries supplier branding/);
+});
+
+test('a variant image is its own supplier photo, uploaded as-is', async () => {
+  const source = await makeImage(900, 900);
+  mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
+  const enhanceMock = mock.method(imageOps, 'enhance', async (b) => b);
+  mock.method(eps, 'upload', async () => 'https://i.ebayimg.com/v.jpg');
+
+  const url = await pipeline.buildVariantImage({ sourceImageUrl: 'https://example.com/v.jpg', accessToken: 't', marketplaceId: 'EBAY_GB' });
+  assert.strictEqual(url, 'https://i.ebayimg.com/v.jpg');
+  assert.strictEqual(enhanceMock.mock.callCount(), 0);
+});
+
+// --- enhance + badges ------------------------------------------------------
+
+test('enhance trims plain margins so the product fills the frame, at 1600² on white', async () => {
+  // A small dark square sitting in a large white field.
+  const product = await sharp({ create: { width: 200, height: 200, channels: 3, background: '#223344' } }).png().toBuffer();
+  const photo = await sharp({ create: { width: 1000, height: 1000, channels: 3, background: '#ffffff' } })
+    .composite([{ input: product, left: 400, top: 400 }])
+    .jpeg()
+    .toBuffer();
+
+  const out = await imageOps.enhance(photo);
+  const meta = await sharp(out).metadata();
+  assert.strictEqual(meta.width, 1600);
+  assert.strictEqual(meta.height, 1600);
+  // After trimming, the product spans most of the frame: the centre pixel is
+  // product-coloured and a pixel at 20% in is too (it was white before).
+  const raw = await sharp(out).raw().toBuffer();
+  const px = (x, y) => raw[(y * 1600 + x) * 3];
+  assert.ok(px(800, 800) < 100, 'centre is product');
+  assert.ok(px(320, 320) < 100, 'product now reaches 20% in — margins were trimmed');
+});
+
+test('brandHero draws the enabled badges and leaves the image alone when none are on', async () => {
+  const photo = await makeImage(1600, 1600);
+  const plain = await heroBadges.brandHero(photo, { addUkFlag: false, addFreeShippingLabel: false, addGlowBorder: false });
+  assert.strictEqual(plain, photo);
+
+  const branded = await heroBadges.brandHero(photo, { addUkFlag: true, addFreeShippingLabel: true, addGlowBorder: false });
+  assert.notStrictEqual(branded.length, photo.length);
+  // The flag sits bottom-left and the label bottom-right: pixels there no
+  // longer match the photo's flat colour, while the centre is untouched.
+  const before = await sharp(photo).raw().toBuffer();
+  const after = await sharp(branded).raw().toBuffer();
+  const at = (buf, x, y) => Array.from(buf.subarray((y * 1600 + x) * 3, (y * 1600 + x) * 3 + 3));
+  assert.notDeepStrictEqual(at(after, 168, 1492), at(before, 168, 1492), 'flag drawn bottom-left');
+  assert.notDeepStrictEqual(at(after, 1400, 1492), at(before, 1400, 1492), 'label drawn bottom-right');
+  assert.deepStrictEqual(at(after, 800, 800).map((v) => Math.round(v / 8)), at(before, 800, 800).map((v) => Math.round(v / 8)), 'centre untouched');
+  assert.deepStrictEqual(heroBadges.activeBadges({ addUkFlag: true, addFreeShippingLabel: false, addGlowBorder: true }), ['UK flag', 'border']);
 });

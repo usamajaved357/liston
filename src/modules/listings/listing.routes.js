@@ -34,6 +34,10 @@ router.get('/:listingId/description-preview', ...editGuard, listingController.de
 router.post('/:listingId/revise', ...editGuard, listingController.reviseText);
 router.post('/:listingId/images/revise', ...editGuard, listingController.reviseImage);
 router.post('/:listingId/images/accept', ...editGuard, listingController.acceptImage);
+// A base64 image can be ~16MB for eBay's 12MB cap — well past the app-wide
+// 2MB JSON limit, so this route parses its own body.
+router.post('/:listingId/images/upload', ...editGuard, express.json({ limit: '20mb' }), listingController.uploadImage);
+router.get('/:listingId/images/download', ...editGuard, listingController.downloadImage);
 router.post(
   '/:listingId/publish',
   requireAuth,

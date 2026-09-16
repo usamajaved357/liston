@@ -118,7 +118,7 @@ test('generateDraftInput assembles a single-SKU draftInput when the source has n
   assert.strictEqual(competitor.title, 'Competitor');
   assert.strictEqual(source.title, 'Source');
   assert.strictEqual(draftInput.categoryId, '123');
-  assert.strictEqual(buildGalleryMock.mock.calls[0].arguments[0].scenePrompt, 'clean white studio background');
+  assert.strictEqual(buildGalleryMock.mock.calls[0].arguments[0].categoryId, '123');
 });
 
 test('generateDraftInput caps single-SKU gallery images at 5, even when the source has more', async () => {
@@ -229,7 +229,7 @@ test('generateDraftInput assembles a variation draftInput when the source has va
   assert.deepStrictEqual(draftInput.variesBy.specifications, [{ name: 'Colour', values: ['Black', 'Red'] }]);
   assert.deepStrictEqual(draftInput.variesBy.aspectsImageVariesBy, ['Colour']);
   assert.strictEqual(draftInput.categoryId, '123');
-  assert.strictEqual(buildGalleryMock.mock.calls[0].arguments[0].scenePrompt, 'clean white studio background');
+  assert.strictEqual(buildGalleryMock.mock.calls[0].arguments[0].categoryId, '123');
 });
 
 test('generateDraftInput fills a variant with no photo of its own from the gallery', async () => {

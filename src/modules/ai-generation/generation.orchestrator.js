@@ -330,8 +330,6 @@ async function generateDraftInput({
 
   const { imageUrls: galleryImageUrls, warnings: imageWarnings } = await imagePipeline.buildGalleryImages({
     sourceImageUrls: source.imageUrls,
-    scenePrompt: content.imageScenePrompt,
-    scenePrompts: content.imageScenePrompts,
     accessToken,
     marketplaceId,
     categoryId: competitor.categoryId,

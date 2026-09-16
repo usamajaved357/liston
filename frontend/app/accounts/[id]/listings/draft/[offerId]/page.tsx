@@ -111,6 +111,11 @@ function ImageCarousel({
   onSetMain,
   onDelete,
   onEditWithAi,
+  onUpload,
+  onReplace,
+  onDownload,
+  onDownloadAll,
+  uploading,
   disabled,
 }: {
   images: string[];
@@ -119,6 +124,11 @@ function ImageCarousel({
   onSetMain: (index: number) => void;
   onDelete: (index: number) => void;
   onEditWithAi: (index: number) => void;
+  onUpload: (files: FileList) => void;
+  onReplace: (index: number, file: File) => void;
+  onDownload: (index: number) => void;
+  onDownloadAll: () => void;
+  uploading: boolean;
   disabled: boolean;
 }) {
   const count = images.length;
@@ -137,10 +147,32 @@ function ImageCarousel({
     return () => window.removeEventListener("keydown", onKey);
   }, [prev, next]);
 
+  const uploadInput = (
+    <label
+      className={`cursor-pointer rounded-md border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink)] hover:border-[var(--color-accent)]/50 ${
+        disabled || uploading ? "pointer-events-none opacity-40" : ""
+      }`}
+    >
+      {uploading ? "Uploading…" : "Upload photos"}
+      <input
+        type="file"
+        accept="image/jpeg,image/png,image/gif,image/webp"
+        multiple
+        hidden
+        disabled={disabled || uploading}
+        onChange={(e) => {
+          if (e.target.files?.length) onUpload(e.target.files);
+          e.target.value = "";
+        }}
+      />
+    </label>
+  );
+
   if (!count) {
     return (
-      <div className="flex aspect-square items-center justify-center rounded-2xl border border-dashed border-[var(--color-line)]">
+      <div className="flex aspect-square flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-[var(--color-line)]">
         <p className="text-sm text-[var(--color-muted)]">No images — eBay needs at least one.</p>
+        {uploadInput}
       </div>
     );
   }
@@ -173,7 +205,7 @@ function ImageCarousel({
         )}
       </div>
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => onSetMain(selected)}
@@ -182,13 +214,37 @@ function ImageCarousel({
         >
           Set as main
         </button>
+        <label
+          className={`cursor-pointer rounded-md border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink)] hover:border-[var(--color-accent)]/50 ${
+            disabled || uploading ? "pointer-events-none opacity-40" : ""
+          }`}
+        >
+          Replace
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/gif,image/webp"
+            hidden
+            disabled={disabled || uploading}
+            onChange={(e) => {
+              if (e.target.files?.[0]) onReplace(selected, e.target.files[0]);
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => onDownload(selected)}
+          className="rounded-md border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink)] hover:border-[var(--color-accent)]/50"
+        >
+          Download
+        </button>
         <button
           type="button"
           onClick={() => onEditWithAi(selected)}
           disabled={disabled}
           className="rounded-md border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink)] hover:border-[var(--color-accent)]/50 disabled:opacity-40"
         >
-          Edit with AI
+          Add text / badge
         </button>
         <button
           type="button"
@@ -198,6 +254,12 @@ function ImageCarousel({
           className="ml-auto text-xs font-semibold text-[var(--color-danger)] hover:underline disabled:opacity-40"
         >
           Delete image
+        </button>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        {uploadInput}
+        <button type="button" onClick={onDownloadAll} className="text-xs font-semibold text-[var(--color-accent)] hover:underline">
+          Download all {count}
         </button>
       </div>
 
@@ -241,6 +303,7 @@ function VariationsEditor({
   onPriceChange,
   onQuantityChange,
   onImageChange,
+  onUploadImage,
   disabled,
 }: {
   variants: VariationDraftVariant[];
@@ -258,6 +321,7 @@ function VariationsEditor({
   onPriceChange: (index: number, value: string) => void;
   onQuantityChange: (index: number, value: string) => void;
   onImageChange: (index: number, url: string) => void;
+  onUploadImage: (index: number, file: File) => void;
   disabled: boolean;
 }) {
   const axisRemoved = (axis: string, value: string) => removedAxisValues.some((r) => r.axis === axis && r.value === value);
@@ -342,6 +406,24 @@ function VariationsEditor({
                   </option>
                 )}
               </select>
+              <label
+                title="Upload a photo for this variation"
+                className={`cursor-pointer rounded-md border border-[var(--color-line)] px-2 py-1 text-xs font-semibold text-[var(--color-ink)] hover:border-[var(--color-accent)]/50 ${
+                  disabled || gone ? "pointer-events-none opacity-40" : ""
+                }`}
+              >
+                ↑
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif,image/webp"
+                  hidden
+                  disabled={disabled || gone}
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) onUploadImage(i, e.target.files[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
               <div className={`min-w-0 flex-1 text-sm text-[var(--color-ink)] ${gone ? "line-through" : ""}`}>
                 {Object.entries(v.aspects)
                   .map(([name, values]) => `${name}: ${values.join(", ")}`)
@@ -605,6 +687,7 @@ export default function DraftEditorPage() {
   const [showNotes, setShowNotes] = useState(false);
   const [imageOverrides, setImageOverrides] = useState<Record<number, string>>({});
   const [imageCheck, setImageCheck] = useState<ImageCheck | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -794,6 +877,44 @@ export default function DraftEditorPage() {
   }
 
   // --- gallery edits ---
+  // Uploads land on the server immediately (they need an eBay-hosted URL),
+  // so the listing is refreshed from the response; local gallery state
+  // follows it. Unsaved text edits are untouched.
+  async function uploadFiles(files: File[], target: { replaces?: string; variantIndex?: number } = {}) {
+    if (!listing) return;
+    setUploading(true);
+    setError(null);
+    try {
+      let latest = listing;
+      for (const file of files) {
+        const data = await api.uploadDraftImage(latest.id, file, target);
+        latest = data.listing;
+        if (target.replaces) {
+          setImages((imgs) => imgs.map((u) => (u === target.replaces ? data.imageUrl : u)));
+          target = {}; // only the first file can replace; the rest append
+        } else if (target.variantIndex === undefined) {
+          setImages((imgs) => [...imgs, data.imageUrl]);
+        }
+      }
+      setListing(latest);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't upload that image.");
+    } finally {
+      setUploading(false);
+    }
+  }
+  async function downloadImage(index: number) {
+    if (!listing) return;
+    try {
+      await api.downloadDraftImage(listing.id, images[index], index + 1);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't download that image.");
+    }
+  }
+  async function downloadAll() {
+    for (let i = 0; i < images.length; i++) await downloadImage(i);
+  }
+
   function setMain(index: number) {
     setImages((imgs) => [imgs[index], ...imgs.filter((_, i) => i !== index)]);
     setSelectedImage(0);
@@ -974,6 +1095,11 @@ export default function DraftEditorPage() {
                 setSelectedImage(i);
                 setAiScope("image");
               }}
+              onUpload={(files) => uploadFiles(Array.from(files))}
+              onReplace={(i, file) => uploadFiles([file], { replaces: images[i] })}
+              onDownload={downloadImage}
+              onDownloadAll={downloadAll}
+              uploading={uploading}
               disabled={!editable || busy}
             />
             {editable && (
@@ -1195,6 +1321,7 @@ export default function DraftEditorPage() {
                 }
                 onPriceChange={(i, value) => setPriceOverrides((p) => ({ ...p, [i]: value }))}
                 onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
+                onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
                 onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
                 disabled={!editable || busy}
               />

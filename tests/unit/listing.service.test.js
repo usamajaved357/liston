@@ -370,3 +370,85 @@ test('removeDraft refuses to delete a published listing', async () => {
   mock.method(listingRepository, 'findByIdForUser', async () => pendingDraft({}, { status: 'published' }));
   await assert.rejects(() => listingService.removeDraft('listing-1', USER_ID), /Only a draft can be edited/);
 });
+
+// --- seller-uploaded images ------------------------------------------------
+
+const sharp = require('sharp');
+const eps = require('../../src/modules/ai-generation/image-pipeline/eps');
+
+async function dataUrl(width, height) {
+  const buf = await sharp({ create: { width, height, channels: 3, background: '#336699' } }).jpeg().toBuffer();
+  return `data:image/jpeg;base64,${buf.toString('base64')}`;
+}
+
+test('uploadDraftImage hosts the seller photo on eBay and appends it to the gallery, bytes untouched', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => ({
+    id: 'listing-1',
+    status: 'pending_review',
+    connection_id: CONNECTION_ID,
+    generated_data: { imageUrls: ['https://i.ebayimg.com/a.jpg'], marketplaceId: 'EBAY_GB' },
+  }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
+  let uploadedBytes = null;
+  mock.method(eps, 'upload', async (token, buffer) => {
+    uploadedBytes = buffer;
+    return 'https://i.ebayimg.com/new.jpg';
+  });
+  const save = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  const { listing, imageUrl } = await listingService.uploadDraftImage('listing-1', USER_ID, { dataUrl: await dataUrl(900, 700) });
+
+  assert.strictEqual(imageUrl, 'https://i.ebayimg.com/new.jpg');
+  assert.deepStrictEqual(listing.generated_data.imageUrls, ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/new.jpg']);
+  const meta = await sharp(uploadedBytes).metadata();
+  assert.deepStrictEqual([meta.width, meta.height], [900, 700], 'uploaded as-is, not padded');
+  assert.strictEqual(save.mock.callCount(), 1);
+});
+
+test('uploadDraftImage can replace an image everywhere it appears, or set a variation photo', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => ({
+    id: 'listing-1',
+    status: 'pending_review',
+    connection_id: CONNECTION_ID,
+    generated_data: {
+      imageUrls: ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'],
+      variants: [{ imageUrls: ['https://i.ebayimg.com/a.jpg'] }, { imageUrls: ['https://i.ebayimg.com/b.jpg'] }],
+      marketplaceId: 'EBAY_GB',
+    },
+  }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
+  mock.method(eps, 'upload', async () => 'https://i.ebayimg.com/new.jpg');
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  const replaced = await listingService.uploadDraftImage('listing-1', USER_ID, { dataUrl: await dataUrl(800, 800), replaces: 'https://i.ebayimg.com/a.jpg' });
+  assert.deepStrictEqual(replaced.listing.generated_data.imageUrls, ['https://i.ebayimg.com/new.jpg', 'https://i.ebayimg.com/b.jpg']);
+  assert.deepStrictEqual(replaced.listing.generated_data.variants[0].imageUrls, ['https://i.ebayimg.com/new.jpg']);
+
+  const variant = await listingService.uploadDraftImage('listing-1', USER_ID, { dataUrl: await dataUrl(800, 800), variantIndex: 1 });
+  assert.deepStrictEqual(variant.listing.generated_data.variants[1].imageUrls, ['https://i.ebayimg.com/new.jpg']);
+  assert.strictEqual(variant.listing.generated_data.imageUrls.length, 2, 'a variant upload does not touch the gallery');
+});
+
+test('uploadDraftImage rejects a photo below eBay’s 500px minimum before touching eBay', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => ({
+    id: 'listing-1',
+    status: 'pending_review',
+    connection_id: CONNECTION_ID,
+    generated_data: { imageUrls: [], marketplaceId: 'EBAY_GB' },
+  }));
+  const upload = mock.method(eps, 'upload', async () => 'https://i.ebayimg.com/new.jpg');
+
+  const small = await dataUrl(300, 300);
+  await assert.rejects(() => listingService.uploadDraftImage('listing-1', USER_ID, { dataUrl: small }), /500px/);
+  assert.strictEqual(upload.mock.callCount(), 0);
+});
+
+test('fetchDraftImage only serves images that belong to the draft', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => ({
+    id: 'listing-1',
+    generated_data: { imageUrls: ['https://i.ebayimg.com/a.jpg'] },
+  }));
+  await assert.rejects(() => listingService.fetchDraftImage('listing-1', USER_ID, 'https://evil.example/x.jpg'), /isn't part of this listing/);
+});

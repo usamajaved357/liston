@@ -73,28 +73,34 @@ test('mapChangesForDraft passes through fields it does not rename', () => {
   assert.deepStrictEqual(mapped, { aspects: { Colour: ['Black'] } });
 });
 
-// Scene and background edits in the editor use the same generator as
-// drafting, so an edited photo matches the gallery it sits in.
-test('reviseImage sends scene edits to the OpenAI generator', async () => {
-  const openaiImage = require('../../src/modules/ai-generation/image-generation/openai-image.service');
-  const imageOps = require('../../src/modules/ai-generation/image-pipeline/image.ops');
+// There is no generative model behind the editor any more: sharpening,
+// badges and text are done locally; anything that would change the photo
+// itself is refused with a plain message rather than faked.
+test('reviseImage refuses edits that would need a generative model', async () => {
   const Anthropic = require('@anthropic-ai/sdk');
-
-  const source = await makeImage(900, 900);
-  const generated = await makeImage(1024, 1024);
-
   const messagesProto = Object.getPrototypeOf(new Anthropic({ apiKey: 'test-key' }).messages);
   mock.method(messagesProto, 'create', async () => ({
-    content: [{ type: 'tool_use', input: { operation: 'scene', scenePrompt: 'on a wooden desk', summary: 'Placed on a desk' } }],
+    content: [{ type: 'tool_use', input: { operation: 'unsupported', summary: 'Put it on a wooden desk' } }],
   }));
-  mock.method(imageOps, 'prepare', async () => ({ buffer: source, sourceUrl: 'https://example.test/a.jpg' }));
-  mock.method(openaiImage, 'isConfigured', () => true);
-  const generate = mock.method(openaiImage, 'generateProductShot', async () => generated);
+  await assert.rejects(
+    () => revision.reviseImage({ imageUrl: 'https://example.test/a.jpg', instruction: 'put it on a wooden desk' }),
+    /limited to sharpening/
+  );
+});
 
-  const result = await revision.reviseImage({ imageUrl: 'https://example.test/a.jpg', instruction: 'put it on a wooden desk' });
+test('reviseImage enhances locally when asked to sharpen', async () => {
+  const Anthropic = require('@anthropic-ai/sdk');
+  const imageOps = require('../../src/modules/ai-generation/image-pipeline/image.ops');
+  const messagesProto = Object.getPrototypeOf(new Anthropic({ apiKey: 'test-key' }).messages);
+  const source = await makeImage(900, 900);
+  mock.method(messagesProto, 'create', async () => ({
+    content: [{ type: 'tool_use', input: { operation: 'enhance', summary: 'Sharpened' } }],
+  }));
+  mock.method(imageOps, 'download', async () => source);
+  const enhance = mock.method(imageOps, 'enhance', async (b) => b);
 
-  assert.strictEqual(generate.mock.callCount(), 1);
-  assert.strictEqual(generate.mock.calls[0].arguments[0].extraInstruction, 'on a wooden desk');
-  assert.strictEqual(result.operation, 'scene');
+  const result = await revision.reviseImage({ imageUrl: 'https://example.test/a.jpg', instruction: 'make it sharper' });
+  assert.strictEqual(enhance.mock.callCount(), 1);
+  assert.strictEqual(result.operation, 'enhance');
   assert.ok(result.previewDataUrl.startsWith('data:image/jpeg;base64,'));
 });

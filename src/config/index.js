@@ -63,21 +63,19 @@ const config = {
   },
 
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
-  openaiApiKey: process.env.OPENAI_API_KEY || null,
+  // One model for every Claude call (draft writing, editor revisions, image
+  // screening). Haiku handles all three at roughly a third of Sonnet's
+  // price; set AI_MODEL to a larger one only if draft quality needs it.
+  aiModel: process.env.AI_MODEL || 'claude-haiku-4-5-20251001',
 
-  // Listing image generation: gpt-image-1 produces genuine product photography
-  // (a person holding the product, pure white background) from the supplier
-  // photo as a reference. Without a key, drafts keep the clean supplier photos.
+  // Listing images are the supplier's own photos, untouched; the seller
+  // replaces them from the editor. Optional badges on the MAIN image only —
+  // all off unless set; the draft warns when any are on (eBay's picture
+  // policy discourages badges and borders).
   imageGeneration: {
-    provider: process.env.OPENAI_API_KEY ? 'openai' : 'none',
-    // The seller asked for these on the image. eBay's picture policy
-    // discourages badges and borders on listing images, so they're each
-    // switchable and the draft carries a warning when any are on.
-    addUkFlag: process.env.IMAGE_ADD_UK_FLAG !== 'false',
-    addFreeShippingLabel: process.env.IMAGE_ADD_FREE_SHIPPING !== 'false',
-    addGlowBorder: process.env.IMAGE_ADD_GLOW_BORDER !== 'false',
-    showPerson: process.env.IMAGE_SHOW_PERSON !== 'false',
-    quality: process.env.IMAGE_QUALITY || 'high',
+    addUkFlag: process.env.IMAGE_ADD_UK_FLAG === 'true',
+    addFreeShippingLabel: process.env.IMAGE_ADD_FREE_SHIPPING === 'true',
+    addGlowBorder: process.env.IMAGE_ADD_GLOW_BORDER === 'true',
   },
 
   // How source products are read from AliExpress. 'scraper' drives a real

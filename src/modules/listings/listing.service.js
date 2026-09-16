@@ -6,6 +6,7 @@ const orchestrator = require('../ai-generation/generation.orchestrator');
 const imageGates = require('../ai-generation/image-pipeline/gates');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
+const imageOps = require('../ai-generation/image-pipeline/image.ops');
 const descriptionTemplate = require('./description-template');
 
 class ListingError extends Error {
@@ -401,6 +402,64 @@ async function acceptImageRevision(id, userId, { proposalId, replaces }) {
   return { listing: updated, imageUrl: hostedUrl };
 }
 
+// The seller's own photo, from their computer, hosted on eBay and put into
+// the draft: replacing an existing image (gallery or variant, wherever it
+// appears), set as a variant's photo, or appended to the gallery. The bytes
+// go up exactly as given — no resizing or padding — after eBay's own limits
+// are checked (≥500px, ≤12MB, a real image).
+async function uploadDraftImage(id, userId, { dataUrl, replaces, variantIndex }) {
+  const listing = await loadEditableDraft(id, userId);
+  const draft = { ...(listing.generated_data || {}) };
+
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl || '');
+  if (!match) throw new ListingError('Upload a JPG, PNG, GIF or WEBP image.', 400);
+  const buffer = Buffer.from(match[2], 'base64');
+  const check = await imageOps.validate(buffer);
+  if (!check.ok) throw new ListingError(check.errors.join(' '), 400);
+  const source = await imageOps.validateSource(buffer);
+  if (!source.ok) throw new ListingError(source.reason, 400);
+
+  const hostedUrl = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
+    const { accessToken } = await ebayService.ensureValidAccessToken(credentials);
+    return eps.upload(accessToken, buffer, { marketplaceId: draft.marketplaceId });
+  });
+
+  if (replaces) {
+    draft.imageUrls = (draft.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url));
+    draft.variants = (draft.variants || []).map((variant) => ({
+      ...variant,
+      imageUrls: (variant.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url)),
+    }));
+  } else if (variantIndex !== undefined && Array.isArray(draft.variants)) {
+    if (!draft.variants[variantIndex]) throw new ListingError('That variation no longer exists.', 400);
+    draft.variants = draft.variants.map((variant, i) => (i === variantIndex ? { ...variant, imageUrls: [hostedUrl] } : variant));
+  } else {
+    if ((draft.imageUrls || []).length >= 24) throw new ListingError('eBay allows at most 24 images per listing.', 400);
+    draft.imageUrls = [...(draft.imageUrls || []), hostedUrl];
+  }
+
+  const updated = await listingRepository.updateGeneratedData(id, draft);
+  return { listing: updated, imageUrl: hostedUrl };
+}
+
+// Streams one of the draft's own images back to the seller as a download —
+// the browser can't force a download of a cross-origin eBay URL itself.
+// Only URLs that belong to this draft are served, so this is not an open proxy.
+async function fetchDraftImage(id, userId, url) {
+  const listing = await listingRepository.findByIdForUser(id, userId);
+  if (!listing) throw new ListingError('Listing not found', 404);
+  const draft = listing.generated_data || {};
+  const known = new Set([...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])]);
+  if (!known.has(url)) throw new ListingError("That image isn't part of this listing.", 404);
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  if (!res.ok) throw new ListingError('Could not fetch that image from eBay.', 502);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const meta = await imageOps.describe(buffer).catch(() => ({ format: 'jpeg' }));
+  const ext = meta.format === 'jpeg' ? 'jpg' : meta.format || 'jpg';
+  return { buffer, contentType: `image/${meta.format || 'jpeg'}`, extension: ext };
+}
+
 async function removeDraft(id, userId) {
   await loadEditableDraft(id, userId);
   return listingRepository.deleteDraft(id, userId);
@@ -566,6 +625,8 @@ function withSkus(draft, connectionId) {
 
 module.exports = {
   renderDraftDescription,
+  uploadDraftImage,
+  fetchDraftImage,
   ListingError,
   createEbayDraft,
   previewDraftSources,

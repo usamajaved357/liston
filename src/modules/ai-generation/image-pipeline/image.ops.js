@@ -34,6 +34,50 @@ async function padToSquare(buffer, size = TARGET_SIZE) {
     .toBuffer();
 }
 
+// The "make the supplier photo look better" step, without a model. Supplier
+// photos are usually decent but soft, slightly dull and under-sized. This is
+// the kind of clean-up a retoucher does before a photo goes live: scale to the
+// listing size with a quality resampler, recover crispness with a mild
+// unsharp mask, lift flat mid-tones a touch. Deliberately conservative — the
+// product must stay exactly the product; nothing here can add, remove or
+// recolour anything. Free and ~100ms, where a generated image cost ~$0.20.
+async function enhance(buffer, size = TARGET_SIZE) {
+  // Supplier shots often leave the product small in a sea of white. Trim the
+  // plain margins (only when the photo actually has a plain background — a
+  // lifestyle shot trims nothing) and re-pad with a consistent 6% margin, so
+  // the product fills the frame like a real catalogue photo. Trimming can
+  // fail on a busy image; fall back to the untouched photo.
+  let framed = await sharp(buffer).flatten({ background: { r: 255, g: 255, b: 255 } }).toBuffer();
+  try {
+    const trimmed = await sharp(framed).trim({ threshold: 18 }).toBuffer();
+    const t = await sharp(trimmed).metadata();
+    const o = await sharp(framed).metadata();
+    // Only accept a trim that leaves a sensible product; a near-empty result
+    // means the background wasn't plain after all.
+    if (t.width >= o.width * 0.15 && t.height >= o.height * 0.15) {
+      const margin = Math.round(Math.max(t.width, t.height) * 0.06);
+      framed = await sharp(trimmed)
+        .extend({ top: margin, bottom: margin, left: margin, right: margin, background: { r: 255, g: 255, b: 255 } })
+        .toBuffer();
+    }
+  } catch {
+    // keep `framed` as is
+  }
+
+  const meta = await sharp(framed).metadata();
+  const longest = Math.max(meta.width || 0, meta.height || 0);
+  // Upscaling a small photo a long way just magnifies its softness; sharpen
+  // a little harder in that case so the result isn't mushy.
+  const upscaling = longest < size;
+  return sharp(framed)
+    .resize(size, size, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 1 }, kernel: 'lanczos3' })
+    .modulate({ brightness: 1.02, saturation: 1.04 })
+    .linear(1.04, -4) // slight contrast lift, keeps white white
+    .sharpen({ sigma: upscaling ? 1.2 : 0.8, m1: 0.6, m2: 0.4 })
+    .jpeg({ quality: 92, chromaSubsampling: '4:4:4' })
+    .toBuffer();
+}
+
 async function describe(buffer) {
   const { width, height, format } = await sharp(buffer).metadata();
   return { width, height, format, bytes: buffer.length };
@@ -123,7 +167,7 @@ async function prepare(url) {
       );
     }
 
-    return { buffer: normalized, sourceUrl: url, meta: result.meta, sourceMeta: source.meta, warnings };
+    return { buffer: normalized, original, sourceUrl: url, meta: result.meta, sourceMeta: source.meta, warnings };
   } catch (err) {
     logger.warn('Could not prepare an image', { url, error: err.message });
     return null;
@@ -136,6 +180,7 @@ module.exports = {
   MAX_DIMENSION,
   MAX_BYTES,
   padToSquare,
+  enhance,
   describe,
   validate,
   validateSource,

@@ -19,7 +19,7 @@ const logger = require('../../../utils/logger');
 // infographic, so this looks at them. One vision call screens the whole
 // gallery at once, which is far cheaper than one call per image.
 
-const MODEL = 'claude-haiku-4-5-20251001';
+const MODEL = config.aiModel;
 // Screening only needs to see layout and whether there's text — full
 // resolution would cost many times the tokens for no extra accuracy.
 const SCREEN_WIDTH = 512;
@@ -43,6 +43,20 @@ const SCREEN_TOOL = {
                 'price stickers, or collage borders. Text printed on the physical product itself (a brand name ' +
                 'moulded into the casing, a label on the box) does NOT count.',
             },
+            overlayTextLanguage: {
+              type: 'string',
+              enum: ['none', 'english', 'other'],
+              description:
+                'Language of any overlaid/added text (captions, headlines, callouts). "none" if there is no added ' +
+                'text, "english" if it is all English, "other" if any of it is Chinese or another language.',
+            },
+            hasSupplierBranding: {
+              type: 'boolean',
+              description:
+                'True if the image shows a store name, seller logo, watermark, website/URL, QR code, price, ' +
+                'discount sticker, phone number or any marketplace branding. A brand name that is part of the ' +
+                'physical product does NOT count.',
+            },
             isCollage: {
               type: 'boolean',
               description:
@@ -59,7 +73,7 @@ const SCREEN_TOOL = {
               description: 'True if the main product is shown complete and clearly, suitable as a main gallery image.',
             },
           },
-          required: ['index', 'hasTextOrGraphics', 'isCollage', 'kind', 'showsWholeProduct'],
+          required: ['index', 'hasTextOrGraphics', 'overlayTextLanguage', 'hasSupplierBranding', 'isCollage', 'kind', 'showsWholeProduct'],
         },
       },
     },
@@ -90,10 +104,11 @@ async function screenImages(prepared) {
       {
         type: 'text',
         text:
-          `These are candidate photos for an eBay listing, in order. eBay prohibits overlaid text, callouts, ` +
-          `arrows, badges, watermarks and multi-photo collages on listing images and demotes listings that use ` +
-          `them, so identify which of these are clean single photographs and which are marketing graphics. ` +
-          `Report on every image.`,
+          `These are candidate photos for a UK eBay listing, in order. Report on every image: whether it carries ` +
+          `added text (and in which language), whether it shows any supplier/store branding, watermark, price or ` +
+          `URL, whether it is a multi-photo collage, what kind of image it is, and whether it shows the whole ` +
+          `product clearly. Be precise about branding: a brand name printed on the product itself is not ` +
+          `branding, a store logo or watermark is.`,
       },
     ];
     thumbnails.forEach((buffer, index) => {
@@ -125,14 +140,28 @@ async function screenImages(prepared) {
   }
 }
 
-// A collage is rejected for the same reason a text slide is: it's a marketing
-// composite rather than a photograph. It also wastes the frame — seven photos
-// tiled into one 1600² image renders the product too small to judge, and eBay
-// disallows collage borders outright. Confirmed live: the same night-light
-// gallery served a seven-panel grid of customer shots, which passed the
-// text check because it carried no text at all.
+// What gets dropped outright, versus what only can't be the MAIN image.
+//
+// eBay's picture policy is enforced on the main photo; competitor listings
+// routinely carry the supplier's feature shots ("Waterproof", "Spring hinge")
+// as secondary images and buyers find them useful. An earlier rule that
+// rejected every image with any text left a glasses listing with 2 of its 6
+// photos — worse for buyers than a headline on image four. Confirmed live.
+//
+// So: anything that would identify another seller or read as foreign-market
+// stock is dropped (watermarks, store names, prices, Chinese text, size
+// charts); everything else stays and is ranked so clean photography leads.
 function isRejected(screen) {
-  return Boolean(screen && (screen.hasTextOrGraphics || screen.isCollage));
+  if (!screen) return false;
+  return Boolean(screen.hasSupplierBranding || screen.overlayTextLanguage === 'other' || screen.kind === 'size_chart');
+}
+
+// Eligible to be the search thumbnail: a clean single photograph of the whole
+// product. Text overlays and collages are fine further down the gallery but
+// never here.
+function isHeroEligible(screen) {
+  if (!screen) return true;
+  return !screen.hasTextOrGraphics && !screen.isCollage && screen.showsWholeProduct && screen.kind !== 'infographic';
 }
 
 // Clean photographs first, marketing composites excluded entirely. Among the
@@ -142,15 +171,20 @@ function rankScreened(screened) {
   const usable = screened.filter((image) => !isRejected(image.screen));
   const rejected = screened.filter((image) => isRejected(image.screen));
 
+  // Clean whole-product photo → clean product photo → clean lifestyle →
+  // anything carrying text or a collage layout (still useful, never first).
   const score = (image) => {
-    if (!image.screen) return 1;
-    if (image.screen.kind === 'product_photo' && image.screen.showsWholeProduct) return 0;
-    if (image.screen.kind === 'product_photo') return 1;
-    if (image.screen.kind === 'lifestyle_photo') return 2;
+    const screen = image.screen;
+    if (!screen) return 1;
+    const dirty = screen.hasTextOrGraphics || screen.isCollage;
+    if (dirty) return screen.kind === 'product_photo' ? 4 : 5;
+    if (screen.kind === 'product_photo' && screen.showsWholeProduct) return 0;
+    if (screen.kind === 'product_photo') return 1;
+    if (screen.kind === 'lifestyle_photo') return 2;
     return 3;
   };
 
   return { usable: [...usable].sort((a, b) => score(a) - score(b)), rejected };
 }
 
-module.exports = { screenImages, rankScreened, isRejected, SCREEN_TOOL };
+module.exports = { screenImages, rankScreened, isRejected, isHeroEligible, SCREEN_TOOL };
