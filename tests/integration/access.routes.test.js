@@ -75,10 +75,45 @@ test('a rejected owner gets a clear refusal, and a login token cannot approve an
   const misuse = await request('GET', `/api/auth/access/approve?token=${token}`);
   assert.match(String(misuse.data), /didn't work/);
 
+  // Rejecting a pending applicant removes the account entirely — nothing of
+  // theirs exists yet, and the address is free to try again later.
   await request('GET', `/api/auth/access/reject?token=${accessService.decisionToken(user.id, 'reject')}`);
-  const blocked = await request('GET', '/api/listings/00000000-0000-0000-0000-000000000000', null, token);
-  assert.strictEqual(blocked.status, 403);
-  assert.match(blocked.data.error, /declined/);
+  const gone = await request('GET', '/api/users/me', null, token);
+  assert.strictEqual(gone.status, 401);
+  const again = await request('POST', '/api/auth/signup', { email, password: 'testpassword123' });
+  assert.strictEqual(again.status, 201);
+});
+
+test('revoking an approved owner keeps their account and data, and it can be restored', async () => {
+  const adminEmail = `admin-${crypto.randomUUID()}@example.com`;
+  const previous = [...config.adminEmails];
+  config.adminEmails.push(adminEmail);
+  try {
+    const admin = await request('POST', '/api/auth/signup', { email: adminEmail, password: 'testpassword123' });
+    const owner = await request('POST', '/api/auth/signup', { email: `test-${crypto.randomUUID()}@example.com`, password: 'testpassword123' });
+    const id = owner.data.user.id;
+
+    await request('POST', `/api/auth/access/requests/${id}`, { status: 'active' }, admin.data.token);
+    const revoked = await request('POST', `/api/auth/access/requests/${id}`, { status: 'rejected' }, admin.data.token);
+    assert.strictEqual(revoked.status, 200);
+    assert.strictEqual(revoked.data.user.access_status, 'rejected');
+    assert.ok(!revoked.data.user.deleted);
+
+    const blocked = await request('GET', '/api/connections', null, owner.data.token);
+    assert.strictEqual(blocked.status, 403);
+    assert.match(blocked.data.error, /declined/);
+
+    const list = await request('GET', '/api/auth/access/requests', null, admin.data.token);
+    assert.ok(list.data.reviewed.some((r) => r.id === id && r.access_status === 'rejected'));
+
+    const restored = await request('POST', `/api/auth/access/requests/${id}`, { status: 'active' }, admin.data.token);
+    assert.strictEqual(restored.data.user.access_status, 'active');
+    const undo = await request('POST', `/api/auth/access/requests/${id}`, { status: 'pending' }, admin.data.token);
+    assert.strictEqual(undo.status, 400);
+  } finally {
+    config.adminEmails.length = 0;
+    config.adminEmails.push(...previous);
+  }
 });
 
 test('admin emails are approved at signup and can list pending requests', async () => {

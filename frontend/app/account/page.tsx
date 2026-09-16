@@ -6,6 +6,8 @@ import { api, ApiError, User } from "@/lib/api";
 import { PasswordField } from "@/components/PasswordField";
 import { PasswordInput } from "@/components/PasswordInput";
 import { AppShell } from "@/components/AppShell";
+import { PageSkeleton } from "@/components/PageSkeleton";
+import { cacheUser, useCachedUser } from "@/lib/session";
 import { AccountMenu } from "@/components/AccountMenu";
 import { AvatarUploader } from "@/components/AvatarUploader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -95,8 +97,9 @@ function ChangePasswordForm() {
 
 export default function AccountPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cachedUser = useCachedUser();
+  const [liveUser, setUser] = useState<User | null>(null);
+  const user = liveUser ?? cachedUser;
   const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -109,12 +112,14 @@ export default function AccountPage() {
     }
     api
       .me()
-      .then(({ user }) => setUser(user))
+      .then(({ user }) => {
+        setUser(user);
+        cacheUser(user);
+      })
       .catch(() => {
         localStorage.removeItem("token");
         router.replace("/login");
       })
-      .finally(() => setLoading(false));
   }, [router]);
 
   function handleLogout() {
@@ -135,16 +140,12 @@ export default function AccountPage() {
     }
   }
 
-  if (loading) {
+  if (!user) {
     return (
-      <main className="flex min-h-screen items-center justify-center">
-        <p className="text-sm text-[var(--color-muted)]">Loading…</p>
+      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+        <PageSkeleton />
       </main>
     );
-  }
-
-  if (!user) {
-    return null;
   }
 
   const connectionsUsed = Number(user.connections_used ?? 0);

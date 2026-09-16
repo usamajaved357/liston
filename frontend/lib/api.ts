@@ -26,6 +26,11 @@ async function request<T>(
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      try {
+        localStorage.removeItem("liston:me");
+      } catch {}
+    }
     // The approval gate: any 403 carrying accessStatus means this account
     // isn't approved yet — send them to the review screen from anywhere.
     if (res.status === 403 && data.accessStatus && typeof window !== "undefined" && !window.location.pathname.startsWith("/pending")) {
@@ -453,8 +458,8 @@ export const api = {
 
   listAccessRequests: () =>
     request<{ requests: AccessRequest[]; reviewed: AccessRequest[] }>("/api/auth/access/requests"),
-  decideAccessRequest: (userId: string, status: "active" | "rejected" | "pending") =>
-    request<{ user: { id: string; email: string; access_status: string } }>(`/api/auth/access/requests/${userId}`, {
+  decideAccessRequest: (userId: string, status: "active" | "rejected") =>
+    request<{ user: { id: string; email: string; access_status: string; deleted?: boolean } }>(`/api/auth/access/requests/${userId}`, {
       method: "POST",
       body: JSON.stringify({ status }),
     }),

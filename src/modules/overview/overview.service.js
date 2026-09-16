@@ -9,8 +9,8 @@ const logger = require('../../utils/logger');
 
 const RANGES = new Set(['7d', '30d', '90d', 'this_month', 'last_month']);
 
-async function getOverview(ownerId, viewer, { range = '30d' } = {}) {
-  const effectiveRange = RANGES.has(range) ? range : '30d';
+async function getOverview(ownerId, viewer, { range = '7d' } = {}) {
+  const effectiveRange = RANGES.has(range) ? range : '7d';
   const { connections } = await connectionService.listConnections(ownerId, viewer);
   const ebayConnections = connections.filter((c) => c.platform_key === 'ebay');
 

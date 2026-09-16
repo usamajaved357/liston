@@ -4,6 +4,8 @@ import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, User, Connection, TeamMember, PermissionUpdate } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
+import { PageSkeleton } from "@/components/PageSkeleton";
+import { cacheUser, useCachedUser } from "@/lib/session";
 import { Field } from "@/components/Field";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -255,7 +257,9 @@ function AddMemberForm({ onAdd }: { onAdd: () => void }) {
 
 export default function TeamPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
+  const cachedUser = useCachedUser();
+  const [liveUser, setUser] = useState<User | null>(null);
+  const user = liveUser ?? cachedUser;
   const [connections, setConnections] = useState<Connection[]>([]);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [knownFeatures, setKnownFeatures] = useState<string[]>([]);
@@ -272,6 +276,7 @@ export default function TeamPage() {
         api.listTeamMembers(),
       ]);
       setUser(meData.user);
+      cacheUser(meData.user);
       setConnections(connectionsData.connections);
       setMembers(teamData.members);
       setKnownFeatures(teamData.knownFeatures);
@@ -320,16 +325,15 @@ export default function TeamPage() {
     }
   }
 
-  if (loading) {
+  // Cold start with nothing cached: a skeleton, never a blank page. Once a
+  // user is known (from cache or the API) the full shell renders and the
+  // page's own content shows its loading state inside it.
+  if (!user) {
     return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
+      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+        <PageSkeleton />
       </main>
     );
-  }
-
-  if (!user) {
-    return null;
   }
 
   const connectionsUsed = Number(user.connections_used ?? 0);
@@ -352,6 +356,10 @@ export default function TeamPage() {
         </div>
       }
     >
+      {loading ? (
+        <PageSkeleton rows={2} />
+      ) : (
+        <>
       <div className="space-y-6 max-w-3xl">
         {error && <Alert>{error}</Alert>}
 
@@ -389,6 +397,8 @@ export default function TeamPage() {
         onConfirm={handleRemove}
         onCancel={() => setPendingRemoveId(null)}
       />
+        </>
+      )}
     </AppShell>
   );
 }

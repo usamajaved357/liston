@@ -2,10 +2,10 @@
 
 import { useState, FormEvent } from "react";
 import { api, ApiError, Platform } from "@/lib/api";
-import { Field } from "@/components/Field";
-import { Alert } from "@/components/Alert";
 import { PlatformIcon } from "@/components/PlatformIcon";
 
+// Step 2 of adding an account: name it, then hand off to the marketplace's
+// own sign-in. Liston never sees the password — only the OAuth grant.
 function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCancel: () => void }) {
   const [label, setLabel] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -29,44 +29,45 @@ function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCan
   }
 
   return (
-    <div className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5 p-5 mt-4">
-      <div className="flex items-center gap-3 mb-4">
-        <PlatformIcon platformKey={platform.key} size={32} />
+    <form onSubmit={handleSubmit} className="mt-5 border-t border-[var(--color-line)] pt-5">
+      <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div>
-          <p className="text-sm font-semibold text-[var(--color-ink)]">Connect {platform.name}</p>
-          <p className="text-xs text-[var(--color-muted)]">
-            You&apos;ll be redirected to {platform.name} to sign in and approve access, then brought back
-            here. Your password is never seen by Liston.
+          <p className="label">Account name</p>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="e.g. Walexo"
+            autoComplete="off"
+            autoFocus
+            className="input mt-1"
+          />
+          <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">How this account appears in Liston. You can change it later.</p>
+        </div>
+        <div className="rounded-xl bg-[var(--color-paper)] px-4 py-3.5 text-[13px] leading-relaxed text-[var(--color-muted)]">
+          <p className="font-medium text-[var(--color-ink)]">What happens next</p>
+          <p className="mt-1">
+            You&apos;ll be sent to {platform.name} to sign in and approve access, then brought straight back here. Your {platform.name}{" "}
+            password never touches Liston.
           </p>
         </div>
       </div>
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <Field
-          label="Label (e.g. the store or account name)"
-          type="text"
-          value={label}
-          onChange={setLabel}
-          autoComplete="off"
-        />
-        {error && <Alert>{error}</Alert>}
-        <div className="flex gap-3">
-          <button
-            type="submit"
-            disabled={connecting || !label.trim()}
-            className="rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
-          >
-            {connecting ? "Redirecting…" : `Connect ${platform.name}`}
-          </button>
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md px-4 py-2 text-sm font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)] transition-colors"
-          >
-            Cancel
-          </button>
+
+      {error && (
+        <div className="notice notice-danger mt-4">
+          <span className="flex-1">{error}</span>
         </div>
-      </form>
-    </div>
+      )}
+
+      <div className="mt-5 flex items-center gap-2">
+        <button type="submit" disabled={connecting || !label.trim()} className="btn btn-primary btn-sm">
+          {connecting ? "Redirecting…" : `Continue to ${platform.name}`}
+        </button>
+        <button type="button" onClick={onCancel} className="btn btn-ghost btn-sm">
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -74,24 +75,37 @@ interface AddConnectionPanelProps {
   platforms: Platform[];
   atLimit: boolean;
   maxConnections: number;
+  onCancel?: () => void;
 }
 
-export function AddConnectionPanel({ platforms, atLimit, maxConnections }: AddConnectionPanelProps) {
+export function AddConnectionPanel({ platforms, atLimit, maxConnections, onCancel }: AddConnectionPanelProps) {
   const [selectedPlatformKey, setSelectedPlatformKey] = useState<string | null>(null);
   const selectedPlatform = platforms.find((p) => p.key === selectedPlatformKey) || null;
 
   return (
-    <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-      <h2 className="text-base font-semibold text-[var(--color-ink)] mb-1">Add a connection</h2>
-      <p className="text-sm text-[var(--color-muted)] mb-5">Choose a marketplace to link an account.</p>
+    <div className="card p-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Connect an account</h2>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Pick the marketplace, name the account, approve access. About a minute.</p>
+        </div>
+        {onCancel && (
+          <button type="button" onClick={onCancel} className="btn btn-ghost btn-icon" aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
 
       {atLimit ? (
-        <Alert variant="warning">
-          Your plan allows {maxConnections} connection{maxConnections === 1 ? "" : "s"}. Remove one or
-          upgrade your plan to connect another.
-        </Alert>
+        <div className="notice notice-warning mt-5">
+          <span className="flex-1">
+            Your plan allows {maxConnections} connection{maxConnections === 1 ? "" : "s"}. Remove one or upgrade to connect another.
+          </span>
+        </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {platforms.map((platform) => {
             const isSelected = selectedPlatformKey === platform.key;
             return (
@@ -100,19 +114,26 @@ export function AddConnectionPanel({ platforms, atLimit, maxConnections }: AddCo
                 type="button"
                 disabled={!platform.connectable}
                 onClick={() => setSelectedPlatformKey(isSelected ? null : platform.key)}
-                className={`relative flex flex-col items-center gap-2 rounded-lg border p-4 text-center transition-colors ${
+                className={`relative flex items-center gap-3 rounded-xl border px-4 py-3.5 text-left transition-colors ${
                   platform.connectable
                     ? isSelected
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/5"
-                      : "border-[var(--color-line)] hover:border-[var(--color-accent)]/50"
-                    : "border-[var(--color-line)] opacity-50 cursor-not-allowed"
+                      ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)] ring-2 ring-[var(--color-primary-soft)]"
+                      : "border-[var(--color-line)] hover:border-[var(--color-line-strong)] hover:bg-[var(--color-paper)]"
+                    : "cursor-not-allowed border-dashed border-[var(--color-line)] opacity-60"
                 }`}
               >
-                <PlatformIcon platformKey={platform.key} size={40} />
-                <span className="text-sm font-medium text-[var(--color-ink)]">{platform.name}</span>
-                {!platform.connectable && (
-                  <span className="absolute top-2 right-2 rounded-full bg-[var(--color-line)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-muted)]">
-                    {platform.status === "coming_soon" ? "Coming soon" : "Setup pending"}
+                <PlatformIcon platformKey={platform.key} size={36} />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[var(--color-ink)]">{platform.name}</p>
+                  <p className="text-[12px] text-[var(--color-muted)]">
+                    {platform.connectable ? "Ready to connect" : platform.status === "coming_soon" ? "Coming soon" : "Setup pending"}
+                  </p>
+                </div>
+                {isSelected && (
+                  <span className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-primary)] text-white">
+                    <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3">
+                      <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </span>
                 )}
               </button>
@@ -121,9 +142,7 @@ export function AddConnectionPanel({ platforms, atLimit, maxConnections }: AddCo
         </div>
       )}
 
-      {selectedPlatform && (
-        <ConnectPlatformForm platform={selectedPlatform} onCancel={() => setSelectedPlatformKey(null)} />
-      )}
+      {selectedPlatform && <ConnectPlatformForm platform={selectedPlatform} onCancel={() => setSelectedPlatformKey(null)} />}
     </div>
   );
 }

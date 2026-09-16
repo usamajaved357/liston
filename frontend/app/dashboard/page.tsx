@@ -1,65 +1,58 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, Connection, User } from "@/lib/api";
+import { api, ApiError, Overview, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { Alert } from "@/components/Alert";
-import { PlatformIcon } from "@/components/PlatformIcon";
+import { formatPrice } from "@/lib/format";
+import { cacheUser, useCachedUser } from "@/lib/session";
 
-const STATUS_STYLES: Record<Connection["status"], string> = {
-  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  expired: "bg-amber-50 text-amber-800 border-amber-200",
-  error: "bg-red-50 text-red-700 border-red-200",
-  suspended: "bg-red-50 text-red-700 border-red-200",
-};
+// The overview: what's happening across every connected account, summed.
+// Plan/usage rings are gone until billing exists — the numbers that matter
+// day to day are listings live, money in, and what's waiting in drafts.
 
-const RING_RADIUS = 36;
-const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const RANGES: { key: string; label: string }[] = [
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
+  { key: "this_month", label: "This month" },
+  { key: "90d", label: "90 days" },
+];
 
-function RingStat({
+function Stat({
   label,
-  sublabel,
   value,
-  pct,
+  hint,
+  icon,
+  tone = "default",
+  href,
 }: {
   label: string;
-  sublabel: string;
   value: string;
-  pct: number;
+  hint?: string;
+  icon: React.ReactNode;
+  tone?: "default" | "primary" | "accent";
+  href?: string;
 }) {
-  const offset = RING_CIRCUMFERENCE * (1 - pct / 100);
-
-  return (
-    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5 flex items-center gap-5">
-      <div className="relative w-[84px] h-[84px] flex-shrink-0">
-        <svg width="84" height="84" viewBox="0 0 84 84" className="-rotate-90">
-          <circle cx="42" cy="42" r={RING_RADIUS} fill="none" stroke="var(--color-line)" strokeWidth="8" />
-          <circle
-            cx="42"
-            cy="42"
-            r={RING_RADIUS}
-            fill="none"
-            stroke="var(--color-accent)"
-            strokeWidth="8"
-            strokeLinecap="round"
-            strokeDasharray={RING_CIRCUMFERENCE}
-            strokeDashoffset={offset}
-            className="transition-all"
-          />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center text-[17px] font-extrabold text-[var(--color-ink)]">
-          {value}
-        </div>
+  const iconBg = { default: "bg-[var(--color-paper)] text-[var(--color-muted)]", primary: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]", accent: "bg-[var(--color-accent-soft)] text-[var(--color-accent)]" }[tone];
+  const body = (
+    <>
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] font-medium text-[var(--color-muted)]">{label}</span>
+        <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconBg}`}>{icon}</span>
       </div>
-      <div>
-        <span className="text-sm font-bold text-[var(--color-ink)] block">{label}</span>
-        <span className="text-xs text-[var(--color-muted)] leading-relaxed block mt-1">{sublabel}</span>
-      </div>
-    </div>
+      <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight text-[var(--color-ink)]">{value}</p>
+      {hint && <p className="mt-2 text-[12px] text-[var(--color-muted)]">{hint}</p>}
+    </>
+  );
+  return href ? (
+    <Link href={href} className="card block p-5 transition-colors hover:border-[var(--color-line-strong)]">
+      {body}
+    </Link>
+  ) : (
+    <div className="card p-5">{body}</div>
   );
 }
 
@@ -70,15 +63,15 @@ function ConnectionBanner() {
 
   if (connected === "ebay") {
     return (
-      <div className="mt-4">
-        <Alert variant="success">Your eBay account is connected.</Alert>
+      <div className="notice notice-success mb-4">
+        <span className="flex-1">Your eBay account is connected.</span>
       </div>
     );
   }
   if (ebayError) {
     return (
-      <div className="mt-4">
-        <Alert>Couldn&apos;t connect your eBay account ({ebayError}). Try again below.</Alert>
+      <div className="notice notice-danger mb-4">
+        <span className="flex-1">Couldn&apos;t connect your eBay account ({ebayError}). Try again from Connections.</span>
       </div>
     );
   }
@@ -87,35 +80,34 @@ function ConnectionBanner() {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [connections, setConnections] = useState<Connection[]>([]);
+  // Seeded from the local cache so the shell paints immediately; the API
+  // copy replaces it a moment later.
+  const cachedUser = useCachedUser();
+  const [liveUser, setUser] = useState<User | null>(null);
+  const user = liveUser ?? cachedUser;
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [range, setRange] = useState("7d");
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
   const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
-  async function loadAll() {
+  const loadOverview = useCallback(async (r: string) => {
+    setRefreshing(true);
     try {
-      const [meData, connectionsData] = await Promise.all([api.me(), api.listConnections()]);
-      // This dashboard is plan/billing usage — a member has none of their
-      // own and can't manage connections, so send them to their account(s).
-      if (meData.user.role === "member") {
-        router.replace("/connections");
-        return;
-      }
-      setUser(meData.user);
-      setConnections(connectionsData.connections);
+      setOverview(await api.overview(r));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         localStorage.removeItem("token");
         router.replace("/login");
         return;
       }
-      setError("Couldn't load your dashboard. Try refreshing.");
+      setError("Couldn't load your overview. Try refreshing.");
     } finally {
-      setLoading(false);
+      setRefreshing(false);
     }
-  }
+  }, [router]);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -123,16 +115,37 @@ export default function DashboardPage() {
       router.replace("/login");
       return;
     }
-    loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router]);
+    api
+      .me()
+      .then(({ user }) => {
+        // A member has no overview of their own — send them to their account(s).
+        if (user.role === "member") {
+          router.replace("/connections");
+          return;
+        }
+        setUser(user);
+        cacheUser(user);
+        return loadOverview("7d");
+      })
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) {
+          localStorage.removeItem("token");
+          router.replace("/login");
+          return;
+        }
+        setError("Couldn't load your overview. Try refreshing.");
+      });
+  }, [router, loadOverview]);
+
+  function changeRange(r: string) {
+    setRange(r);
+    loadOverview(r);
+  }
 
   function handleLogout() {
     localStorage.removeItem("token");
     router.push("/login");
   }
-
-  const [actionLoading, setActionLoading] = useState(false);
 
   async function handleDeleteAccount() {
     setActionLoading(true);
@@ -157,41 +170,42 @@ export default function DashboardPage() {
     }
   }
 
-  if (loading) {
+  // No cached user on a cold start: a bare shell for the few hundred ms
+  // until /me answers, never a blank page.
+  if (!user) {
     return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
+      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+        <div className="mx-auto max-w-5xl space-y-4">
+          <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="card h-28 animate-pulse" />
+            ))}
+          </div>
+        </div>
       </main>
     );
   }
 
-  if (!user) {
-    return null;
-  }
-
-  const connectionsUsed = connections.length;
-  const maxConnections = user.max_connections ?? 0;
-  const listingsUsed = user.listings_used_this_month ?? 0;
-  const listingsIncluded = user.listings_included_per_month ?? 0;
-  const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
-  const listingsPct = listingsIncluded ? Math.min(100, (listingsUsed / listingsIncluded) * 100) : 0;
-  const atLimit = connectionsUsed >= maxConnections;
   const planName = user.plan_name ?? "Unassigned";
-
-  const sortedConnections = [...connections].sort((a, b) =>
-    a.platform_name === b.platform_name ? a.label.localeCompare(b.label) : a.platform_name.localeCompare(b.platform_name)
-  );
+  const o = overview;
+  const money = (n: number) => formatPrice(n, o?.earnings.currency || "GBP");
+  const rangeLabel = RANGES.find((r) => r.key === range)?.label.toLowerCase() || range;
+  const failed = o?.perAccount.filter((a) => !a.ok) || [];
 
   return (
     <AppShell
-      connectionsUsed={connectionsUsed}
-      maxConnections={maxConnections}
+      connectionsUsed={o?.accounts.total ?? 0}
+      maxConnections={user.max_connections ?? 0}
       planName={planName}
       role={user.role}
       isAdmin={user.is_admin}
       header={
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
+          <div>
+            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Overview</h1>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Across all your connected accounts.</p>
+          </div>
           <AccountMenu
             email={user.email}
             subtitle={`${planName} plan`}
@@ -203,8 +217,8 @@ export default function DashboardPage() {
       }
     >
       {error && (
-        <div className="mb-4">
-          <Alert>{error}</Alert>
+        <div className="notice notice-danger mb-4">
+          <span className="flex-1">{error}</span>
         </div>
       )}
 
@@ -213,82 +227,184 @@ export default function DashboardPage() {
       </Suspense>
 
       {!user.email_verified_at && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm text-amber-900">
+        <div className="notice notice-warning mb-4">
+          <span className="flex-1">
             Verify your email to secure your account.
             {resendState === "sent" && " Check your inbox for the new link."}
-          </p>
-          <button
-            onClick={handleResendVerification}
-            disabled={resendState !== "idle"}
-            className="text-sm font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:text-amber-950 disabled:opacity-60"
-          >
-            {resendState === "sending" ? "Sending…" : resendState === "sent" ? "Sent" : "Resend verification email"}
+          </span>
+          <button onClick={handleResendVerification} disabled={resendState !== "idle"} className="btn btn-secondary btn-sm">
+            {resendState === "sending" ? "Sending…" : resendState === "sent" ? "Sent" : "Resend"}
           </button>
         </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 mb-7">
-        <RingStat
-          label="Connected accounts"
-          value={`${connectionsUsed}/${maxConnections}`}
-          sublabel={
-            atLimit
-              ? "You've used all the connections your plan includes."
-              : "marketplace accounts linked to Liston."
-          }
-          pct={connectionsPct}
-        />
-        <RingStat
-          label="Listings this month"
-          value={`${listingsUsed}/${listingsIncluded}`}
-          sublabel="Included in your plan — resets each billing cycle."
-          pct={listingsPct}
-        />
-      </div>
-
-      <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--color-line)]">
-          <div>
-            <span className="text-[15px] font-extrabold text-[var(--color-ink)] block">Connected accounts</span>
-            <span className="text-xs text-[var(--color-muted)]">Sorted by marketplace</span>
-          </div>
+      {failed.map((a) => (
+        <div key={a.id} className="notice notice-warning mb-4">
+          <span className="flex-1">
+            <strong>{a.label}</strong> couldn&apos;t be read — its numbers are left out of the totals. {a.error}
+          </span>
+          <Link href="/connections" className="btn btn-secondary btn-sm">
+            Connections
+          </Link>
         </div>
+      ))}
 
-        {sortedConnections.length === 0 ? (
-          <div className="px-5 py-8 text-center">
-            <p className="text-sm text-[var(--color-muted)] mb-3">No accounts connected yet.</p>
-            <Link
-              href="/connections"
-              className="inline-flex rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] transition-colors"
-            >
-              Connect an account
-            </Link>
+      {!o ? (
+        <>
+          <div className="mb-3 flex items-center justify-between">
+            <div className="h-4 w-56 animate-pulse rounded-full bg-[var(--color-line)]" />
+            <div className="h-7 w-72 animate-pulse rounded-full bg-[var(--color-line)]" />
           </div>
-        ) : (
-          <ul>
-            {sortedConnections.map((connection) => (
-              <li
-                key={connection.id}
-                className="flex items-center gap-3.5 px-5 py-4 border-b border-[var(--color-line)] last:border-b-0 transition-colors hover:bg-[var(--color-paper)]"
-              >
-                <Link href={`/accounts/${connection.id}`} className="flex items-center gap-3.5 flex-1 min-w-0">
-                  <PlatformIcon platformKey={connection.platform_key} size={40} />
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-[var(--color-ink)] truncate">{connection.label}</p>
-                    <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
-                  </div>
-                </Link>
-                <span
-                  className={`rounded-full border px-2.5 py-1 text-[11px] font-bold capitalize flex-shrink-0 ${STATUS_STYLES[connection.status]}`}
-                >
-                  {connection.status}
-                </span>
-              </li>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="card p-5">
+                <div className="flex items-center justify-between">
+                  <div className="h-3.5 w-24 animate-pulse rounded-full bg-[var(--color-line)]" />
+                  <div className="h-8 w-8 animate-pulse rounded-lg bg-[var(--color-paper)]" />
+                </div>
+                <div className="mt-4 h-7 w-20 animate-pulse rounded-md bg-[var(--color-line)]" />
+                <div className="mt-2.5 h-3 w-32 animate-pulse rounded-full bg-[var(--color-paper)]" />
+              </div>
             ))}
-          </ul>
-        )}
-      </div>
+          </div>
+        </>
+      ) : o.accounts.total === 0 ? (
+        <div className="card px-6 py-12 text-center">
+          <p className="text-sm font-medium text-[var(--color-ink)]">No accounts connected yet</p>
+          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Connect your eBay store to see listings, orders and earnings here.</p>
+          <Link href="/connections" className="btn btn-primary btn-sm mt-4">
+            Connect an account
+          </Link>
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-[13px] text-[var(--color-muted)]">
+              Sales figures for the last <span className="font-medium text-[var(--color-ink)]">{rangeLabel}</span>
+              {refreshing && <span className="ml-2 text-[var(--color-muted)]">· updating…</span>}
+            </p>
+            <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+              {RANGES.map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => changeRange(r.key)}
+                  className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
+                    range === r.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Stat
+              label="Earnings"
+              value={o ? money(o.earnings.amount) : "—"}
+              hint={o ? `${o.orders} order${o.orders === 1 ? "" : "s"} in the last ${rangeLabel}` : undefined}
+              tone="accent"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M4 17l5-5 4 4 7-8M15 8h5v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+            <Stat
+              label="Active listings"
+              value={o ? String(o.activeListings) : "—"}
+              hint="Live on eBay right now"
+              tone="primary"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <rect x="3.5" y="4" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
+                  <rect x="3.5" y="10.5" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
+                  <rect x="3.5" y="17" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
+                </svg>
+              }
+            />
+            <Stat
+              label="Connected accounts"
+              value={o ? String(o.accounts.total) : "—"}
+              hint={o && o.accounts.needsAttention ? `${o.accounts.needsAttention} need${o.accounts.needsAttention === 1 ? "s" : ""} attention` : "All connections healthy"}
+              href="/connections"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" stroke="currentColor" strokeWidth="1.8" />
+                </svg>
+              }
+            />
+            <Stat
+              label="Drafts waiting"
+              value={o ? String(o.drafts) : "—"}
+              hint="Drafted in Liston, not yet published"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M13 7l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              }
+            />
+            <Stat
+              label="Published with Liston"
+              value={o ? String(o.publishedViaListon) : "—"}
+              hint="Listings that went live from here"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-3z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+            <Stat
+              label="Orders"
+              value={o ? String(o.orders) : "—"}
+              hint={`In the last ${rangeLabel}`}
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M6 3h12l1 5H5l1-5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M5 8h14v11a2 2 0 01-2 2H7a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+          </div>
+
+          {o && o.perAccount.length > 1 && (
+            <div className="card mt-6 overflow-hidden">
+              <div className="border-b border-[var(--color-line)] px-5 py-3">
+                <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By account</h2>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-[var(--color-paper)] text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                  <tr>
+                    <th className="px-5 py-2">Account</th>
+                    <th className="px-5 py-2 text-right">Active listings</th>
+                    <th className="px-5 py-2 text-right">Orders</th>
+                    <th className="px-5 py-2 text-right">Earnings</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {o.perAccount.map((a) => (
+                    <tr key={a.id} className="border-t border-[var(--color-line)]">
+                      <td className="px-5 py-2.5 font-medium text-[var(--color-ink)]">
+                        <Link href={`/accounts/${a.id}`} className="hover:text-[var(--color-primary)] hover:underline">
+                          {a.label}
+                        </Link>
+                        {!a.ok && <span className="ml-2 text-xs text-[var(--color-danger)]">unavailable</span>}
+                      </td>
+                      <td className="px-5 py-2.5 text-right text-[var(--color-ink)]">{a.activeListings}</td>
+                      <td className="px-5 py-2.5 text-right text-[var(--color-ink)]">{a.orders}</td>
+                      <td className="px-5 py-2.5 text-right font-medium text-[var(--color-ink)]">{a.earnings ? formatPrice(a.earnings.amount, a.earnings.currency) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
 
       <ConfirmDialog
         open={confirmAction === "logout"}

@@ -121,7 +121,12 @@ async function accessDecision(req, res) {
   try {
     const user = await accessService.decide(token);
     const approved = user.access_status === 'active';
-    decisionPage(res, approved ? 'Access approved' : 'Access rejected', `${user.email} has been ${approved ? 'approved and emailed a login link' : 'rejected and notified'}.`);
+    const outcome = approved
+      ? 'approved and emailed a login link'
+      : user.deleted
+        ? 'notified and their account removed'
+        : "notified and their access revoked — their data is kept";
+    decisionPage(res, approved ? 'Access approved' : 'Access rejected', `${user.email} has been ${outcome}.`);
   } catch (err) {
     decisionPage(res, "That link didn't work", err.message || 'It may have expired — use the Access requests page in Liston instead.');
   }
@@ -136,7 +141,7 @@ async function listAccessRequests(req, res, next) {
   }
 }
 
-const accessStatusSchema = z.object({ status: z.enum(['active', 'rejected', 'pending']) });
+const accessStatusSchema = z.object({ status: z.enum(['active', 'rejected']) });
 async function setAccessStatus(req, res, next) {
   try {
     const parsed = accessStatusSchema.safeParse(req.body);

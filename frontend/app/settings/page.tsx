@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
+import { PageSkeleton } from "@/components/PageSkeleton";
+import { cacheUser, useCachedUser } from "@/lib/session";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
@@ -26,7 +28,9 @@ function ComingSoonCard({ title, description }: { title: string; description: st
 
 export default function WorkspaceSettingsPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
+  const cachedUser = useCachedUser();
+  const [liveUser, setUser] = useState<User | null>(null);
+  const user = liveUser ?? cachedUser;
   const [loading, setLoading] = useState(true);
   const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
@@ -48,6 +52,7 @@ export default function WorkspaceSettingsPage() {
           return;
         }
         setUser(user);
+        cacheUser(user);
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
@@ -78,16 +83,15 @@ export default function WorkspaceSettingsPage() {
     }
   }
 
-  if (loading) {
+  // Cold start with nothing cached: a skeleton, never a blank page. Once a
+  // user is known (from cache or the API) the full shell renders and the
+  // page's own content shows its loading state inside it.
+  if (!user) {
     return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
+      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+        <PageSkeleton />
       </main>
     );
-  }
-
-  if (!user) {
-    return null;
   }
 
   const connectionsUsed = Number(user.connections_used ?? 0);
@@ -119,6 +123,10 @@ export default function WorkspaceSettingsPage() {
         </div>
       }
     >
+      {loading ? (
+        <PageSkeleton rows={3} />
+      ) : (
+        <>
       {actionError && (
         <div className="mb-4">
           <Alert>{actionError}</Alert>
@@ -174,6 +182,8 @@ export default function WorkspaceSettingsPage() {
         onCancel={() => setConfirmAction(null)}
         onConfirm={handleDeleteAccount}
       />
+        </>
+      )}
     </AppShell>
   );
 }
