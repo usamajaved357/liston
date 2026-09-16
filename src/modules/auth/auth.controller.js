@@ -129,13 +129,14 @@ async function accessDecision(req, res) {
 
 async function listAccessRequests(req, res, next) {
   try {
-    res.status(200).json({ requests: await accessService.listPending() });
+    const [requests, reviewed] = await Promise.all([accessService.listPending(), accessService.listReviewed()]);
+    res.status(200).json({ requests, reviewed });
   } catch (err) {
     next(err);
   }
 }
 
-const accessStatusSchema = z.object({ status: z.enum(['active', 'rejected']) });
+const accessStatusSchema = z.object({ status: z.enum(['active', 'rejected', 'pending']) });
 async function setAccessStatus(req, res, next) {
   try {
     const parsed = accessStatusSchema.safeParse(req.body);

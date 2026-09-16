@@ -37,6 +37,26 @@ async function request<T>(
   return data as T;
 }
 
+export interface Overview {
+  range: string;
+  accounts: { total: number; active: number; needsAttention: number };
+  activeListings: number;
+  earnings: { amount: number; currency: string };
+  orders: number;
+  drafts: number;
+  publishedViaListon: number;
+  perAccount: {
+    id: string;
+    label: string;
+    status: string;
+    ok: boolean;
+    error?: string;
+    activeListings: number;
+    earnings: { amount: number; currency: string } | null;
+    orders: number;
+  }[];
+}
+
 export interface AccessRequest {
   id: string;
   email: string;
@@ -44,6 +64,8 @@ export interface AccessRequest {
   access_note: string | null;
   created_at: string;
   email_verified_at: string | null;
+  access_status?: "pending" | "active" | "rejected";
+  access_reviewed_at?: string | null;
 }
 
 export interface User {
@@ -430,8 +452,8 @@ export const api = {
     }),
 
   listAccessRequests: () =>
-    request<{ requests: AccessRequest[] }>("/api/auth/access/requests"),
-  decideAccessRequest: (userId: string, status: "active" | "rejected") =>
+    request<{ requests: AccessRequest[]; reviewed: AccessRequest[] }>("/api/auth/access/requests"),
+  decideAccessRequest: (userId: string, status: "active" | "rejected" | "pending") =>
     request<{ user: { id: string; email: string; access_status: string } }>(`/api/auth/access/requests/${userId}`, {
       method: "POST",
       body: JSON.stringify({ status }),
@@ -444,6 +466,7 @@ export const api = {
     }),
 
   me: () => request<{ user: User }>("/api/users/me"),
+  overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}`),
 
   verifyEmail: (token: string) =>
     request<{ user: User }>("/api/auth/verify-email", {

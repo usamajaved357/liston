@@ -94,8 +94,28 @@ async function listPending() {
   return rows;
 }
 
+// The last 30 days of decisions, so a wrong click can be undone from the app.
+async function listReviewed() {
+  const { rows } = await query(
+    `SELECT id, email, name, access_note, created_at, email_verified_at, access_status, access_reviewed_at
+     FROM users WHERE role = 'owner' AND access_status IN ('active', 'rejected') AND access_reviewed_at > now() - interval '30 days'
+     ORDER BY access_reviewed_at DESC LIMIT 50`
+  );
+  return rows;
+}
+
 async function setStatus(userId, status) {
-  if (!['active', 'rejected'].includes(status)) throw new AccessError('Status must be active or rejected.', 400);
+  if (!['active', 'rejected', 'pending'].includes(status)) throw new AccessError('Status must be active, rejected or pending.', 400);
+  if (status === 'pending') {
+    // Undo: back to the queue, no email — the applicant never saw the slip.
+    const { rows } = await query(
+      `UPDATE users SET access_status = 'pending', access_reviewed_at = NULL, updated_at = now()
+       WHERE id = $1 AND role = 'owner' RETURNING id, email, access_status`,
+      [userId]
+    );
+    if (!rows.length) throw new AccessError('Account not found.', 404);
+    return rows[0];
+  }
   // An admin approving someone vouches for the address too — needed while
   // the email provider can't reach every applicant with a verification link.
   const { rows } = await query(
@@ -109,4 +129,4 @@ async function setStatus(userId, status) {
   return rows[0];
 }
 
-module.exports = { AccessError, isAdminEmail, notifyAdmins, decide, listPending, setStatus, decisionToken };
+module.exports = { AccessError, isAdminEmail, notifyAdmins, decide, listPending, listReviewed, setStatus, decisionToken };
