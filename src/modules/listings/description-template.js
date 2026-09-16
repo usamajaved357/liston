@@ -38,6 +38,23 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// Inline formatting the seller (or the model) can use inside the plain-text
+// description. Escaped first, then the markers become tags, so nothing but
+// these exact patterns can produce HTML:
+//   **bold**              → <strong>
+//   ==highlight==         → <mark>
+//   [color=#rrggbb]…[/color]  → coloured text (hex only)
+//   [size=lg]…[/size]     → larger text (sm | lg | xl)
+// A stray "**" that isn't closed is left as-is.
+const SIZE_PX = { sm: '12px', lg: '18px', xl: '22px' };
+function inline(text) {
+  return escapeHtml(text)
+    .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/==([^=\n]+?)==/g, '<mark style="background:#fff59d;padding:0 2px;border-radius:2px">$1</mark>')
+    .replace(/\[color=(#[0-9a-fA-F]{6})\]([\s\S]+?)\[\/color\]/g, '<span style="color:$1">$2</span>')
+    .replace(/\[size=(sm|lg|xl)\]([\s\S]+?)\[\/size\]/g, (_, size, inner) => `<span style="font-size:${SIZE_PX[size]}">${inner}</span>`);
+}
+
 // The model writes plain text — paragraphs separated by blank lines, bullet
 // lines starting with "•" or "-", and short ALL-CAPS lines as headings.
 // Turned into the HTML the template's styles expect, with everything escaped.
@@ -49,20 +66,21 @@ function textToHtml(text) {
       if (!lines.length) return '';
       const bullets = lines.filter((l) => /^[•\-*]\s+/.test(l));
       if (bullets.length === lines.length) {
-        return `<ul>${lines.map((l) => `<li>${escapeHtml(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
+        return `<ul>${lines.map((l) => `<li>${inline(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
       }
-      const isHeading = (line) => /^[A-Z0-9 &:\-–]{4,60}:?$/.test(line);
-      const headingHtml = (line) => `<p><strong>${escapeHtml(line.replace(/:$/, ''))}</strong></p>`;
+      // "**Key Features:**" — a bold-only line — is a heading too.
+      const isHeading = (line) => /^[A-Z0-9 &:\-–]{4,60}:?$/.test(line) || /^\*\*[^*]{2,60}\*\*:?$/.test(line);
+      const headingHtml = (line) => `<p><strong>${inline(line.replace(/:$/, ''))}</strong></p>`;
       if (lines.length === 1 && isHeading(lines[0])) return headingHtml(lines[0]);
       // A block mixing a lead line with bullets — "KEY FEATURES:" straight
       // into its list is how the model writes it. The lead renders as a
       // heading when it looks like one, otherwise as a paragraph.
       if (bullets.length) {
         const lead = lines.filter((l) => !/^[•\-*]\s+/.test(l));
-        const leadHtml = lead.length === 1 && isHeading(lead[0]) ? headingHtml(lead[0]) : lead.length ? `<p>${lead.map(escapeHtml).join('<br/>')}</p>` : '';
-        return leadHtml + `<ul>${bullets.map((l) => `<li>${escapeHtml(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
+        const leadHtml = lead.length === 1 && isHeading(lead[0]) ? headingHtml(lead[0]) : lead.length ? `<p>${lead.map(inline).join('<br/>')}</p>` : '';
+        return leadHtml + `<ul>${bullets.map((l) => `<li>${inline(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
       }
-      return `<p>${lines.map(escapeHtml).join('<br/>')}</p>`;
+      return `<p>${lines.map(inline).join('<br/>')}</p>`;
     })
     .join('');
 }

@@ -394,38 +394,48 @@ export default function DraftListingPage() {
                   </div>
                 )}
 
-                <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-line)] pt-5">
-                  <p className="text-sm text-[var(--color-muted)]">
-                    {preview.source.axes.length ? (
-                      <>
-                        <span className="font-bold text-[var(--color-ink)]">{selectedCount}</span> variation
-                        {selectedCount === 1 ? "" : "s"} will be drafted
-                        {selectedCount < preview.source.totalCombinations && ` of ${preview.source.totalCombinations} offered`}
-                      </>
-                    ) : (
-                      "Single listing"
-                    )}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleDraft}
-                    disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0)}
-                    className="btn btn-primary"
-                  >
-                    {busy === "draft" ? (
-                      <span className="inline-flex items-center gap-2">
-                        {messages[statusIndex]} <ThinkingDots />
-                      </span>
-                    ) : (
-                      "Draft with AI"
-                    )}
-                  </button>
-                </div>
               </div>
             </section>
           )}
         </div>
       </div>
+
+      {preview && (
+        <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+            <Link href={`/accounts/${params.id}/listings?filter=draft`} className="btn btn-danger-ghost">
+              Cancel
+            </Link>
+            <div className="flex items-center gap-4">
+              <p className="text-sm text-[var(--color-muted)]">
+                {preview.source.axes.length ? (
+                  <>
+                    <span className="font-bold text-[var(--color-ink)]">{selectedCount}</span> variation
+                    {selectedCount === 1 ? "" : "s"} will be drafted
+                    {selectedCount < preview.source.totalCombinations && ` of ${preview.source.totalCombinations} offered`}
+                  </>
+                ) : (
+                  "Single listing"
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={handleDraft}
+                disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0)}
+                className="btn btn-primary"
+              >
+                {busy === "draft" ? (
+                  <span className="inline-flex items-center gap-2">
+                    {messages[statusIndex]} <ThinkingDots />
+                  </span>
+                ) : (
+                  "Draft with AI"
+                )}
+              </button>
+            </div>
+          </div>
+        </footer>
+      )}
     </main>
   );
 }

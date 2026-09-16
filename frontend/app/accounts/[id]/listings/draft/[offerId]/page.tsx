@@ -39,6 +39,50 @@ const cardTitleClass = "text-[15px] font-bold text-[var(--color-ink)]";
 const smallButton = "btn btn-secondary btn-sm";
 const TITLE_MAX = 80;
 
+// Small inline icons for the compact action rows.
+const Icon = {
+  star: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8L12 3.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  ),
+  swap: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M4 7h13l-3-3M20 17H7l3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  upload: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M12 16V4m0 0l-4 4m4-4l4 4M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  download: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M12 4v12m0 0l-4-4m4 4l4-4M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  text: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M5 6h14M12 6v13M9 19h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  ),
+  trash: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  restore: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M4 10h11a5 5 0 010 10h-4M4 10l4-4M4 10l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  close: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5">
+      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  ),
+};
+
 const CONDITIONS = [
   { value: "NEW", label: "New" },
   { value: "USED_EXCELLENT", label: "Used — excellent" },
@@ -193,11 +237,19 @@ function GalleryGrid({
         <h3 className={cardTitleClass}>
           Photos <span className="font-medium text-[var(--color-muted)]">· {count} of 24</span>
         </h3>
-        <div className="flex items-center gap-2">
-          <FileButton label={uploading ? "Uploading…" : "+ Upload"} multiple disabled={disabled || uploading || count >= 24} onFiles={onUpload} className={smallButton} />
+        <div className="flex items-center gap-1.5">
+          <FileButton
+            label={<>{Icon.upload}<span>{uploading ? "Uploading…" : "Upload"}</span></>}
+            multiple
+            disabled={disabled || uploading || count >= 24}
+            onFiles={onUpload}
+            className="btn btn-secondary btn-sm"
+            title="Upload photos from your computer"
+          />
           {count > 0 && (
-            <button type="button" onClick={onDownloadAll} className={smallButton}>
-              Download all
+            <button type="button" onClick={onDownloadAll} title="Download all photos" className="btn btn-secondary btn-sm">
+              {Icon.download}
+              <span>All</span>
             </button>
           )}
         </div>
@@ -215,7 +267,7 @@ function GalleryGrid({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={current} alt="" className="h-full w-full object-contain" />
             {selected === 0 && (
-              <span className="chip chip-primary absolute left-3 top-3 h-7 bg-[var(--color-panel)]">
+              <span className="chip chip-primary absolute left-3 top-3">
                 Main photo
               </span>
             )}
@@ -224,26 +276,28 @@ function GalleryGrid({
             </span>
           </div>
 
-          {/* Actions for the selected image */}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button type="button" onClick={() => onSetMain(selected)} disabled={disabled || selected === 0} className={smallButton}>
-              Set as main
+          {/* Actions for the selected image — icons only, labels on hover */}
+          <div className="mt-3 flex items-center gap-1.5">
+            <button type="button" onClick={() => onSetMain(selected)} disabled={disabled || selected === 0} title="Set as main photo" aria-label="Set as main photo" className="btn btn-secondary btn-icon">
+              {Icon.star}
             </button>
-            <FileButton label="Replace" disabled={disabled || uploading} onFiles={(f) => onReplace(selected, f[0])} className={smallButton} />
-            <button type="button" onClick={() => onDownload(selected)} className={smallButton}>
-              Download
+            <FileButton label={Icon.swap} disabled={disabled || uploading} onFiles={(f) => onReplace(selected, f[0])} className="btn btn-secondary btn-icon" title="Replace this photo" />
+            <button type="button" onClick={() => onDownload(selected)} title="Download this photo" aria-label="Download this photo" className="btn btn-secondary btn-icon">
+              {Icon.download}
             </button>
-            <button type="button" onClick={() => onEditWithAi(selected)} disabled={disabled} className={smallButton}>
-              Add text / badge
+            <button type="button" onClick={() => onEditWithAi(selected)} disabled={disabled} title="Add text or a badge" aria-label="Add text or a badge" className="btn btn-secondary btn-icon">
+              {Icon.text}
             </button>
+            <span className="ml-auto text-xs text-[var(--color-muted)]">Photo {selected + 1}</span>
             <button
               type="button"
               onClick={() => onDelete(selected)}
               disabled={disabled || count === 1}
-              title={count === 1 ? "A listing needs at least one photo" : undefined}
-              className="btn btn-danger-ghost btn-sm ml-auto"
+              title={count === 1 ? "A listing needs at least one photo" : "Remove this photo"}
+              aria-label="Remove this photo"
+              className="btn btn-danger-ghost btn-icon"
             >
-              Remove
+              {Icon.trash}
             </button>
           </div>
 
@@ -268,16 +322,6 @@ function GalleryGrid({
                 )}
               </button>
             ))}
-            {!disabled && count < 24 && (
-              <FileButton
-                label={<span className="text-2xl leading-none text-[var(--color-muted)]">+</span>}
-                multiple
-                disabled={uploading}
-                onFiles={onUpload}
-                className="flex aspect-square items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-line)] hover:border-[var(--color-accent)]"
-                title="Upload photos"
-              />
-            )}
           </div>
         </>
       )}
@@ -334,14 +378,18 @@ function VariationsTable({
 }) {
   const [bulkPrice, setBulkPrice] = useState("");
   const [bulkQty, setBulkQty] = useState("");
+  // Which row's price working is open — the ROI figure is a button.
+  // Rendered position: fixed, so the table's own scroll container can't
+  // clip it.
+  const [openBreakdown, setOpenBreakdown] = useState<{ index: number; top?: number; bottom?: number; right: number } | null>(null);
   const axisRemoved = (axis: string, value: string) => removedAxisValues.some((r) => r.axis === axis && r.value === value);
   const isRowGone = (variant: VariationDraftVariant, index: number) =>
     removedIndexes.has(index) || Object.entries(variant.aspects).some(([axis, values]) => axisRemoved(axis, values[0]));
   const axes = specifications.map((s) => s.name);
   const remaining = variants.filter((v, i) => !isRowGone(v, i)).length;
   const currency = variants[0]?.price.currency || "GBP";
-  const cell = "px-3 py-2.5 align-middle";
-  const numInput = "input input-sm text-right";
+  const cell = "px-3 py-1.5 align-middle";
+  const numInput = "input input-sm text-center";
 
   return (
     <div className={cardClass}>
@@ -373,9 +421,9 @@ function VariationsTable({
       </div>
 
       {/* Attribute values — remove a whole colour or size at once */}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {specifications.map((spec) => (
-          <div key={spec.name} className="rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)] p-3">
+          <div key={spec.name} className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-paper)] px-3.5 py-3">
             <p className={labelClass}>{spec.name}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {spec.values.map((value) => {
@@ -384,23 +432,27 @@ function VariationsTable({
                 return (
                   <span
                     key={value}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
+                    className={`inline-flex h-8 items-center gap-2 rounded-full border pl-3 pr-1 text-[13px] ${
                       gone
-                        ? "border-dashed border-[var(--color-line)] text-[var(--color-muted)] line-through"
+                        ? "border-dashed border-[var(--color-line)] text-[var(--color-muted)]"
                         : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)]"
                     }`}
                   >
-                    {value}
-                    <span className="text-[var(--color-muted)]">{count}</span>
+                    <span className={gone ? "line-through" : "font-medium"}>{value}</span>
+                    <span className="rounded-full bg-[var(--color-paper)] px-1.5 text-[11px] font-semibold text-[var(--color-muted)]">{count}</span>
                     {!disabled && (
                       <button
                         type="button"
                         aria-label={gone ? `Restore ${value}` : `Remove ${value}`}
                         title={gone ? "Restore" : `Remove all ${count} combination${count === 1 ? "" : "s"}`}
                         onClick={() => (gone ? onRestoreAxisValue({ axis: spec.name, value }) : onRemoveAxisValue({ axis: spec.name, value }))}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-danger)]"
+                        className={`flex h-6 w-6 items-center justify-center rounded-full transition-colors ${
+                          gone
+                            ? "text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]"
+                            : "text-[var(--color-muted)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)]"
+                        }`}
                       >
-                        {gone ? "↺" : "×"}
+                        {gone ? Icon.restore : Icon.trash}
                       </button>
                     )}
                   </span>
@@ -411,8 +463,8 @@ function VariationsTable({
         ))}
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-xl border border-[var(--color-line)]">
-        <table className="w-full min-w-[720px] border-collapse text-sm">
+      <div className="mt-3 overflow-x-auto rounded-2xl border border-[var(--color-line)]">
+        <table className="w-full min-w-[720px] border-collapse text-[13px]">
           <thead className="bg-[var(--color-paper)] text-left">
             <tr className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-muted)]">
               <th className={`${cell} w-20`}>Photo</th>
@@ -421,10 +473,10 @@ function VariationsTable({
                   {axis}
                 </th>
               ))}
-              <th className={`${cell} w-36 text-right`}>Price ({currencySymbol(currency)})</th>
-              <th className={`${cell} w-24 text-right`}>Qty</th>
-              <th className={`${cell} w-20 text-right`}>ROI</th>
-              <th className={`${cell} w-24`} />
+              <th className={`${cell} w-36 text-center`}>Price ({currencySymbol(currency)})</th>
+              <th className={`${cell} w-24 text-center`}>Qty</th>
+              <th className={`${cell} w-24 text-center`}>ROI</th>
+              <th className={`${cell} w-14`} />
             </tr>
           </thead>
           <tbody>
@@ -439,12 +491,12 @@ function VariationsTable({
                   className={`border-t border-[var(--color-line)] ${gone ? "bg-[var(--color-paper)]/60 text-[var(--color-muted)]" : "hover:bg-[var(--color-paper)]/40"}`}
                 >
                   <td className={cell}>
-                    <div className="group relative h-14 w-14">
+                    <div className="group relative h-11 w-11">
                       {image ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={image} alt="" className={`h-14 w-14 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
+                        <img src={image} alt="" className={`h-11 w-11 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
                       ) : (
-                        <div className="flex h-14 w-14 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
+                        <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
                           none
                         </div>
                       )}
@@ -474,7 +526,7 @@ function VariationsTable({
                       {v.aspects[axis]?.[0] ?? "—"}
                     </td>
                   ))}
-                  <td className={`${cell} text-right`}>
+                  <td className={`${cell} text-center`}>
                     <input
                       type="number"
                       step="0.01"
@@ -485,7 +537,7 @@ function VariationsTable({
                       className={numInput}
                     />
                   </td>
-                  <td className={`${cell} text-right`}>
+                  <td className={`${cell} text-center`}>
                     <input
                       type="number"
                       step="1"
@@ -496,25 +548,75 @@ function VariationsTable({
                       className={numInput}
                     />
                   </td>
-                  <td className={`${cell} text-right text-xs font-semibold`}>
+                  <td className={`${cell} text-center text-xs font-semibold`}>
                     {roi && !gone ? (
-                      <span className={roi.roiPercent >= roi.targetRoiPercent ? "text-emerald-700" : "text-[var(--color-danger)]"}>
-                        {roi.roiPercent.toFixed(0)}%
-                      </span>
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            if (openBreakdown?.index === i) return setOpenBreakdown(null);
+                            const r = e.currentTarget.getBoundingClientRect();
+                            // Opens below the button when there's room above the
+                            // fixed footer; otherwise flips above it.
+                            const POPOVER = 360;
+                            const FOOTER = 72;
+                            const fitsBelow = r.bottom + 6 + POPOVER < window.innerHeight - FOOTER;
+                            setOpenBreakdown({
+                              index: i,
+                              right: window.innerWidth - r.right,
+                              ...(fitsBelow ? { top: r.bottom + 6 } : { bottom: window.innerHeight - r.top + 6 }),
+                            });
+                          }}
+                          title="How this price was worked out"
+                          aria-expanded={openBreakdown?.index === i}
+                          className={`inline-flex h-7 items-center gap-1 rounded-full border px-2.5 transition-colors ${
+                            roi.roiPercent >= roi.targetRoiPercent
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400"
+                              : "border-[#fecdd3] bg-[var(--color-danger-soft)] text-[var(--color-danger)] hover:border-[var(--color-danger)]"
+                          }`}
+                        >
+                          {roi.roiPercent.toFixed(0)}%
+                          <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 opacity-70">
+                            <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
+                            <path d="M12 11v5M12 8h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                        {openBreakdown?.index === i && (
+                          <>
+                            <div className="fixed inset-0 z-40" onClick={() => setOpenBreakdown(null)} aria-hidden />
+                            <div className="fixed z-50 w-80 text-left" style={{ top: openBreakdown.top, bottom: openBreakdown.bottom, right: openBreakdown.right, boxShadow: "var(--shadow-pop)" }}>
+                              <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-1">
+                                <div className="flex items-center justify-between px-3 pt-2">
+                                  <p className="text-xs font-bold text-[var(--color-ink)]">
+                                    {axes.map((axis) => v.aspects[axis]?.[0]).filter(Boolean).join(" · ")}
+                                  </p>
+                                  <button type="button" onClick={() => setOpenBreakdown(null)} aria-label="Close" className="text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+                                    {Icon.close}
+                                  </button>
+                                </div>
+                                <div className="p-2">
+                                  <PriceBreakdownPanel breakdown={roi} />
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </>
                     ) : (
                       <span className="text-[var(--color-muted)]">—</span>
                     )}
                   </td>
-                  <td className={`${cell} text-right`}>
-                    {!disabled && (
-                      <button
-                        type="button"
-                        onClick={() => (rowRemovedDirectly ? onRestoreRow(i) : onRemoveRow(i))}
-                        className={`text-xs font-semibold hover:underline ${rowRemovedDirectly ? "text-[var(--color-accent)]" : gone ? "invisible" : "text-[var(--color-danger)]"}`}
-                      >
-                        {rowRemovedDirectly ? "Restore" : "Remove"}
-                      </button>
-                    )}
+                  <td className={`${cell} text-center`}>
+                    {!disabled &&
+                      (rowRemovedDirectly ? (
+                        <button type="button" onClick={() => onRestoreRow(i)} title="Restore this variation" aria-label="Restore this variation" className="btn btn-secondary btn-icon text-[var(--color-accent)]">
+                          {Icon.restore}
+                        </button>
+                      ) : gone ? null : (
+                        <button type="button" onClick={() => onRemoveRow(i)} title="Remove this variation" aria-label="Remove this variation" className="btn btn-danger-ghost btn-icon">
+                          {Icon.trash}
+                        </button>
+                      ))}
                   </td>
                 </tr>
               );
@@ -1078,23 +1180,12 @@ export default function DraftEditorPage() {
       <EditorHeader
         backHref={`/accounts/${params.id}/listings?filter=draft`}
         backLabel="Back to drafts"
-        title={title || "Untitled listing"}
+        title={editable ? "Edit draft" : "Listing"}
         chips={
           <>
-            <span className="chip chip-accent h-6 text-[11px] uppercase tracking-wide">
-              {listing.status.replace("_", " ")}
-            </span>
-            {variation && (
-              <span className="chip h-6 text-[11px]">
-                {variation.variants.length} variations
-              </span>
-            )}
+            {variation && <span className="chip">{variation.variants.length} variations</span>}
             {notes.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setShowNotes((v) => !v)}
-                className="chip chip-warning h-6 text-[11px]"
-              >
+              <button type="button" onClick={() => setShowNotes((v) => !v)} className="chip chip-warning">
                 {notes.length} {notes.length === 1 ? "note" : "notes"}
               </button>
             )}
@@ -1103,11 +1194,9 @@ export default function DraftEditorPage() {
         actions={
           editable ? (
             <>
-              <span className={`mr-1 hidden text-xs md:inline ${title.length > TITLE_MAX ? "font-semibold text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>
-                {title.length > TITLE_MAX ? `Title is ${title.length - TITLE_MAX} characters over eBay's limit` : dirty ? "Unsaved changes" : "Saved"}
-              </span>
+              <span className="mr-1 hidden text-xs text-[var(--color-muted)] md:inline">{dirty ? "Unsaved changes" : "All changes saved"}</span>
               {dirty && (
-                <button type="button" onClick={() => resetFrom(listing)} disabled={busy} className={smallButton}>
+                <button type="button" onClick={() => resetFrom(listing)} disabled={busy} className="btn btn-ghost btn-sm">
                   Discard
                 </button>
               )}
@@ -1115,30 +1204,10 @@ export default function DraftEditorPage() {
                 type="button"
                 onClick={handleSave}
                 disabled={!dirty || busy || title.length > TITLE_MAX}
-                className="btn btn-secondary btn-sm"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmPublish(true)}
-                disabled={!canPublish}
-                title={dirty ? "Save your changes first" : undefined}
+                title={title.length > TITLE_MAX ? "Shorten the title first" : undefined}
                 className="btn btn-primary btn-sm"
               >
-                {publishing ? "Publishing…" : "Publish to eBay"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                disabled={busy}
-                title="Delete draft"
-                aria-label="Delete draft"
-                className="btn btn-danger-ghost btn-sm ml-1 px-2"
-              >
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                {saving ? "Saving…" : "Save"}
               </button>
             </>
           ) : null
@@ -1147,39 +1216,44 @@ export default function DraftEditorPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-7xl px-6 py-6">
-          {error && (
-            <div className="mb-4">
-              <Alert>{error}</Alert>
-            </div>
-          )}
-          {listing.error_message && listing.status === "pending_review" && (
-            <div className="mb-4">
-              <Alert>Last publish attempt failed: {listing.error_message}</Alert>
-            </div>
-          )}
-          {imageCheck && !imageCheck.ok && (
-            <div className="mb-4">
-              <Alert>{imageCheck.errors.join(" ")}</Alert>
-            </div>
-          )}
-          {listing.status === "published" && (
-            <div className="mb-4">
-              <Alert variant="success">
-                Live on eBay{listing.external_product_id ? ` — item ${listing.external_product_id}` : ""}.
-              </Alert>
+          {(error || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published") && (
+            <div className="mb-4 space-y-2">
+              {error && (
+                <div className="notice notice-danger">
+                  <span className="flex-1">{error}</span>
+                  <button type="button" onClick={() => setError(null)} aria-label="Dismiss" className="opacity-70 hover:opacity-100">
+                    {Icon.close}
+                  </button>
+                </div>
+              )}
+              {listing.error_message && listing.status === "pending_review" && (
+                <div className="notice notice-danger">
+                  <span className="flex-1">Last publish attempt failed: {listing.error_message}</span>
+                </div>
+              )}
+              {imageCheck && !imageCheck.ok && (
+                <div className="notice notice-warning">
+                  <span className="flex-1">{imageCheck.errors.join(" ")}</span>
+                </div>
+              )}
+              {listing.status === "published" && (
+                <div className="notice notice-success">
+                  <span className="flex-1">Live on eBay{listing.external_product_id ? ` — item ${listing.external_product_id}` : ""}.</span>
+                </div>
+              )}
             </div>
           )}
           {showNotes && notes.length > 0 && (
-            <div className="mb-4 rounded-xl border border-amber-200 bg-[var(--color-warning-soft)] p-4">
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-[var(--color-warning-soft)] px-4 py-3">
               <div className="flex items-baseline justify-between">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">Drafting notes</p>
                 <button type="button" onClick={() => setShowNotes(false)} className="text-xs text-amber-800 hover:underline">
                   Hide
                 </button>
               </div>
-              <ul className="mt-2 space-y-1">
+              <ul className="mt-1.5 space-y-0.5">
                 {notes.map((w) => (
-                  <li key={w} className="text-sm leading-relaxed text-amber-900">
+                  <li key={w} className="text-[13px] leading-relaxed text-amber-900">
                     • {w}
                   </li>
                 ))}
@@ -1243,15 +1317,20 @@ export default function DraftEditorPage() {
                     </span>
                   </div>
                   <input
-                    className={`${inputClass} mt-1.5 !h-12 text-base font-semibold`}
+                    className={`${inputClass} mt-1.5 font-semibold ${title.length > TITLE_MAX ? "!border-[var(--color-danger)]" : ""}`}
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     disabled={!editable || busy}
                   />
+                  {title.length > TITLE_MAX && (
+                    <p className="mt-1.5 text-xs font-semibold text-[var(--color-danger)]">
+                      {title.length - TITLE_MAX} characters over eBay&apos;s 80-character limit — shorten it to save.
+                    </p>
+                  )}
                 </div>
 
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <div className="sm:col-span-2">
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div className="sm:col-span-3">
                     <p className={labelClass}>Category</p>
                     <p className="mt-1.5 text-sm text-[var(--color-ink)]">
                       {content.categoryPath?.length ? content.categoryPath.join(" › ") : `Category ${content.categoryId}`}
@@ -1284,7 +1363,7 @@ export default function DraftEditorPage() {
                       </div>
                     </>
                   ) : (
-                    <div>
+                    <div className="sm:col-span-2">
                       <p className={labelClass}>Pricing</p>
                       <p className="mt-1.5 text-sm text-[var(--color-ink)]">Per variation — edit in the table below.</p>
                     </div>
@@ -1292,8 +1371,8 @@ export default function DraftEditorPage() {
                 </div>
 
                 {single?.priceBreakdown && (
-                  <details className="mt-4 rounded-xl border border-[var(--color-line)]">
-                    <summary className="cursor-pointer px-4 py-2.5 text-xs font-semibold text-[var(--color-ink)]">
+                  <details className="mt-3 rounded-2xl border border-[var(--color-line)]">
+                    <summary className="cursor-pointer px-4 py-2 text-xs font-semibold text-[var(--color-ink)]">
                       How this price was worked out · {single.priceBreakdown.roiPercent.toFixed(0)}% ROI
                     </summary>
                     <div className="border-t border-[var(--color-line)] p-3">
@@ -1303,7 +1382,7 @@ export default function DraftEditorPage() {
                 )}
 
                 {content.listingPolicies && (
-                  <div className="mt-4 grid gap-3 rounded-xl bg-[var(--color-paper)] p-3 sm:grid-cols-3">
+                  <div className="mt-3 grid gap-3 rounded-2xl bg-[var(--color-paper)] px-4 py-2.5 sm:grid-cols-3">
                     {(["fulfillmentPolicyId", "paymentPolicyId", "returnPolicyId"] as const).map((kind) => (
                       <div key={kind} className="min-w-0">
                         <p className={labelClass}>{kind.replace("PolicyId", "")}</p>
@@ -1323,7 +1402,7 @@ export default function DraftEditorPage() {
                     Item specifics <span className="font-medium text-[var(--color-muted)]">· {specifics.length}</span>
                   </h3>
                   {editable && (
-                    <button type="button" onClick={() => setSpecifics((rows) => [...rows, { name: "", value: "" }])} disabled={busy} className={smallButton}>
+                    <button type="button" onClick={() => setSpecifics((rows) => [...rows, { name: "", value: "" }])} disabled={busy} className="btn btn-secondary btn-sm">
                       + Add
                     </button>
                   )}
@@ -1331,18 +1410,18 @@ export default function DraftEditorPage() {
                 {specifics.length === 0 ? (
                   <p className="mt-3 text-sm text-[var(--color-muted)]">No item specifics yet.</p>
                 ) : (
-                  <div className="mt-3 grid gap-x-5 gap-y-1 md:grid-cols-2">
+                  <div className="mt-3 grid gap-x-6 md:grid-cols-2">
                     {specifics.map((row, i) => (
-                      <div key={i} className="flex items-center gap-1.5 border-b border-[var(--color-line)] py-1 text-sm">
+                      <div key={i} className="flex items-center gap-1 border-b border-[var(--color-line)] py-0.5 text-[13px]">
                         <input
-                          className="w-[42%] min-w-0 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-[var(--color-muted)] hover:border-[var(--color-line)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-100"
+                          className="h-7 w-[42%] min-w-0 rounded-full border border-transparent bg-transparent px-2 text-[var(--color-muted)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
                           value={row.name}
                           placeholder="Name"
                           onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
                           disabled={!editable || busy}
                         />
                         <input
-                          className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-accent)] focus:outline-none disabled:opacity-100"
+                          className="h-7 min-w-0 flex-1 rounded-full border border-transparent bg-transparent px-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
                           value={row.value}
                           placeholder="Value"
                           onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
@@ -1354,9 +1433,9 @@ export default function DraftEditorPage() {
                             aria-label={`Remove ${row.name || "specific"}`}
                             onClick={() => setSpecifics((rows) => rows.filter((_, j) => j !== i))}
                             disabled={busy}
-                            className="shrink-0 rounded-md px-1.5 text-[var(--color-muted)] hover:text-[var(--color-danger)] disabled:opacity-40"
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)] disabled:opacity-40"
                           >
-                            ×
+                            {Icon.close}
                           </button>
                         )}
                       </div>
@@ -1433,9 +1512,32 @@ export default function DraftEditorPage() {
               />
             </div>
           )}
-          <div className="h-10" />
+          <div className="h-6" />
         </div>
       </div>
+
+      {editable && (
+        <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+            <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
+              {Icon.trash}
+              <span>Delete draft</span>
+            </button>
+            <div className="flex items-center gap-3">
+              {dirty && <span className="text-xs text-[var(--color-muted)]">Save your changes to publish</span>}
+              <button
+                type="button"
+                onClick={() => setConfirmPublish(true)}
+                disabled={!canPublish}
+                title={dirty ? "Save your changes first" : undefined}
+                className="btn btn-primary"
+              >
+                {publishing ? "Publishing…" : "Publish to eBay"}
+              </button>
+            </div>
+          </div>
+        </footer>
+      )}
 
       <ConfirmDialog
         open={confirmPublish}
