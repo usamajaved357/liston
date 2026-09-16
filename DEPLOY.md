@@ -5,21 +5,25 @@ Two services from this one repo, plus a Postgres database.
 ## 1. Create the project
 
 1. Railway → New Project → **Deploy from GitHub repo** → pick this repo (the `main` branch).
-2. Add **Postgres** (New → Database → PostgreSQL). Railway injects `DATABASE_URL` into any service you reference it from.
+2. On the canvas: **+ Create → Database → PostgreSQL**. Its `DATABASE_URL` is referenced from the API service's variables.
 
-## 2. API service
+## 2. API service (the service Railway created from the repo)
 
-- **Root directory:** `/` (repository root). Nixpacks picks up `nixpacks.toml` and `railway.json`.
-- On every boot it runs `npm run migrate` and the idempotent `npm run seed`, then starts.
-- Generate a public domain (Settings → Networking → Generate Domain). Note it — call it `API_URL` below.
+Click its box on the canvas → **Settings**:
 
-**Variables** (Settings → Variables). Copy the values from your local `.env`:
+- **Source → Root Directory:** `/` (leave as is).
+- **Build → Builder:** Railpack (default). Leave *Custom Build Command* empty.
+- **Deploy → Custom Start Command:** `npm run migrate && npm run seed && npm start`
+- **Deploy → Healthcheck Path:** `/health`
+- **Networking → Public Networking → Generate Domain** (port `3000` if asked). Note the URL — `API_URL` below.
+
+**Variables tab → Raw Editor**, paste (values from your local `.env`):
 
 | Variable | Value |
 |---|---|
-| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (reference the Postgres service) |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (use your database service's name inside the braces) |
 | `NODE_ENV` | `production` |
-| `PORT` | leave unset — Railway provides it |
+| `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | `1` (the DS API needs no browser; skips a 300MB download) |
 | `FRONTEND_URL` | the frontend's public URL (step 3) — also locks CORS to it |
 | `JWT_SECRET` | a fresh random string for production |
 | `CREDENTIALS_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` — **generate a new one; existing dev connections won't decrypt with a different key** |
@@ -33,20 +37,18 @@ Two services from this one repo, plus a Postgres database.
 | `ALIEXPRESS_APP_KEY`, `ALIEXPRESS_APP_SECRET`, `ALIEXPRESS_CALLBACK` | as local |
 | `IMAGE_ADD_UK_FLAG` etc. | optional, default off |
 
-Not needed: `REDIS_URL` (optional until BullMQ is used), `OPENAI_API_KEY`, `BRIA_API_KEY`.
+Don't set `PORT` (Railway injects it). Not needed: `REDIS_URL`, `OPENAI_API_KEY`, `BRIA_API_KEY`.
 
 ## 3. Frontend service
 
-- New → GitHub repo (same repo) → Settings → **Root directory: `/frontend`**.
-- Generate a public domain. Put it in the API service's `FRONTEND_URL`.
+On the project **canvas** (not inside a service): **+ Create** (top-right, or right-click the canvas) → **GitHub Repo** → pick the same repo. A second box appears. Click it → **Settings**:
 
-**Variables:**
+- **Source → Root Directory:** `/frontend`
+- Build/Start: leave defaults (Railpack detects Next.js: `npm run build` / `npm start`).
+- **Healthcheck Path:** `/login`
+- **Generate Domain** — this is your app URL. Put it in the API service's `FRONTEND_URL`.
 
-| Variable | Value |
-|---|---|
-| `NEXT_PUBLIC_API_URL` | `https://API_URL` (no trailing slash) |
-
-`NEXT_PUBLIC_*` is baked in at build time — redeploy the frontend after changing it.
+**Variables:** `NEXT_PUBLIC_API_URL` = `https://API_URL` (no trailing slash). `NEXT_PUBLIC_*` is baked in at build time — redeploy the frontend after changing it.
 
 ## 4. Third-party callbacks to update
 

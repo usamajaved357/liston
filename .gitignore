@@ -33,3 +33,6 @@ ARCHITECTURE.md
 PHASE-2.md
 PROGRESS.md
 .cache/
+
+# TypeScript incremental cache (breaks Nixpacks cache mounts when committed)
+frontend/tsconfig.tsbuildinfo
