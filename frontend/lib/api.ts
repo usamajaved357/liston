@@ -689,6 +689,8 @@ export const api = {
     }),
 
   removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
+  setTeamMemberPassword: (id: string, password: string) =>
+    request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
   updateMemberPermissions: (memberId: string, permissions: PermissionUpdate[]) =>
     request<{ permissions: TeamMemberPermission[] }>(`/api/team/members/${memberId}/permissions`, {

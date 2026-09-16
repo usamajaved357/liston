@@ -79,7 +79,9 @@ interface AddConnectionPanelProps {
 }
 
 export function AddConnectionPanel({ platforms, atLimit, maxConnections, onCancel }: AddConnectionPanelProps) {
-  const [selectedPlatformKey, setSelectedPlatformKey] = useState<string | null>(null);
+  // Start on the one marketplace that can actually be connected today, so the
+  // name field is there straight away instead of behind a click.
+  const [selectedPlatformKey, setSelectedPlatformKey] = useState<string | null>(() => platforms.find((p) => p.connectable)?.key ?? null);
   const selectedPlatform = platforms.find((p) => p.key === selectedPlatformKey) || null;
 
   return (

@@ -33,6 +33,16 @@ async function addMember(ownerId, { email, name, password }) {
   }
 }
 
+// Owners hand out member logins, so they can also reset one — the member's
+// old password stops working immediately.
+async function setMemberPassword(memberId, ownerId, password) {
+  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+  const updated = await teamRepository.setMemberPassword(memberId, ownerId, passwordHash);
+  if (!updated) {
+    throw new TeamError('Team member not found', 404);
+  }
+}
+
 async function removeMember(memberId, ownerId) {
   const deleted = await teamRepository.deleteMember(memberId, ownerId);
   if (!deleted) {
@@ -91,6 +101,7 @@ module.exports = {
   listMembers,
   addMember,
   removeMember,
+  setMemberPassword,
   getMemberPermissions,
   updateMemberPermissions,
   TeamError,

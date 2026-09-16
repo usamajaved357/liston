@@ -10,6 +10,7 @@ const router = express.Router();
 router.get('/members', requireAuth, requireOwner, teamController.listMembers);
 router.post('/members', requireAuth, requireOwner, teamController.addMember);
 router.delete('/members/:id', requireAuth, requireOwner, teamController.removeMember);
+router.put('/members/:id/password', requireAuth, requireOwner, teamController.setMemberPassword);
 router.get('/members/:id/permissions', requireAuth, requireOwner, teamController.getMemberPermissions);
 router.put('/members/:id/permissions', requireAuth, requireOwner, teamController.updateMemberPermissions);
 
