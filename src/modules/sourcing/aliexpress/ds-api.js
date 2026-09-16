@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const logger = require('../../../utils/logger');
+const appState = require('../../../db/app-state.repository');
 const config = require('../../../config');
 const { ScrapingError } = require('../../scraping/scraping.errors');
 
@@ -31,9 +32,9 @@ function sign(params, appSecret) {
 // Tokens can come from .env or from the file the consent script writes —
 // checking only .env sent a freshly authorised app straight to "not
 // configured". Confirmed live.
-function assertConfigured() {
+async function assertConfigured() {
   const { appKey, appSecret } = config.aliexpress;
-  const state = loadTokenState();
+  const state = await loadTokenState();
   if (!appKey || !appSecret || !(state.accessToken || state.refreshToken)) {
     throw new ScrapingError(
       'The AliExpress API is selected but not configured — set ALIEXPRESS_APP_KEY and ALIEXPRESS_APP_SECRET, then run `node scripts/aliexpress-auth.js` to authorise.',
@@ -44,43 +45,65 @@ function assertConfigured() {
 
 // --- token lifecycle ---------------------------------------------------------
 // AliExpress access tokens are short-lived; a static one in .env would stop
-// working within hours. The refresh token is the durable credential. Refreshed
-// tokens are persisted to a local file so a restart doesn't burn a refresh,
-// and refreshed 5 minutes early so a call never lands on an expired token.
+// working within hours. The refresh token is the durable credential and it
+// rolls on every refresh, so the current pair has to be kept somewhere that
+// survives a restart AND a redeploy. A local file did the first but not the
+// second (Railway wipes the filesystem each release), so it lives in the
+// app_state table now, with an in-memory copy for the hot path. The file
+// is still read once as a migration path from earlier installs.
 //
 // Expiry comes from the epoch-ms `expire_time` / `refresh_token_valid_time`
-// fields, not the misleading `expires_in` label — the live shape, per the
-// implementation this was ported from.
+// fields, not the misleading `expires_in` label.
 const TOKEN_FILE = path.join(process.cwd(), '.cache', 'aliexpress-token.json');
+const TOKEN_KEY = 'aliexpress.token';
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 let tokenState = null;
 let refreshing = null;
 
-function loadTokenState() {
-  if (tokenState) return tokenState;
+function stateFromEnvOrFile() {
   try {
-    tokenState = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+    return JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
   } catch {
-    tokenState = {
+    return {
       accessToken: config.aliexpress.accessToken,
       refreshToken: config.aliexpress.refreshToken,
       accessExpiresMs: config.aliexpress.accessTokenExpiresMs,
     };
   }
+}
+
+async function loadTokenState() {
+  if (tokenState) return tokenState;
+  try {
+    const stored = await appState.get(TOKEN_KEY);
+    if (stored?.refreshToken) {
+      tokenState = stored;
+      return tokenState;
+    }
+  } catch (err) {
+    // No DB (a script run before migrations, or the unit tests) — fall
+    // through to the file/env copy.
+    logger.warn('Could not read the AliExpress token from the database', { error: err.message });
+  }
+  tokenState = stateFromEnvOrFile();
   return tokenState;
 }
 
-function saveTokenState(state) {
+async function saveTokenState(state) {
   tokenState = state;
+  try {
+    await appState.set(TOKEN_KEY, state);
+  } catch (err) {
+    logger.warn('Could not persist the AliExpress token to the database — keeping the file copy', { error: err.message });
+  }
   try {
     fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
     fs.writeFileSync(TOKEN_FILE, JSON.stringify(state), { mode: 0o600 });
-  } catch (err) {
-    logger.warn('Could not persist the refreshed AliExpress token', { error: err.message });
+  } catch {
+    // best effort only
   }
 }
 
-// System auth calls are signed the same way but carry no access_token.
 async function signedPost(apiName, bizParams, { accessToken } = {}) {
   const { appKey, appSecret } = config.aliexpress;
   const params = { app_key: appKey, timestamp: String(Date.now()), sign_method: 'sha256', method: apiName };
@@ -106,9 +129,10 @@ async function refreshAccessToken(state) {
   raiseIfError(raw);
   const data = unwrapEnvelope(raw);
   if (!data.access_token) {
-    throw new ScrapingError('AliExpress did not return a new access token — the refresh token may have expired; re-authorise the app.', {
-      source: 'aliexpress',
-    });
+    throw new ScrapingError(
+      'AliExpress access has expired — re-authorise the app: run `node scripts/aliexpress-auth.js`, open the link, approve, then run it again with the code.',
+      { source: 'aliexpress' }
+    );
   }
   const next = {
     accessToken: data.access_token,
@@ -116,21 +140,22 @@ async function refreshAccessToken(state) {
     accessExpiresMs: Number(data.expire_time) || Date.now() + 60 * 60 * 1000,
     refreshExpiresMs: Number(data.refresh_token_valid_time) || state.refreshExpiresMs || null,
   };
-  saveTokenState(next);
+  await saveTokenState(next);
   logger.info('Refreshed the AliExpress access token');
   return next;
 }
 
-// A Test-status app gets rolling tokens: access 24h, refresh 48h (confirmed
-// live). Refreshing only on demand means two quiet days end in a forced
-// re-consent, so the server also refreshes on a timer. Every refresh rolls the
-// refresh token forward, so the chain never breaks while the server runs.
+// A Test-status app gets short tokens: access 24h, refresh 48h from the
+// CONSENT (confirmed live — the refresh expiry does not move when the token
+// is refreshed). So the timer keeps the access token fresh, but a Test app
+// still needs a new consent every two days; "Apply Online" in the AliExpress
+// console turns the app formal, whose tokens last months.
 const KEEP_ALIVE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 function startTokenKeepAlive() {
   if (config.aliexpress.source !== 'ds-api') return null;
   const tick = async () => {
     try {
-      const state = loadTokenState();
+      const state = await loadTokenState();
       if (!state.refreshToken) return;
       await refreshAccessToken(state);
     } catch (err) {
@@ -166,12 +191,12 @@ async function exchangeCode(code) {
     accessExpiresMs: Number(data.expire_time) || Date.now() + 60 * 60 * 1000,
     refreshExpiresMs: Number(data.refresh_token_valid_time) || null,
   };
-  saveTokenState(next);
+  await saveTokenState(next);
   return next;
 }
 
 async function getValidAccessToken() {
-  const state = loadTokenState();
+  const state = await loadTokenState();
   const fresh = state.accessToken && state.accessExpiresMs && Date.now() < state.accessExpiresMs - REFRESH_SKEW_MS;
   if (fresh) return state.accessToken;
 
@@ -185,7 +210,7 @@ async function getValidAccessToken() {
 }
 
 async function call(apiName, bizParams) {
-  assertConfigured();
+  await assertConfigured();
   const accessToken = await getValidAccessToken();
   const { appKey, appSecret } = config.aliexpress;
 

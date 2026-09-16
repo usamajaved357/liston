@@ -45,7 +45,8 @@ const config = {
   port: parseInt(process.env.PORT || '3000', 10),
 
   databaseUrl: required('DATABASE_URL'),
-  redisUrl: required('REDIS_URL'),
+  // Redis/BullMQ isn't wired up yet — optional so a deploy doesn't need a Redis service.
+  redisUrl: process.env.REDIS_URL || null,
 
   // Used to build links in emailed tokens (verification/password-reset).
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',

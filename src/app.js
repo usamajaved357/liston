@@ -3,6 +3,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const logger = require('./utils/logger');
+const config = require('./config');
 const errorHandler = require('./middleware/errorHandler.middleware');
 
 const authRoutes = require('./modules/auth/auth.routes');
@@ -16,7 +17,15 @@ function createApp() {
   const app = express();
 
   app.use(helmet());
-  app.use(cors({ exposedHeaders: ['Content-Disposition'] }));
+  // Open in development; in production only the deployed frontend may call
+  // the API with a browser (server-to-server callers like eBay's
+  // notifications don't send an Origin and are unaffected).
+  app.use(
+    cors({
+      origin: config.env === 'production' ? [config.frontendUrl] : true,
+      exposedHeaders: ['Content-Disposition'],
+    })
+  );
   // 2mb accommodates base64 profile-photo uploads (src/modules/users) on top of normal JSON bodies
   app.use(express.json({ limit: '2mb' }));
 

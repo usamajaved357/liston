@@ -238,7 +238,9 @@ export default function ConnectionsPage() {
 
   const connectionsUsed = connections.length;
   const maxConnections = user.max_connections ?? 0;
-  const atLimit = connectionsUsed >= maxConnections;
+  // Plan limits are switched off server-side for now (ENFORCE_PLAN_LIMITS);
+  // the UI follows suit so the add flow is never blocked.
+  const atLimit = false;
   const planName = user.plan_name ?? "Unassigned";
 
   const sortedConnections = [...connections].sort((a, b) =>

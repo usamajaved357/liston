@@ -1,0 +1,13 @@
+# Railway build for the API (service root = repository root).
+# Playwright is only needed for ALIEXPRESS_SOURCE=scraper; the DS API path
+# needs no browser, so skip the ~300MB download at install time.
+[variables]
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
+NODE_ENV = "production"
+
+[phases.install]
+cmds = ["npm ci --omit=dev"]
+
+[start]
+# Migrations and the (idempotent) seed run on every boot, then the server.
+cmd = "npm run migrate && npm run seed && npm start"

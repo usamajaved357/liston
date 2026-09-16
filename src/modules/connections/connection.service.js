@@ -60,7 +60,13 @@ async function listConnections(ownerId, viewer) {
   return { connections: visible, maxConnections };
 }
 
+// Plan limits are switched off for now: the product is being run for a
+// single business with several eBay accounts before billing exists. The
+// check stays in place (and the frontend still shows `maxConnections`) so
+// it can be re-enabled by flipping ENFORCE_PLAN_LIMITS=true once plans are
+// real.
 async function assertUnderPlanLimit(userId) {
+  if (process.env.ENFORCE_PLAN_LIMITS !== 'true') return;
   const [used, max] = await Promise.all([
     connectionRepository.countByUser(userId),
     connectionRepository.getMaxConnectionsForUser(userId),

@@ -1,0 +1,12 @@
+# Railway build for the Next.js frontend (service root = /frontend).
+[variables]
+NODE_ENV = "production"
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm start"

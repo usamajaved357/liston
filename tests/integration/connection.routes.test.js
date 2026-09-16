@@ -79,6 +79,8 @@ test('GET /api/connections returns an empty list and the plan limit for a fresh 
 });
 
 test('POST /api/connections/ebay/authorize rejects once the plan connection limit is reached', async () => {
+  // Limits are only enforced when the flag is on (off in production for now).
+  process.env.ENFORCE_PLAN_LIMITS = 'true';
   const email = `test-${crypto.randomUUID()}@example.com`;
   const { userId, token } = await signupAndLogin(email, 'testpassword123');
 
@@ -91,9 +93,31 @@ test('POST /api/connections/ebay/authorize rejects once the plan connection limi
     credentials: { accessToken: 'x', refreshToken: 'y', accessTokenExpiresAt: Date.now() + 10000 },
   });
 
-  const { status, data } = await request('POST', '/api/connections/ebay/authorize', { label: 'New Store' }, token);
-  assert.strictEqual(status, 403);
-  assert.match(data.error, /allows up to 1 connection/);
+  try {
+    const { status, data } = await request('POST', '/api/connections/ebay/authorize', { label: 'New Store' }, token);
+    assert.strictEqual(status, 403);
+    assert.match(data.error, /allows up to 1 connection/);
+  } finally {
+    delete process.env.ENFORCE_PLAN_LIMITS;
+  }
+});
+
+test('POST /api/connections/ebay/authorize allows more connections than the plan when limits are off', async () => {
+  const email = `test-${crypto.randomUUID()}@example.com`;
+  const { userId, token } = await signupAndLogin(email, 'testpassword123');
+  await connectionService.createConnection(userId, {
+    platformKey: 'ebay',
+    label: 'Existing Store',
+    credentials: { accessToken: 'x', refreshToken: 'y', accessTokenExpiresAt: Date.now() + 10000 },
+  });
+  const original = { ...config.ebay };
+  Object.assign(config.ebay, { clientId: 'cid', clientSecret: 'csecret', ruName: 'test-runame' });
+  try {
+    const { status } = await request('POST', '/api/connections/ebay/authorize', { label: 'Second Store' }, token);
+    assert.strictEqual(status, 200);
+  } finally {
+    Object.assign(config.ebay, original);
+  }
 });
 
 test('POST /api/connections/ebay/authorize returns an authorize URL when under the plan limit', async () => {
