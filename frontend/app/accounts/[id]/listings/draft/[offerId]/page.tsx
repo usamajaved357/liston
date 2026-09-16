@@ -19,6 +19,7 @@ import {
 import { Alert } from "@/components/Alert";
 import { EditorHeader } from "@/components/EditorHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { currencySymbol, formatPrice } from "@/lib/format";
 
 // The draft editor. A draft lives only in Liston until Publish, so every
 // change here is a local edit saved with one PATCH — nothing touches eBay
@@ -61,23 +62,19 @@ function PriceBreakdownPanel({ breakdown }: { breakdown: PriceBreakdown }) {
     <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)] p-4">
       <div className="flex items-baseline justify-between">
         <span className={labelClass}>Sell price</span>
-        <span className="text-xl font-extrabold text-[var(--color-ink)]">
-          {breakdown.currency} {breakdown.sellPrice.toFixed(2)}
-        </span>
+        <span className="text-xl font-extrabold text-[var(--color-ink)]">{formatPrice(breakdown.sellPrice, breakdown.currency)}</span>
       </div>
       <div className="mt-3 space-y-1">
         {rows.map((row) => (
           <div key={row.label} className="flex justify-between text-sm text-[var(--color-muted)]">
             <span>{row.label}</span>
-            <span>
-              −{breakdown.currency} {row.value.toFixed(2)}
-            </span>
+            <span>−{formatPrice(row.value, breakdown.currency)}</span>
           </div>
         ))}
         <div className="flex justify-between border-t border-[var(--color-line)] pt-1.5 text-sm font-bold">
           <span className="text-[var(--color-ink)]">Profit</span>
           <span className={breakdown.profit > 0 ? "text-emerald-700" : "text-[var(--color-danger)]"}>
-            {breakdown.currency} {breakdown.profit.toFixed(2)}
+            {formatPrice(breakdown.profit, breakdown.currency)}
           </span>
         </div>
       </div>
@@ -87,13 +84,13 @@ function PriceBreakdownPanel({ breakdown }: { breakdown: PriceBreakdown }) {
       </p>
       {breakdown.basis === "competitor" ? (
         <p className="mt-1 text-xs text-[var(--color-muted)]">
-          Matched the competitor&apos;s {breakdown.currency} {breakdown.competitorPrice?.toFixed(2)} — above your floor
-          of {breakdown.currency} {breakdown.floorPrice?.toFixed(2)}.
+          Matched the competitor&apos;s {formatPrice(breakdown.competitorPrice ?? 0, breakdown.currency)} — above your floor
+          of {formatPrice(breakdown.floorPrice ?? 0, breakdown.currency)}.
         </p>
       ) : (
         breakdown.competitorPrice != null && (
           <p className="mt-1 text-xs text-[var(--color-muted)]">
-            Competitor sells at {breakdown.currency} {breakdown.competitorPrice.toFixed(2)}, below your floor — priced
+            Competitor sells at {formatPrice(breakdown.competitorPrice, breakdown.currency)}, below your floor — priced
             at your target instead.
           </p>
         )
@@ -359,7 +356,7 @@ function VariationsTable({
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-[var(--color-muted)]">Apply to all:</span>
             <div className="flex items-center gap-1">
-              <span className="text-[var(--color-muted)]">{currency}</span>
+              <span className="text-[var(--color-muted)]">{currencySymbol(currency)}</span>
               <input type="number" step="0.01" min="0" placeholder="price" value={bulkPrice} onChange={(e) => setBulkPrice(e.target.value)} className={`${numInput} w-24`} />
               <button type="button" disabled={!bulkPrice} onClick={() => { onApplyAll("price", bulkPrice); setBulkPrice(""); }} className={smallButton}>
                 Set
@@ -424,7 +421,7 @@ function VariationsTable({
                   {axis}
                 </th>
               ))}
-              <th className={`${cell} w-36 text-right`}>Price ({currency})</th>
+              <th className={`${cell} w-36 text-right`}>Price ({currencySymbol(currency)})</th>
               <th className={`${cell} w-24 text-right`}>Qty</th>
               <th className={`${cell} w-20 text-right`}>ROI</th>
               <th className={`${cell} w-24`} />
@@ -812,11 +809,20 @@ export default function DraftEditorPage() {
     const out: Record<string, string[]> = {};
     for (const row of specifics) {
       const name = row.name.trim();
+      if (!name || !row.value.trim()) continue;
+      // An untouched row keeps its original array exactly — a value that
+      // itself contains a comma ("Colour Day, B&W Night") must not be split
+      // into two, which made every such draft look edited on load.
+      const original = originalAspects[name];
+      if (original && original.join(", ") === row.value) {
+        out[name] = original;
+        continue;
+      }
       const values = row.value.split(",").map((v) => v.trim()).filter(Boolean);
-      if (name && values.length) out[name] = values;
+      if (values.length) out[name] = values;
     }
     return out;
-  }, [specifics]);
+  }, [specifics, originalAspects]);
   const aspectsChanged = JSON.stringify(editedAspects) !== JSON.stringify(originalAspects);
 
   const dirty = useMemo(() => {
@@ -1071,7 +1077,7 @@ export default function DraftEditorPage() {
     <main className="flex h-screen flex-col bg-[var(--color-paper)]">
       <EditorHeader
         backHref={`/accounts/${params.id}/listings?filter=draft`}
-        backLabel="Drafts"
+        backLabel="Back to drafts"
         title={title || "Untitled listing"}
         chips={
           <>
@@ -1097,7 +1103,9 @@ export default function DraftEditorPage() {
         actions={
           editable ? (
             <>
-              <span className="mr-1 hidden text-xs text-[var(--color-muted)] md:inline">{dirty ? "Unsaved changes" : "Saved"}</span>
+              <span className={`mr-1 hidden text-xs md:inline ${title.length > TITLE_MAX ? "font-semibold text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>
+                {title.length > TITLE_MAX ? `Title is ${title.length - TITLE_MAX} characters over eBay's limit` : dirty ? "Unsaved changes" : "Saved"}
+              </span>
               {dirty && (
                 <button type="button" onClick={() => resetFrom(listing)} disabled={busy} className={smallButton}>
                   Discard
@@ -1237,7 +1245,6 @@ export default function DraftEditorPage() {
                   <input
                     className={`${inputClass} mt-1.5 !h-12 text-base font-semibold`}
                     value={title}
-                    maxLength={TITLE_MAX}
                     onChange={(e) => setTitle(e.target.value)}
                     disabled={!editable || busy}
                   />
@@ -1268,7 +1275,7 @@ export default function DraftEditorPage() {
                   {single ? (
                     <>
                       <div>
-                        <label className={labelClass}>Price ({single.price.currency})</label>
+                        <label className={labelClass}>Price ({currencySymbol(single.price.currency)})</label>
                         <input type="number" step="0.01" min="0" className={`${inputClass} mt-1.5`} value={singlePrice} onChange={(e) => setSinglePrice(e.target.value)} disabled={!editable || busy} />
                       </div>
                       <div>

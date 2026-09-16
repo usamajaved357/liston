@@ -6,6 +6,7 @@ import Link from "next/link";
 import { EditorHeader, Stepper } from "@/components/EditorHeader";
 import { Alert } from "@/components/Alert";
 import { api, ApiError, DraftPreview } from "@/lib/api";
+import { prettyPriceText } from "@/lib/format";
 
 // Drafting in two steps. Step one reads both listings and costs nothing;
 // step two generates the listing for ONLY the variations the seller ticked.
@@ -21,6 +22,58 @@ function ThinkingDots() {
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70 animate-bounce [animation-delay:150ms]" />
       <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70 animate-bounce [animation-delay:300ms]" />
     </span>
+  );
+}
+
+// The supplier's photos, large enough to judge, before anything is drafted.
+function PhotoCarousel({ images }: { images: string[] }) {
+  const [index, setIndex] = useState(0);
+  const count = images.length;
+  const go = (delta: number) => setIndex((i) => (i + delta + count) % count);
+  const arrow =
+    "absolute top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white/95 text-[var(--color-ink)] shadow-sm transition-colors hover:border-[var(--color-line-strong)]";
+
+  return (
+    <div>
+      <div className="relative aspect-square overflow-hidden rounded-xl border border-[var(--color-line)] bg-white">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={images[index]} alt="" className="h-full w-full object-contain" />
+        {index === 0 && <span className="chip chip-primary absolute left-3 top-3 h-7">Main photo</span>}
+        <span className="absolute right-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-white">
+          {index + 1} / {count}
+        </span>
+        {count > 1 && (
+          <>
+            <button type="button" onClick={() => go(-1)} aria-label="Previous photo" className={`${arrow} left-3`}>
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            <button type="button" onClick={() => go(1)} aria-label="Next photo" className={`${arrow} right-3`}>
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </>
+        )}
+      </div>
+      <div className="mt-2.5 grid grid-cols-6 gap-2 sm:grid-cols-8">
+        {images.map((url, i) => (
+          <button
+            key={`${url}-${i}`}
+            type="button"
+            onClick={() => setIndex(i)}
+            aria-label={`Photo ${i + 1}`}
+            className={`aspect-square overflow-hidden rounded-lg border-2 bg-white transition-colors ${
+              i === index ? "border-[var(--color-primary)]" : "border-[var(--color-line)] hover:border-[var(--color-line-strong)]"
+            }`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={url} alt="" className="h-full w-full object-contain" />
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -124,26 +177,8 @@ export default function DraftListingPage() {
     <main className="flex h-screen flex-col bg-[var(--color-paper)]">
       <EditorHeader
         backHref={`/accounts/${params.id}/listings?filter=draft`}
-        backLabel="Drafts"
+        backLabel="Back to drafts"
         title="Draft a listing"
-        actions={
-          preview ? (
-            <button
-              type="button"
-              onClick={handleDraft}
-              disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0)}
-              className="btn btn-primary btn-sm"
-            >
-              {busy === "draft" ? (
-                <span className="inline-flex items-center gap-2">
-                  {messages[statusIndex]} <ThinkingDots />
-                </span>
-              ) : (
-                `Draft ${preview.source.axes.length ? `${selectedCount} variation${selectedCount === 1 ? "" : "s"}` : "listing"}`
-              )}
-            </button>
-          ) : null
-        }
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -234,14 +269,22 @@ export default function DraftListingPage() {
                   <p className="mt-1.5 text-sm font-semibold leading-snug text-[var(--color-ink)]">{preview.competitor.title}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <span className="chip chip-primary">
-                      {preview.competitor.priceText || "price not read"}
+                      {prettyPriceText(preview.competitor.priceText) || "price not read"}
                     </span>
-                    {preview.competitor.categoryPath.length > 0 && (
-                      <span className="chip">
-                        {preview.competitor.categoryPath.slice(-2).join(" › ")}
-                      </span>
-                    )}
                   </div>
+                  {preview.competitor.categoryPath.length > 0 && (
+                    <div className="mt-3">
+                      <p className={labelClass}>eBay category</p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
+                        {preview.competitor.categoryPath.map((segment, i) => (
+                          <span key={`${segment}-${i}`} className="flex items-center gap-1.5">
+                            {i > 0 && <span className="text-[var(--color-line-strong)]">›</span>}
+                            <span className={`chip ${i === preview.competitor.categoryPath.length - 1 ? "chip-primary" : ""}`}>{segment}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="card p-5">
@@ -249,7 +292,7 @@ export default function DraftListingPage() {
                   <p className="mt-1.5 text-sm font-semibold leading-snug text-[var(--color-ink)]">{preview.source.title}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <span className="chip chip-primary">
-                      {preview.source.priceText || "price not read"}
+                      {prettyPriceText(preview.source.priceText) || "price not read"}
                     </span>
                     <span className="chip">
                       {preview.source.totalCombinations || 1} option{preview.source.totalCombinations === 1 ? "" : "s"}
@@ -259,18 +302,8 @@ export default function DraftListingPage() {
                     </span>
                   </div>
                   {preview.source.imageUrls.length > 0 && (
-                    <div className="mt-4 grid grid-cols-4 gap-2 sm:grid-cols-5">
-                      {preview.source.imageUrls.map((url, i) => (
-                        <div key={url} className="relative aspect-square overflow-hidden rounded-xl border border-[var(--color-line)] bg-white">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={url} alt="" className="h-full w-full object-contain" />
-                          {i === 0 && (
-                            <span className="absolute left-1.5 top-1.5 rounded-md bg-[var(--color-primary)] px-1.5 py-0.5 text-[10px] font-bold text-white">
-                              MAIN
-                            </span>
-                          )}
-                        </div>
-                      ))}
+                    <div className="mt-4">
+                      <PhotoCarousel images={preview.source.imageUrls} />
                     </div>
                   )}
                   <p className="mt-3 text-xs text-[var(--color-muted)]">

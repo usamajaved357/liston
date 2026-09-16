@@ -26,12 +26,13 @@ export function EditorHeader({
       <div className="grid h-14 grid-cols-[1fr_auto_1fr] items-center gap-4 px-4 sm:px-6">
         <Link
           href={backHref}
-          className="justify-self-start inline-flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-[var(--color-muted)] transition-colors hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
+          aria-label={backLabel}
+          title={backLabel}
+          className="justify-self-start flex h-9 w-9 items-center justify-center rounded-full border border-[var(--color-line)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"
         >
-          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+          <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
             <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          {backLabel}
         </Link>
         <div className="flex min-w-0 max-w-[56vw] items-center justify-center gap-2.5">
           <h1 className="truncate text-[15px] font-bold leading-none text-[var(--color-ink)]">{title}</h1>

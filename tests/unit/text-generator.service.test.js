@@ -142,3 +142,20 @@ test('generateListingContent throws AiGenerationError when the model returns no 
     AiGenerationError
   );
 });
+
+test('generateListingContent shortens a title the model made longer than 80 characters', async () => {
+  config.anthropicApiKey = 'test-key';
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+  const longTitle = 'WiFi 1080P HD Security Camera Indoor Window Mount 2.4/5GHz Night Vision Remote Monitoring';
+  mock.method(messagesProto, 'create', async () => ({
+    content: [{ type: 'tool_use', input: { title: longTitle, description: 'd', condition: 'NEW', aspects: {} } }],
+  }));
+  const result = await textGenerator.generateListingContent({
+    competitor: { title: 'C', specifics: {}, categoryBreadcrumb: [], variants: [] },
+    source: { title: 'S', specifics: {}, imageUrls: [], variants: [] },
+    currency: 'GBP',
+  });
+  assert.ok(result.title.length <= 80, result.title);
+  assert.ok(!result.title.endsWith(' '));
+  assert.match(result.aspectWarnings.join(' '), /80-character limit/);
+});

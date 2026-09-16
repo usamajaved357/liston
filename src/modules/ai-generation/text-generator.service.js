@@ -171,6 +171,16 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
     );
   }
 
+  // The schema says maxLength 80 but the model doesn't always honour it (an
+  // 89-character camera title came back and blocked Save). Trim at a word
+  // boundary rather than mid-word.
+  const titleKey = hasVariants ? 'commonTitle' : 'title';
+  if (typeof content[titleKey] === 'string' && content[titleKey].length > 80) {
+    const cut = content[titleKey].slice(0, 80);
+    content[titleKey] = (cut.lastIndexOf(' ') > 60 ? cut.slice(0, cut.lastIndexOf(' ')) : cut).trim();
+    warnings.push('The title was longer than eBay\'s 80-character limit and has been shortened — check it still reads well.');
+  }
+
   return { ...content, [aspectKey]: aspects, aspectWarnings: warnings };
 }
 
