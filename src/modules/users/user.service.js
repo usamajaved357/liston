@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const userRepository = require('./user.repository');
+const config = require('../../config');
 const authService = require('../auth/auth.service');
 
 const SALT_ROUNDS = 12;
@@ -16,7 +17,8 @@ async function getCurrentUser(userId) {
   if (!user) {
     throw new UserError('User not found', 404);
   }
-  return user;
+  // Lets the frontend show the "Access requests" admin page to the right people.
+  return { ...user, is_admin: config.adminEmails.includes(String(user.email).toLowerCase()) };
 }
 
 async function deleteAccount(userId) {

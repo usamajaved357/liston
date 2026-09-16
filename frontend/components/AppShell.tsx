@@ -13,9 +13,11 @@ interface AppShellProps {
   // Team management is owner-only — the nav item (and the page itself) is
   // hidden for a member, who never has a role other than "member" here.
   role?: "owner" | "member";
+  // Access requests are reviewed only by the addresses in ADMIN_EMAILS.
+  isAdmin?: boolean;
 }
 
-export function AppShell({ children, header, connectionsUsed, maxConnections, planName, role }: AppShellProps) {
+export function AppShell({ children, header, connectionsUsed, maxConnections, planName, role, isAdmin }: AppShellProps) {
   const pathname = usePathname();
   const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
 
@@ -89,6 +91,19 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
                   <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   <circle cx="17" cy="8.5" r="2.3" stroke="currentColor" strokeWidth="1.6" />
                   <path d="M15.5 14c2.5 0 5 1.6 5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
+          {isAdmin && (
+            <NavItem
+              href="/admin/access"
+              active={pathname === "/admin/access"}
+              label="Access requests"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-3z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               }
             />

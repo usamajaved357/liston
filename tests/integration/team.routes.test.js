@@ -37,6 +37,9 @@ async function request(method, path, body, token) {
 
 async function signupAndLogin(email, password) {
   const { data } = await request('POST', '/api/auth/signup', { email, password });
+  // New owners are pending until an admin approves; these tests are about
+  // what an approved account can do, so approve directly in the DB.
+  await pool.query("UPDATE users SET access_status = 'active' WHERE id = $1", [data.user.id]);
   return { userId: data.user.id, token: data.token };
 }
 

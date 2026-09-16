@@ -26,10 +26,24 @@ async function request<T>(
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    // The approval gate: any 403 carrying accessStatus means this account
+    // isn't approved yet — send them to the review screen from anywhere.
+    if (res.status === 403 && data.accessStatus && typeof window !== "undefined" && !window.location.pathname.startsWith("/pending")) {
+      window.location.assign("/pending");
+    }
     throw new ApiError(data.error || "Something went wrong", res.status);
   }
 
   return data as T;
+}
+
+export interface AccessRequest {
+  id: string;
+  email: string;
+  name: string | null;
+  access_note: string | null;
+  created_at: string;
+  email_verified_at: string | null;
 }
 
 export interface User {
@@ -45,6 +59,8 @@ export interface User {
   listings_used_this_month?: number;
   email_verified_at?: string | null;
   avatar_url?: string | null;
+  access_status?: "pending" | "active" | "rejected";
+  is_admin?: boolean;
   created_at: string;
 }
 
@@ -407,10 +423,18 @@ export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch"
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
 
 export const api = {
-  signup: (email: string, password: string) =>
+  signup: (email: string, password: string, extra: { name?: string; accessNote?: string } = {}) =>
     request<AuthResponse>("/api/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...extra }),
+    }),
+
+  listAccessRequests: () =>
+    request<{ requests: AccessRequest[] }>("/api/auth/access/requests"),
+  decideAccessRequest: (userId: string, status: "active" | "rejected") =>
+    request<{ user: { id: string; email: string; access_status: string } }>(`/api/auth/access/requests/${userId}`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
     }),
 
   login: (email: string, password: string) =>

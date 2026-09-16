@@ -102,6 +102,7 @@ export default function WorkspaceSettingsPage() {
       maxConnections={maxConnections}
       planName={planName}
       role={user.role}
+      isAdmin={user.is_admin}
       header={
         <div className="flex items-center justify-between">
           <div>

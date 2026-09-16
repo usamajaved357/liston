@@ -48,7 +48,7 @@ export default function LoginPage() {
         </>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-3.5">
         <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
         <div>
           <div className="flex items-center justify-between mb-1.5">
@@ -66,7 +66,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
+          className="btn btn-primary w-full"
         >
           {loading ? "Logging in…" : "Log in"}
         </button>

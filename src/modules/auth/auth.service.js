@@ -5,6 +5,7 @@ const { query } = require('../../db/client');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const emailService = require('../../utils/email');
+const accessService = require('./access.service');
 
 const SALT_ROUNDS = 12;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -38,7 +39,7 @@ async function deliverLink(kind, sendFn, userEmail, rawToken, path) {
   }
 }
 
-async function signup({ email, password }) {
+async function signup({ email, password, name, accessNote }) {
   const existing = await query('SELECT id FROM users WHERE email = $1', [email]);
   if (existing.rows.length > 0) {
     throw new AuthError('An account with this email already exists', 409);
@@ -52,21 +53,32 @@ async function signup({ email, password }) {
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   const rawVerificationToken = generateRawToken();
+  // Admins are in from the start; everyone else waits for an admin's yes.
+  const accessStatus = accessService.isAdminEmail(email) ? 'active' : 'pending';
   const result = await query(
-    `INSERT INTO users (email, password_hash, plan_id, email_verification_token_hash, email_verification_expires_at)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, email, plan_id, created_at`,
+    `INSERT INTO users (email, password_hash, plan_id, email_verification_token_hash, email_verification_expires_at, name, access_status, access_note)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, email, plan_id, created_at, access_status`,
     [
       email,
       passwordHash,
       starterPlan.rows[0].id,
       hashToken(rawVerificationToken),
       new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
+      name || null,
+      accessStatus,
+      accessNote || null,
     ]
   );
 
   const user = result.rows[0];
   await deliverLink('Email verification', emailService.sendVerificationEmail, email, rawVerificationToken, '/verify-email');
+  // Tell the admins now rather than only after verification: while the
+  // email provider is sandboxed the verification mail may never arrive, and
+  // an admin approving someone vouches for the address anyway.
+  if (accessStatus === 'pending') {
+    await accessService.notifyAdmins({ id: user.id, email, name: name || null, access_note: accessNote || null, emailVerified: false });
+  }
 
   const token = issueToken(user);
   // emailVerificationToken is for internal/test use only — controllers must
@@ -80,14 +92,15 @@ async function verifyEmail(rawToken) {
     `UPDATE users
      SET email_verified_at = now(), email_verification_token_hash = NULL, email_verification_expires_at = NULL
      WHERE email_verification_token_hash = $1 AND email_verification_expires_at > now()
-     RETURNING id, email`,
+     RETURNING id, email, name, role, access_status, access_note`,
     [tokenHash]
   );
 
   if (result.rows.length === 0) {
     throw new AuthError('This verification link is invalid or has expired', 400);
   }
-  return { user: result.rows[0] };
+  const user = result.rows[0];
+  return { user: { id: user.id, email: user.email } };
 }
 
 async function resendVerification(userId) {

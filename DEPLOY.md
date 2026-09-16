@@ -23,6 +23,8 @@ Click its box on the canvas → **Settings**:
 |---|---|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (use your database service's name inside the braces) |
 | `NODE_ENV` | `production` |
+| `API_URL` | `https://API_URL` — used to build the approve/reject links in emails |
+| `ADMIN_EMAILS` | your email(s), comma-separated — auto-approved, receive access requests |
 | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | `1` (the DS API needs no browser; skips a 300MB download) |
 | `FRONTEND_URL` | the frontend's public URL (step 3) — also locks CORS to it |
 | `JWT_SECRET` | a fresh random string for production |
@@ -68,7 +70,8 @@ Then click **Apply Online** on the app in the AliExpress console. Until the app 
 
 ## 6. After the first deploy
 
-1. Sign up on the frontend, verify the email (Resend), connect the eBay account(s) — plan limits are off (`ENFORCE_PLAN_LIMITS` unset).
+1. Sign up on the frontend with an address listed in `ADMIN_EMAILS` (auto-approved), verify the email (Resend), connect the eBay account(s) — plan limits are off (`ENFORCE_PLAN_LIMITS` unset).
+   Anyone else who signs up lands on "under review": you get an email with Approve/Reject links, and there's an **Access requests** page in the sidebar for admins.
 2. Settings → Listing settings, policies, shipping location, description template ("Fill from my eBay store").
 3. Draft one listing end to end.
 

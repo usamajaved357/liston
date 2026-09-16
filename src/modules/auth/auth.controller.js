@@ -1,9 +1,14 @@
 const { z } = require('zod');
 const authService = require('./auth.service');
+const accessService = require('./access.service');
+const config = require('../../config');
 
 const signupSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8, 'Password must be at least 8 characters'),
+  name: z.string().trim().max(80).optional(),
+  // "Tell us about your business" — shown to the admin reviewing the request.
+  accessNote: z.string().trim().max(500).optional(),
 });
 
 // Login only needs a password to be present — enforcing today's minimum
@@ -102,4 +107,46 @@ async function resetPassword(req, res, next) {
   }
 }
 
-module.exports = { signup, login, verifyEmail, resendVerification, forgotPassword, resetPassword };
+// One-click links from the admin email. These are browser navigations, so
+// they end on a small confirmation page rather than JSON.
+function decisionPage(res, title, body) {
+  res
+    .status(200)
+    .type('html')
+    .send(`<!doctype html><meta name="viewport" content="width=device-width"><body style="font-family:system-ui;max-width:520px;margin:80px auto;padding:0 20px;color:#0f172a"><h2>${title}</h2><p style="color:#475569">${body}</p><p><a href="${config.frontendUrl}" style="color:#4f46e5">Open Liston</a></p></body>`);
+}
+
+async function accessDecision(req, res) {
+  const token = typeof req.query.token === 'string' ? req.query.token : '';
+  try {
+    const user = await accessService.decide(token);
+    const approved = user.access_status === 'active';
+    decisionPage(res, approved ? 'Access approved' : 'Access rejected', `${user.email} has been ${approved ? 'approved and emailed a login link' : 'rejected and notified'}.`);
+  } catch (err) {
+    decisionPage(res, "That link didn't work", err.message || 'It may have expired — use the Access requests page in Liston instead.');
+  }
+}
+
+async function listAccessRequests(req, res, next) {
+  try {
+    res.status(200).json({ requests: await accessService.listPending() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const accessStatusSchema = z.object({ status: z.enum(['active', 'rejected']) });
+async function setAccessStatus(req, res, next) {
+  try {
+    const parsed = accessStatusSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    res.status(200).json({ user: await accessService.setStatus(req.params.userId, parsed.data.status) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  accessDecision,
+  listAccessRequests,
+  setAccessStatus, signup, login, verifyEmail, resendVerification, forgotPassword, resetPassword };

@@ -342,6 +342,7 @@ export default function TeamPage() {
       maxConnections={maxConnections}
       planName={planName}
       role={user.role}
+      isAdmin={user.is_admin}
       header={
         <div>
           <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Team</h1>
