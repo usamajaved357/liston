@@ -132,7 +132,7 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
     source: {
       title: source.title,
       priceText: source.priceText,
-      imageUrls: (source.imageUrls || []).slice(0, 8),
+      imageUrls: source.imageUrls || [],
       axes,
       totalCombinations: (source.variants || []).length,
     },

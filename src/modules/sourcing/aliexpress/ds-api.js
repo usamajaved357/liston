@@ -330,11 +330,19 @@ function normalizeProduct(raw, productId, sourceUrl) {
     if (!priceText && amount) priceText = `${currency} ${amount}`.trim();
   }
 
+  // The product page's gallery is the main photos PLUS each option's own
+  // photo — the API keeps those on the SKUs. A glasses listing showed 8 on
+  // the page and the API's image_urls carried 6; the other two were the
+  // colour photos. Merged (deduplicated, main photos first) so the draft
+  // has every picture the buyer would have seen on AliExpress.
+  const skuImages = variants.map((variant) => variant.imageUrl).filter(Boolean);
+  const allImages = [...new Set([...imageUrls, ...skuImages])];
+
   return {
     sourceUrl,
     title: String(title).trim(),
     description: String(base.detail || base.mobile_detail || '').trim(),
-    imageUrls,
+    imageUrls: allImages,
     priceText,
     specifics,
     categoryBreadcrumb: [],
@@ -371,11 +379,15 @@ function deriveVariantAxes(variants) {
         imagesByValue.get(value).add(variant.imageUrl);
       }
     }
-    // A photo per SKU is attached to every attribute of that SKU, so "One
-    // Size" would look image-bearing too. It only counts if the photo
-    // actually changes with this axis's value (or it's the sole axis).
+    // A photo per SKU is attached to every attribute of that SKU, so every
+    // axis looks image-bearing at first glance. The photo belongs to THIS
+    // axis only if each of its values maps to exactly one photo (every
+    // "Black" SKU shares the black photo) and the values differ from each
+    // other. On a glasses listing, "Eye Prescription" failed the first test
+    // — +100 had a black and an orange photo — so it's the colour's axis.
+    const consistent = [...imagesByValue.values()].every((set) => set.size === 1);
     const distinct = new Set([...imagesByValue.values()].map((set) => [...set][0]));
-    axis.hasImages = distinct.size > 1 || (axes.size === 1 && imagesByValue.size > 0);
+    axis.hasImages = imagesByValue.size > 0 && consistent && (distinct.size > 1 || axes.size === 1);
   }
   return [...axes.values()];
 }

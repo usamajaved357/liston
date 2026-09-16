@@ -100,7 +100,8 @@ test('normalizeProduct reads price from the SKU, not the base object', () => {
 
   assert.strictEqual(result.title, 'LED Lamp');
   assert.strictEqual(result.priceText, 'GBP 8.99');
-  assert.deepStrictEqual(result.imageUrls, ['https://a.jpg', 'https://b.jpg']);
+  // The SKU's own photo joins the gallery after the main photos.
+  assert.deepStrictEqual(result.imageUrls, ['https://a.jpg', 'https://b.jpg', 'https://cold.jpg']);
   assert.deepStrictEqual(result.variants[0].attributes, { 'Body Color': 'Cold white' });
   assert.strictEqual(result.variants[0].imageUrl, 'https://cold.jpg');
 });
@@ -184,4 +185,18 @@ test('normalizeProduct returns variantAxes alongside variants', () => {
   };
   const result = dsApi.normalizeProduct(raw, '1', 'https://aliexpress.com/item/1.html');
   assert.deepStrictEqual(result.variantAxes, [{ name: 'Color', values: ['A', 'B'], hasImages: true }]);
+});
+
+test('deriveVariantAxes gives the photo to the axis it actually follows', () => {
+  // Every SKU has a photo, but it's the colour's photo: each prescription
+  // value maps to two different photos, so it is not image-bearing.
+  const variants = [
+    { attributes: { Color: 'Black', Prescription: '+100' }, imageUrl: 'https://black.jpg' },
+    { attributes: { Color: 'Orange', Prescription: '+100' }, imageUrl: 'https://orange.jpg' },
+    { attributes: { Color: 'Black', Prescription: '+150' }, imageUrl: 'https://black.jpg' },
+    { attributes: { Color: 'Orange', Prescription: '+150' }, imageUrl: 'https://orange.jpg' },
+  ];
+  const axes = dsApi.deriveVariantAxes(variants);
+  assert.strictEqual(axes.find((a) => a.name === 'Color').hasImages, true);
+  assert.strictEqual(axes.find((a) => a.name === 'Prescription').hasImages, false);
 });

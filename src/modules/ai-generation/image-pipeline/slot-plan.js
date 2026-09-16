@@ -19,9 +19,14 @@ const DEFAULT_SLOTS = [
   { key: 'packaging', role: 'detail', perVariation: false, required: false, composite: false },
 ];
 
+// eBay allows 24 images. Every usable supplier photo is listed (the seller
+// drops what they don't want in the editor) — an earlier cap of 5 quietly
+// hid the rest of the gallery.
+const EBAY_MAX_IMAGES = 24;
+
 const DEFAULT_PLAN = {
   minImages: 3,
-  recommendedImages: 5,
+  recommendedImages: EBAY_MAX_IMAGES,
   slots: DEFAULT_SLOTS,
   // Never true. eBay's automated systems flag text, watermarks, borders and
   // badges on images and suppress the listing's visibility — the opposite of

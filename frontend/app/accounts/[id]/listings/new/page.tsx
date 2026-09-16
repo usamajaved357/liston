@@ -3,27 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { BackHeader } from "@/components/BackHeader";
+import { EditorHeader, Stepper } from "@/components/EditorHeader";
 import { Alert } from "@/components/Alert";
 import { api, ApiError, DraftPreview } from "@/lib/api";
 
 // Drafting in two steps. Step one reads both listings and costs nothing;
-// step two generates text and photography for ONLY the variations the
-// seller ticked. Nobody lists all 162 combinations of a phone case, and
-// generating photography for variations that get deleted afterwards is
-// money and minutes thrown away.
+// step two generates the listing for ONLY the variations the seller ticked.
+// Nobody lists all 162 combinations of a phone case.
 
-const inputClass =
-  "w-full rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-sm text-[var(--color-ink)]";
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">{label}</label>
-      <div className="mt-1.5">{children}</div>
-    </div>
-  );
-}
+const inputClass = "input";
+const labelClass = "label";
 
 function ThinkingDots() {
   return (
@@ -36,13 +25,7 @@ function ThinkingDots() {
 }
 
 const READ_MESSAGES = ["Reading the competitor listing…", "Reading the source product…", "Almost there…"];
-const DRAFT_MESSAGES = [
-  "Drafting your listing with AI…",
-  "Photographing your product…",
-  "Generating variation photos…",
-  "Uploading images to eBay…",
-  "Almost done…",
-];
+const DRAFT_MESSAGES = ["Writing your listing…", "Preparing images…", "Uploading images to eBay…", "Almost done…"];
 
 export default function DraftListingPage() {
   const params = useParams<{ id: string }>();
@@ -81,7 +64,7 @@ export default function DraftListingPage() {
     setBusy("read");
     setError(null);
     setPreview(null);
-    startStatus(READ_MESSAGES, 6000);
+    startStatus(READ_MESSAGES, 4000);
     try {
       const data = await api.previewDraftListing(params.id, { competitorUrl, sourceUrl });
       setPreview(data);
@@ -98,8 +81,7 @@ export default function DraftListingPage() {
     }
   }
 
-  // Combinations that survive the current ticks — what step two will
-  // actually build, and therefore what it will cost.
+  // Combinations that survive the current ticks — what step two builds.
   const selectedCount = useMemo(() => {
     if (!preview) return 0;
     if (!preview.source.axes.length) return 1;
@@ -122,7 +104,7 @@ export default function DraftListingPage() {
     if (!preview) return;
     setBusy("draft");
     setError(null);
-    startStatus(DRAFT_MESSAGES, 25000);
+    startStatus(DRAFT_MESSAGES, 12000);
     try {
       const variantSelection: Record<string, string[]> = {};
       for (const axis of preview.source.axes) variantSelection[axis.name] = [...(selection[axis.name] || [])];
@@ -136,207 +118,280 @@ export default function DraftListingPage() {
   }
 
   const messages = busy === "read" ? READ_MESSAGES : DRAFT_MESSAGES;
+  const step = preview ? 2 : 1;
 
   return (
-    <main className="min-h-screen">
-      <BackHeader backHref={`/accounts/${params.id}/listings?filter=draft`} backLabel="Back to drafts" />
+    <main className="flex h-screen flex-col bg-[var(--color-paper)]">
+      <EditorHeader
+        backHref={`/accounts/${params.id}/listings?filter=draft`}
+        backLabel="Drafts"
+        title="Draft a listing"
+        actions={
+          preview ? (
+            <button
+              type="button"
+              onClick={handleDraft}
+              disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0)}
+              className="btn btn-primary btn-sm"
+            >
+              {busy === "draft" ? (
+                <span className="inline-flex items-center gap-2">
+                  {messages[statusIndex]} <ThinkingDots />
+                </span>
+              ) : (
+                `Draft ${preview.source.axes.length ? `${selectedCount} variation${selectedCount === 1 ? "" : "s"}` : "listing"}`
+              )}
+            </button>
+          ) : null
+        }
+      />
 
-      <div className="max-w-3xl mx-auto px-6 py-12">
-        <h1 className="text-2xl font-extrabold text-[var(--color-ink)]">Draft a listing</h1>
-        <p className="mt-2 text-sm text-[var(--color-muted)] leading-relaxed">
-          Paste a competitor&apos;s eBay listing and your AliExpress source product. Liston reads both first, so you
-          can choose exactly which variations to list before anything is generated. Prices come from the supplier&apos;s
-          cost and your target return in{" "}
-          <Link href={`/accounts/${params.id}/settings`} className="text-[var(--color-accent)] hover:underline">
-            Settings
-          </Link>
-          .
-        </p>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-7xl px-6 py-8">
+          {error && (
+            <div className="mb-6">
+              <Alert>{error}</Alert>
+            </div>
+          )}
 
-        {error && (
-          <div className="mt-5">
-            <Alert>{error}</Alert>
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <Stepper steps={["Read the listings", "Choose what to list"]} current={step} />
+            <p className="text-xs text-[var(--color-muted)]">
+              Prices come from the supplier cost and your target return in{" "}
+              <Link href={`/accounts/${params.id}/settings`} className="text-[var(--color-accent)] hover:underline">
+                Settings
+              </Link>
+              .
+            </p>
           </div>
-        )}
 
-        {/* Step 1 — URLs */}
-        <form
-          onSubmit={handleRead}
-          className="mt-6 flex flex-col gap-4 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6"
-        >
-          <div className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-primary)] text-xs font-bold text-white">
-              1
-            </span>
-            <span className="text-sm font-bold text-[var(--color-ink)]">Read the listings</span>
-          </div>
-          <Field label="Competitor eBay listing URL">
-            <input
-              className={inputClass}
-              type="url"
-              placeholder="https://www.ebay.co.uk/itm/..."
-              value={competitorUrl}
-              onChange={(e) => setCompetitorUrl(e.target.value)}
-              disabled={busy !== null}
-              required
-            />
-          </Field>
-          <Field label="Source AliExpress product URL">
-            <input
-              className={inputClass}
-              type="url"
-              placeholder="https://www.aliexpress.com/item/..."
-              value={sourceUrl}
-              onChange={(e) => setSourceUrl(e.target.value)}
-              disabled={busy !== null}
-              required
-            />
-          </Field>
-          <button
-            type="submit"
-            disabled={busy !== null}
-            className="mt-1 self-start rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-90 transition-colors"
+          {/* ---- Step 1 ------------------------------------------------ */}
+          <form
+            onSubmit={handleRead}
+            className="card p-6"
           >
-            {busy === "read" ? (
-              <span className="inline-flex items-center gap-2">
-                {messages[statusIndex]} <ThinkingDots />
-              </span>
-            ) : preview ? (
-              "Read again"
-            ) : (
-              "Read listings"
-            )}
-          </button>
-        </form>
+            <h2 className="text-base font-bold text-[var(--color-ink)]">Read the listings</h2>
+            <p className="mt-1 text-sm text-[var(--color-muted)]">
+              Paste the competitor&apos;s eBay listing and your AliExpress source product. Both are read first, so you choose
+              exactly what to list before anything is generated.
+            </p>
 
-        {/* Step 2 — choose variations */}
-        {preview && (
-          <div className="mt-6 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-            <div className="flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-primary)] text-xs font-bold text-white">
-                2
-              </span>
-              <span className="text-sm font-bold text-[var(--color-ink)]">Choose what to list</span>
-            </div>
-
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <div className="rounded-xl border border-[var(--color-line)] p-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Competitor</p>
-                <p className="mt-1.5 text-sm font-semibold text-[var(--color-ink)] leading-snug">{preview.competitor.title}</p>
-                <p className="mt-1 text-xs text-[var(--color-muted)]">
-                  {preview.competitor.priceText || "price not read"} · {preview.competitor.categoryPath.slice(-2).join(" › ")}
-                </p>
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <div>
+                <label className={labelClass}>Competitor · eBay listing</label>
+                <input
+                  className={`${inputClass} mt-1.5`}
+                  type="url"
+                  placeholder="https://www.ebay.co.uk/itm/…"
+                  value={competitorUrl}
+                  onChange={(e) => setCompetitorUrl(e.target.value)}
+                  disabled={busy !== null}
+                  required
+                />
+                <p className="mt-1.5 text-xs text-[var(--color-muted)]">Sets the category, item specifics and the price to beat.</p>
               </div>
-              <div className="rounded-xl border border-[var(--color-line)] p-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-muted)]">Source product</p>
-                <p className="mt-1.5 text-sm font-semibold text-[var(--color-ink)] leading-snug">{preview.source.title}</p>
-                <p className="mt-1 text-xs text-[var(--color-muted)]">
-                  {preview.source.priceText || "price not read"} · {preview.source.totalCombinations || 1} option
-                  {preview.source.totalCombinations === 1 ? "" : "s"} on the supplier page
-                </p>
-                {preview.source.imageUrls.length > 0 && (
-                  <div className="mt-3 flex gap-1.5 overflow-x-auto">
-                    {preview.source.imageUrls.map((url) => (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img key={url} src={url} alt="" className="h-12 w-12 flex-shrink-0 rounded-md border border-[var(--color-line)] object-cover" />
-                    ))}
-                  </div>
-                )}
+              <div>
+                <label className={labelClass}>Source · AliExpress product</label>
+                <input
+                  className={`${inputClass} mt-1.5`}
+                  type="url"
+                  placeholder="https://www.aliexpress.com/item/…"
+                  value={sourceUrl}
+                  onChange={(e) => setSourceUrl(e.target.value)}
+                  disabled={busy !== null}
+                  required
+                />
+                <p className="mt-1.5 text-xs text-[var(--color-muted)]">Supplies the photos, variations and cost price.</p>
               </div>
             </div>
 
-            {preview.source.axes.length === 0 ? (
-              <p className="mt-5 text-sm text-[var(--color-muted)]">
-                This product has no variations — it will be drafted as a single listing.
-              </p>
-            ) : (
-              <div className="mt-5 space-y-5">
-                {preview.source.axes.map((axis) => {
-                  const chosen = selection[axis.name] || new Set<string>();
-                  const allValues = axis.values.map((v) => v.value);
-                  return (
-                    <div key={axis.name}>
-                      <div className="flex items-baseline justify-between">
-                        <p className="text-sm font-bold text-[var(--color-ink)]">
-                          {axis.name}{" "}
-                          <span className="font-normal text-[var(--color-muted)]">
-                            — {chosen.size} of {axis.values.length}
-                          </span>
-                        </p>
-                        <div className="flex gap-3 text-xs">
-                          <button type="button" onClick={() => setAll(axis.name, allValues, true)} className="text-[var(--color-accent)] hover:underline">
-                            All
-                          </button>
-                          <button type="button" onClick={() => setAll(axis.name, allValues, false)} className="text-[var(--color-muted)] hover:underline">
-                            None
-                          </button>
-                        </div>
-                      </div>
-                      <div className={`mt-2 grid gap-2 ${axis.hasImages ? "grid-cols-3 sm:grid-cols-6" : "grid-cols-2 sm:grid-cols-4"}`}>
-                        {axis.values.map((option) => {
-                          const on = chosen.has(option.value);
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              onClick={() => toggle(axis.name, option.value)}
-                              disabled={busy !== null}
-                              className={`flex items-center gap-2 rounded-lg border p-2 text-left text-xs transition-colors ${
-                                on
-                                  ? "border-[var(--color-primary)] bg-[var(--color-primary)]/5 text-[var(--color-ink)]"
-                                  : "border-[var(--color-line)] text-[var(--color-muted)]"
-                              }`}
-                            >
-                              {axis.hasImages ? (
-                                option.imageUrl ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img src={option.imageUrl} alt="" className={`h-10 w-10 flex-shrink-0 rounded-md object-cover ${on ? "" : "opacity-50"}`} />
-                                ) : (
-                                  <div className="h-10 w-10 flex-shrink-0 rounded-md bg-[var(--color-paper)]" />
-                                )
-                              ) : (
-                                <input type="checkbox" readOnly checked={on} className="pointer-events-none" />
-                              )}
-                              <span className="min-w-0 truncate font-medium">{option.value}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-line)] pt-5">
-              <p className="text-sm text-[var(--color-muted)]">
-                {preview.source.axes.length ? (
-                  <>
-                    <span className="font-bold text-[var(--color-ink)]">{selectedCount}</span> variation
-                    {selectedCount === 1 ? "" : "s"} will be drafted
-                    {selectedCount < preview.source.totalCombinations && ` (of ${preview.source.totalCombinations} offered)`}
-                  </>
-                ) : (
-                  "Single listing"
-                )}
-              </p>
+            <div className="mt-5 flex justify-end">
               <button
-                type="button"
-                onClick={handleDraft}
-                disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0)}
-                className="rounded-md bg-[var(--color-primary)] px-5 py-2 text-sm font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-40 transition-colors"
+                type="submit"
+                disabled={busy !== null}
+                className={`btn ${preview ? "btn-secondary" : "btn-primary"}`}
               >
-                {busy === "draft" ? (
+                {busy === "read" ? (
                   <span className="inline-flex items-center gap-2">
                     {messages[statusIndex]} <ThinkingDots />
                   </span>
+                ) : preview ? (
+                  "Read again"
                 ) : (
-                  "Draft with AI"
+                  "Read listings"
                 )}
               </button>
             </div>
-          </div>
-        )}
+          </form>
+
+          {/* ---- Step 2 ------------------------------------------------ */}
+          {preview && (
+            <section className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+              {/* Left: what was read */}
+              <div className="space-y-4">
+                <div className="card p-5">
+                  <p className={labelClass}>Competitor on eBay</p>
+                  <p className="mt-1.5 text-sm font-semibold leading-snug text-[var(--color-ink)]">{preview.competitor.title}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <span className="chip chip-primary">
+                      {preview.competitor.priceText || "price not read"}
+                    </span>
+                    {preview.competitor.categoryPath.length > 0 && (
+                      <span className="chip">
+                        {preview.competitor.categoryPath.slice(-2).join(" › ")}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="card p-5">
+                  <p className={labelClass}>Source on AliExpress</p>
+                  <p className="mt-1.5 text-sm font-semibold leading-snug text-[var(--color-ink)]">{preview.source.title}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <span className="chip chip-primary">
+                      {preview.source.priceText || "price not read"}
+                    </span>
+                    <span className="chip">
+                      {preview.source.totalCombinations || 1} option{preview.source.totalCombinations === 1 ? "" : "s"}
+                    </span>
+                    <span className="chip">
+                      {preview.source.imageUrls.length} photo{preview.source.imageUrls.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  {preview.source.imageUrls.length > 0 && (
+                    <div className="mt-4 grid grid-cols-4 gap-2 sm:grid-cols-5">
+                      {preview.source.imageUrls.map((url, i) => (
+                        <div key={url} className="relative aspect-square overflow-hidden rounded-xl border border-[var(--color-line)] bg-white">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={url} alt="" className="h-full w-full object-contain" />
+                          {i === 0 && (
+                            <span className="absolute left-1.5 top-1.5 rounded-md bg-[var(--color-primary)] px-1.5 py-0.5 text-[10px] font-bold text-white">
+                              MAIN
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="mt-3 text-xs text-[var(--color-muted)]">
+                    All supplier photos go into the draft as they are. Remove, reorder or replace them in the editor.
+                  </p>
+                </div>
+              </div>
+
+              {/* Right: choose variations */}
+              <div className="card p-6">
+                <h2 className="text-base font-bold text-[var(--color-ink)]">Choose what to list</h2>
+                <p className="mt-1 text-sm text-[var(--color-muted)]">Untick anything you don&apos;t want to sell. Everything ticked is drafted.</p>
+
+                {preview.source.axes.length === 0 ? (
+                  <p className="mt-4 text-sm text-[var(--color-muted)]">
+                    This product has no variations — it will be drafted as a single listing.
+                  </p>
+                ) : (
+                  <div className="mt-5 space-y-6">
+                    {preview.source.axes.map((axis) => {
+                      const chosen = selection[axis.name] || new Set<string>();
+                      const allValues = axis.values.map((v) => v.value);
+                      return (
+                        <div key={axis.name}>
+                          <div className="flex items-baseline justify-between">
+                            <p className="text-sm font-bold text-[var(--color-ink)]">
+                              {axis.name}{" "}
+                              <span className="font-normal text-[var(--color-muted)]">
+                                · {chosen.size} of {axis.values.length}
+                              </span>
+                            </p>
+                            <div className="flex gap-1">
+                              <button type="button" onClick={() => setAll(axis.name, allValues, true)} className="btn btn-ghost btn-sm text-[var(--color-accent)]">
+                                Select all
+                              </button>
+                              <button type="button" onClick={() => setAll(axis.name, allValues, false)} className="btn btn-ghost btn-sm">
+                                Clear
+                              </button>
+                            </div>
+                          </div>
+                          <div
+                            className="mt-3 grid gap-2.5"
+                            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${axis.hasImages ? 200 : 150}px, 1fr))` }}
+                          >
+                            {axis.values.map((option) => {
+                              const on = chosen.has(option.value);
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => toggle(axis.name, option.value)}
+                                  disabled={busy !== null}
+                                  aria-pressed={on}
+                                  className={`flex items-center gap-3 rounded-xl border p-2.5 text-left transition-all ${
+                                    on
+                                      ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)] shadow-sm"
+                                      : "border-[var(--color-line)] bg-[var(--color-panel)] hover:border-[var(--color-line-strong)]"
+                                  }`}
+                                >
+                                  {axis.hasImages &&
+                                    (option.imageUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={option.imageUrl}
+                                        alt=""
+                                        className={`h-14 w-14 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-contain ${on ? "" : "opacity-60"}`}
+                                      />
+                                    ) : (
+                                      <div className="h-14 w-14 flex-shrink-0 rounded-lg bg-[var(--color-paper)]" />
+                                    ))}
+                                  <span className={`min-w-0 flex-1 text-sm font-medium leading-snug ${on ? "text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>
+                                    {option.value}
+                                  </span>
+                                  <span
+                                    className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border text-[11px] font-bold ${
+                                      on ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white" : "border-[var(--color-line-strong)]"
+                                    }`}
+                                  >
+                                    {on ? "✓" : ""}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-line)] pt-5">
+                  <p className="text-sm text-[var(--color-muted)]">
+                    {preview.source.axes.length ? (
+                      <>
+                        <span className="font-bold text-[var(--color-ink)]">{selectedCount}</span> variation
+                        {selectedCount === 1 ? "" : "s"} will be drafted
+                        {selectedCount < preview.source.totalCombinations && ` of ${preview.source.totalCombinations} offered`}
+                      </>
+                    ) : (
+                      "Single listing"
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleDraft}
+                    disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0)}
+                    className="btn btn-primary"
+                  >
+                    {busy === "draft" ? (
+                      <span className="inline-flex items-center gap-2">
+                        {messages[statusIndex]} <ThinkingDots />
+                      </span>
+                    ) : (
+                      "Draft with AI"
+                    )}
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
+        </div>
       </div>
     </main>
   );

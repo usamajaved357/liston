@@ -121,7 +121,7 @@ test('generateDraftInput assembles a single-SKU draftInput when the source has n
   assert.strictEqual(buildGalleryMock.mock.calls[0].arguments[0].categoryId, '123');
 });
 
-test('generateDraftInput caps single-SKU gallery images at 5, even when the source has more', async () => {
+test('generateDraftInput keeps every usable gallery image the pipeline returns', async () => {
   mock.method(ebaySource, 'fetchListing', async () => ({ title: 'Competitor', categoryId: '123', variants: [] }));
   mock.method(aliexpressSource, 'fetchProduct', async () => ({
     title: 'Source',
@@ -137,7 +137,7 @@ test('generateDraftInput caps single-SKU gallery images at 5, even when the sour
     imageScenePrompt: 'clean white studio background',
   }));
   const buildGalleryMock = mock.method(imagePipeline, 'buildGalleryImages', async ({ sourceImageUrls }) => ({
-    imageUrls: sourceImageUrls.slice(0, 5),
+    imageUrls: sourceImageUrls,
     warnings: [],
   }));
   mock.method(imagePipeline, 'buildVariantImage', async ({ sourceImageUrl }) => sourceImageUrl || null);
@@ -149,10 +149,10 @@ test('generateDraftInput caps single-SKU gallery images at 5, even when the sour
   });
 
   assert.strictEqual(buildGalleryMock.mock.calls[0].arguments[0].sourceImageUrls.length, 12);
-  assert.strictEqual(draftInput.imageUrls.length, 5);
+  assert.strictEqual(draftInput.imageUrls.length, 12);
 });
 
-test('generateDraftInput caps variation group images at 5 and keeps exactly 1 image per variant', async () => {
+test('generateDraftInput keeps every group image and exactly 1 image per variant', async () => {
   mock.method(ebaySource, 'fetchListing', async () => ({ title: 'Competitor', categoryId: '123', variants: [] }));
   mock.method(aliexpressSource, 'fetchProduct', async () => ({
     title: 'Source',
@@ -173,7 +173,7 @@ test('generateDraftInput caps variation group images at 5 and keeps exactly 1 im
     imageScenePrompt: 'clean white studio background',
   }));
   mock.method(imagePipeline, 'buildGalleryImages', async ({ sourceImageUrls }) => ({
-    imageUrls: sourceImageUrls.slice(0, 5),
+    imageUrls: sourceImageUrls,
     warnings: [],
   }));
   mock.method(imagePipeline, 'buildVariantImage', async ({ sourceImageUrl }) => sourceImageUrl || null);
@@ -184,7 +184,7 @@ test('generateDraftInput caps variation group images at 5 and keeps exactly 1 im
     merchantLocationKey: 'main',
   });
 
-  assert.strictEqual(draftInput.imageUrls.length, 5);
+  assert.strictEqual(draftInput.imageUrls.length, 12);
   assert.ok(draftInput.variants.every((v) => v.imageUrls.length === 1));
 });
 
