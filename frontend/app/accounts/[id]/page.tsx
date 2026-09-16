@@ -1,234 +1,309 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, EarningsRange, Money, OrderCounts, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 
-const STATUS_STYLES: Record<string, string> = {
-  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  expired: "bg-amber-50 text-amber-800 border-amber-200",
-  error: "bg-red-50 text-red-700 border-red-200",
-  suspended: "bg-red-50 text-red-700 border-red-200",
-};
+// The account dashboard: money in and orders for a chosen window, the live
+// catalogue and what's waiting in drafts, then the order queue by state.
+// Inbox and Campaigns are shown dimmed so the shape of the page is already
+// there when those land.
 
-const RANGE_LABELS: Record<EarningsRange, string> = {
-  today: "Today",
-  "7d": "7 days",
-  "30d": "30 days",
-  "90d": "90 days",
-  this_month: "This month",
-  last_month: "Last month",
-  custom: "Custom",
-  all_time: "All time",
-};
-
-const RANGE_ORDER: EarningsRange[] = ["today", "7d", "30d", "this_month", "last_month", "custom", "all_time"];
-
-function FilterPill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-        active
-          ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
-          : "border-[var(--color-line)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50 hover:text-[var(--color-ink)]"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function EarningsWidget({ connectionId }: { connectionId: string }) {
-  const [range, setRange] = useState<EarningsRange>("7d");
-  const [customFrom, setCustomFrom] = useState(todayIso());
-  const [customTo, setCustomTo] = useState(todayIso());
-  const [earnings, setEarnings] = useState<Money>({ amount: 0 });
-  const [orderCount, setOrderCount] = useState(0);
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    api
-      .getConnectionEarnings(connectionId, range, range === "custom" ? { from: customFrom, to: customTo } : undefined)
-      .then((data) => {
-        setEarnings(data.earnings);
-        setOrderCount(data.orderCount);
-        setTruncated(data.truncated);
-      })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load earnings from eBay."))
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, range, range === "custom" ? customFrom : null, range === "custom" ? customTo : null]);
-
-  return (
-    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-        <h2 className="text-base font-bold text-[var(--color-ink)]">Earnings</h2>
-        <div className="flex flex-wrap items-center gap-2">
-          {RANGE_ORDER.map((key) => (
-            <FilterPill key={key} active={range === key} onClick={() => setRange(key)}>
-              {RANGE_LABELS[key]}
-            </FilterPill>
-          ))}
-        </div>
-      </div>
-
-      {range === "custom" && (
-        <div className="flex items-center gap-3 mb-5">
-          <input
-            type="date"
-            value={customFrom}
-            max={customTo}
-            onChange={(e) => setCustomFrom(e.target.value)}
-            className="rounded-md border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink)]"
-          />
-          <span className="text-sm text-[var(--color-muted)]">to</span>
-          <input
-            type="date"
-            value={customTo}
-            min={customFrom}
-            max={todayIso()}
-            onChange={(e) => setCustomTo(e.target.value)}
-            className="rounded-md border border-[var(--color-line)] px-3 py-1.5 text-sm text-[var(--color-ink)]"
-          />
-        </div>
-      )}
-
-      {error ? (
-        <Alert>{error}</Alert>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-              {RANGE_LABELS[range]} revenue
-            </span>
-            <p className="mt-1.5 text-3xl font-extrabold text-[var(--color-ink)]">
-              {loading ? "…" : formatMoney(earnings)}
-            </p>
-          </div>
-          <div>
-            <span className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">Orders</span>
-            <p className="mt-1.5 text-3xl font-extrabold text-[var(--color-ink)]">{loading ? "…" : orderCount}</p>
-          </div>
-        </div>
-      )}
-
-      {truncated && !error && (
-        <p className="mt-4 text-xs text-[var(--color-muted)]">
-          eBay only provides order history for the last 90 days — this is the most "all time" can show.
-        </p>
-      )}
-    </div>
-  );
-}
-
-// What a team member who manages orders actually needs on an account's
-// Overview: the operational state of the queue — what's waiting to be
-// shipped, what's unpaid, what's already gone out — not revenue, which is
-// the owner's concern and none of a fulfilment teammate's business. Each
-// tile links straight into the Orders tab pre-filtered to that status, over
-// the same 90-day window it counted (eBay's Trading API doesn't serve order
-// history further back than that).
-const ORDER_SUMMARY_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
-  {
-    key: "awaiting_dispatch",
-    label: "Awaiting dispatch",
-    hint: "Paid — needs shipping",
-    tone: "text-[var(--color-ink)]",
-  },
-  { key: "awaiting_payment", label: "Awaiting payment", hint: "New — not paid yet", tone: "text-amber-700" },
-  { key: "dispatched", label: "Paid and dispatched", hint: "Already shipped", tone: "text-emerald-700" },
-  { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-danger)]" },
+const RANGES: { key: EarningsRange; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
+  { key: "this_month", label: "This month" },
+  { key: "last_month", label: "Last month" },
+  { key: "all_time", label: "All time" },
 ];
 
 const SUMMARY_RANGE = "90d";
 
-function OrdersSummaryWidget({ connectionId }: { connectionId: string }) {
-  const [counts, setCounts] = useState<OrderCounts | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
+  { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid — needs shipping", tone: "text-[var(--color-primary)]" },
+  { key: "awaiting_payment", label: "Awaiting payment", hint: "New — not paid yet", tone: "text-amber-700" },
+  { key: "dispatched", label: "Dispatched", hint: "Already shipped", tone: "text-emerald-700" },
+  { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-muted)]" },
+];
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    // perPage 1 because only `counts` is used here — the backend derives
-    // counts from the whole window regardless of the page size requested.
-    api
-      .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
-      .then((data) => setCounts(data.counts))
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."))
-      .finally(() => setLoading(false));
-  }, [connectionId]);
-
-  return (
-    <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-5">
-        <h2 className="text-base font-bold text-[var(--color-ink)]">Orders</h2>
-        <span className="text-xs text-[var(--color-muted)]">Last 90 days</span>
+function Stat({
+  label,
+  value,
+  hint,
+  icon,
+  tone = "default",
+  href,
+  loading,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  icon: React.ReactNode;
+  tone?: "default" | "primary" | "accent";
+  href?: string;
+  loading?: boolean;
+}) {
+  const iconBg = {
+    default: "bg-[var(--color-paper)] text-[var(--color-muted)]",
+    primary: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
+    accent: "bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
+  }[tone];
+  const body = (
+    <>
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] font-medium text-[var(--color-muted)]">{label}</span>
+        <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconBg}`}>{icon}</span>
       </div>
-
-      {error ? (
-        <Alert>{error}</Alert>
+      {loading ? (
+        <div className="mt-4 h-7 w-24 animate-pulse rounded-md bg-[var(--color-line)]" />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {ORDER_SUMMARY_TILES.map((tile) => (
-            <Link
-              key={tile.key}
-              href={`/accounts/${connectionId}/orders?status=${tile.key}&range=${SUMMARY_RANGE}`}
-              className="rounded-xl border border-[var(--color-line)] p-4 transition-colors hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-paper)]"
-            >
-              <p className={`text-3xl font-extrabold ${tile.tone}`}>{loading ? "…" : counts?.[tile.key] ?? 0}</p>
-              <p className="mt-1.5 text-sm font-semibold text-[var(--color-ink)]">{tile.label}</p>
-              <p className="text-xs text-[var(--color-muted)]">{tile.hint}</p>
-            </Link>
-          ))}
-        </div>
+        <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight text-[var(--color-ink)]">{value}</p>
       )}
+      {hint && <p className="mt-2 text-[12px] text-[var(--color-muted)]">{hint}</p>}
+    </>
+  );
+  return href ? (
+    <Link href={href} className="card block p-5 transition-colors hover:border-[var(--color-line-strong)]">
+      {body}
+    </Link>
+  ) : (
+    <div className="card p-5">{body}</div>
+  );
+}
+
+function ComingSoonCard({ title, blurb, icon }: { title: string; blurb: string; icon: React.ReactNode }) {
+  return (
+    <div className="card relative overflow-hidden p-5 opacity-60">
+      <span className="absolute right-4 top-4 rounded-full bg-[var(--color-paper)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
+        Coming soon
+      </span>
+      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-paper)] text-[var(--color-muted)]">{icon}</span>
+      <p className="mt-4 text-[15px] font-semibold text-[var(--color-ink)]">{title}</p>
+      <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">{blurb}</p>
+      <div className="mt-4 space-y-2">
+        <div className="h-2.5 w-3/4 rounded-full bg-[var(--color-line)]" />
+        <div className="h-2.5 w-1/2 rounded-full bg-[var(--color-line)]" />
+      </div>
     </div>
   );
 }
 
+function OrderQueue({ connectionId, counts, loading, error }: { connectionId: string; counts: OrderCounts | null; loading: boolean; error: string | null }) {
+  return (
+    <section>
+      <div className="mb-3 flex items-baseline justify-between">
+        <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">Order queue</h2>
+        <span className="text-[12px] text-[var(--color-muted)]">Last 90 days</span>
+      </div>
+      {error ? (
+        <Alert>{error}</Alert>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {ORDER_TILES.map((tile) => (
+            <Link
+              key={tile.key}
+              href={`/accounts/${connectionId}/orders?status=${tile.key}&range=${SUMMARY_RANGE}`}
+              className="card p-5 transition-colors hover:border-[var(--color-line-strong)]"
+            >
+              {loading ? (
+                <div className="h-7 w-12 animate-pulse rounded-md bg-[var(--color-line)]" />
+              ) : (
+                <p className={`text-[28px] font-semibold leading-none tracking-tight ${tile.tone}`}>{counts?.[tile.key] ?? 0}</p>
+              )}
+              <p className="mt-3 text-sm font-medium text-[var(--color-ink)]">{tile.label}</p>
+              <p className="text-[12px] text-[var(--color-muted)]">{tile.hint}</p>
+            </Link>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+const Icons = {
+  money: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M4 17l5-5 4 4 7-8M15 8h5v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  orders: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M3.5 8L12 3.5 20.5 8v8L12 20.5 3.5 16V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M3.5 8L12 12.5 20.5 8M12 12.5v8" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  ),
+  listings: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+    </svg>
+  ),
+  drafts: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M12.5 7.5l4 4" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  ),
+  inbox: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  campaigns: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M4 10.5v3a1.5 1.5 0 001.5 1.5H8l6 4V5L8 9H5.5A1.5 1.5 0 004 10.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M17.5 9.5a3.5 3.5 0 010 5M8 15v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  ),
+};
+
+function OwnerDashboard({ connectionId }: { connectionId: string }) {
+  const [range, setRange] = useState<EarningsRange>("7d");
+  // Keyed by range so switching ranges shows the skeleton without a
+  // synchronous reset inside the effect.
+  const [earningsByRange, setEarningsByRange] = useState<Record<string, { amount: Money; orders: number; truncated: boolean } | { error: string }>>({});
+  const loaded = earningsByRange[range];
+  const earnings = loaded && !("error" in loaded) ? loaded : null;
+  const earningsError = loaded && "error" in loaded ? loaded.error : null;
+  const [live, setLive] = useState<number | null>(null);
+  const [drafts, setDrafts] = useState<number | null>(null);
+  const [counts, setCounts] = useState<OrderCounts | null>(null);
+  const [countsError, setCountsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getConnectionEarnings(connectionId, range)
+      .then((d) => !cancelled && setEarningsByRange((m) => ({ ...m, [range]: { amount: d.earnings, orders: d.orderCount, truncated: d.truncated } })))
+      .catch((err) => !cancelled && setEarningsByRange((m) => ({ ...m, [range]: { error: err instanceof ApiError ? err.message : "Couldn't load earnings from eBay." } })));
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId, range]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getConnectionListings(connectionId, "active", 1).then((d) => !cancelled && setLive(d.totalEntries)).catch(() => !cancelled && setLive(0));
+    api.listDraftListings(connectionId).then((d) => !cancelled && setDrafts(d.drafts.length)).catch(() => !cancelled && setDrafts(0));
+    api
+      .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
+      .then((d) => !cancelled && setCounts(d.counts))
+      .catch((err) => !cancelled && setCountsError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."));
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId]);
+
+  const rangeLabel = RANGES.find((r) => r.key === range)?.label.toLowerCase() || range;
+  const base = `/accounts/${connectionId}`;
+
+  return (
+    <div className="space-y-8">
+      <section>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[13px] text-[var(--color-muted)]">
+            Sales for <span className="font-medium text-[var(--color-ink)]">{rangeLabel}</span>
+            {earnings?.truncated && <span className="ml-2">· eBay only keeps 90 days of orders</span>}
+          </p>
+          <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                type="button"
+                onClick={() => setRange(r.key)}
+                className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
+                  range === r.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {earningsError && (
+          <div className="notice notice-danger mb-4">
+            <span className="flex-1">{earningsError}</span>
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Stat label="Earnings" value={earnings ? formatMoney(earnings.amount) : "—"} hint={`Revenue in the last ${rangeLabel}`} tone="accent" icon={Icons.money} loading={!earnings && !earningsError} />
+          <Stat
+            label="Orders"
+            value={earnings ? String(earnings.orders) : "—"}
+            hint={`Placed in the last ${rangeLabel}`}
+            tone="primary"
+            icon={Icons.orders}
+            href={`${base}/orders`}
+            loading={!earnings && !earningsError}
+          />
+          <Stat label="Live listings" value={live === null ? "—" : String(live)} hint="Active on eBay right now" icon={Icons.listings} href={`${base}/listings`} loading={live === null} />
+          <Stat
+            label="Drafts waiting"
+            value={drafts === null ? "—" : String(drafts)}
+            hint={drafts ? "Ready to review and publish" : "Nothing waiting to publish"}
+            icon={Icons.drafts}
+            href={`${base}/listings?filter=draft`}
+            loading={drafts === null}
+          />
+        </div>
+      </section>
+
+      <OrderQueue connectionId={connectionId} counts={counts} loading={!counts && !countsError} error={countsError} />
+
+      <section>
+        <h2 className="mb-3 text-[13px] font-semibold text-[var(--color-ink)]">On the way</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          <ComingSoonCard title="Inbox" blurb="Buyer messages from eBay in one place, with AI-suggested replies you can send in a tap." icon={Icons.inbox} />
+          <ComingSoonCard title="Campaigns" blurb="Promoted listings and sales events, with what each one earned you against what it cost." icon={Icons.campaigns} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+// A team member granted Orders is doing fulfilment work — revenue isn't
+// theirs to see, so they get the queue and nothing else.
+function MemberDashboard({ connectionId }: { connectionId: string }) {
+  const [counts, setCounts] = useState<OrderCounts | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
+      .then((d) => setCounts(d.counts))
+      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."));
+  }, [connectionId]);
+  return <OrderQueue connectionId={connectionId} counts={counts} loading={!counts && !error} error={error} />;
+}
+
+function ShellSkeleton() {
+  return (
+    <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <div className="mx-auto max-w-5xl space-y-4">
+        <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="card h-28 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    </main>
+  );
+}
+
 export default function AccountOverviewPage() {
-  const router = useRouter();
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  async function handleDelete() {
-    setDeleting(true);
-    try {
-      await api.deleteConnection(params.id);
-      router.push("/connections");
-    } catch {
-      setDeleteError("Couldn't remove this connection. Try again.");
-      setDeleting(false);
-      setConfirmDelete(false);
-    }
-  }
-
-  if (loading) {
-    return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
-      </main>
-    );
-  }
+  if (loading) return <ShellSkeleton />;
 
   if (error || !connection || !user) {
     return (
@@ -238,76 +313,45 @@ export default function AccountOverviewPage() {
     );
   }
 
+  const isOwner = connection.permissions === undefined;
+
   return (
     <AccountShell
       connectionId={connection.id}
       label={connection.label}
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
-      status={connection.status}
       permissions={connection.permissions}
       user={user}
       header={
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Overview</h1>
-            <p className="text-sm text-[var(--color-muted)] mt-0.5">{connection.label} · {connection.platform_name}</p>
+            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Overview</h1>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+              {connection.label} · {connection.platform_name}
+            </p>
           </div>
-          <div className="flex items-center gap-3">
-            <span
-              className={`rounded-full border px-3 py-1 text-xs font-medium capitalize ${
-                STATUS_STYLES[connection.status] || STATUS_STYLES.error
-              }`}
-            >
-              {connection.status}
-            </span>
-            {/* Disconnecting a whole eBay account is always admin-only —
-                connection.permissions is only ever set for a member. */}
-            {connection.permissions === undefined && (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="text-sm font-medium text-[var(--color-danger)] hover:underline"
-              >
-                Remove connection
-              </button>
-            )}
-          </div>
+          {isOwner && (
+            <Link href="/dashboard" className="btn btn-sm bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Dashboard
+            </Link>
+          )}
         </div>
       }
     >
-      {deleteError && (
-        <div className="mb-4">
-          <Alert>{deleteError}</Alert>
-        </div>
-      )}
-
-      {/* An owner owns the P&L, so Overview leads with Earnings for them. A
-          team member granted Orders is doing fulfilment work — revenue isn't
-          theirs to monitor, so they get the operational state of the order
-          queue instead. Anyone without Orders access has nothing to show
-          here at all (Overview is entirely order-derived today). */}
-      {connection.permissions === undefined ? (
-        <EarningsWidget connectionId={connection.id} />
-      ) : connection.permissions.orders ? (
-        <OrdersSummaryWidget connectionId={connection.id} />
+      {isOwner ? (
+        <OwnerDashboard connectionId={connection.id} />
+      ) : connection.permissions?.orders ? (
+        <MemberDashboard connectionId={connection.id} />
       ) : (
-        <div className="rounded-2xl border border-dashed border-[var(--color-line)] p-8 text-center">
-          <p className="text-sm text-[var(--color-muted)]">
-            Nothing to show here yet — check the sections in the sidebar you have access to.
-          </p>
+        <div className="card px-6 py-12 text-center">
+          <p className="text-sm font-medium text-[var(--color-ink)]">Nothing to show here yet</p>
+          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Use the sections in the sidebar you have access to.</p>
         </div>
       )}
-
-      <ConfirmDialog
-        open={confirmDelete}
-        title="Remove this connection?"
-        description="Liston will no longer be able to draft or publish listings to this account."
-        confirmLabel="Remove"
-        danger
-        loading={deleting}
-        onCancel={() => setConfirmDelete(false)}
-        onConfirm={handleDelete}
-      />
     </AccountShell>
   );
 }

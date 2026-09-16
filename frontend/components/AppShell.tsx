@@ -17,9 +17,10 @@ interface AppShellProps {
   isAdmin?: boolean;
 }
 
-export function AppShell({ children, header, connectionsUsed, maxConnections, planName, role, isAdmin }: AppShellProps) {
+// connectionsUsed / maxConnections / planName are accepted for compatibility
+// with existing pages; the sidebar no longer shows plan usage.
+export function AppShell({ children, header, role, isAdmin }: AppShellProps) {
   const pathname = usePathname();
-  const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
 
   return (
     <div className="h-screen flex overflow-hidden">
@@ -92,17 +93,6 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
           )}
         </nav>
 
-        <div className="mt-auto rounded-lg bg-[var(--color-paper)] p-3 flex flex-col gap-1">
-          <span className="text-[10.5px] font-bold uppercase tracking-wide text-[var(--color-accent)]">
-            {planName} plan
-          </span>
-          <div className="h-1 rounded-full bg-[var(--color-line)] overflow-hidden">
-            <div className="h-full bg-[var(--color-accent)]" style={{ width: `${connectionsPct}%` }} />
-          </div>
-          <span className="text-[10.5px] text-[var(--color-muted)]">
-            {connectionsUsed} of {maxConnections} connections used
-          </span>
-        </div>
       </aside>
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">

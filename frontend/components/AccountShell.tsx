@@ -7,16 +7,8 @@ import { api, User } from "@/lib/api";
 import { Logo } from "@/components/Logo";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
-import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
-
-const STATUS_STYLES: Record<string, string> = {
-  active: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  expired: "bg-amber-50 text-amber-800 border-amber-200",
-  error: "bg-red-50 text-red-700 border-red-200",
-  suspended: "bg-red-50 text-red-700 border-red-200",
-};
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -25,18 +17,16 @@ interface AccountShellProps {
   label: string;
   platformKey: string;
   platformName: string;
-  status: string;
+  // Kept for callers; the shell no longer displays it (the header does).
+  status?: string;
   // Undefined for an owner (show every tab). For a team member, comes from
   // the connection's resolved `permissions` (see ConnectionPermissions in
   // lib/api.ts) — only tabs with `true` are shown. The backend enforces the
   // same gate on each route independently (see requireFeature), so this is
   // a UX nicety, not the security boundary.
   permissions?: Record<string, boolean>;
-  // Needed so this shell can offer a real, always-present way to log out —
-  // every page under /accounts/[id]/* renders this shell and previously had
-  // no logout affordance at all once inside a connection (a real gap for
-  // everyone, but a dead end for a member with only one accessible account,
-  // since "All connections" has nowhere useful to send them either).
+  // A member has no other shell: their sidebar carries their identity, a way
+  // back to their account list and the only logout they get.
   user: User;
 }
 
@@ -47,7 +37,6 @@ export function AccountShell({
   label,
   platformKey,
   platformName,
-  status,
   permissions,
   user,
 }: AccountShellProps) {
@@ -85,17 +74,10 @@ export function AccountShell({
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
         </div>
 
-        <Link
-          href="/connections"
-          className="flex items-center gap-1.5 px-2 text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)] transition-colors"
-        >
-          ← {permissions === undefined ? "All connections" : "Your accounts"}
-        </Link>
-
-        <div className="flex items-center gap-2.5 rounded-lg bg-[var(--color-paper)] px-2.5 py-2.5">
+        <div className="flex items-center gap-2.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)] px-3 py-2.5">
           <PlatformIcon platformKey={platformKey} size={32} />
           <div className="min-w-0">
-            <p className="text-sm font-bold text-[var(--color-ink)] truncate">{label}</p>
+            <p className="truncate text-sm font-semibold text-[var(--color-ink)]">{label}</p>
             <p className="text-[11px] text-[var(--color-muted)]">{platformName}</p>
           </div>
         </div>
@@ -112,10 +94,10 @@ export function AccountShell({
               label="Overview"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                  <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                  <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                  <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                  <rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                  <rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                  <rect x="13" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
                 </svg>
               }
             />
@@ -127,9 +109,8 @@ export function AccountShell({
               label="Listings"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <rect x="3.5" y="4" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="3.5" y="10.5" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="3.5" y="17" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <circle cx="8" cy="8" r="1.4" fill="currentColor" />
                 </svg>
               }
             />
@@ -141,14 +122,8 @@ export function AccountShell({
               label="Orders"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path
-                    d="M6 3h12l1 5H5l1-5z"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinejoin="round"
-                  />
-                  <path d="M5 8h14v11a2 2 0 01-2 2H7a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M9 12a3 3 0 006 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M3.5 8L12 3.5 20.5 8v8L12 20.5 3.5 16V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M3.5 8L12 12.5 20.5 8M12 12.5v8" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
                 </svg>
               }
             />
@@ -160,8 +135,8 @@ export function AccountShell({
               label="Campaigns"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M3 10v4a1 1 0 001 1h2l7 4V5L6 9H4a1 1 0 00-1 1z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M17 9a3 3 0 010 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M4 10.5v3a1.5 1.5 0 001.5 1.5H8l6 4V5L8 9H5.5A1.5 1.5 0 004 10.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M17.5 9.5a3.5 3.5 0 010 5M8 15v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                 </svg>
               }
             />
@@ -173,13 +148,8 @@ export function AccountShell({
               label="Inbox"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path
-                    d="M3.5 6.5h17v11a1.5 1.5 0 01-1.5 1.5h-14A1.5 1.5 0 013.5 17.5v-11z"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinejoin="round"
-                  />
-                  <path d="M3.5 6.5l8.5 6 8.5-6" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               }
             />
@@ -194,43 +164,38 @@ export function AccountShell({
               label="Settings"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
-                  <path
-                    d="M19.4 13.5a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1.04 1.56V19.5a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1.04-1.56 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.56-1.04H4.5a2 2 0 110-4h.09a1.7 1.7 0 001.56-1.04 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H10.6A1.7 1.7 0 0011.5 4.5V4.4a2 2 0 114 0v.09a1.7 1.7 0 001.04 1.56 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87v.09a1.7 1.7 0 001.56 1.04h.09a2 2 0 110 4h-.09a1.7 1.7 0 00-1.56 1.04z"
-                    stroke="currentColor"
-                    strokeWidth="1.3"
-                    strokeLinejoin="round"
-                  />
+                  <path d="M4 7h10M18 7h2M4 12h2M10 12h10M4 17h10M18 17h2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <circle cx="16" cy="7" r="2" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="8" cy="12" r="2" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="16" cy="17" r="2" stroke="currentColor" strokeWidth="1.8" />
                 </svg>
               }
             />
           )}
         </nav>
 
-        <div className="mt-auto rounded-lg bg-[var(--color-paper)] p-3 flex flex-col gap-1.5">
-          <span className="text-[10.5px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Status</span>
-          <span
-            className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[11px] font-bold capitalize ${
-              STATUS_STYLES[status] || STATUS_STYLES.error
-            }`}
-          >
-            {status}
-          </span>
-        </div>
+        {permissions !== undefined && (
+          <div className="mt-auto space-y-1 border-t border-[var(--color-line)] pt-3">
+            <Link href="/connections" className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Your accounts
+            </Link>
+            <button type="button" onClick={() => setConfirmAction("logout")} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <path d="M10 4H6a2 2 0 00-2 2v12a2 2 0 002 2h4M15 8l4 4-4 4M19 12H9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Log out
+            </button>
+            <p className="truncate px-2.5 pt-1 text-[11px] text-[var(--color-muted)]">{user.email}</p>
+          </div>
+        )}
       </aside>
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">
         {header && (
-          <div className="flex-shrink-0 flex items-start gap-4 px-10 pt-8 pb-6 bg-[var(--color-paper)]">
-            <div className="flex-1 min-w-0">{header}</div>
-            <AccountMenu
-              email={user.email}
-              subtitle={permissions === undefined ? "Owner" : "Team member"}
-              avatarUrl={user.avatar_url}
-              onLogout={() => setConfirmAction("logout")}
-              onDeleteAccount={() => setConfirmAction("delete")}
-            />
-          </div>
+          <div className="flex-shrink-0 px-10 pt-8 pb-6 bg-[var(--color-paper)]">{header}</div>
         )}
         <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>
           {actionError && (
