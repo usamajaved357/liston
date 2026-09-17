@@ -323,21 +323,11 @@ export default function AccountOverviewPage() {
       permissions={connection.permissions}
       user={user}
       header={
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Overview</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-              {connection.label} · {connection.platform_name}
-            </p>
-          </div>
-          {isOwner && (
-            <Link href="/dashboard" className="btn btn-sm bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Dashboard
-            </Link>
-          )}
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Overview</h1>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+            {connection.label} · {connection.platform_name}
+          </p>
         </div>
       }
     >

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { api, User } from "@/lib/api";
 import { Logo } from "@/components/Logo";
-import { PlatformIcon } from "@/components/PlatformIcon";
+import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
@@ -77,15 +77,7 @@ export function AccountShell({
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
         </div>
 
-        <div className="flex items-center gap-2.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)] px-3 py-2.5">
-          <PlatformIcon platformKey={platformKey} size={32} />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-[var(--color-ink)]">{label}</p>
-            <p className="text-[11px] text-[var(--color-muted)]" title={marketplace ? `${marketplace.name} · ${marketplace.currency}` : undefined}>
-              {marketplace ? `${marketplace.flag} ${marketplace.name} · ${marketplace.currency}` : platformName}
-            </p>
-          </div>
-        </div>
+        <AccountSwitcher connectionId={connectionId} label={label} platformKey={platformKey} platformName={platformName} marketplace={marketplace} />
 
         <nav className="flex flex-col gap-0.5">
           {/* Overview's only content today is the Earnings widget, which is
@@ -200,7 +192,19 @@ export function AccountShell({
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">
         {header && (
-          <div className="flex-shrink-0 px-10 pt-8 pb-6 bg-[var(--color-paper)]">{header}</div>
+          <div className="flex flex-shrink-0 items-start gap-4 bg-[var(--color-paper)] px-10 pt-8 pb-6">
+            <div className="min-w-0 flex-1">{header}</div>
+            {/* Owners came from the main dashboard; members have no dashboard,
+                their way out is the sidebar footer. */}
+            {permissions === undefined && (
+              <Link href="/dashboard" className="btn btn-sm flex-shrink-0 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Dashboard
+              </Link>
+            )}
+          </div>
         )}
         <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>
           {actionError && (
