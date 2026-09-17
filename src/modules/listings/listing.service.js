@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const listingRepository = require('./listing.repository');
 const connectionService = require('../connections/connection.service');
 const ebayService = require('../ebay/ebay.service');
+const marketplaces = require('../ebay/marketplaces');
 const orchestrator = require('../ai-generation/generation.orchestrator');
 const imageGates = require('../ai-generation/image-pipeline/gates');
 const revisionService = require('./listing-revision.service');
@@ -190,13 +191,13 @@ async function generateEbayDraftFromUrls(
     // settings, not typed per draft. Undefined is fine — the pricing service
     // falls back to its documented defaults (60% ROI, 18% ads, 12%
     // processing, £0.30 per order).
-    pricing: connection.settings?.pricing,
+    pricing: { currency: marketplaces.currencyFor(ebaySettings.marketplaceId || 'EBAY_GB'), ...(connection.settings?.pricing || {}) },
     merchantLocationKey: ebaySettings.merchantLocationKey,
     // The competitor is read from — and the category schema fetched for —
     // the same marketplace the listing will be published to, so the category
     // ids and aspect names line up.
     marketplaceId: ebaySettings.marketplaceId || 'EBAY_GB',
-    countryOfOrigin: connection.settings?.listing?.countryOfOrigin || 'United Kingdom',
+    countryOfOrigin: connection.settings?.listing?.countryOfOrigin || marketplaces.summary(ebaySettings.marketplaceId || 'EBAY_GB').countryName,
   });
 
   // Only the SKU BASE is decided here; the actual SKUs are stamped at publish
@@ -581,6 +582,7 @@ function htmlToText(html) {
 }
 
 function draftFromLiveItem(item, marketplaceId) {
+  const fallbackCurrency = marketplaces.currencyFor(marketplaceId);
   const base = {
     imageUrls: item.imageUrls,
     categoryId: item.categoryId,
@@ -611,7 +613,7 @@ function draftFromLiveItem(item, marketplaceId) {
           aspects: v.specifics,
           condition: item.condition || 'NEW',
           quantity: Math.max(0, v.quantity - v.quantitySold),
-          price: { value: v.price ? v.price.amount.toFixed(2) : '0.00', currency: v.price?.currency || item.currency || 'GBP' },
+          price: { value: v.price ? v.price.amount.toFixed(2) : '0.00', currency: v.price?.currency || item.currency || fallbackCurrency },
         };
       }),
     };
@@ -623,7 +625,7 @@ function draftFromLiveItem(item, marketplaceId) {
     aspects: item.specifics,
     condition: item.condition || 'NEW',
     quantity: Math.max(0, item.quantity - item.quantitySold),
-    price: { value: item.price ? item.price.amount.toFixed(2) : '0.00', currency: item.price?.currency || item.currency || 'GBP' },
+    price: { value: item.price ? item.price.amount.toFixed(2) : '0.00', currency: item.price?.currency || item.currency || fallbackCurrency },
   };
 }
 

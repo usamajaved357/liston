@@ -126,10 +126,10 @@ async function extractFromPage(page) {
 // Same rationale as the eBay scraper: bot detection can be probabilistic
 // even with the stealth plugin, and a fresh browser launch on retry (a new
 // fingerprint each time via withPage) has a real chance of getting through.
-async function scrapeListing(url, attempts = 3) {
+async function scrapeListing(url, attempts = 3, { currency, region } = {}) {
   let raw = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    raw = await withPage(url, extractFromPage, { source: 'aliexpress' });
+    raw = await withPage(url, extractFromPage, { source: 'aliexpress', ...(currency ? { currency } : {}), ...(region ? { region } : {}) });
     if (raw.title) break;
     // The URL is the single most useful fact when a scrape fails and it
     // wasn't being logged — a product link isn't sensitive.

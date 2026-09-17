@@ -123,6 +123,7 @@ export interface Connection {
   platform_key: string;
   platform_name: string;
   settings?: { ebay?: EbaySettings; pricing?: PricingSettings; template?: DescriptionTemplate };
+  marketplace?: Marketplace | null;
   permissions?: ConnectionPermissions;
   created_at: string;
   updated_at: string;
@@ -232,12 +233,40 @@ export interface Policy {
   marketplaceId: string;
 }
 
+export interface LocationAddress {
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  stateOrProvince?: string;
+  postalCode?: string;
+  country?: string;
+  phone?: string;
+  name?: string;
+  company?: string;
+}
+
 export interface MerchantLocation {
   merchantLocationKey: string;
   name?: string;
+  status?: string | null;
+  address?: LocationAddress | null;
+}
+
+// Which eBay site a connection sells on, detected from the account itself.
+export interface Marketplace {
+  id: string;
+  label: string;
+  name: string;
+  flag: string;
+  currency: string;
+  country: string;
+  countryName: string;
+  itemHost: string;
 }
 
 export interface ConnectionPolicies {
+  marketplace: Marketplace;
+  registrationAddress: LocationAddress | null;
   fulfillmentPolicies: Policy[];
   paymentPolicies: Policy[];
   returnPolicies: Policy[];
@@ -575,8 +604,13 @@ export const api = {
     );
   },
 
-  getConnectionPolicies: (id: string, marketplaceId = "EBAY_GB") =>
-    request<ConnectionPolicies>(`/api/connections/${id}/policies?marketplaceId=${marketplaceId}`),
+  // The marketplace is the account's own (detected server-side); no argument.
+  getConnectionPolicies: (id: string) => request<ConnectionPolicies>(`/api/connections/${id}/policies`),
+
+  // Creates an eBay inventory location from a confirmed address and makes it
+  // the connection's shipping location.
+  createConnectionLocation: (id: string, input: { name: string } & LocationAddress) =>
+    request<{ merchantLocationKey: string }>(`/api/connections/${id}/locations`, { method: "POST", body: JSON.stringify(input) }),
 
   updateConnectionPolicies: (id: string, settings: EbaySettings) =>
     request<{ settings: { ebay: EbaySettings } }>(`/api/connections/${id}/policies`, {

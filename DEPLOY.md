@@ -70,7 +70,7 @@ Then click **Apply Online** on the app in the AliExpress console. Until the app 
 
 ## 5b. Copying an account from local to production
 
-`scripts/copy-account-to-prod.js <email>` copies one owner (team members, connections with re-encrypted credentials, listings, permissions) and the AliExpress token. Needs `TARGET_DATABASE_URL` (the Postgres public URL) and `TARGET_CREDENTIALS_ENCRYPTION_KEY` (the backend's key). Run `DATABASE_URL=<public url> node src/db/migrate.js up` first if the schema is behind.
+`node scripts/copy-account.js <email> --to-prod` copies one owner (team members, connections with re-encrypted credentials, listings, permissions) and the AliExpress token up to production; `--from-prod` pulls an account down to the local database to reproduce its data. Needs `PROD_DATABASE_URL` (the Postgres public URL) and `PROD_CREDENTIALS_ENCRYPTION_KEY` (the backend's key) in `.env`. Run `DATABASE_URL=<public url> node src/db/migrate.js up` first if the schema is behind.
 
 ## 6. After the first deploy
 

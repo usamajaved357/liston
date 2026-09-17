@@ -19,6 +19,7 @@ router.get('/:id/orders', requireAuth, requireFeature('orders'), connectionContr
 router.get('/:id/earnings', requireAuth, requireFeature('orders'), connectionController.getEarnings);
 router.get('/:id/policies', requireAuth, requireOwner, connectionController.getPolicies);
 router.put('/:id/policies', requireAuth, requireOwner, connectionController.updatePolicies);
+router.post('/:id/locations', requireAuth, requireOwner, connectionController.createLocation);
 // Listing settings (target ROI, fees, shipping) drive every sell price, so
 // they're owner-only for the same reason policies are — never delegable.
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);

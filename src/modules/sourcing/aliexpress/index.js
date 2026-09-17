@@ -26,11 +26,11 @@ function productIdFromUrl(url) {
   );
 }
 
-async function fetchProduct(url) {
+async function fetchProduct(url, { shipTo, currency } = {}) {
   if (config.aliexpress.source === 'ds-api') {
-    return dsApi.fetchProduct(productIdFromUrl(url), url);
+    return dsApi.fetchProduct(productIdFromUrl(url), url, { shipTo, currency });
   }
-  return scraper.scrapeListing(url);
+  return scraper.scrapeListing(url, 3, { currency, region: shipTo });
 }
 
 module.exports = { fetchProduct, productIdFromUrl };

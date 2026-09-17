@@ -2,6 +2,7 @@ const ebayClient = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 const ebayTrading = require('./ebay.trading');
 const { createSwrCache } = require('./swr-cache');
+const marketplaces = require('./marketplaces');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -41,11 +42,14 @@ async function createOfferWithRetry(accessToken, offerInput, attempts = 4, delay
 // is true and `credentials` holds the updated values — the caller (which
 // owns the DB write) must persist them via connectionService, since this
 // module has no knowledge of connection storage.
+// `credentials.marketplaceId` is attached by the connection service (not
+// stored): it picks the Trading site every call below is made against.
 async function ensureValidAccessToken(credentials) {
+  const siteId = marketplaces.siteIdFor(credentials.marketplaceId);
   const expiresSoon = !credentials.accessTokenExpiresAt || credentials.accessTokenExpiresAt - Date.now() < TOKEN_REFRESH_MARGIN_MS;
 
   if (!expiresSoon) {
-    return { accessToken: credentials.accessToken, credentials, credentialsChanged: false };
+    return { accessToken: credentials.accessToken, credentials, credentialsChanged: false, siteId };
   }
 
   if (!credentials.refreshToken) {
@@ -54,7 +58,7 @@ async function ensureValidAccessToken(credentials) {
 
   const refreshed = await ebayOauth.refreshAccessToken(credentials.refreshToken);
   const updatedCredentials = { ...credentials, ...refreshed };
-  return { accessToken: refreshed.accessToken, credentials: updatedCredentials, credentialsChanged: true };
+  return { accessToken: refreshed.accessToken, credentials: updatedCredentials, credentialsChanged: true, siteId };
 }
 
 // eBay requires at least one merchant inventory location before an offer can
@@ -324,20 +328,20 @@ async function withdrawDraft(credentials, offerId) {
 // Active + ended listings read from the seller's real eBay catalog (Trading
 // API) — this sees everything on the account, not just what Liston created.
 async function listActiveListings(credentials, opts) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayTrading.getActiveListings(accessToken, opts);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.getActiveListings(accessToken, { ...opts, siteId });
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
 async function getStoreProfile(credentials) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const profile = await ebayTrading.getStoreProfile(accessToken);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const profile = await ebayTrading.getStoreProfile(accessToken, { siteId });
   return { ...profile, credentialsChanged, credentials: refreshedCredentials };
 }
 
 async function listUnsoldListings(credentials, opts) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayTrading.getUnsoldListings(accessToken, opts);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.getUnsoldListings(accessToken, { ...opts, siteId });
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -352,14 +356,76 @@ async function deleteInventoryObjects(credentials, { offerId, groupKey, skus = [
   return { credentialsChanged, credentials: refreshedCredentials };
 }
 
+// Which eBay site this seller is on (from their registration), plus the
+// address eBay holds for them. Used once to set a connection's marketplace
+// and to offer a ready-made shipping location.
+async function detectMarketplace(credentials) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+
+  // GetUser is the direct answer, but eBay rations it tightly per app. When
+  // it's refused, fall back to signals that aren't rationed: where the
+  // seller's business policies live, then which eBay site their listings
+  // link to.
+  let profile = null;
+  try {
+    profile = await ebayTrading.getUserProfile(accessToken);
+  } catch {
+    profile = null;
+  }
+  let market = profile ? marketplaces.fromSite(profile.site) || marketplaces.fromSite(profile.storeSite) || marketplaces.fromCountry(profile.registrationAddress.country) : null;
+
+  if (!market) {
+    const counts = await Promise.all(
+      marketplaces.MARKETPLACES.map(async (m) => {
+        const res = await ebayClient.getFulfillmentPolicies(accessToken, m.id).catch(() => null);
+        return { m, n: res?.fulfillmentPolicies?.length || 0 };
+      })
+    );
+    const best = counts.sort((a, b) => b.n - a.n)[0];
+    if (best && best.n > 0) market = best.m;
+  }
+  if (!market) {
+    const listings = await ebayTrading.getActiveListings(accessToken, { pageNumber: 1, entriesPerPage: 1 }).catch(() => null);
+    const host = listings?.items?.[0]?.viewItemUrl ? new URL(listings.items[0].viewItemUrl).host : null;
+    market = marketplaces.MARKETPLACES.find((m) => m.itemHost === host) || null;
+  }
+  market = market || marketplaces.byId(marketplaces.DEFAULT_ID);
+  return { marketplaceId: market.id, profile, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// Creates an Inventory API location (what an offer's merchantLocationKey
+// points at). Seller Hub addresses are not inventory locations, which is why
+// accounts that never used the Inventory API show none.
+async function createMerchantLocation(credentials, { merchantLocationKey, name, address }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const body = {
+    location: {
+      address: {
+        addressLine1: address.addressLine1,
+        ...(address.addressLine2 ? { addressLine2: address.addressLine2 } : {}),
+        city: address.city,
+        ...(address.stateOrProvince ? { stateOrProvince: address.stateOrProvince } : {}),
+        postalCode: address.postalCode,
+        country: address.country,
+      },
+    },
+    locationTypes: ['WAREHOUSE'],
+    merchantLocationStatus: 'ENABLED',
+    name,
+    ...(address.phone ? { phone: address.phone } : {}),
+  };
+  await ebayClient.createInventoryLocation(accessToken, merchantLocationKey, body);
+  return { merchantLocationKey, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function getLiveItem(credentials, itemId) {
-  const { accessToken } = await ensureValidAccessToken(credentials);
-  return ebayTrading.getItem(accessToken, itemId);
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  return ebayTrading.getItem(accessToken, itemId, { siteId });
 }
 
 async function reviseLiveListing(credentials, itemId, payload) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayTrading.reviseListing(accessToken, itemId, payload);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.reviseListing(accessToken, itemId, payload, { siteId });
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -368,8 +434,8 @@ function conditionIdFor(condition) {
 }
 
 async function listOrders(credentials, opts) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayTrading.getOrders(accessToken, opts);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.getOrders(accessToken, { ...opts, siteId });
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -435,8 +501,8 @@ function resolveRangeWindow(range, from, to) {
 // `expectedPages` is the page count from the previous fetch of the same
 // window: with it, every page is requested at once (a guess that's too high
 // just returns an empty page), so a refresh costs one round trip.
-async function fetchAllOrdersInWindow(accessToken, createTimeFrom, createTimeTo, expectedPages = 1) {
-  const opts = { createTimeFrom, createTimeTo, entriesPerPage: MAX_ORDER_PAGE_SIZE };
+async function fetchAllOrdersInWindow(accessToken, createTimeFrom, createTimeTo, expectedPages = 1, siteId = 0) {
+  const opts = { createTimeFrom, createTimeTo, entriesPerPage: MAX_ORDER_PAGE_SIZE, siteId };
   const firstBatch = await Promise.all(
     Array.from({ length: Math.max(1, expectedPages) }, (_, i) => ebayTrading.getOrders(accessToken, { ...opts, pageNumber: i + 1 }))
   );
@@ -459,16 +525,16 @@ const ordersCache = createSwrCache({
   freshMs: 2 * 60 * 1000,
   staleMs: 30 * 60 * 1000,
   warmWindowMs: 30 * 60 * 1000,
-  fetcher: async (accessToken, meta) => {
+  fetcher: async ({ accessToken, siteId }, meta) => {
     const now = new Date();
     const start = new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
-    const { orders, totalPages } = await fetchAllOrdersInWindow(accessToken, start.toISOString(), now.toISOString(), meta?.totalPages);
+    const { orders, totalPages } = await fetchAllOrdersInWindow(accessToken, start.toISOString(), now.toISOString(), meta?.totalPages, siteId);
     return { value: orders, meta: { totalPages } };
   },
 });
 
-function getOrdersLast90Cached(connectionId, accessToken) {
-  return ordersCache.get(connectionId, accessToken);
+function getOrdersLast90Cached(connectionId, accessToken, siteId) {
+  return ordersCache.get(connectionId, { accessToken, siteId });
 }
 
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
@@ -477,9 +543,9 @@ const ITEM_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
 // The listings tab works the same way: the whole active (or unsold) set is
 // pulled once, so paging, page size and search never go back to eBay.
 const MAX_LISTING_PAGE_SIZE = 200;
-async function fetchAllListings(accessToken, status, expectedPages = 1) {
+async function fetchAllListings(accessToken, status, expectedPages = 1, siteId = 0) {
   const call = status === 'inactive' ? ebayTrading.getUnsoldListings : ebayTrading.getActiveListings;
-  const opts = { entriesPerPage: MAX_LISTING_PAGE_SIZE };
+  const opts = { entriesPerPage: MAX_LISTING_PAGE_SIZE, siteId };
   const firstBatch = await Promise.all(
     Array.from({ length: Math.max(1, expectedPages) }, (_, i) => call(accessToken, { ...opts, pageNumber: i + 1 }))
   );
@@ -496,8 +562,8 @@ const listingsCache = createSwrCache({
   freshMs: 2 * 60 * 1000,
   staleMs: 30 * 60 * 1000,
   warmWindowMs: 30 * 60 * 1000,
-  fetcher: async ({ accessToken, status }, meta) => {
-    const { items, totalPages } = await fetchAllListings(accessToken, status, meta?.totalPages);
+  fetcher: async ({ accessToken, status, siteId }, meta) => {
+    const { items, totalPages } = await fetchAllListings(accessToken, status, meta?.totalPages, siteId);
     return { value: items, meta: { totalPages } };
   },
 });
@@ -507,8 +573,8 @@ const listingsCache = createSwrCache({
  * memory. `perPage` of 0 means everything on one page.
  */
 async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25, hiddenItemIds = [] }) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  let all = await listingsCache.get(`${connectionId}:${status}`, { accessToken, status });
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  let all = await listingsCache.get(`${connectionId}:${status}`, { accessToken, status, siteId });
   if (hiddenItemIds.length) {
     const hidden = new Set(hiddenItemIds.map(String));
     all = all.filter((item) => !hidden.has(item.itemId));
@@ -547,12 +613,12 @@ function ordersWithin(orders, start, end) {
   });
 }
 
-async function getItemSummaryCached(accessToken, itemId) {
+async function getItemSummaryCached(accessToken, itemId, siteId) {
   const cached = itemSummaryCache.get(itemId);
   if (cached && Date.now() - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) {
     return cached.summary;
   }
-  const summary = await ebayTrading.getItemSummary(accessToken, itemId).catch(() => null);
+  const summary = await ebayTrading.getItemSummary(accessToken, itemId, { siteId }).catch(() => null);
   if (summary) itemSummaryCache.set(itemId, { fetchedAt: Date.now(), summary });
   return summary;
 }
@@ -579,9 +645,9 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
  * orders the page never shows.
  */
 async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25 }) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
-  const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken), start, end);
+  const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId), start, end);
 
   const tagged = rawOrders.map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order) }));
 
@@ -608,7 +674,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   const pageOrders = filtered.slice((page - 1) * perPage, page * perPage);
 
   const uniqueItemIds = [...new Set(pageOrders.flatMap((o) => o.lineItems.map((li) => li.itemId).filter(Boolean)))];
-  const summaries = await Promise.all(uniqueItemIds.map((itemId) => getItemSummaryCached(accessToken, itemId)));
+  const summaries = await Promise.all(uniqueItemIds.map((itemId) => getItemSummaryCached(accessToken, itemId, siteId)));
   const summaryByItemId = new Map(summaries.filter(Boolean).map((s) => [s.itemId, s]));
 
   const enrichedOrders = pageOrders.map((order) => ({
@@ -643,13 +709,13 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
 // `truncated` flag lets the frontend say so instead of implying a true
 // lifetime total.
 async function getEarningsSummary(credentials, { connectionId, range, from, to }) {
-  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
 
   const effectiveRange = range === 'all_time' ? '90d' : range;
   const [start, end] = resolveRangeWindow(effectiveRange, from, to);
   const orders = connectionId
-    ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken), start, end)
-    : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString())).orders;
+    ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId), start, end)
+    : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString(), 1, siteId)).orders;
 
   let amount = 0;
   let currency = null;
@@ -687,6 +753,8 @@ module.exports = {
   listUnsoldListings,
   listOrders,
   getLiveItem,
+  detectMarketplace,
+  createMerchantLocation,
   deleteInventoryObjects,
   reviseLiveListing,
   conditionIdFor,

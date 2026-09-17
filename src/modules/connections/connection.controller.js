@@ -3,6 +3,7 @@ const connectionService = require('./connection.service');
 const ebayOauth = require('../ebay/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
+const marketplaces = require('../ebay/marketplaces');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
@@ -38,10 +39,18 @@ async function listPlatforms(req, res, next) {
 
 async function list(req, res, next) {
   try {
-    const { connections, maxConnections } = await connectionService.listConnections(req.ownerId, {
+    let { connections, maxConnections } = await connectionService.listConnections(req.ownerId, {
       role: req.role,
       userId: req.userId,
     });
+    // An eBay account connected before marketplaces existed has no tag yet;
+    // detect it now so the list is right from the first visit. One GetUser
+    // per untagged account, never repeated once saved.
+    const untagged = connections.filter((c) => c.platform_key === 'ebay' && !c.marketplace);
+    if (untagged.length && req.role === 'owner') {
+      await Promise.all(untagged.map((c) => connectionService.ensureMarketplace(c.id, req.ownerId, ebayService).catch(() => null)));
+      ({ connections } = await connectionService.listConnections(req.ownerId, { role: req.role, userId: req.userId }));
+    }
     res.status(200).json({ connections, maxConnections });
   } catch (err) {
     next(err);
@@ -179,29 +188,81 @@ const updatePricingSchema = z.object({
 
 async function getPolicies(req, res, next) {
   try {
-    const marketplaceId = typeof req.query.marketplaceId === 'string' ? req.query.marketplaceId : 'EBAY_GB';
+    // The marketplace is the account's own, detected from eBay, never a
+    // query default: a US seller's policies only exist on EBAY_US.
+    const ensured = await connectionService.ensureMarketplace(req.params.id, req.ownerId, ebayService);
+    if (ensured.platform_key !== 'ebay') {
+      throw new connectionService.ConnectionError(`Policies aren't available for ${ensured.platform_name} yet`, 400);
+    }
+    const marketplaceId = ensured.settings?.ebay?.marketplaceId || marketplaces.DEFAULT_ID;
 
-    // Folded into one endpoint (rather than a second round-trip) — the
-    // Settings page needs policies + shipping location together to hydrate
-    // all four pickers in a single load.
-    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, async (credentials, connection) => {
-      if (connection.platform_key !== 'ebay') {
-        throw new connectionService.ConnectionError(`Policies aren't available for ${connection.platform_name} yet`, 400);
-      }
-      const [policies, locations] = await Promise.all([
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, async (credentials) => {
+      const [policies, locations, detected] = await Promise.all([
         ebayService.getBusinessPolicies(credentials, marketplaceId),
         ebayService.getMerchantLocations(credentials),
+        // The registration address is what "Create from my eBay address" offers.
+        ebayService.detectMarketplace(credentials).catch(() => null),
       ]);
       const refreshed = locations.credentialsChanged ? locations : policies;
-      return { policies, locations, credentialsChanged: refreshed.credentialsChanged, credentials: refreshed.credentials };
+      return { policies, locations, detected, credentialsChanged: refreshed.credentialsChanged, credentials: refreshed.credentials };
     });
 
     res.status(200).json({
+      marketplace: marketplaces.summary(marketplaceId),
       fulfillmentPolicies: result.policies.fulfillmentPolicies,
       paymentPolicies: result.policies.paymentPolicies,
       returnPolicies: result.policies.returnPolicies,
-      merchantLocations: result.locations.locations,
+      merchantLocations: result.locations.locations.map((l) => ({
+        merchantLocationKey: l.merchantLocationKey,
+        name: l.name || l.merchantLocationKey,
+        status: l.merchantLocationStatus || null,
+        address: l.location?.address || null,
+      })),
+      registrationAddress: result.detected?.profile?.registrationAddress || null,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const createLocationSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  addressLine1: z.string().trim().min(1).max(200),
+  addressLine2: z.string().trim().max(200).optional().default(''),
+  city: z.string().trim().min(1).max(100),
+  stateOrProvince: z.string().trim().max(100).optional().default(''),
+  postalCode: z.string().trim().min(1).max(20),
+  country: z.string().trim().length(2),
+  phone: z.string().trim().max(30).optional().default(''),
+});
+
+// Creates the Inventory API location an offer ships from, from the address
+// the seller confirms in Settings (prefilled with their eBay registration
+// address). Saves it as the connection's shipping location straight away.
+async function createLocation(req, res, next) {
+  try {
+    const parsed = createLocationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+    if (connection.platform_key !== 'ebay') {
+      throw new connectionService.ConnectionError(`Locations aren't available for ${connection.platform_name} yet`, 400);
+    }
+    const base = String(connection.label || 'LISTON')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '')
+      .slice(0, 20) || 'LISTON';
+    const merchantLocationKey = `${base}-${Date.now().toString(36).toUpperCase()}`;
+    const { name, ...address } = parsed.data;
+
+    await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
+      ebayService.createMerchantLocation(credentials, { merchantLocationKey, name, address: { ...address, country: address.country.toUpperCase() } })
+    );
+    const settings = await connectionService.updateConnectionSettings(req.params.id, req.ownerId, {
+      ebay: { ...(connection.settings?.ebay || {}), merchantLocationKey },
+    });
+    res.status(201).json({ merchantLocationKey, settings });
   } catch (err) {
     next(err);
   }
@@ -219,7 +280,9 @@ async function updatePolicies(req, res, next) {
       throw new connectionService.ConnectionError(`Policies aren't available for ${connection.platform_name} yet`, 400);
     }
 
-    const settings = await connectionService.updateConnectionSettings(req.params.id, req.ownerId, { ebay: parsed.data });
+    const settings = await connectionService.updateConnectionSettings(req.params.id, req.ownerId, {
+      ebay: { ...parsed.data, marketplaceId: connection.settings?.ebay?.marketplaceId || parsed.data.marketplaceId },
+    });
     res.status(200).json({ settings });
   } catch (err) {
     next(err);
@@ -334,6 +397,7 @@ module.exports = {
   getOrders,
   getEarnings,
   getPolicies,
+  createLocation,
   updatePolicies,
   updatePricing,
   updateTemplate,

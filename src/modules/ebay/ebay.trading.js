@@ -19,7 +19,9 @@ class EbayTradingError extends Error {
 const TRADING_API_URL = 'https://api.ebay.com/ws/api.dll';
 const COMPATIBILITY_LEVEL = '1193';
 
-async function tradingRequest(accessToken, callName, bodyXml) {
+// `siteId` is the Trading site the seller lives on (0 US, 3 UK ...): revises
+// and store reads fail or come back in the wrong currency on another site.
+async function tradingRequest(accessToken, callName, bodyXml, siteId = 0) {
   const xml =
     `<?xml version="1.0" encoding="utf-8"?>\n` +
     `<${callName}Request xmlns="urn:ebay:apis:eBLBaseComponents">` +
@@ -30,7 +32,7 @@ async function tradingRequest(accessToken, callName, bodyXml) {
   const res = await fetch(TRADING_API_URL, {
     method: 'POST',
     headers: {
-      'X-EBAY-API-SITEID': '0',
+      'X-EBAY-API-SITEID': String(siteId),
       'X-EBAY-API-COMPATIBILITY-LEVEL': COMPATIBILITY_LEVEL,
       'X-EBAY-API-CALL-NAME': callName,
       'X-EBAY-API-IAF-TOKEN': accessToken,
@@ -96,9 +98,9 @@ function paginationOf(container) {
   };
 }
 
-async function getActiveListings(accessToken, { pageNumber = 1, entriesPerPage = 25 } = {}) {
+async function getActiveListings(accessToken, { pageNumber = 1, entriesPerPage = 25, siteId } = {}) {
   const body = `<ActiveList><Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination></ActiveList><DetailLevel>ReturnSummary</DetailLevel>`;
-  const res = await tradingRequest(accessToken, 'GetMyeBaySelling', body);
+  const res = await tradingRequest(accessToken, 'GetMyeBaySelling', body, siteId);
   const list = res.ActiveList;
   return {
     items: toArray(list?.ItemArray?.Item).map(mapListingItem),
@@ -106,9 +108,9 @@ async function getActiveListings(accessToken, { pageNumber = 1, entriesPerPage =
   };
 }
 
-async function getUnsoldListings(accessToken, { pageNumber = 1, entriesPerPage = 25 } = {}) {
+async function getUnsoldListings(accessToken, { pageNumber = 1, entriesPerPage = 25, siteId } = {}) {
   const body = `<UnsoldList><Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination></UnsoldList><DetailLevel>ReturnSummary</DetailLevel>`;
-  const res = await tradingRequest(accessToken, 'GetMyeBaySelling', body);
+  const res = await tradingRequest(accessToken, 'GetMyeBaySelling', body, siteId);
   const list = res.UnsoldList;
   return {
     items: toArray(list?.ItemArray?.Item).map(mapListingItem),
@@ -164,14 +166,14 @@ function mapOrder(order) {
 // Used to enrich an order's line items with an image + live quantity —
 // GetOrders itself carries neither. OutputSelector trims the response to
 // just what we need.
-async function getItemSummary(accessToken, itemId) {
+async function getItemSummary(accessToken, itemId, { siteId } = {}) {
   const body =
     `<ItemID>${itemId}</ItemID>` +
     `<OutputSelector>Item.PictureDetails</OutputSelector>` +
     `<OutputSelector>Item.Quantity</OutputSelector>` +
     `<OutputSelector>Item.QuantityAvailable</OutputSelector>` +
     `<OutputSelector>Item.ListingDetails.ViewItemURL</OutputSelector>`;
-  const res = await tradingRequest(accessToken, 'GetItem', body);
+  const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
   const item = res.Item || {};
   const pictures = toArray(item.PictureDetails?.PictureURL);
   return {
@@ -212,14 +214,14 @@ const GET_ORDERS_FIELDS = [
 
 // createTimeFrom/createTimeTo are ISO 8601 strings; eBay caps this range at
 // 90 days per request.
-async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber = 1, entriesPerPage = 50 } = {}) {
+async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber = 1, entriesPerPage = 50, siteId } = {}) {
   const body =
     `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom>` +
     `<CreateTimeTo>${createTimeTo}</CreateTimeTo>` +
     `<OrderStatus>All</OrderStatus>` +
     `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination>` +
     GET_ORDERS_FIELDS.map((f) => `<OutputSelector>${f}</OutputSelector>`).join('');
-  const res = await tradingRequest(accessToken, 'GetOrders', body);
+  const res = await tradingRequest(accessToken, 'GetOrders', body, siteId);
   return {
     orders: toArray(res.OrderArray?.Order).map(mapOrder),
     ...paginationOf(res),
@@ -231,10 +233,10 @@ async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber
 // This is what fills the description template's branding without the seller
 // typing any of it — and it can't drift from what eBay shows, because it IS
 // what eBay shows.
-async function getStoreProfile(accessToken) {
+async function getStoreProfile(accessToken, { siteId } = {}) {
   const [store, user] = await Promise.all([
-    tradingRequest(accessToken, 'GetStore', '').catch(() => null),
-    tradingRequest(accessToken, 'GetUser', ''),
+    tradingRequest(accessToken, 'GetStore', '', siteId).catch(() => null),
+    tradingRequest(accessToken, 'GetUser', '', siteId),
   ]);
 
   return {
@@ -255,11 +257,12 @@ async function getStoreProfile(accessToken) {
 // (confirmed live), so a description change has to go through Trading's
 // ReviseFixedPriceItem. Also the only way to repair a listing that went up
 // with the plain text.
-async function reviseDescription(accessToken, itemId, descriptionHtml) {
+async function reviseDescription(accessToken, itemId, descriptionHtml, { siteId } = {}) {
   const body = await tradingRequest(
     accessToken,
     'ReviseFixedPriceItem',
-    `<Item><ItemID>${itemId}</ItemID><Description><![CDATA[${descriptionHtml}]]></Description></Item>`
+    `<Item><ItemID>${itemId}</ItemID><Description><![CDATA[${descriptionHtml}]]></Description></Item>`,
+    siteId
   );
   return { itemId: String(body.ItemID || itemId) };
 }
@@ -304,8 +307,8 @@ function specificsFrom(node) {
 
 // Everything the editor needs to load a live listing: text, pictures,
 // price, stock, condition, specifics and (if any) the variation matrix.
-async function getItem(accessToken, itemId) {
-  const res = await tradingRequest(accessToken, 'GetItem', `<ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
+async function getItem(accessToken, itemId, { siteId } = {}) {
+  const res = await tradingRequest(accessToken, 'GetItem', `<ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`, siteId);
   const item = res.Item || {};
   const variationsNode = item.Variations;
   const variations = toArray(variationsNode?.Variation).map((v) => ({
@@ -346,7 +349,7 @@ async function getItem(accessToken, itemId) {
 // sent; eBay leaves the rest as they were. For a variation listing the
 // whole matrix goes up together, because eBay treats <Variations> as a
 // replacement set.
-async function reviseListing(accessToken, itemId, { title, descriptionHtml, price, quantity, conditionId, imageUrls, specifics, variations, variationSpecificsSet, variationPictures }) {
+async function reviseListing(accessToken, itemId, { title, descriptionHtml, price, quantity, conditionId, imageUrls, specifics, variations, variationSpecificsSet, variationPictures }, { siteId } = {}) {
   let body = `<Item><ItemID>${itemId}</ItemID>`;
   if (title !== undefined) body += `<Title>${xmlEscape(title)}</Title>`;
   if (descriptionHtml !== undefined) body += `<Description><![CDATA[${descriptionHtml}]]></Description>`;
@@ -381,12 +384,37 @@ async function reviseListing(accessToken, itemId, { title, descriptionHtml, pric
     if (quantity !== undefined) body += `<Quantity>${Math.max(0, Number(quantity) || 0)}</Quantity>`;
   }
   body += '</Item>';
-  const res = await tradingRequest(accessToken, 'ReviseFixedPriceItem', body);
+  const res = await tradingRequest(accessToken, 'ReviseFixedPriceItem', body, siteId);
   return { itemId: String(res.ItemID || itemId) };
+}
+
+// Which eBay site the seller registered on, and the address eBay holds for
+// them: the two things needed to set a connection up for the right market.
+async function getUserProfile(accessToken) {
+  const res = await tradingRequest(accessToken, 'GetUser', '<DetailLevel>ReturnAll</DetailLevel>');
+  const user = res.User || {};
+  const a = user.RegistrationAddress || {};
+  return {
+    username: user.UserID || null,
+    site: user.Site || null,
+    storeSite: user.SellerInfo?.StoreSite || null,
+    registrationAddress: {
+      name: a.Name ? String(a.Name) : '',
+      company: a.CompanyName ? String(a.CompanyName) : '',
+      addressLine1: a.Street1 ? String(a.Street1) : a.Street ? String(a.Street) : '',
+      addressLine2: a.Street2 ? String(a.Street2) : '',
+      city: a.CityName ? String(a.CityName) : '',
+      stateOrProvince: a.StateOrProvince ? String(a.StateOrProvince) : '',
+      postalCode: a.PostalCode !== undefined ? String(a.PostalCode) : '',
+      country: a.Country ? String(a.Country) : '',
+      phone: a.Phone !== undefined ? String(a.Phone) : '',
+    },
+  };
 }
 
 module.exports = {
   EbayTradingError,
+  getUserProfile,
   CONDITION_IDS,
   getActiveListings,
   getUnsoldListings,

@@ -19,6 +19,8 @@ interface AccountShellProps {
   platformName: string;
   // Kept for callers; the shell no longer displays it (the header does).
   status?: string;
+  // The eBay site the account sells on, shown under the account name.
+  marketplace?: { flag: string; label: string; currency: string; name: string } | null;
   // Undefined for an owner (show every tab). For a team member, comes from
   // the connection's resolved `permissions` (see ConnectionPermissions in
   // lib/api.ts) — only tabs with `true` are shown. The backend enforces the
@@ -37,6 +39,7 @@ export function AccountShell({
   label,
   platformKey,
   platformName,
+  marketplace,
   permissions,
   user,
 }: AccountShellProps) {
@@ -78,7 +81,9 @@ export function AccountShell({
           <PlatformIcon platformKey={platformKey} size={32} />
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-[var(--color-ink)]">{label}</p>
-            <p className="text-[11px] text-[var(--color-muted)]">{platformName}</p>
+            <p className="text-[11px] text-[var(--color-muted)]" title={marketplace ? `${marketplace.name} · ${marketplace.currency}` : undefined}>
+              {marketplace ? `${marketplace.flag} ${marketplace.name} · ${marketplace.currency}` : platformName}
+            </p>
           </div>
         </div>
 

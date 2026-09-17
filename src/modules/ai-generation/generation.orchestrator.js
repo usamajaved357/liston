@@ -6,6 +6,7 @@ const textGenerator = require('./text-generator.service');
 const imagePipeline = require('./image-pipeline');
 const { ScrapingError } = require('../scraping/scraping.errors');
 const pricingService = require('../pricing/pricing.service');
+const marketplaces = require('../ebay/marketplaces');
 const priceParser = require('../pricing/price-parser');
 const { PricingError } = require('../pricing/pricing.service');
 
@@ -201,10 +202,13 @@ function applyOrigin(aspects = {}, countryOfOrigin) {
 // combinations of a phone case, and generating photography for variations
 // that get deleted afterwards is money and minutes thrown away.
 async function readSources({ competitorUrl, sourceUrl, marketplaceId = 'EBAY_GB' }) {
+  // Supplier prices are asked for in the marketplace's own currency and
+  // shipping country, so a US account is costed in USD shipped to the US.
+  const market = marketplaces.byId(marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
   // The AliExpress scrape is by far the slowest step (a real browser, ~30s),
   // so it starts first and everything cheap overlaps with it. Kept as a
   // floating promise deliberately — awaited below.
-  const sourcePromise = aliexpressSource.fetchProduct(sourceUrl);
+  const sourcePromise = aliexpressSource.fetchProduct(sourceUrl, { shipTo: market.country, currency: market.currency });
   // Attached immediately so a scrape that rejects before we await it can't
   // surface as an unhandled rejection and take the process down.
   sourcePromise.catch(() => {});

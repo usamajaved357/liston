@@ -48,8 +48,15 @@ function AccountRow({ connection, onRemove }: { connection: Connection; onRemove
         <PlatformIcon platformKey={connection.platform_key} size={44} />
         <div className="min-w-0">
           <p className="truncate text-[15px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{connection.label}</p>
-          <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
-            {connection.platform_name} · connected {formatShortDate(connection.created_at)}
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-[var(--color-muted)]">
+            {connection.marketplace && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-paper)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-line)]" title={`${connection.marketplace.name} · ${connection.marketplace.currency}`}>
+                <span aria-hidden>{connection.marketplace.flag}</span> {connection.marketplace.label} · {connection.marketplace.currency}
+              </span>
+            )}
+            <span>
+              {connection.platform_name} · connected {formatShortDate(connection.created_at)}
+            </span>
           </p>
         </div>
       </Link>

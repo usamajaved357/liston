@@ -1,5 +1,6 @@
 const connectionRepository = require('./connection.repository');
 const teamRepository = require('../team/team.repository');
+const marketplaces = require('../ebay/marketplaces');
 const { encrypt, decrypt } = require('./credentials.encryption');
 
 class ConnectionError extends Error {
@@ -40,11 +41,19 @@ async function listPlatforms() {
 // connections with zero granted features are dropped entirely (they'd have
 // nothing to show a member anyway). Omitted/owner viewer returns everything
 // unchanged, matching today's owner-only behavior.
+// The marketplace tag every connection carries in the UI. Null until the
+// site has been detected (see ensureMarketplace), so nothing is guessed.
+function withMarketplace(connection) {
+  const id = connection.settings?.ebay?.marketplaceId;
+  return { ...connection, marketplace: id ? marketplaces.summary(id) : null };
+}
+
 async function listConnections(ownerId, viewer) {
-  const [connections, maxConnections] = await Promise.all([
+  const [rawConnections, maxConnections] = await Promise.all([
     connectionRepository.findAllByUser(ownerId),
     connectionRepository.getMaxConnectionsForUser(ownerId),
   ]);
+  const connections = rawConnections.map(withMarketplace);
 
   if (!viewer || viewer.role === 'owner') {
     return { connections, maxConnections };
@@ -107,7 +116,7 @@ async function getConnectionSummary(id, ownerId, viewer) {
   if (!connection) {
     throw new ConnectionError('Connection not found', 404);
   }
-  const { credentials, ...summary } = connection;
+  const { credentials, ...summary } = withMarketplace(connection);
   void credentials;
   if (viewer && viewer.role === 'member') {
     summary.permissions = await teamRepository.getResolvedPermissions(viewer.userId, id);
@@ -120,11 +129,16 @@ async function getConnectionWithDecryptedCredentials(id, userId) {
   if (!connection) {
     throw new ConnectionError('Connection not found', 404);
   }
-  return { ...connection, credentials: decryptCredentials(connection.credentials) };
+  // marketplaceId rides along in memory so every eBay call knows which site
+  // to talk to; it is stripped again before anything is written back.
+  const credentials = { ...decryptCredentials(connection.credentials), marketplaceId: connection.settings?.ebay?.marketplaceId };
+  return { ...connection, credentials };
 }
 
 async function updateConnectionCredentials(id, credentials) {
-  await connectionRepository.updateCredentials(id, encryptCredentials(credentials));
+  const { marketplaceId, ...stored } = credentials;
+  void marketplaceId;
+  await connectionRepository.updateCredentials(id, encryptCredentials(stored));
 }
 
 // Settings are plain, non-secret per-connection config (e.g. eBay's chosen
@@ -139,6 +153,21 @@ async function updateConnectionSettings(id, userId, patch) {
   const merged = { ...connection.settings, ...patch };
   await connectionRepository.updateSettings(id, merged);
   return merged;
+}
+
+// Detects and saves which eBay site a connection sells on, the first time
+// it's needed. Also seeds the pricing currency from the marketplace when the
+// seller hasn't set one. Returns the (possibly updated) connection.
+async function ensureMarketplace(id, userId, ebayService) {
+  const connection = await getConnectionWithDecryptedCredentials(id, userId);
+  if (connection.platform_key !== 'ebay' || connection.settings?.ebay?.marketplaceId) return connection;
+  const detected = await ebayService.detectMarketplace(connection.credentials);
+  if (detected.credentialsChanged) await updateConnectionCredentials(id, detected.credentials);
+  const settings = await updateConnectionSettings(id, userId, {
+    ebay: { ...(connection.settings?.ebay || {}), marketplaceId: detected.marketplaceId },
+    pricing: { ...(connection.settings?.pricing || {}), currency: connection.settings?.pricing?.currency || marketplaces.currencyFor(detected.marketplaceId) },
+  });
+  return { ...connection, settings, credentials: { ...connection.credentials, marketplaceId: detected.marketplaceId } };
 }
 
 // Runs a platform action (e.g. an eBay draft/publish call) with this
@@ -169,6 +198,7 @@ module.exports = {
   getConnectionWithDecryptedCredentials,
   updateConnectionCredentials,
   updateConnectionSettings,
+  ensureMarketplace,
   withDecryptedCredentials,
   deleteConnection,
   ConnectionError,

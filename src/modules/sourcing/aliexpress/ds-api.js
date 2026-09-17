@@ -417,11 +417,11 @@ function deriveVariantAxes(variants) {
   return [...axes.values()];
 }
 
-async function fetchProduct(productId, sourceUrl) {
+async function fetchProduct(productId, sourceUrl, { shipTo, currency } = {}) {
   const raw = await call('aliexpress.ds.product.get', {
     product_id: productId,
-    ship_to_country: config.aliexpress.shipToCountry,
-    target_currency: config.aliexpress.targetCurrency,
+    ship_to_country: shipTo || config.aliexpress.shipToCountry,
+    target_currency: currency || config.aliexpress.targetCurrency,
     target_language: 'en',
   });
   return normalizeProduct(raw, productId, sourceUrl);

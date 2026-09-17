@@ -319,6 +319,7 @@ export default function AccountOverviewPage() {
       label={connection.label}
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
+      marketplace={connection.marketplace}
       permissions={connection.permissions}
       user={user}
       header={

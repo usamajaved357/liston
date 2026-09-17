@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ConnectionPolicies, DescriptionTemplate, MerchantLocation, Policy, PricingSettings } from "@/lib/api";
+import { api, ApiError, ConnectionPolicies, DescriptionTemplate, LocationAddress, Policy, PricingSettings } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
+import { currencySymbol } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 
@@ -246,6 +247,8 @@ export default function AccountSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [locationForm, setLocationForm] = useState<({ name: string } & LocationAddress) | null>(null);
+  const [creatingLocation, setCreatingLocation] = useState(false);
 
   const [pricing, setPricing] = useState<PricingSettings>(DEFAULT_PRICING);
   const [savingPricing, setSavingPricing] = useState(false);
@@ -299,14 +302,14 @@ export default function AccountSettingsPage() {
       setLoading(false);
       return;
     }
-    setPricing({ ...DEFAULT_PRICING, ...(connection.settings?.pricing || {}) });
+    setPricing({ ...DEFAULT_PRICING, ...(connection.marketplace ? { currency: connection.marketplace.currency } : {}), ...(connection.settings?.pricing || {}) });
     setTemplate({ ...DEFAULT_TEMPLATE, storeName: connection.label, ...(connection.settings?.template || {}) });
 
-    const marketplaceId = connection.settings?.ebay?.marketplaceId || "EBAY_GB";
     api
-      .getConnectionPolicies(connection.id, marketplaceId)
+      .getConnectionPolicies(connection.id)
       .then((data) => {
         setPolicies(data);
+        setPricing((p) => (connection.settings?.pricing?.currency ? p : { ...p, currency: data.marketplace.currency }));
         setFulfillmentPolicyId(connection.settings?.ebay?.fulfillmentPolicyId || "");
         setPaymentPolicyId(connection.settings?.ebay?.paymentPolicyId || "");
         setReturnPolicyId(connection.settings?.ebay?.returnPolicyId || "");
@@ -344,6 +347,37 @@ export default function AccountSettingsPage() {
       setError(err instanceof ApiError ? err.message : "Couldn't save your policies. Try again.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function startLocationForm() {
+    const a = policies?.registrationAddress;
+    setLocationForm({
+      name: `${connection?.label || "Main"} warehouse`,
+      addressLine1: a?.addressLine1 || "",
+      addressLine2: a?.addressLine2 || "",
+      city: a?.city || "",
+      stateOrProvince: a?.stateOrProvince || "",
+      postalCode: a?.postalCode || "",
+      country: a?.country || policies?.marketplace.country || "",
+      phone: a?.phone || "",
+    });
+  }
+
+  async function handleCreateLocation() {
+    if (!connection || !locationForm) return;
+    setCreatingLocation(true);
+    setError(null);
+    try {
+      const { merchantLocationKey } = await api.createConnectionLocation(connection.id, locationForm);
+      setMerchantLocationKey(merchantLocationKey);
+      setLocationForm(null);
+      const data = await api.getConnectionPolicies(connection.id);
+      setPolicies(data);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't create the location on eBay. Check the address and try again.");
+    } finally {
+      setCreatingLocation(false);
     }
   }
 
@@ -402,6 +436,7 @@ export default function AccountSettingsPage() {
   ];
   const setT = (patch: Partial<DescriptionTemplate>) => setTemplate((t) => ({ ...t, ...patch }));
   const setP = (patch: Partial<PricingSettings>) => setPricing((p) => ({ ...p, ...patch }));
+  const sym = currencySymbol(pricing.currency);
   const activePalette = (p: { accentColor: string; darkColor: string }) =>
     p.accentColor.toLowerCase() === template.accentColor.toLowerCase() && p.darkColor.toLowerCase() === template.darkColor.toLowerCase();
 
@@ -411,6 +446,7 @@ export default function AccountSettingsPage() {
       label={connection.label}
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
+      marketplace={connection.marketplace}
       permissions={connection.permissions}
       user={user}
       header={
@@ -447,7 +483,17 @@ export default function AccountSettingsPage() {
               <Skeleton />
             ) : (
               <div className="card overflow-hidden">
-                <SectionHead title="Listing policies" blurb="Attached to every listing Liston publishes. eBay won't accept a listing without all four." />
+                <SectionHead
+                  title="Listing policies"
+                  blurb="Attached to every listing Liston publishes. eBay won't accept a listing without all four."
+                  action={
+                    policies?.marketplace ? (
+                      <span className="chip flex-shrink-0 font-medium" title="Detected from the eBay account">
+                        {policies.marketplace.flag} {policies.marketplace.name} · {policies.marketplace.currency}
+                      </span>
+                    ) : undefined
+                  }
+                />
                 {!policiesReady && (
                   <div className="notice notice-warning mx-6 mt-4">
                     <span className="flex-1">Pick all four before publishing anything from this account.</span>
@@ -455,6 +501,9 @@ export default function AccountSettingsPage() {
                 )}
                 <Row title="Fulfillment policy" hint="Postage services, handling time and where you ship to.">
                   <Select value={fulfillmentPolicyId} onChange={setFulfillmentPolicyId} options={(policies?.fulfillmentPolicies || []).map((p) => ({ id: policyId(p), label: p.name }))} />
+                  {(policies?.fulfillmentPolicies || []).length === 0 && (
+                    <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">No postage policies on {policies?.marketplace.name}. Create one in Seller Hub, then reload.</p>
+                  )}
                 </Row>
                 <Row title="Payment policy" hint="How buyers pay you.">
                   <Select value={paymentPolicyId} onChange={setPaymentPolicyId} options={(policies?.paymentPolicies || []).map((p) => ({ id: policyId(p), label: p.name }))} />
@@ -462,14 +511,50 @@ export default function AccountSettingsPage() {
                 <Row title="Return policy" hint="Whether and how buyers can return.">
                   <Select value={returnPolicyId} onChange={setReturnPolicyId} options={(policies?.returnPolicies || []).map((p) => ({ id: policyId(p), label: p.name }))} />
                 </Row>
-                <Row title="Shipping location" hint="The eBay inventory location stock ships from." last>
-                  <Select
-                    value={merchantLocationKey}
-                    onChange={setMerchantLocationKey}
-                    options={(policies?.merchantLocations || []).map((l: MerchantLocation) => ({ id: l.merchantLocationKey, label: l.name || l.merchantLocationKey }))}
-                  />
-                  {(policies?.merchantLocations || []).length === 0 && (
-                    <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">No inventory location on eBay yet. Add one in Seller Hub, then reload.</p>
+                <Row title="Shipping location" hint="The address stock ships from. eBay keeps these separately from your Seller Hub addresses, so one is created here if you have none." last>
+                  {(policies?.merchantLocations || []).length > 0 && (
+                    <Select
+                      value={merchantLocationKey}
+                      onChange={setMerchantLocationKey}
+                      options={(policies?.merchantLocations || []).map((l) => ({
+                        id: l.merchantLocationKey,
+                        label: `${l.name || l.merchantLocationKey}${l.address ? ` · ${[l.address.addressLine1, l.address.city, l.address.postalCode, l.address.country].filter(Boolean).join(", ")}` : ""}`,
+                      }))}
+                    />
+                  )}
+                  {locationForm ? (
+                    <div className="mt-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)] p-4">
+                      <p className="text-[12.5px] text-[var(--color-muted)]">
+                        {policies?.registrationAddress ? "Prefilled from your eBay registration address. Check it, then create." : "Enter the address your orders ship from."}
+                      </p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <input className="input input-sm sm:col-span-2" placeholder="Location name" value={locationForm.name} onChange={(e) => setLocationForm({ ...locationForm, name: e.target.value })} />
+                        <input className="input input-sm sm:col-span-2" placeholder="Address line 1" value={locationForm.addressLine1} onChange={(e) => setLocationForm({ ...locationForm, addressLine1: e.target.value })} />
+                        <input className="input input-sm sm:col-span-2" placeholder="Address line 2 (optional)" value={locationForm.addressLine2} onChange={(e) => setLocationForm({ ...locationForm, addressLine2: e.target.value })} />
+                        <input className="input input-sm" placeholder="City" value={locationForm.city} onChange={(e) => setLocationForm({ ...locationForm, city: e.target.value })} />
+                        <input className="input input-sm" placeholder="State / county (optional)" value={locationForm.stateOrProvince} onChange={(e) => setLocationForm({ ...locationForm, stateOrProvince: e.target.value })} />
+                        <input className="input input-sm" placeholder="Postcode" value={locationForm.postalCode} onChange={(e) => setLocationForm({ ...locationForm, postalCode: e.target.value })} />
+                        <input className="input input-sm" placeholder="Country code (GB, US)" maxLength={2} value={locationForm.country} onChange={(e) => setLocationForm({ ...locationForm, country: e.target.value.toUpperCase() })} />
+                        <input className="input input-sm sm:col-span-2" placeholder="Phone (optional)" value={locationForm.phone} onChange={(e) => setLocationForm({ ...locationForm, phone: e.target.value })} />
+                      </div>
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleCreateLocation}
+                          disabled={creatingLocation || !locationForm.name || !locationForm.addressLine1 || !locationForm.city || !locationForm.postalCode || (locationForm.country || "").length !== 2}
+                          className="btn btn-primary btn-sm"
+                        >
+                          {creatingLocation ? "Creating…" : "Create on eBay"}
+                        </button>
+                        <button type="button" onClick={() => setLocationForm(null)} className="btn btn-ghost btn-sm">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button type="button" onClick={startLocationForm} className="btn btn-secondary btn-sm mt-2">
+                      {(policies?.merchantLocations || []).length ? "Add another location" : "Create from my eBay address"}
+                    </button>
                   )}
                 </Row>
                 <SaveBar saving={saving} saved={saved} error={error} onSave={handleSave} disabled={!canSavePolicies} label="Save policies" />
@@ -479,7 +564,7 @@ export default function AccountSettingsPage() {
           {tab === "pricing" && (
             <div className="card overflow-hidden">
               <SectionHead title="Pricing" blurb="Every draft is priced from the supplier's cost and these numbers. Each variation is priced from its own cost." />
-              <Row title="Target ROI" hint="Profit as a share of what you paid. 60% means £2 spent returns £1.20 profit.">
+              <Row title="Target ROI" hint={`Profit as a share of what you paid. 60% means ${sym}2 spent returns ${sym}1.20 profit.`}>
                 <Unit value={pricing.targetRoiPercent} unit="%" onChange={(v) => setP({ targetRoiPercent: v })} />
               </Row>
               <Row title="eBay fees" hint="Promoted Listings rate, final value fee, and the flat per-order charge.">
@@ -511,12 +596,12 @@ export default function AccountSettingsPage() {
                     const preview = previewPrice(cost, pricing);
                     return (
                       <div key={cost} className="rounded-xl bg-[var(--color-paper)] px-4 py-3">
-                        <p className="text-[12px] text-[var(--color-muted)]">Costs £{cost.toFixed(2)}</p>
+                        <p className="text-[12px] text-[var(--color-muted)]">Costs {sym}{cost.toFixed(2)}</p>
                         {preview ? (
                           <>
-                            <p className="mt-0.5 text-[20px] font-semibold tracking-tight text-[var(--color-ink)]">£{preview.sell.toFixed(2)}</p>
+                            <p className="mt-0.5 text-[20px] font-semibold tracking-tight text-[var(--color-ink)]">{sym}{preview.sell.toFixed(2)}</p>
                             <p className="text-[12px] text-[var(--color-muted)]">
-                              £{preview.profit.toFixed(2)} profit · {preview.roi.toFixed(0)}% ROI
+                              {sym}{preview.profit.toFixed(2)} profit · {preview.roi.toFixed(0)}% ROI
                             </p>
                           </>
                         ) : (

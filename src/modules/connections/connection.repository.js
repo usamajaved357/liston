@@ -33,7 +33,7 @@ async function findAllPlatforms() {
 
 async function findAllByUser(userId) {
   const result = await query(
-    `SELECT c.id, c.label, c.status, c.created_at, c.updated_at, p.key AS platform_key, p.name AS platform_name
+    `SELECT c.id, c.label, c.status, c.created_at, c.updated_at, c.settings, p.key AS platform_key, p.name AS platform_name
      FROM connections c
      JOIN platforms p ON p.id = c.destination_platform_id
      WHERE c.user_id = $1

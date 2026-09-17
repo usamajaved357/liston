@@ -1,40 +1,60 @@
 #!/usr/bin/env node
 // One-off: copy ONE account (user, team members, connections with their
-// settings, listings, permissions) from the local database to production,
-// re-encrypting platform credentials with the production key.
+// settings, listings, permissions) between two databases, re-encrypting
+// platform credentials with the target's key. Works in both directions:
 //
-//   TARGET_DATABASE_URL=postgresql://... TARGET_CREDENTIALS_ENCRYPTION_KEY=... \
-//     node scripts/copy-account-to-prod.js xcoderpc@gmail.com
+//   # local -> production
+//   node scripts/copy-account.js xcoderpc@gmail.com --to-prod
+//   # production -> local (to reproduce an account's data locally)
+//   node scripts/copy-account.js talhaubaid001@gmail.com --from-prod
 //
+// Production is read from PROD_DATABASE_URL and PROD_CREDENTIALS_ENCRYPTION_KEY
+// in .env; local from DATABASE_URL and CREDENTIALS_ENCRYPTION_KEY.
 // Plans and platforms are matched by name/key (their IDs differ per DB).
 // Idempotent: rows are upserted by primary key.
 require('dotenv').config();
 const crypto = require('crypto');
 const { Pool } = require('pg');
-const localEncryption = require('../src/modules/connections/credentials.encryption');
 
 const email = process.argv[2];
-const targetUrl = process.env.TARGET_DATABASE_URL;
-const targetKey = process.env.TARGET_CREDENTIALS_ENCRYPTION_KEY;
-if (!email || !targetUrl || !targetKey) {
-  console.error('usage: TARGET_DATABASE_URL=… TARGET_CREDENTIALS_ENCRYPTION_KEY=… node scripts/copy-account-to-prod.js <email>');
+const direction = process.argv[3];
+if (!email || !['--to-prod', '--from-prod'].includes(direction)) {
+  console.error('usage: node scripts/copy-account.js <email> --to-prod | --from-prod');
   process.exit(1);
 }
-const key = Buffer.from(targetKey, 'base64');
-if (key.length !== 32) {
-  console.error('TARGET_CREDENTIALS_ENCRYPTION_KEY must decode to 32 bytes');
+const prod = { url: process.env.PROD_DATABASE_URL, key: process.env.PROD_CREDENTIALS_ENCRYPTION_KEY };
+const localCfg = { url: process.env.DATABASE_URL, key: process.env.CREDENTIALS_ENCRYPTION_KEY };
+if (!prod.url || !prod.key) {
+  console.error('Set PROD_DATABASE_URL and PROD_CREDENTIALS_ENCRYPTION_KEY in .env');
   process.exit(1);
 }
-// Same envelope as credentials.encryption.js, with the target key.
-function encryptForTarget(value) {
+const [source, dest] = direction === '--to-prod' ? [localCfg, prod] : [prod, localCfg];
+
+function keyOf(base64) {
+  const key = Buffer.from(base64, 'base64');
+  if (key.length !== 32) throw new Error('An encryption key must decode to 32 bytes');
+  return key;
+}
+const sourceKey = keyOf(source.key);
+const destKey = keyOf(dest.key);
+
+// Same envelope as credentials.encryption.js.
+function decryptWith(key, payload) {
+  const raw = Buffer.from(payload, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12));
+  decipher.setAuthTag(raw.subarray(12, 28));
+  return JSON.parse(Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8'));
+}
+function encryptWith(key, value) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(value), 'utf8')), cipher.final()]);
   return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64');
 }
 
-const local = new Pool({ connectionString: process.env.DATABASE_URL });
-const target = new Pool({ connectionString: targetUrl, ssl: targetUrl.includes('rlwy.net') ? { rejectUnauthorized: false } : undefined });
+const sslFor = (url) => (url.includes('rlwy.net') || url.includes('railway.app') ? { rejectUnauthorized: false } : undefined);
+const local = new Pool({ connectionString: source.url, ssl: sslFor(source.url) });
+const target = new Pool({ connectionString: dest.url, ssl: sslFor(dest.url) });
 
 async function upsert(db, table, row, conflictKey = 'id') {
   const cols = Object.keys(row);
@@ -49,7 +69,7 @@ async function upsert(db, table, row, conflictKey = 'id') {
 
 (async () => {
   const { rows: users } = await local.query('SELECT * FROM users WHERE email = $1', [email]);
-  if (!users.length) throw new Error(`No local user ${email}`);
+  if (!users.length) throw new Error(`No user ${email} in the source database`);
   const owner = users[0];
 
   // plan by name
@@ -68,11 +88,11 @@ async function upsert(db, table, row, conflictKey = 'id') {
     const { rows: platformKey } = await local.query('SELECT key FROM platforms WHERE id = $1', [c.destination_platform_id]);
     const { rows: targetPlatform } = await target.query('SELECT id FROM platforms WHERE key = $1', [platformKey[0].key]);
     // credentials is JSONB: { enc: <base64 envelope> }
-    const plain = localEncryption.decrypt(c.credentials.enc);
+    const plain = decryptWith(sourceKey, c.credentials.enc);
     await upsert(target, 'connections', {
       ...c,
       destination_platform_id: targetPlatform[0].id,
-      credentials: { enc: encryptForTarget(plain) },
+      credentials: { enc: encryptWith(destKey, plain) },
     });
     console.log('connection', c.label);
 
@@ -85,7 +105,8 @@ async function upsert(db, table, row, conflictKey = 'id') {
   for (const p of perms) await upsert(target, 'member_permissions', p);
   console.log('permissions', perms.length);
 
-  const token = (await local.query("SELECT value FROM app_state WHERE key = 'aliexpress.token'")).rows[0];
+  // The AliExpress token only travels up to production, never down.
+  const token = direction === '--to-prod' ? (await local.query("SELECT value FROM app_state WHERE key = 'aliexpress.token'")).rows[0] : null;
   if (token) {
     await upsert(target, 'app_state', { key: 'aliexpress.token', value: token.value, updated_at: new Date() }, 'key');
     console.log('aliexpress token copied');

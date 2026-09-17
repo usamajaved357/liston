@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const ebayOauth = require('./ebay.oauth');
 const connectionService = require('../connections/connection.service');
+const ebayService = require('./ebay.service');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
@@ -27,11 +28,14 @@ async function oauthCallback(req, res) {
 
   try {
     const tokens = await ebayOauth.exchangeCodeForToken(String(code));
-    await connectionService.createConnection(statePayload.userId, {
+    const created = await connectionService.createConnection(statePayload.userId, {
       platformKey: 'ebay',
       label: statePayload.label,
       credentials: tokens,
     });
+    // Tag the account with its eBay site straight away; a failure here just
+    // means the tag is picked up on the next Connections visit.
+    await connectionService.ensureMarketplace(created.id, statePayload.userId, ebayService).catch(() => null);
     return res.redirect(`${config.frontendUrl}/dashboard?connected=ebay`);
   } catch (err) {
     logger.error('eBay OAuth callback failed', { message: err.message });

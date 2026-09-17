@@ -335,6 +335,7 @@ function AccountOrdersContent() {
       label={connection.label}
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
+      marketplace={connection.marketplace}
       status={connection.status}
       permissions={connection.permissions}
       user={user}
