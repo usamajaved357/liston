@@ -36,6 +36,15 @@ async function findMemberForOwner(id, ownerId) {
   return result.rows[0] || null;
 }
 
+async function setMemberPassword(id, ownerId, passwordHash) {
+  const result = await query(
+    `UPDATE users SET password_hash = $3, updated_at = now()
+     WHERE id = $1 AND parent_user_id = $2 AND role = 'member'`,
+    [id, ownerId, passwordHash]
+  );
+  return result.rowCount > 0;
+}
+
 async function deleteMember(id, ownerId) {
   const result = await query(
     `DELETE FROM users WHERE id = $1 AND parent_user_id = $2 AND role = 'member'`,
@@ -136,6 +145,7 @@ module.exports = {
   createMember,
   findMemberForOwner,
   deleteMember,
+  setMemberPassword,
   getPermissions,
   setPermission,
   clearPermission,

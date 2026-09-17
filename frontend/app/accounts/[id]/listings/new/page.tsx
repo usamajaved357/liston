@@ -319,7 +319,7 @@ export default function DraftListingPage() {
 
                 {preview.source.axes.length === 0 ? (
                   <p className="mt-4 text-sm text-[var(--color-muted)]">
-                    This product has no variations — it will be drafted as a single listing.
+                    This product has no variations, so it will be drafted as a single listing.
                   </p>
                 ) : (
                   <div className="mt-5 space-y-6">

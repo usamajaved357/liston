@@ -74,7 +74,7 @@ function validateAspects(aspects, schema) {
     // A single-value aspect given several values is rejected outright, so
     // keep the first rather than losing the aspect entirely.
     if (!entry.multiValue && finalValues.length > 1) {
-      warnings.push(`"${entry.name}" only accepts one value on eBay — kept "${finalValues[0]}".`);
+      warnings.push(`"${entry.name}" only accepts one value on eBay. Kept "${finalValues[0]}".`);
       finalValues = [finalValues[0]];
     }
 

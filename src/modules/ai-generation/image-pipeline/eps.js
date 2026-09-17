@@ -130,7 +130,7 @@ async function uploadAll(accessToken, prepared, { marketplaceId } = {}) {
       try {
         return await upload(accessToken, image.buffer, { marketplaceId });
       } catch (err) {
-        logger.warn('EPS upload failed — falling back to the source image URL', {
+        logger.warn('EPS upload failed. Falling back to the source image URL', {
           sourceUrl: image.sourceUrl,
           error: err.message,
         });

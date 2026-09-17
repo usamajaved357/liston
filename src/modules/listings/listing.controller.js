@@ -64,6 +64,31 @@ async function listDrafts(req, res, next) {
   }
 }
 
+// Opens a live eBay listing in the editor. Returns the working copy's id.
+async function startLiveEdit(req, res, next) {
+  try {
+    if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
+      return res.status(400).json({ error: 'That does not look like an eBay item number.' });
+    }
+    const listing = await listingService.startLiveEdit(req.params.id, req.ownerId, String(req.params.itemId));
+    res.status(200).json({ listing });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function removeInactive(req, res, next) {
+  try {
+    if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
+      return res.status(400).json({ error: 'That does not look like an eBay item number.' });
+    }
+    await listingService.removeInactiveListing(req.params.id, req.ownerId, String(req.params.itemId));
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getOne(req, res, next) {
   try {
     const { listing, policies } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
@@ -235,4 +260,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };

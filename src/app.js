@@ -5,6 +5,7 @@ const cors = require('cors');
 const logger = require('./utils/logger');
 const config = require('./config');
 const errorHandler = require('./middleware/errorHandler.middleware');
+const { requireAuth, requireAccess } = require('./middleware/auth.middleware');
 
 const authRoutes = require('./modules/auth/auth.routes');
 const userRoutes = require('./modules/users/user.routes');
@@ -12,6 +13,7 @@ const connectionRoutes = require('./modules/connections/connection.routes');
 const ebayRoutes = require('./modules/ebay/ebay.routes');
 const listingRoutes = require('./modules/listings/listing.routes');
 const teamRoutes = require('./modules/team/team.routes');
+const overviewRoutes = require('./modules/overview/overview.routes');
 
 function createApp() {
   const app = express();
@@ -20,9 +22,15 @@ function createApp() {
   // Open in development; in production only the deployed frontend may call
   // the API with a browser (server-to-server callers like eBay's
   // notifications don't send an Origin and are unaffected).
+  // FRONTEND_URL plus any extra CORS_ORIGINS (comma-separated, e.g. a custom
+  // domain), trailing slashes ignored — a stray "/" silently blocked every
+  // browser call once.
+  const allowedOrigins = [config.frontendUrl, ...(process.env.CORS_ORIGINS || '').split(',')]
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
   app.use(
     cors({
-      origin: config.env === 'production' ? [config.frontendUrl] : true,
+      origin: config.env === 'production' ? allowedOrigins : true,
       exposedHeaders: ['Content-Disposition'],
     })
   );
@@ -45,10 +53,15 @@ function createApp() {
 
   app.use('/api/auth', authRoutes);
   app.use('/api/users', userRoutes);
-  app.use('/api/connections', connectionRoutes);
+  // Everything below the approval gate needs an approved owner (members
+  // inherit their owner's status). /api/auth and /api/users stay open so a
+  // pending user can log in, see the review screen, and manage their login.
+  // eBay's own callbacks (/api/ebay/*) carry no user session and stay open.
+  app.use('/api/connections', requireAuth, requireAccess, connectionRoutes);
   app.use('/api/ebay', ebayRoutes);
-  app.use('/api/listings', listingRoutes);
-  app.use('/api/team', teamRoutes);
+  app.use('/api/listings', requireAuth, requireAccess, listingRoutes);
+  app.use('/api/team', requireAuth, requireAccess, teamRoutes);
+  app.use('/api/overview', overviewRoutes);
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

@@ -43,6 +43,20 @@ async function addMember(req, res, next) {
   }
 }
 
+const setPasswordSchema = z.object({ password: z.string().min(8, 'Password must be at least 8 characters') });
+async function setMemberPassword(req, res, next) {
+  try {
+    const parsed = setPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+    await teamService.setMemberPassword(req.params.id, req.ownerId, parsed.data.password);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function removeMember(req, res, next) {
   try {
     await teamService.removeMember(req.params.id, req.ownerId);
@@ -74,4 +88,4 @@ async function updateMemberPermissions(req, res, next) {
   }
 }
 
-module.exports = { listMembers, addMember, removeMember, getMemberPermissions, updateMemberPermissions };
+module.exports = { listMembers, addMember, removeMember, setMemberPassword, getMemberPermissions, updateMemberPermissions };

@@ -26,10 +26,51 @@ async function request<T>(
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      try {
+        localStorage.removeItem("liston:me");
+      } catch {}
+    }
+    // The approval gate: any 403 carrying accessStatus means this account
+    // isn't approved yet — send them to the review screen from anywhere.
+    if (res.status === 403 && data.accessStatus && typeof window !== "undefined" && !window.location.pathname.startsWith("/pending")) {
+      window.location.assign("/pending");
+    }
     throw new ApiError(data.error || "Something went wrong", res.status);
   }
 
   return data as T;
+}
+
+export interface Overview {
+  range: string;
+  accounts: { total: number; active: number; needsAttention: number };
+  activeListings: number;
+  earnings: { amount: number; currency: string };
+  orders: number;
+  drafts: number;
+  publishedViaListon: number;
+  perAccount: {
+    id: string;
+    label: string;
+    status: string;
+    ok: boolean;
+    error?: string;
+    activeListings: number;
+    earnings: { amount: number; currency: string } | null;
+    orders: number;
+  }[];
+}
+
+export interface AccessRequest {
+  id: string;
+  email: string;
+  name: string | null;
+  access_note: string | null;
+  created_at: string;
+  email_verified_at: string | null;
+  access_status?: "pending" | "active" | "rejected";
+  access_reviewed_at?: string | null;
 }
 
 export interface User {
@@ -45,6 +86,8 @@ export interface User {
   listings_used_this_month?: number;
   email_verified_at?: string | null;
   avatar_url?: string | null;
+  access_status?: "pending" | "active" | "rejected";
+  is_admin?: boolean;
   created_at: string;
 }
 
@@ -399,6 +442,8 @@ export interface DraftListing {
   error_message: string | null;
   created_at: string;
   updated_at: string;
+  // Set when this row is a live listing opened for editing (never a draft).
+  edit_of_item_id?: string | null;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
@@ -407,10 +452,18 @@ export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch"
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
 
 export const api = {
-  signup: (email: string, password: string) =>
+  signup: (email: string, password: string, extra: { name?: string; accessNote?: string } = {}) =>
     request<AuthResponse>("/api/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, ...extra }),
+    }),
+
+  listAccessRequests: () =>
+    request<{ requests: AccessRequest[]; reviewed: AccessRequest[] }>("/api/auth/access/requests"),
+  decideAccessRequest: (userId: string, status: "active" | "rejected") =>
+    request<{ user: { id: string; email: string; access_status: string; deleted?: boolean } }>(`/api/auth/access/requests/${userId}`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
     }),
 
   login: (email: string, password: string) =>
@@ -420,6 +473,7 @@ export const api = {
     }),
 
   me: () => request<{ user: User }>("/api/users/me"),
+  overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}`),
 
   verifyEmail: (token: string) =>
     request<{ user: User }>("/api/auth/verify-email", {
@@ -481,10 +535,13 @@ export const api = {
 
   deleteAvatar: () => request<{ message: string }>("/api/users/me/avatar", { method: "DELETE" }),
 
-  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1) =>
-    request<{ items: Listing[]; totalEntries: number; totalPages: number }>(
-      `/api/connections/${id}/listings?status=${status}&page=${page}`
-    ),
+  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "") => {
+    const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage) });
+    if (search) params.set("q", search);
+    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number }>(
+      `/api/connections/${id}/listings?${params.toString()}`
+    );
+  },
 
   getConnectionOrders: (
     id: string,
@@ -543,6 +600,12 @@ export const api = {
       feedbackScore: number | null;
       feedbackPercent: string | null;
     }>(`/api/connections/${id}/store-profile`),
+  // Colour pairs suggested from the store logo (saved URL, or eBay's when blank).
+  getTemplatePalette: (id: string, logoUrl?: string) =>
+    request<{ logoUrl: string; colors: string[]; palettes: { name: string; accentColor: string; darkColor: string }[] }>(
+      `/api/connections/${id}/template/palette${logoUrl ? `?url=${encodeURIComponent(logoUrl)}` : ""}`
+    ),
+
   updateConnectionTemplate: (id: string, template: DescriptionTemplate) =>
     request<{ settings: { template: DescriptionTemplate } }>(`/api/connections/${id}/template`, {
       method: "PUT",
@@ -560,6 +623,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+
+  // Permanently removes an ended listing (eBay inventory objects Liston
+  // created, Liston's records, and hides it from the Inactive tab).
+  removeInactiveListing: (connectionId: string, itemId: string) =>
+    request<void>(`/api/connections/${connectionId}/listings/${itemId}`, { method: "DELETE" }),
+
+  // Opens a live eBay listing in the editor; returns the transient working copy.
+  startLiveEdit: (connectionId: string, itemId: string) =>
+    request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit`, { method: "POST" }),
 
   listDraftListings: (connectionId: string) =>
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
@@ -637,6 +709,8 @@ export const api = {
     }),
 
   removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
+  setTeamMemberPassword: (id: string, password: string) =>
+    request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
   updateMemberPermissions: (memberId: string, permissions: PermissionUpdate[]) =>
     request<{ permissions: TeamMemberPermission[] }>(`/api/team/members/${memberId}/permissions`, {

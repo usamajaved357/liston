@@ -3,65 +3,28 @@
 import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, User } from "@/lib/api";
-import { Field } from "@/components/Field";
 import { PasswordField } from "@/components/PasswordField";
 import { PasswordInput } from "@/components/PasswordInput";
-import { Alert } from "@/components/Alert";
 import { AppShell } from "@/components/AppShell";
+import { PageSkeleton } from "@/components/PageSkeleton";
+import { cacheUser, useCachedUser } from "@/lib/session";
 import { AccountMenu } from "@/components/AccountMenu";
 import { AvatarUploader } from "@/components/AvatarUploader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { formatDate } from "@/lib/format";
 
-function ChangeEmailForm({ currentEmail }: { currentEmail: string }) {
-  const [email, setEmail] = useState("");
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    if (email.trim().toLowerCase() === currentEmail.trim().toLowerCase()) {
-      setError("New email must be different from your current email.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const { message } = await api.updateEmail(email, currentPassword);
-      setSuccess(message);
-      setEmail("");
-      setCurrentPassword("");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't update your email. Try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
+// Two-column settings rows: what the setting is on the left, the control on
+// the right. Email isn't editable here — it's the login identity and the
+// address access approval was granted to.
+function SettingRow({ title, description, children, last }: { title: string; description: string; children: React.ReactNode; last?: boolean }) {
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <p className="text-sm text-[var(--color-muted)]">
-        Current email: <span className="text-[var(--color-ink)] font-medium">{currentEmail}</span>
-      </p>
-      <Field label="New email" type="email" value={email} onChange={setEmail} autoComplete="email" />
+    <div className={`grid gap-4 px-6 py-6 md:grid-cols-[260px_minmax(0,1fr)] ${last ? "" : "border-b border-[var(--color-line)]"}`}>
       <div>
-        <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">Current password</span>
-        <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
+        <h2 className="text-sm font-semibold text-[var(--color-ink)]">{title}</h2>
+        <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">{description}</p>
       </div>
-      {error && <Alert>{error}</Alert>}
-      {success && <Alert variant="success">{success}</Alert>}
-      <button
-        type="submit"
-        disabled={loading}
-        className="rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
-      >
-        {loading ? "Updating…" : "Update email"}
-      </button>
-    </form>
+      <div className="min-w-0 max-w-md">{children}</div>
+    </div>
   );
 }
 
@@ -106,41 +69,37 @@ function ChangePasswordForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-3.5">
       <div>
-        <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">Current password</span>
+        <span className="mb-1 block text-[13px] font-medium text-[var(--color-ink)]">Current password</span>
         <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
       </div>
-      <PasswordField
-        label="New password"
-        value={newPassword}
-        onChange={setNewPassword}
-        autoComplete="new-password"
-        showCriteria
-      />
-      <PasswordField
-        label="Confirm new password"
-        value={confirmPassword}
-        onChange={setConfirmPassword}
-        autoComplete="new-password"
-      />
-      {error && <Alert>{error}</Alert>}
-      {success && <Alert variant="success">{success}</Alert>}
-      <button
-        type="submit"
-        disabled={loading}
-        className="rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
-      >
-        {loading ? "Updating…" : "Update password"}
-      </button>
+      <PasswordField label="New password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" showCriteria />
+      <PasswordField label="Confirm new password" value={confirmPassword} onChange={setConfirmPassword} autoComplete="new-password" />
+      {error && (
+        <div className="notice notice-danger">
+          <span className="flex-1">{error}</span>
+        </div>
+      )}
+      {success && (
+        <div className="notice notice-success">
+          <span className="flex-1">{success}</span>
+        </div>
+      )}
+      <div className="pt-1">
+        <button type="submit" disabled={loading || !currentPassword || !newPassword || !confirmPassword} className="btn btn-primary btn-sm">
+          {loading ? "Updating…" : "Update password"}
+        </button>
+      </div>
     </form>
   );
 }
 
 export default function AccountPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cachedUser = useCachedUser();
+  const [liveUser, setUser] = useState<User | null>(null);
+  const user = liveUser ?? cachedUser;
   const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -153,12 +112,14 @@ export default function AccountPage() {
     }
     api
       .me()
-      .then(({ user }) => setUser(user))
+      .then(({ user }) => {
+        setUser(user);
+        cacheUser(user);
+      })
       .catch(() => {
         localStorage.removeItem("token");
         router.replace("/login");
       })
-      .finally(() => setLoading(false));
   }, [router]);
 
   function handleLogout() {
@@ -179,21 +140,18 @@ export default function AccountPage() {
     }
   }
 
-  if (loading) {
+  if (!user) {
     return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
+      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+        <PageSkeleton />
       </main>
     );
-  }
-
-  if (!user) {
-    return null;
   }
 
   const connectionsUsed = Number(user.connections_used ?? 0);
   const maxConnections = user.max_connections ?? 0;
   const planName = user.plan_name ?? "Unassigned";
+  const isOwner = user.role !== "member";
 
   return (
     <AppShell
@@ -201,9 +159,13 @@ export default function AccountPage() {
       maxConnections={maxConnections}
       planName={planName}
       role={user.role}
+      isAdmin={user.is_admin}
       header={
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Account settings</h1>
+          <div>
+            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Account</h1>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Your login and how you appear in Liston.</p>
+          </div>
           <AccountMenu
             email={user.email}
             subtitle={`${planName} plan`}
@@ -215,37 +177,62 @@ export default function AccountPage() {
       }
     >
       {actionError && (
-        <div className="mb-4 max-w-xl">
-          <Alert>{actionError}</Alert>
+        <div className="notice notice-danger mb-4 max-w-3xl">
+          <span className="flex-1">{actionError}</span>
         </div>
       )}
 
-      <div className="max-w-xl space-y-5">
-        <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-          <h2 className="text-base font-bold text-[var(--color-ink)] mb-1">Profile photo</h2>
-          <p className="text-sm text-[var(--color-muted)] mb-5">
-            Shown in the sidebar and account menu across Liston.
-          </p>
-          <AvatarUploader
-            avatarUrl={user.avatar_url}
-            onChange={(avatarUrl) => setUser((u) => (u ? { ...u, avatar_url: avatarUrl } : u))}
-          />
+      <div className="max-w-3xl space-y-6">
+        <div className="card">
+          <SettingRow title="Profile" description="Your photo is shown in the sidebar and account menu.">
+            <div className="flex flex-wrap items-center gap-5">
+              <AvatarUploader avatarUrl={user.avatar_url} onChange={(avatarUrl) => setUser((u) => (u ? { ...u, avatar_url: avatarUrl } : u))} />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-[var(--color-ink)]">{user.name || user.email}</p>
+                <p className="truncate text-[13px] text-[var(--color-muted)]">{user.email}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <span className="chip chip-primary">{isOwner ? (user.is_admin ? "Admin" : "Owner") : "Team member"}</span>
+                  {user.email_verified_at ? <span className="chip chip-accent">Email verified</span> : <span className="chip chip-warning">Email not verified</span>}
+                  {user.created_at && <span className="chip">Since {formatDate(user.created_at)}</span>}
+                </div>
+              </div>
+            </div>
+          </SettingRow>
+
+          <SettingRow title="Login email" description="The address you sign in with. It's fixed to the account. Contact us if it needs to change." last>
+            <div className="input flex items-center justify-between bg-[var(--color-paper)] text-[var(--color-muted)]">
+              <span className="truncate">{user.email}</span>
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0">
+                <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M8 11V8a4 4 0 018 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </div>
+          </SettingRow>
         </div>
 
-        <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-          <h2 className="text-base font-bold text-[var(--color-ink)] mb-1">Change email</h2>
-          <p className="text-sm text-[var(--color-muted)] mb-5">
-            You will need to verify the new address before it is fully active.
-          </p>
-          <ChangeEmailForm currentEmail={user.email} />
+        <div className="card">
+          <SettingRow title="Password" description="Choose a strong password you're not using anywhere else. You'll stay logged in on this device." last>
+            <ChangePasswordForm />
+          </SettingRow>
         </div>
 
-        <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-          <h2 className="text-base font-bold text-[var(--color-ink)] mb-1">Change password</h2>
-          <p className="text-sm text-[var(--color-muted)] mb-5">
-            Choose a strong password you are not using anywhere else.
-          </p>
-          <ChangePasswordForm />
+        <div className="card border-rose-200">
+          <SettingRow
+            title={isOwner ? "Delete account" : "Remove my login"}
+            description={
+              isOwner
+                ? "Permanently deletes your account, every connected marketplace, team members and all listing data."
+                : "Removes only your own login. The accounts and data you had access to are unaffected."
+            }
+            last
+          >
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-[13px] text-[var(--color-muted)]">This can&apos;t be undone.</p>
+              <button type="button" onClick={() => setConfirmAction("delete")} className="btn btn-secondary btn-sm text-[var(--color-danger)]">
+                {isOwner ? "Delete account" : "Remove login"}
+              </button>
+            </div>
+          </SettingRow>
         </div>
       </div>
 
@@ -259,9 +246,13 @@ export default function AccountPage() {
       />
       <ConfirmDialog
         open={confirmAction === "delete"}
-        title="Delete your account?"
-        description="This permanently deletes your account, connections, and listing data. This action cannot be undone."
-        confirmLabel="Delete account"
+        title={isOwner ? "Delete your account?" : "Remove your login?"}
+        description={
+          isOwner
+            ? "This permanently deletes your account, connections, and listing data. This action cannot be undone."
+            : "This removes your own team-member login. It doesn't affect the accounts or data owned by whoever gave you access."
+        }
+        confirmLabel={isOwner ? "Delete account" : "Remove login"}
         danger
         loading={actionLoading}
         onCancel={() => setConfirmAction(null)}

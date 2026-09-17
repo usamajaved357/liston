@@ -23,6 +23,8 @@ Click its box on the canvas → **Settings**:
 |---|---|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (use your database service's name inside the braces) |
 | `NODE_ENV` | `production` |
+| `API_URL` | `https://API_URL` — used to build the approve/reject links in emails |
+| `ADMIN_EMAILS` | your email(s), comma-separated — auto-approved, receive access requests |
 | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | `1` (the DS API needs no browser; skips a 300MB download) |
 | `FRONTEND_URL` | the frontend's public URL (step 3) — also locks CORS to it |
 | `JWT_SECRET` | a fresh random string for production |
@@ -66,9 +68,14 @@ DATABASE_URL="<same>" node scripts/aliexpress-auth.js <code>
 
 Then click **Apply Online** on the app in the AliExpress console. Until the app is formally approved, its refresh token is only valid for 48 hours from consent (this is fixed by AliExpress, not something we can extend) — a Test app needs this consent repeated every two days. An approved app's tokens last months.
 
+## 5b. Copying an account from local to production
+
+`scripts/copy-account-to-prod.js <email>` copies one owner (team members, connections with re-encrypted credentials, listings, permissions) and the AliExpress token. Needs `TARGET_DATABASE_URL` (the Postgres public URL) and `TARGET_CREDENTIALS_ENCRYPTION_KEY` (the backend's key). Run `DATABASE_URL=<public url> node src/db/migrate.js up` first if the schema is behind.
+
 ## 6. After the first deploy
 
-1. Sign up on the frontend, verify the email (Resend), connect the eBay account(s) — plan limits are off (`ENFORCE_PLAN_LIMITS` unset).
+1. Sign up on the frontend with an address listed in `ADMIN_EMAILS` (auto-approved), verify the email (Resend), connect the eBay account(s) — plan limits are off (`ENFORCE_PLAN_LIMITS` unset).
+   Anyone else who signs up lands on "under review": you get an email with Approve/Reject links, and there's an **Access requests** page in the sidebar for admins.
 2. Settings → Listing settings, policies, shipping location, description template ("Fill from my eBay store").
 3. Draft one listing end to end.
 

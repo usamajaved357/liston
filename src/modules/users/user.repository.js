@@ -4,7 +4,7 @@ async function findByIdWithPlan(userId) {
   const result = await query(
     `SELECT
        u.id, u.email, u.name, u.role, u.plan_id, u.listings_used_this_month, u.billing_cycle_start,
-       u.email_verified_at, u.created_at, u.avatar_url,
+       u.email_verified_at, u.created_at, u.avatar_url, u.access_status,
        p.name AS plan_name, p.max_connections, p.listings_included_per_month,
        (SELECT count(*) FROM connections c WHERE c.user_id = u.id) AS connections_used
      FROM users u
@@ -18,7 +18,7 @@ async function findByIdWithPlan(userId) {
 // Cheap indexed PK lookup used on every authenticated request (requireAuth)
 // to resolve role/ownerId — kept minimal on purpose.
 async function findRoleInfo(userId) {
-  const result = await query('SELECT id, role, parent_user_id FROM users WHERE id = $1', [userId]);
+  const result = await query('SELECT id, email, role, parent_user_id, access_status FROM users WHERE id = $1', [userId]);
   return result.rows[0] || null;
 }
 

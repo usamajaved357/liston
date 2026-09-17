@@ -2,8 +2,16 @@ const { Pool } = require('pg');
 const config = require('../config');
 const logger = require('../utils/logger');
 
+// Railway's public proxy (rlwy.net) serves a self-signed chain; the private
+// network and local Postgres don't use TLS. DATABASE_SSL=true forces it on.
+function sslFor(url) {
+  if (process.env.DATABASE_SSL === 'true' || /rlwy\.net|railway\.app/.test(url || '')) return { rejectUnauthorized: false };
+  return undefined;
+}
+
 const pool = new Pool({
   connectionString: config.databaseUrl,
+  ssl: sslFor(config.databaseUrl),
   max: 10,
   idleTimeoutMillis: 30000,
 });
@@ -23,4 +31,4 @@ async function query(text, params) {
   return result;
 }
 
-module.exports = { pool, query };
+module.exports = { pool, query, sslFor };

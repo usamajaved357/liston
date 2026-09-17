@@ -1,5 +1,6 @@
 const bcrypt = require('bcrypt');
 const userRepository = require('./user.repository');
+const config = require('../../config');
 const authService = require('../auth/auth.service');
 
 const SALT_ROUNDS = 12;
@@ -16,7 +17,8 @@ async function getCurrentUser(userId) {
   if (!user) {
     throw new UserError('User not found', 404);
   }
-  return user;
+  // Lets the frontend show the "Access requests" admin page to the right people.
+  return { ...user, is_admin: config.adminEmails.includes(String(user.email).toLowerCase()) };
 }
 
 async function deleteAccount(userId) {
@@ -71,7 +73,7 @@ async function updateAvatar(userId, avatarDataUrl) {
     throw new UserError('Avatar must be a PNG, JPEG or WebP image', 400);
   }
   if (avatarDataUrl.length > MAX_AVATAR_BASE64_LENGTH) {
-    throw new UserError('Avatar image is too large — please use one under 1MB', 400);
+    throw new UserError('Avatar image is too large. Please use one under 1MB', 400);
   }
   await userRepository.updateAvatar(userId, avatarDataUrl);
 }

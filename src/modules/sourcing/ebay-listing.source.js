@@ -114,7 +114,7 @@ function normalizeSingle(item, url) {
 function normalizeGroup(group, url) {
   const items = group.items || [];
   if (!items.length) {
-    throw new ScrapingError("That eBay listing's variations couldn't be read — try a different listing.", {
+    throw new ScrapingError("That eBay listing's variations couldn't be read. Try a different listing.", {
       source: 'ebay',
     });
   }
@@ -166,7 +166,7 @@ async function fetchListing(url, marketplaceId = DEFAULT_MARKETPLACE) {
   }
 
   if (!item.title) {
-    throw new ScrapingError("This doesn't look like a live eBay listing — it may have ended or been removed.", {
+    throw new ScrapingError("This doesn't look like a live eBay listing. It may have ended or been removed.", {
       source: 'ebay',
     });
   }

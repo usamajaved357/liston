@@ -50,6 +50,8 @@ const config = {
 
   // Used to build links in emailed tokens (verification/password-reset).
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
+  // Where this API is reachable from a browser — used for one-click links in emails.
+  apiUrl: (process.env.API_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/+$/, ''),
 
   jwt: {
     secret: required('JWT_SECRET'),
@@ -62,6 +64,13 @@ const config = {
     apiKey: process.env.RESEND_API_KEY || null,
     fromEmail: process.env.EMAIL_FROM || 'Liston <onboarding@resend.dev>',
   },
+
+  // Who approves new owner accounts (comma-separated). These addresses are
+  // auto-approved at signup and receive every access request.
+  adminEmails: (process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
 
   anthropicApiKey: process.env.ANTHROPIC_API_KEY || null,
   // One model for every Claude call (draft writing, editor revisions, image

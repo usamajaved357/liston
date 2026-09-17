@@ -155,7 +155,7 @@ async function generateEbayDraftFromUrls(
     prunePreviews();
     const preview = previews.get(previewId);
     if (!preview || preview.userId !== userId || preview.connectionId !== connectionId) {
-      throw new ListingError('That preview has expired — read the listings again.', 400);
+      throw new ListingError('That preview has expired. Read the listings again.', 400);
     }
     preRead = preview;
     competitorUrl = preview.competitorUrl;
@@ -332,7 +332,7 @@ async function updateDraft(id, userId, patch) {
         !has(policies.paymentPolicies, 'paymentPolicyId', patch.listingPolicies.paymentPolicyId) ||
         !has(policies.returnPolicies, 'returnPolicyId', patch.listingPolicies.returnPolicyId)
       ) {
-        throw new ListingError("One of those policies isn't on this eBay account any more — refresh and pick again.", 400);
+        throw new ListingError("One of those policies isn't on this eBay account any more. Refresh and pick again.", 400);
       }
       return policies;
     });
@@ -358,7 +358,7 @@ async function updateDraft(id, userId, patch) {
   }
 
   if (Array.isArray(draft.variants) && draft.variants.length === 0) {
-    throw new ListingError("A variation listing needs at least one variation — you've removed them all.", 400);
+    throw new ListingError("A variation listing needs at least one variation. You've removed them all.", 400);
   }
 
   const updated = await listingRepository.updateGeneratedData(id, draft);
@@ -398,7 +398,7 @@ async function acceptImageRevision(id, userId, { proposalId, replaces }) {
   const listing = await loadEditableDraft(id, userId);
   const proposal = revisionService.takeProposal(proposalId);
   if (!proposal) {
-    throw new ListingError('That edit has expired — run it again.', 400);
+    throw new ListingError('That edit has expired. Run it again.', 400);
   }
 
   const draft = { ...(listing.generated_data || {}) };
@@ -549,6 +549,188 @@ async function previewDescription(id, userId) {
   return renderDraftDescription(listing, userId);
 }
 
+// ---- Editing a listing that is already live on eBay ----
+//
+// The live item is loaded into the same draft shape the editor already
+// understands, kept as a transient row (edit_of_item_id set) and then either
+// revised in place on eBay or discarded. It never appears in Drafts.
+
+// eBay descriptions are HTML; the editor works in plain text with the
+// template applied at publish. Keep the paragraph and line structure.
+function htmlToText(html) {
+  let text = String(html || '');
+  // Liston's own template wraps the seller's copy in .eb-desc; anything
+  // outside it (header, badges, carousel) is template, not description.
+  const start = text.indexOf('<div class="eb-desc">');
+  if (start >= 0) {
+    const end = text.indexOf('</div>\n  </div>', start);
+    text = end > start ? text.slice(start + '<div class="eb-desc">'.length, end) : text.slice(start);
+  }
+  text = text.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '');
+  text = text.replace(/<(strong|b)>([\s\S]*?)<\/\1>/gi, '**$2**');
+  text = text.replace(/<mark[^>]*>([\s\S]*?)<\/mark>/gi, '==$1==');
+  text = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n').replace(/<\/(ul|ol)>/gi, '\n\n').replace(/<p[^>]*>/gi, '\n').replace(/<li[^>]*>/gi, '• ');
+  text = text.replace(/<[^>]+>/g, '');
+  text = text.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+  return text
+    .split('\n')
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function draftFromLiveItem(item, marketplaceId) {
+  const base = {
+    imageUrls: item.imageUrls,
+    categoryId: item.categoryId,
+    categoryPath: item.categoryPath,
+    marketplaceId,
+    merchantLocationKey: '',
+    liveItemId: item.itemId,
+  };
+  if (item.variations.length) {
+    const axes = Object.keys(item.variationSpecificsSet);
+    const picturesByAxis = Object.fromEntries(item.variationPictures.map((p) => [p.specificName, p.byValue]));
+    const imageAxis = item.variationPictures[0]?.specificName;
+    return {
+      ...base,
+      commonTitle: item.title,
+      commonDescription: htmlToText(item.description),
+      variesBy: {
+        aspects: item.specifics,
+        aspectsImageVariesBy: imageAxis ? [imageAxis] : [],
+        specifications: axes.map((name) => ({ name, values: item.variationSpecificsSet[name] })),
+      },
+      variants: item.variations.map((v) => {
+        const value = imageAxis ? v.specifics[imageAxis]?.[0] : null;
+        const own = value ? picturesByAxis[imageAxis]?.[value] : null;
+        return {
+          sku: v.sku || undefined,
+          imageUrls: own && own.length ? own : item.imageUrls.slice(0, 1),
+          aspects: v.specifics,
+          condition: item.condition || 'NEW',
+          quantity: Math.max(0, v.quantity - v.quantitySold),
+          price: { value: v.price ? v.price.amount.toFixed(2) : '0.00', currency: v.price?.currency || item.currency || 'GBP' },
+        };
+      }),
+    };
+  }
+  return {
+    ...base,
+    title: item.title,
+    description: htmlToText(item.description),
+    aspects: item.specifics,
+    condition: item.condition || 'NEW',
+    quantity: Math.max(0, item.quantity - item.quantitySold),
+    price: { value: item.price ? item.price.amount.toFixed(2) : '0.00', currency: item.price?.currency || item.currency || 'GBP' },
+  };
+}
+
+async function startLiveEdit(connectionId, userId, itemId) {
+  const existing = await listingRepository.findLiveEdit(connectionId, userId, itemId);
+  if (existing) return existing;
+
+  return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
+    const item = await ebayService.getLiveItem(credentials, itemId);
+    if (item.listingType && item.listingType !== 'FixedPriceItem') {
+      throw new ListingError('Only fixed-price listings can be edited here.', 400);
+    }
+    let draft = draftFromLiveItem(item, connection.settings?.ebay?.marketplaceId);
+
+    // If Liston published this item, start from its own draft: the plain
+    // description with its formatting is far better than reversing HTML.
+    const own = await listingRepository.findPublishedByItemId(connectionId, itemId);
+    const ownDraft = own?.generated_data;
+    if (ownDraft) {
+      const isVariation = Array.isArray(ownDraft.variants) && ownDraft.variants.length > 0;
+      const liveIsVariation = Array.isArray(draft.variants);
+      if (isVariation === liveIsVariation) {
+        draft = isVariation
+          ? { ...draft, commonDescription: ownDraft.commonDescription || draft.commonDescription }
+          : { ...draft, description: ownDraft.description || draft.description };
+      }
+    }
+
+    return listingRepository.createLiveEdit({ connectionId, itemId, sku: item.sku, generatedData: draft });
+  });
+}
+
+async function publishLiveEdit(listing, userId) {
+  const draft = listing.generated_data || {};
+  const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const imageCheck = imageGates.checkDraftImages(draft);
+  if (!imageCheck.ok) throw new ListingError(imageCheck.errors.join(' '), 400);
+
+  const html = await renderDraftDescription(listing, userId);
+  const specifics = isVariation ? draft.variesBy?.aspects : draft.aspects;
+  const payload = {
+    title: isVariation ? draft.commonTitle : draft.title,
+    descriptionHtml: html,
+    imageUrls: draft.imageUrls,
+    specifics,
+    conditionId: ebayService.conditionIdFor(isVariation ? draft.variants[0]?.condition : draft.condition),
+  };
+  if (isVariation) {
+    const imageAxis = draft.variesBy?.aspectsImageVariesBy?.[0];
+    const byValue = {};
+    if (imageAxis) {
+      for (const v of draft.variants) {
+        const value = v.aspects?.[imageAxis]?.[0];
+        if (value && !byValue[value] && v.imageUrls?.length) byValue[value] = v.imageUrls;
+      }
+    }
+    payload.variations = draft.variants.map((v) => ({
+      sku: v.sku,
+      price: { amount: Number(v.price.value), currency: v.price.currency },
+      quantity: v.quantity,
+      specifics: v.aspects,
+    }));
+    payload.variationSpecificsSet = Object.fromEntries((draft.variesBy?.specifications || []).map((s) => [s.name, s.values]));
+    payload.variationPictures = imageAxis ? [{ specificName: imageAxis, byValue }] : [];
+  } else {
+    payload.price = { amount: Number(draft.price.value), currency: draft.price.currency };
+    payload.quantity = draft.quantity;
+  }
+
+  await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
+    ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload)
+  );
+  ebayService.invalidateListings(listing.connection_id);
+  // The edit is now live; the working copy has done its job.
+  await listingRepository.deleteById(listing.id);
+  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true };
+}
+
+// Removes an ended listing for good: eBay's own Inventory objects if Liston
+// created them, every Liston record of it, and it's hidden from the Inactive
+// tab from now on. eBay has no API for clearing its own Unsold list, so the
+// entry can linger in Seller Hub until eBay purges it (90 days).
+async function removeInactiveListing(connectionId, userId, itemId) {
+  const rows = await listingRepository.findAllByItemId(connectionId, itemId);
+  const offerIds = rows.map((r) => r.platform_offer_id).filter(Boolean);
+  const groupKeys = rows.map((r) => r.platform_group_key).filter(Boolean);
+  const skus = rows.flatMap((r) => {
+    const d = r.generated_data || {};
+    return Array.isArray(d.variants) ? d.variants.map((v) => v.sku).filter(Boolean) : r.sku ? [r.sku] : [];
+  });
+
+  await connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
+    if (offerIds.length || groupKeys.length || skus.length) {
+      for (const offerId of offerIds) await ebayService.deleteInventoryObjects(credentials, { offerId });
+      for (const groupKey of groupKeys) await ebayService.deleteInventoryObjects(credentials, { groupKey });
+      if (skus.length) await ebayService.deleteInventoryObjects(credentials, { skus });
+    }
+    const hidden = new Set((connection.settings?.hiddenItemIds || []).map(String));
+    hidden.add(String(itemId));
+    await connectionService.updateConnectionSettings(connectionId, userId, { hiddenItemIds: [...hidden] });
+    return {};
+  });
+
+  await listingRepository.deleteByItemId(connectionId, itemId);
+  ebayService.invalidateListings(connectionId);
+}
+
 async function publish(id, userId) {
   const listing = await listingRepository.findByIdForUser(id, userId);
   if (!listing) {
@@ -556,6 +738,9 @@ async function publish(id, userId) {
   }
   if (listing.status !== 'pending_review') {
     throw new ListingError(`Only a listing pending review can be published (this one is "${listing.status}")`, 400);
+  }
+  if (listing.edit_of_item_id) {
+    return publishLiveEdit(listing, userId);
   }
 
   // Images are the single biggest driver of whether a listing sells, so the
@@ -614,6 +799,7 @@ async function publish(id, userId) {
       });
     }
 
+    ebayService.invalidateListings(listing.connection_id);
     return listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way
@@ -660,4 +846,7 @@ module.exports = {
   acceptImageRevision,
   removeAxisValue,
   publish,
+  startLiveEdit,
+  removeInactiveListing,
+  htmlToText,
 };

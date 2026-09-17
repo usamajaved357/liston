@@ -23,8 +23,11 @@ router.put('/:id/policies', requireAuth, requireOwner, connectionController.upda
 // they're owner-only for the same reason policies are — never delegable.
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);
 router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
+router.get('/:id/template/palette', requireAuth, requireOwner, connectionController.logoPalette);
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
+router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
+router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingController.removeInactive);
 // Step one of drafting: read both listings so the seller can pick which
 // variations to list, before anything is generated or paid for.
 router.post('/:id/listings/drafts/preview', requireAuth, requireFeature('listings'), listingController.previewDraft);

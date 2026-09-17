@@ -358,7 +358,7 @@ function AccountOrdersContent() {
         {SOON_TABS.map((label) => (
           <span
             key={label}
-            title="Not available yet — needs eBay's returns/cases API"
+            title="Not available yet, needs eBay's returns/cases API"
             className="rounded-full px-3.5 py-1.5 text-xs font-semibold text-[var(--color-muted)]/50 cursor-not-allowed"
           >
             {label}

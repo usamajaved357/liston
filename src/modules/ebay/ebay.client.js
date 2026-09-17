@@ -67,7 +67,7 @@ async function request(accessToken, method, path, body, marketplaceId) {
     });
   } catch (err) {
     if (err.name === 'TimeoutError' || err.name === 'AbortError') {
-      throw new EbayApiError('eBay API request timed out — try again in a moment.', 504);
+      throw new EbayApiError('eBay API request timed out. Try again in a moment.', 504);
     }
     throw err;
   }
@@ -143,6 +143,18 @@ function withdrawOffer(accessToken, offerId) {
   return request(accessToken, 'POST', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/withdraw`);
 }
 
+function deleteOffer(accessToken, offerId) {
+  return request(accessToken, 'DELETE', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`);
+}
+
+function deleteInventoryItem(accessToken, sku) {
+  return request(accessToken, 'DELETE', `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+}
+
+function deleteInventoryItemGroup(accessToken, groupKey) {
+  return request(accessToken, 'DELETE', `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
+}
+
 function getInventoryLocations(accessToken) {
   return request(accessToken, 'GET', '/sell/inventory/v1/location?limit=50');
 }
@@ -181,6 +193,9 @@ module.exports = {
   publishOffer,
   publishOfferByInventoryItemGroup,
   withdrawOffer,
+  deleteOffer,
+  deleteInventoryItem,
+  deleteInventoryItemGroup,
   getInventoryLocations,
   createInventoryLocation,
   getFulfillmentPolicies,

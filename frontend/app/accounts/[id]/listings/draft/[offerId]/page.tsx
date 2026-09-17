@@ -85,9 +85,9 @@ const Icon = {
 
 const CONDITIONS = [
   { value: "NEW", label: "New" },
-  { value: "USED_EXCELLENT", label: "Used — excellent" },
-  { value: "USED_GOOD", label: "Used — good" },
-  { value: "USED_ACCEPTABLE", label: "Used — acceptable" },
+  { value: "USED_EXCELLENT", label: "Used, excellent" },
+  { value: "USED_GOOD", label: "Used, good" },
+  { value: "USED_ACCEPTABLE", label: "Used, acceptable" },
 ];
 
 // A price the seller didn't type needs to show its working, or it's just a
@@ -123,18 +123,18 @@ function PriceBreakdownPanel({ breakdown }: { breakdown: PriceBreakdown }) {
         </div>
       </div>
       <p className={`mt-2.5 text-xs font-semibold ${hitTarget ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
-        {breakdown.roiPercent.toFixed(0)}% ROI {hitTarget ? "— at or above" : "— BELOW"} your{" "}
+        {breakdown.roiPercent.toFixed(0)}% ROI {hitTarget ? "is at or above" : "is BELOW"} your{" "}
         {breakdown.targetRoiPercent}% target
       </p>
       {breakdown.basis === "competitor" ? (
         <p className="mt-1 text-xs text-[var(--color-muted)]">
-          Matched the competitor&apos;s {formatPrice(breakdown.competitorPrice ?? 0, breakdown.currency)} — above your floor
+          Matched the competitor&apos;s {formatPrice(breakdown.competitorPrice ?? 0, breakdown.currency)}, above your floor
           of {formatPrice(breakdown.floorPrice ?? 0, breakdown.currency)}.
         </p>
       ) : (
         breakdown.competitorPrice != null && (
           <p className="mt-1 text-xs text-[var(--color-muted)]">
-            Competitor sells at {formatPrice(breakdown.competitorPrice, breakdown.currency)}, below your floor — priced
+            Competitor sells at {formatPrice(breakdown.competitorPrice, breakdown.currency)}, below your floor, so priced
             at your target instead.
           </p>
         )
@@ -422,7 +422,7 @@ function GalleryGrid({
 
       {count === 0 ? (
         <div className="mt-4 flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--color-line)]">
-          <p className="text-sm text-[var(--color-muted)]">No photos yet — eBay needs at least one.</p>
+          <p className="text-sm text-[var(--color-muted)]">No photos yet. eBay needs at least one.</p>
           <FileButton label="Upload photos" multiple disabled={disabled || uploading} onFiles={onUpload} className={smallButton} />
         </div>
       ) : (
@@ -1005,7 +1005,7 @@ function PublishedDialog({ listing, onClose }: { listing: DraftListing; onClose:
   const currency = variation ? variation.variants[0]?.price.currency || "GBP" : single!.price.currency;
   const priceText = variation
     ? prices.length
-      ? `${formatPrice(Math.min(...prices), currency)}${Math.max(...prices) !== Math.min(...prices) ? ` – ${formatPrice(Math.max(...prices), currency)}` : ""}`
+      ? `${formatPrice(Math.min(...prices), currency)}${Math.max(...prices) !== Math.min(...prices) ? ` to ${formatPrice(Math.max(...prices), currency)}` : ""}`
       : "—"
     : formatPrice(single!.price.value, currency);
   const itemId = listing.external_product_id;
@@ -1116,6 +1116,9 @@ export default function DraftEditorPage() {
   const variation = content && isVariationDraft(content) ? content : null;
   const single = content && !isVariationDraft(content) ? content : null;
   const editable = listing?.status === "pending_review";
+  // A live listing opened for editing: only two ways out, discard or push
+  // the changes to eBay. No draft is kept either way.
+  const isLiveEdit = Boolean(listing?.edit_of_item_id);
 
   const resetFrom = useCallback((row: DraftListing) => {
     const c = row.generated_data as DraftContent;
@@ -1281,7 +1284,17 @@ export default function DraftEditorPage() {
     setPublishing(true);
     setError(null);
     try {
+      // Editing a live listing is one step: unsaved changes go up with it.
+      if (isLiveEdit && dirty) {
+        const saved = await api.updateDraftListing(listing.id, buildPatch());
+        setListing(saved.listing);
+        resetFrom(saved.listing);
+      }
       const data = await api.publishDraftListing(listing.id);
+      if (isLiveEdit) {
+        router.push(`/accounts/${params.id}/listings?updated=${listing.edit_of_item_id}`);
+        return;
+      }
       setListing(data.listing);
       setPublished(data.listing);
     } catch (err) {
@@ -1296,7 +1309,7 @@ export default function DraftEditorPage() {
     setDeleting(true);
     try {
       await api.deleteDraftListing(listing.id);
-      router.push(`/accounts/${params.id}/listings?filter=draft`);
+      router.push(`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't delete this draft.");
       setDeleting(false);
@@ -1453,9 +1466,9 @@ export default function DraftEditorPage() {
   return (
     <main className="flex h-screen flex-col bg-[var(--color-paper)]">
       <EditorHeader
-        backHref={`/accounts/${params.id}/listings?filter=draft`}
-        backLabel="Back to drafts"
-        title={editable ? "Edit listing" : "Listing"}
+        backHref={`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`}
+        backLabel={isLiveEdit ? "Back to listings" : "Back to drafts"}
+        title={isLiveEdit ? "Edit live listing" : editable ? "Edit listing" : "Listing"}
         chips={
           notes.length > 0 ? (
             <button
@@ -1476,7 +1489,11 @@ export default function DraftEditorPage() {
           ) : null
         }
         actions={
-          editable ? (
+          isLiveEdit ? (
+            <span className="chip font-medium" title="eBay item number">
+              Live · #{listing.edit_of_item_id}
+            </span>
+          ) : editable ? (
             <>
               <span className="mr-1 hidden text-xs text-[var(--color-muted)] md:inline">{dirty ? "Unsaved changes" : "All changes saved"}</span>
               {dirty && (
@@ -1522,7 +1539,7 @@ export default function DraftEditorPage() {
               )}
               {listing.status === "published" && (
                 <div className="notice notice-success">
-                  <span className="flex-1">Live on eBay{listing.external_product_id ? ` — item ${listing.external_product_id}` : ""}.</span>
+                  <span className="flex-1">Live on eBay{listing.external_product_id ? `, item ${listing.external_product_id}` : ""}.</span>
                 </div>
               )}
             </div>
@@ -1608,7 +1625,7 @@ export default function DraftEditorPage() {
                   />
                   {title.length > TITLE_MAX && (
                     <p className="mt-1.5 text-xs font-semibold text-[var(--color-danger)]">
-                      {title.length - TITLE_MAX} characters over eBay&apos;s 80-character limit — shorten it to save.
+                      {title.length - TITLE_MAX} characters over eBay&apos;s 80-character limit. Shorten it to save.
                     </p>
                   )}
                 </div>
@@ -1649,7 +1666,7 @@ export default function DraftEditorPage() {
                   ) : (
                     <div className="sm:col-span-2">
                       <p className={labelClass}>Pricing</p>
-                      <p className="mt-1.5 text-sm text-[var(--color-ink)]">Per variation — edit in the table below.</p>
+                      <p className="mt-1.5 text-sm text-[var(--color-ink)]">Per variation, edit in the table below.</p>
                     </div>
                   )}
                 </div>
@@ -1839,19 +1856,36 @@ export default function DraftEditorPage() {
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
             <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
               {Icon.trash}
-              <span>Delete draft</span>
+              <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
             </button>
             <div className="flex items-center gap-3">
-              {dirty && <span className="text-xs text-[var(--color-muted)]">Save your changes to publish</span>}
-              <button
-                type="button"
-                onClick={() => setConfirmPublish(true)}
-                disabled={!canPublish}
-                title={dirty ? "Save your changes first" : undefined}
-                className="btn btn-primary"
-              >
-                {publishing ? "Publishing…" : "Publish to eBay"}
-              </button>
+              {isLiveEdit ? (
+                <>
+                  {dirty && <span className="text-xs text-[var(--color-muted)]">Changes go live on eBay when you publish</span>}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPublish(true)}
+                    disabled={!editable || busy || !dirty || title.length > TITLE_MAX}
+                    title={!dirty ? "Nothing has changed yet" : title.length > TITLE_MAX ? "Shorten the title first" : undefined}
+                    className="btn btn-primary"
+                  >
+                    {publishing ? "Updating…" : "Publish changes"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {dirty && <span className="text-xs text-[var(--color-muted)]">Save your changes to publish</span>}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPublish(true)}
+                    disabled={!canPublish}
+                    title={dirty ? "Save your changes first" : undefined}
+                    className="btn btn-primary"
+                  >
+                    {publishing ? "Publishing…" : "Publish to eBay"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </footer>
@@ -1861,18 +1895,26 @@ export default function DraftEditorPage() {
 
       <ConfirmDialog
         open={confirmPublish}
-        title="Publish this listing?"
-        description={`It goes live on eBay immediately${variation ? `, with ${variation.variants.length} variations` : ""}. Publishing creates the listing on eBay now, so this can take a minute or two for large variation sets.`}
-        confirmLabel="Publish"
+        title={isLiveEdit ? "Publish these changes?" : "Publish this listing?"}
+        description={
+          isLiveEdit
+            ? "The live eBay listing is updated in place. Buyers see the new title, photos, price, stock and description straight away."
+            : `It goes live on eBay immediately${variation ? `, with ${variation.variants.length} variations` : ""}. Publishing creates the listing on eBay now, so this can take a minute or two for large variation sets.`
+        }
+        confirmLabel={isLiveEdit ? "Publish changes" : "Publish"}
         loading={publishing}
         onCancel={() => setConfirmPublish(false)}
         onConfirm={handlePublish}
       />
       <ConfirmDialog
         open={confirmDelete}
-        title="Delete this draft?"
-        description="This removes the draft from Liston. Nothing has been created on eBay, so there's nothing to undo there."
-        confirmLabel="Delete"
+        title={isLiveEdit ? "Discard your changes?" : "Delete this draft?"}
+        description={
+          isLiveEdit
+            ? "The listing on eBay stays exactly as it is. Nothing you changed here is kept."
+            : "This removes the draft from Liston. Nothing has been created on eBay, so there's nothing to undo there."
+        }
+        confirmLabel={isLiveEdit ? "Discard" : "Delete"}
         danger
         loading={deleting}
         onCancel={() => setConfirmDelete(false)}

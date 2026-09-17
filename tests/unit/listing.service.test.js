@@ -452,3 +452,144 @@ test('fetchDraftImage only serves images that belong to the draft', async () => 
   }));
   await assert.rejects(() => listingService.fetchDraftImage('listing-1', USER_ID, 'https://evil.example/x.jpg'), /isn't part of this listing/);
 });
+
+// ---- editing a live listing ----
+
+function liveItem(overrides = {}) {
+  return {
+    itemId: '407000000001',
+    sku: 'SKU-1',
+    title: 'Live title',
+    description: '<p>Hello <strong>there</strong></p><ul><li>One</li></ul>',
+    imageUrls: ['https://i.ebayimg.com/1.jpg', 'https://i.ebayimg.com/2.jpg'],
+    price: { amount: 9.99, currency: 'GBP' },
+    quantity: 10,
+    quantitySold: 3,
+    condition: 'NEW',
+    conditionId: 1000,
+    categoryId: '123',
+    categoryPath: ['A', 'B'],
+    specifics: { Brand: ['Unbranded'], Type: ['Thing'] },
+    currency: 'GBP',
+    viewItemUrl: 'https://www.ebay.co.uk/itm/407000000001',
+    listingType: 'FixedPriceItem',
+    variationSpecificsSet: {},
+    variations: [],
+    variationPictures: [],
+    ...overrides,
+  };
+}
+
+test('startLiveEdit loads a single live listing into the draft shape with available stock and text description', async () => {
+  mock.method(listingRepository, 'findLiveEdit', async () => null);
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getLiveItem', async () => liveItem());
+  const create = mock.method(listingRepository, 'createLiveEdit', async (args) => ({ id: 'edit-1', edit_of_item_id: args.itemId, generated_data: args.generatedData, status: 'pending_review' }));
+
+  const row = await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001');
+
+  const draft = create.mock.calls[0].arguments[0].generatedData;
+  assert.strictEqual(row.edit_of_item_id, '407000000001');
+  assert.strictEqual(draft.title, 'Live title');
+  assert.strictEqual(draft.quantity, 7);
+  assert.strictEqual(draft.price.value, '9.99');
+  assert.deepStrictEqual(draft.aspects, { Brand: ['Unbranded'], Type: ['Thing'] });
+  assert.match(draft.description, /Hello \*\*there\*\*/);
+  assert.match(draft.description, /• One/);
+});
+
+test('startLiveEdit maps a variation listing with per-value pictures and prefers the Liston draft description', async () => {
+  mock.method(listingRepository, 'findLiveEdit', async () => null);
+  mock.method(listingRepository, 'findPublishedByItemId', async () => ({ generated_data: { commonDescription: 'Original **draft** copy', variants: [{}] } }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getLiveItem', async () =>
+    liveItem({
+      variationSpecificsSet: { Colour: ['Black', 'White'] },
+      variations: [
+        { sku: 'S-B', price: { amount: 5, currency: 'GBP' }, quantity: 4, quantitySold: 1, specifics: { Colour: ['Black'] } },
+        { sku: 'S-W', price: { amount: 6, currency: 'GBP' }, quantity: 2, quantitySold: 0, specifics: { Colour: ['White'] } },
+      ],
+      variationPictures: [{ specificName: 'Colour', byValue: { Black: ['https://i.ebayimg.com/b.jpg'] } }],
+    })
+  );
+  const create = mock.method(listingRepository, 'createLiveEdit', async (args) => ({ id: 'edit-2', generated_data: args.generatedData }));
+
+  await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001');
+
+  const draft = create.mock.calls[0].arguments[0].generatedData;
+  assert.strictEqual(draft.commonDescription, 'Original **draft** copy');
+  assert.deepStrictEqual(draft.variesBy.specifications, [{ name: 'Colour', values: ['Black', 'White'] }]);
+  assert.deepStrictEqual(draft.variesBy.aspectsImageVariesBy, ['Colour']);
+  assert.deepStrictEqual(draft.variants[0].imageUrls, ['https://i.ebayimg.com/b.jpg']);
+  assert.deepStrictEqual(draft.variants[1].imageUrls, ['https://i.ebayimg.com/1.jpg']); // falls back to the gallery
+  assert.strictEqual(draft.variants[0].quantity, 3);
+});
+
+test('startLiveEdit resumes an unfinished edit instead of creating a second copy', async () => {
+  mock.method(listingRepository, 'findLiveEdit', async () => ({ id: 'edit-existing' }));
+  const create = mock.method(listingRepository, 'createLiveEdit', async () => ({ id: 'edit-new' }));
+  const row = await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001');
+  assert.strictEqual(row.id, 'edit-existing');
+  assert.strictEqual(create.mock.calls.length, 0);
+});
+
+test('publish on a live edit revises the item in place and removes the working copy', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => ({
+    id: 'edit-1',
+    connection_id: CONNECTION_ID,
+    status: 'pending_review',
+    edit_of_item_id: '407000000001',
+    external_product_id: '407000000001',
+    generated_data: {
+      title: 'New title',
+      description: 'New copy',
+      imageUrls: ['https://i.ebayimg.com/1.jpg'],
+      aspects: { Brand: ['Unbranded'] },
+      condition: 'NEW',
+      quantity: 5,
+      price: { value: '12.50', currency: 'GBP' },
+      categoryId: '123',
+    },
+  }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  const revise = mock.method(ebayService, 'reviseLiveListing', async (credentials, itemId, payload) => {
+    assert.strictEqual(itemId, '407000000001');
+    assert.strictEqual(payload.title, 'New title');
+    assert.deepStrictEqual(payload.price, { amount: 12.5, currency: 'GBP' });
+    assert.strictEqual(payload.quantity, 5);
+    assert.strictEqual(payload.conditionId, 1000);
+    assert.match(payload.descriptionHtml, /New copy/);
+    return { itemId };
+  });
+  const del = mock.method(listingRepository, 'deleteById', async () => {});
+  const updateStatus = mock.method(listingRepository, 'updateStatus', async () => {});
+
+  const result = await listingService.publish('edit-1', USER_ID);
+
+  assert.strictEqual(revise.mock.calls.length, 1);
+  assert.strictEqual(del.mock.calls[0].arguments[0], 'edit-1');
+  assert.strictEqual(updateStatus.mock.calls.length, 0);
+  assert.strictEqual(result.external_product_id, '407000000001');
+  assert.strictEqual(result.deleted, true);
+});
+
+test('removeInactiveListing clears Liston records, deletes eBay inventory objects it created and hides the item', async () => {
+  mock.method(listingRepository, 'findAllByItemId', async () => [
+    { platform_offer_id: 'offer-9', platform_group_key: null, sku: 'SKU-9', generated_data: {} },
+  ]);
+  const delObjects = mock.method(ebayService, 'deleteInventoryObjects', async () => ({}));
+  const settings = mock.method(connectionService, 'updateConnectionSettings', async (id, userId, patch) => patch);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection({ settings: { hiddenItemIds: ['1'] } })));
+  const delRows = mock.method(listingRepository, 'deleteByItemId', async () => {});
+  mock.method(ebayService, 'invalidateListings', () => {});
+
+  await listingService.removeInactiveListing(CONNECTION_ID, USER_ID, '407000000009');
+
+  assert.deepStrictEqual(delObjects.mock.calls[0].arguments[1], { offerId: 'offer-9' });
+  assert.deepStrictEqual(delObjects.mock.calls[1].arguments[1], { skus: ['SKU-9'] });
+  assert.deepStrictEqual(settings.mock.calls[0].arguments[2], { hiddenItemIds: ['1', '407000000009'] });
+  assert.deepStrictEqual(delRows.mock.calls[0].arguments, [CONNECTION_ID, '407000000009']);
+});

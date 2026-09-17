@@ -80,7 +80,7 @@ function ResetPasswordForm() {
       <button
         type="submit"
         disabled={loading}
-        className="w-full rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
+        className="btn btn-primary w-full"
       >
         {loading ? "Resetting…" : "Reset password"}
       </button>

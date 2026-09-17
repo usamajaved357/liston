@@ -25,7 +25,7 @@ export function PasswordField({
 
   return (
     <label className="block">
-      <span className="block text-sm font-medium text-[var(--color-ink)] mb-1.5">{label}</span>
+      <span className="mb-1 block text-[13px] font-medium text-[var(--color-ink)]">{label}</span>
       <PasswordInput
         value={value}
         onChange={onChange}
@@ -34,7 +34,7 @@ export function PasswordField({
         onBlur={() => setFocused(false)}
       />
       {showCriteria && focused && (
-        <div className="mt-2 flex items-center gap-1.5 text-xs">
+        <div className="mt-1.5 flex items-center gap-1.5 text-[11px]">
           <svg viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5 flex-shrink-0">
             <circle cx="8" cy="8" r="8" fill={meetsLength ? "#0f9b8e" : "#e2e5eb"} />
             {meetsLength && (
@@ -52,7 +52,7 @@ export function PasswordField({
           </span>
         </div>
       )}
-      {error && <span className="block text-sm text-[var(--color-danger)] mt-1.5">{error}</span>}
+      {error && <span className="mt-1 block text-xs text-[var(--color-danger)]">{error}</span>}
     </label>
   );
 }

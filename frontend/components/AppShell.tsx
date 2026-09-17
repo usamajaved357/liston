@@ -13,11 +13,14 @@ interface AppShellProps {
   // Team management is owner-only — the nav item (and the page itself) is
   // hidden for a member, who never has a role other than "member" here.
   role?: "owner" | "member";
+  // Access requests are reviewed only by the addresses in ADMIN_EMAILS.
+  isAdmin?: boolean;
 }
 
-export function AppShell({ children, header, connectionsUsed, maxConnections, planName, role }: AppShellProps) {
+// connectionsUsed / maxConnections / planName are accepted for compatibility
+// with existing pages; the sidebar no longer shows plan usage.
+export function AppShell({ children, header, role, isAdmin }: AppShellProps) {
   const pathname = usePathname();
-  const connectionsPct = maxConnections ? Math.min(100, (connectionsUsed / maxConnections) * 100) : 0;
 
   return (
     <div className="h-screen flex overflow-hidden">
@@ -28,11 +31,10 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
         </div>
 
         <nav className="flex flex-col gap-0.5">
-          {/* Overview (plan/billing usage) and Connections-management/Settings
-              are owner-only concepts — a member has no plan of their own and
-              can't add/remove connections or touch policies, so in practice
-              they never reach this shell at all (see /dashboard, /settings,
-              and the member branch of /connections). Gated here too as
+          {/* Overview and Connections management are owner-only concepts — a
+              member can't add/remove connections or touch policies, so in
+              practice they never reach this shell at all (see /dashboard and
+              the member branch of /connections). Gated here too as
               defense in depth against a brief render before those redirects
               land. */}
           {role !== "member" && (
@@ -61,23 +63,6 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
               </svg>
             }
           />
-          {role !== "member" && (
-            <NavItem
-              href="/settings"
-              active={pathname === "/settings"}
-              label="Settings"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path
-                    d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              }
-            />
-          )}
           {role === "owner" && (
             <NavItem
               href="/team"
@@ -93,19 +78,21 @@ export function AppShell({ children, header, connectionsUsed, maxConnections, pl
               }
             />
           )}
+          {isAdmin && (
+            <NavItem
+              href="/admin/access"
+              active={pathname === "/admin/access"}
+              label="Access requests"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-3z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+          )}
         </nav>
 
-        <div className="mt-auto rounded-lg bg-[var(--color-paper)] p-3 flex flex-col gap-1">
-          <span className="text-[10.5px] font-bold uppercase tracking-wide text-[var(--color-accent)]">
-            {planName} plan
-          </span>
-          <div className="h-1 rounded-full bg-[var(--color-line)] overflow-hidden">
-            <div className="h-full bg-[var(--color-accent)]" style={{ width: `${connectionsPct}%` }} />
-          </div>
-          <span className="text-[10.5px] text-[var(--color-muted)]">
-            {connectionsUsed} of {maxConnections} connections used
-          </span>
-        </div>
       </aside>
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">

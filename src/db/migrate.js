@@ -55,7 +55,7 @@ async function up(pool) {
       ranAny = true;
     } catch (err) {
       await client.query('ROLLBACK');
-      throw new Error(`Migration failed: ${name} — ${err.message}`);
+      throw new Error(`Migration failed: ${name} - ${err.message}`);
     } finally {
       client.release();
     }
@@ -101,7 +101,8 @@ async function main() {
     process.exit(1);
   }
 
-  const pool = new Pool({ connectionString: config.databaseUrl });
+  const { sslFor } = require('./client');
+  const pool = new Pool({ connectionString: config.databaseUrl, ssl: sslFor(config.databaseUrl) });
   try {
     if (direction === 'up') await up(pool);
     else await down(pool);

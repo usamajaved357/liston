@@ -37,6 +37,9 @@ async function request(method, path, body, token) {
 
 async function signupAndLogin(email, password) {
   const { data } = await request('POST', '/api/auth/signup', { email, password });
+  // New owners are pending until an admin approves; these tests are about
+  // what an approved account can do, so approve directly in the DB.
+  await pool.query("UPDATE users SET access_status = 'active' WHERE id = $1", [data.user.id]);
   return { userId: data.user.id, token: data.token };
 }
 
@@ -56,7 +59,7 @@ async function createOwnerWithMemberAndConnection() {
   assert.strictEqual(addRes.status, 201);
 
   const { data: loginData } = await request('POST', '/api/auth/login', { email: memberEmail, password: memberPassword });
-  return { ownerId, ownerToken, memberId: addRes.data.member.id, memberToken: loginData.token, connectionId: connection.id };
+  return { ownerId, ownerToken, memberId: addRes.data.member.id, memberToken: loginData.token, memberEmail, connectionId: connection.id };
 }
 
 test('POST /api/team/members requires the caller to be an owner', async () => {
@@ -221,4 +224,22 @@ test('DELETE /api/team/members/:id removes a member and their permissions', asyn
 
   const { status } = await request('GET', '/api/connections', undefined, memberToken);
   assert.strictEqual(status, 401); // token now belongs to a deleted user
+});
+
+test('PUT /api/team/members/:id/password resets a member login (owner only)', async () => {
+  const { ownerToken, memberId, memberToken, memberEmail } = await createOwnerWithMemberAndConnection();
+
+  const asMember = await request('PUT', `/api/team/members/${memberId}/password`, { password: 'newpassword123' }, memberToken);
+  assert.strictEqual(asMember.status, 403);
+
+  const short = await request('PUT', `/api/team/members/${memberId}/password`, { password: 'short' }, ownerToken);
+  assert.strictEqual(short.status, 400);
+
+  const ok = await request('PUT', `/api/team/members/${memberId}/password`, { password: 'newpassword123' }, ownerToken);
+  assert.strictEqual(ok.status, 204);
+
+  const oldLogin = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
+  assert.strictEqual(oldLogin.status, 401);
+  const newLogin = await request('POST', '/api/auth/login', { email: memberEmail, password: 'newpassword123' });
+  assert.strictEqual(newLogin.status, 200);
 });

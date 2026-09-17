@@ -13,6 +13,8 @@ export default function SignupPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [accessNote, setAccessNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -27,9 +29,9 @@ export default function SignupPage() {
 
     setLoading(true);
     try {
-      const { token } = await api.signup(email, password);
+      const { token, user } = await api.signup(email, password, { name: name || undefined, accessNote: accessNote || undefined });
       localStorage.setItem("token", token);
-      router.push("/dashboard");
+      router.push(user.access_status === "pending" ? "/pending" : "/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't create your account. Try again.");
     } finally {
@@ -40,8 +42,8 @@ export default function SignupPage() {
   return (
     <AuthLayout
       eyebrow="Liston"
-      title="Create your account"
-      subtitle="Start tracking competitor listings and publishing with AI."
+      title="Request access"
+      subtitle="Liston is invite-only while we build. Tell us about your business and we'll approve your account by email."
       footer={
         <>
           Already have an account?{" "}
@@ -51,7 +53,8 @@ export default function SignupPage() {
         </>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-3.5">
+        <Field label="Your name" type="text" value={name} onChange={setName} autoComplete="name" />
         <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
         <PasswordField
           label="Password"
@@ -60,13 +63,19 @@ export default function SignupPage() {
           autoComplete="new-password"
           showCriteria
         />
+        <div>
+          <label className="block text-[13px] font-medium text-[var(--color-ink)]">About your business <span className="font-normal text-[var(--color-muted)]">(optional)</span></label>
+          <textarea
+            className="input mt-1 h-[4.5rem] resize-none text-[13.5px]"
+            placeholder="e.g. UK eBay seller, two stores, mostly home & garden"
+            value={accessNote}
+            onChange={(e) => setAccessNote(e.target.value)}
+            maxLength={500}
+          />
+        </div>
         {error && <Alert>{error}</Alert>}
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full rounded-md bg-[var(--color-primary)] px-4 py-2.5 text-[15px] font-medium text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-60 transition-colors"
-        >
-          {loading ? "Creating account…" : "Create account"}
+        <button type="submit" disabled={loading} className="btn btn-primary w-full">
+          {loading ? "Sending request…" : "Request access"}
         </button>
       </form>
     </AuthLayout>

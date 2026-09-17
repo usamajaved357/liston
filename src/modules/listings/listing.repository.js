@@ -28,11 +28,57 @@ async function findPendingByConnection(connectionId, userId) {
     `SELECT l.*
      FROM listings l
      JOIN connections c ON c.id = l.connection_id
-     WHERE l.connection_id = $1 AND c.user_id = $2 AND l.status = 'pending_review'
+     WHERE l.connection_id = $1 AND c.user_id = $2 AND l.status = 'pending_review' AND l.edit_of_item_id IS NULL
      ORDER BY l.created_at DESC`,
     [connectionId, userId]
   );
   return result.rows;
+}
+
+// The in-progress edit of a live listing, if there is one, so reopening
+// Edit resumes it rather than starting a second copy.
+async function findLiveEdit(connectionId, userId, itemId) {
+  const result = await query(
+    `SELECT l.* FROM listings l JOIN connections c ON c.id = l.connection_id
+     WHERE l.connection_id = $1 AND c.user_id = $2 AND l.edit_of_item_id = $3 AND l.status = 'pending_review'
+     ORDER BY l.created_at DESC LIMIT 1`,
+    [connectionId, userId, itemId]
+  );
+  return result.rows[0] || null;
+}
+
+async function createLiveEdit({ connectionId, itemId, sku, generatedData }) {
+  const result = await query(
+    `INSERT INTO listings (connection_id, sku, external_product_id, edit_of_item_id, generated_data, status)
+     VALUES ($1, $2, $3, $3, $4, 'pending_review') RETURNING *`,
+    [connectionId, sku, itemId, generatedData]
+  );
+  return result.rows[0];
+}
+
+// The most recent listing Liston itself published as this eBay item: its
+// draft is the best possible starting point for an edit (plain description
+// with formatting markers, clean specifics, per-variation images).
+async function findPublishedByItemId(connectionId, itemId) {
+  const result = await query(
+    `SELECT * FROM listings WHERE connection_id = $1 AND external_product_id = $2 AND status = 'published' AND edit_of_item_id IS NULL
+     ORDER BY updated_at DESC LIMIT 1`,
+    [connectionId, itemId]
+  );
+  return result.rows[0] || null;
+}
+
+async function findAllByItemId(connectionId, itemId) {
+  const result = await query('SELECT * FROM listings WHERE connection_id = $1 AND external_product_id = $2', [connectionId, itemId]);
+  return result.rows;
+}
+
+async function deleteByItemId(connectionId, itemId) {
+  await query('DELETE FROM listings WHERE connection_id = $1 AND external_product_id = $2', [connectionId, itemId]);
+}
+
+async function deleteById(id) {
+  await query('DELETE FROM listings WHERE id = $1', [id]);
 }
 
 async function updateStatus(id, status, { externalProductId, errorMessage } = {}) {
@@ -84,6 +130,12 @@ async function deleteDraft(id, userId) {
 }
 
 module.exports = {
+  findLiveEdit,
+  createLiveEdit,
+  findPublishedByItemId,
+  deleteById,
+  findAllByItemId,
+  deleteByItemId,
   createDraft,
   findByIdForUser,
   findPendingByConnection,

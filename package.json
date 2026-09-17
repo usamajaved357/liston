@@ -1,7 +1,7 @@
 {
   "name": "liston",
   "version": "0.1.0",
-  "description": "Liston — track competitor listings, generate original content with AI, publish across marketplaces",
+  "description": "Liston \u2014 track competitor listings, generate original content with AI, publish across marketplaces",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
@@ -10,7 +10,7 @@
     "migrate": "node src/db/migrate.js up",
     "migrate:down": "node src/db/migrate.js down",
     "seed": "node src/db/seeds/run.js",
-    "test": "NODE_ENV=test node --test"
+    "test": "NODE_ENV=test node --test; STATUS=$?; node tests/cleanup.js; exit $STATUS"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

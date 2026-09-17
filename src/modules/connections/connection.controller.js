@@ -2,6 +2,7 @@ const { z } = require('zod');
 const connectionService = require('./connection.service');
 const ebayOauth = require('../ebay/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
+const logoPalette$ = require('./logo-palette');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
@@ -76,18 +77,33 @@ const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month'
 async function getListings(req, res, next) {
   try {
     const status = req.query.status === 'inactive' ? 'inactive' : 'active';
-    const pageNumber = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    // perPage=all puts everything on one page.
+    const perPage = req.query.perPage === 'all' ? 0 : Math.min(200, Math.max(1, parseInt(req.query.perPage, 10) || 25));
+    const search = typeof req.query.q === 'string' ? req.query.q : '';
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Listings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return status === 'active'
-        ? ebayService.listActiveListings(credentials, { pageNumber, entriesPerPage: 25 })
-        : ebayService.listUnsoldListings(credentials, { pageNumber, entriesPerPage: 25 });
+      return ebayService.listListingsDetailed(credentials, {
+        connectionId: req.params.id,
+        status,
+        search,
+        page,
+        perPage,
+        hiddenItemIds: status === 'inactive' ? connection.settings?.hiddenItemIds || [] : [],
+      });
     });
 
-    res.status(200).json({ items: result.items, totalEntries: result.totalEntries, totalPages: result.totalPages });
+    res.status(200).json({
+      items: result.items,
+      totalEntries: result.totalEntries,
+      totalPages: result.totalPages,
+      page: result.page,
+      perPage: result.perPage,
+      allCount: result.allCount,
+    });
   } catch (err) {
     next(err);
   }
@@ -130,7 +146,7 @@ async function getEarnings(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Earnings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.getEarningsSummary(credentials, { range, from, to });
+      return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to });
     });
 
     res.status(200).json({ earnings: result.earnings, orderCount: result.orderCount, truncated: result.truncated });
@@ -250,6 +266,26 @@ async function getStoreProfile(req, res, next) {
   }
 }
 
+// Colour suggestions for the description template, read from the store's
+// logo (the saved one, or the eBay store logo when none is set).
+async function logoPalette(req, res, next) {
+  try {
+    const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    let logoUrl = url;
+    if (!logoUrl) {
+      const profile = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) => ebayService.getStoreProfile(credentials));
+      logoUrl = profile.logoUrl || '';
+    }
+    if (!/^https?:\/\//i.test(logoUrl)) {
+      return res.status(400).json({ error: 'No logo to read colours from. Add a logo URL first.' });
+    }
+    const result = await logoPalette$.palettesFromLogo(logoUrl);
+    res.status(200).json({ logoUrl, ...result });
+  } catch (err) {
+    next(Object.assign(new Error("Couldn't read colours from that logo."), { statusCode: 400, cause: err }));
+  }
+}
+
 async function updateTemplate(req, res, next) {
   try {
     const parsed = updateTemplateSchema.safeParse(req.body);
@@ -301,5 +337,6 @@ module.exports = {
   updatePolicies,
   updatePricing,
   updateTemplate,
+  logoPalette,
   getStoreProfile,
 };

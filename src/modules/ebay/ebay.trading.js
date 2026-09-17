@@ -183,6 +183,33 @@ async function getItemSummary(accessToken, itemId) {
   };
 }
 
+// Only the fields mapOrder/mapLineItem read. A full GetOrders response is
+// several times larger (shipping addresses, fee breakdowns, monetary
+// details) and the parse time was most of what the dashboard waited on.
+const GET_ORDERS_FIELDS = [
+  'PaginationResult',
+  'HasMoreOrders',
+  'OrderArray.Order.OrderID',
+  'OrderArray.Order.OrderStatus',
+  'OrderArray.Order.CreatedTime',
+  'OrderArray.Order.Total',
+  'OrderArray.Order.Subtotal',
+  'OrderArray.Order.BuyerUserID',
+  'OrderArray.Order.CheckoutStatus.Status',
+  'OrderArray.Order.PaidTime',
+  'OrderArray.Order.ShippedTime',
+  'OrderArray.Order.CancelStatus',
+  'OrderArray.Order.TransactionArray.Transaction.Item.ItemID',
+  'OrderArray.Order.TransactionArray.Transaction.Item.Title',
+  'OrderArray.Order.TransactionArray.Transaction.QuantityPurchased',
+  'OrderArray.Order.TransactionArray.Transaction.TransactionPrice',
+  'OrderArray.Order.TransactionArray.Transaction.Variation.VariationSpecifics',
+  'OrderArray.Order.TransactionArray.Transaction.Buyer.UserFirstName',
+  'OrderArray.Order.TransactionArray.Transaction.Buyer.UserLastName',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingDetails.ShipmentTrackingDetails',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.HandleByTime',
+];
+
 // createTimeFrom/createTimeTo are ISO 8601 strings; eBay caps this range at
 // 90 days per request.
 async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber = 1, entriesPerPage = 50 } = {}) {
@@ -190,7 +217,8 @@ async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber
     `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom>` +
     `<CreateTimeTo>${createTimeTo}</CreateTimeTo>` +
     `<OrderStatus>All</OrderStatus>` +
-    `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination>`;
+    `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination>` +
+    GET_ORDERS_FIELDS.map((f) => `<OutputSelector>${f}</OutputSelector>`).join('');
   const res = await tradingRequest(accessToken, 'GetOrders', body);
   return {
     orders: toArray(res.OrderArray?.Order).map(mapOrder),
@@ -236,4 +264,136 @@ async function reviseDescription(accessToken, itemId, descriptionHtml) {
   return { itemId: String(body.ItemID || itemId) };
 }
 
-module.exports = { EbayTradingError, getActiveListings, getUnsoldListings, getOrders, getItemSummary, getStoreProfile, reviseDescription };
+// Trading's numeric condition ids <-> the Inventory API enum the drafts use.
+const CONDITION_IDS = {
+  NEW: 1000,
+  NEW_OTHER: 1500,
+  NEW_WITH_DEFECTS: 1750,
+  CERTIFIED_REFURBISHED: 2000,
+  SELLER_REFURBISHED: 2500,
+  USED_EXCELLENT: 3000,
+  USED_VERY_GOOD: 4000,
+  USED_GOOD: 5000,
+  USED_ACCEPTABLE: 6000,
+  FOR_PARTS_OR_NOT_WORKING: 7000,
+};
+function conditionFromId(id) {
+  const n = Number(id);
+  return Object.keys(CONDITION_IDS).find((k) => CONDITION_IDS[k] === n) || null;
+}
+function xmlEscape(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function nameValueList(specifics) {
+  return Object.entries(specifics || {})
+    .filter(([, values]) => (Array.isArray(values) ? values.length : values))
+    .map(
+      ([name, values]) =>
+        `<NameValueList><Name>${xmlEscape(name)}</Name>${(Array.isArray(values) ? values : [values]).map((v) => `<Value>${xmlEscape(v)}</Value>`).join('')}</NameValueList>`
+    )
+    .join('');
+}
+function specificsFrom(node) {
+  const out = {};
+  for (const nv of toArray(node?.NameValueList)) {
+    const values = toArray(nv.Value).map((v) => (typeof v === 'object' ? v['#text'] : v)).filter((v) => v !== undefined && v !== '');
+    if (nv.Name && values.length) out[String(nv.Name)] = values.map(String);
+  }
+  return out;
+}
+
+// Everything the editor needs to load a live listing: text, pictures,
+// price, stock, condition, specifics and (if any) the variation matrix.
+async function getItem(accessToken, itemId) {
+  const res = await tradingRequest(accessToken, 'GetItem', `<ItemID>${itemId}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
+  const item = res.Item || {};
+  const variationsNode = item.Variations;
+  const variations = toArray(variationsNode?.Variation).map((v) => ({
+    sku: v.SKU ? String(v.SKU) : null,
+    price: money(v.StartPrice),
+    quantity: Number(v.Quantity ?? 0),
+    quantitySold: Number(v.SellingStatus?.QuantitySold ?? 0),
+    specifics: specificsFrom(v.VariationSpecifics),
+  }));
+  const variationPictures = toArray(variationsNode?.Pictures).map((p) => ({
+    specificName: p.VariationSpecificName,
+    byValue: Object.fromEntries(toArray(p.VariationSpecificPictureSet).map((set) => [String(set.VariationSpecificValue), toArray(set.PictureURL).map(String)])),
+  }));
+  return {
+    itemId: String(item.ItemID || itemId),
+    sku: item.SKU ? String(item.SKU) : null,
+    title: item.Title || '',
+    description: item.Description || '',
+    imageUrls: toArray(item.PictureDetails?.PictureURL).map(String),
+    price: money(item.StartPrice),
+    quantity: Number(item.Quantity ?? 0),
+    quantitySold: Number(item.SellingStatus?.QuantitySold ?? 0),
+    condition: conditionFromId(item.ConditionID),
+    conditionId: item.ConditionID ? Number(item.ConditionID) : null,
+    categoryId: item.PrimaryCategory?.CategoryID ? String(item.PrimaryCategory.CategoryID) : null,
+    categoryPath: item.PrimaryCategory?.CategoryName ? String(item.PrimaryCategory.CategoryName).split(':') : [],
+    specifics: specificsFrom(item.ItemSpecifics),
+    currency: item.StartPrice?.['@_currencyID'] || item.Currency || null,
+    viewItemUrl: item.ListingDetails?.ViewItemURL || null,
+    listingType: item.ListingType || null,
+    variationSpecificsSet: specificsFrom(variationsNode?.VariationSpecificsSet),
+    variations,
+    variationPictures,
+  };
+}
+
+// Revises a live fixed-price listing in place. Only the fields given are
+// sent; eBay leaves the rest as they were. For a variation listing the
+// whole matrix goes up together, because eBay treats <Variations> as a
+// replacement set.
+async function reviseListing(accessToken, itemId, { title, descriptionHtml, price, quantity, conditionId, imageUrls, specifics, variations, variationSpecificsSet, variationPictures }) {
+  let body = `<Item><ItemID>${itemId}</ItemID>`;
+  if (title !== undefined) body += `<Title>${xmlEscape(title)}</Title>`;
+  if (descriptionHtml !== undefined) body += `<Description><![CDATA[${descriptionHtml}]]></Description>`;
+  if (conditionId) body += `<ConditionID>${conditionId}</ConditionID>`;
+  if (imageUrls && imageUrls.length) body += `<PictureDetails>${imageUrls.map((u) => `<PictureURL>${xmlEscape(u)}</PictureURL>`).join('')}</PictureDetails>`;
+  if (specifics) body += `<ItemSpecifics>${nameValueList(specifics)}</ItemSpecifics>`;
+  if (variations && variations.length) {
+    body += '<Variations>';
+    if (variationSpecificsSet) body += `<VariationSpecificsSet>${nameValueList(variationSpecificsSet)}</VariationSpecificsSet>`;
+    for (const v of variations) {
+      body += '<Variation>';
+      if (v.sku) body += `<SKU>${xmlEscape(v.sku)}</SKU>`;
+      if (v.price) body += `<StartPrice currencyID="${xmlEscape(v.price.currency)}">${Number(v.price.amount).toFixed(2)}</StartPrice>`;
+      if (v.quantity !== undefined) body += `<Quantity>${Math.max(0, Number(v.quantity) || 0)}</Quantity>`;
+      body += `<VariationSpecifics>${nameValueList(v.specifics)}</VariationSpecifics>`;
+      body += '</Variation>';
+    }
+    if (variationPictures && variationPictures.length) {
+      for (const p of variationPictures) {
+        const sets = Object.entries(p.byValue || {}).filter(([, urls]) => urls && urls.length);
+        if (!sets.length) continue;
+        body += `<Pictures><VariationSpecificName>${xmlEscape(p.specificName)}</VariationSpecificName>`;
+        for (const [value, urls] of sets) {
+          body += `<VariationSpecificPictureSet><VariationSpecificValue>${xmlEscape(value)}</VariationSpecificValue>${urls.map((u) => `<PictureURL>${xmlEscape(u)}</PictureURL>`).join('')}</VariationSpecificPictureSet>`;
+        }
+        body += '</Pictures>';
+      }
+    }
+    body += '</Variations>';
+  } else {
+    if (price) body += `<StartPrice currencyID="${xmlEscape(price.currency)}">${Number(price.amount).toFixed(2)}</StartPrice>`;
+    if (quantity !== undefined) body += `<Quantity>${Math.max(0, Number(quantity) || 0)}</Quantity>`;
+  }
+  body += '</Item>';
+  const res = await tradingRequest(accessToken, 'ReviseFixedPriceItem', body);
+  return { itemId: String(res.ItemID || itemId) };
+}
+
+module.exports = {
+  EbayTradingError,
+  CONDITION_IDS,
+  getActiveListings,
+  getUnsoldListings,
+  getOrders,
+  getItemSummary,
+  getItem,
+  getStoreProfile,
+  reviseDescription,
+  reviseListing,
+};

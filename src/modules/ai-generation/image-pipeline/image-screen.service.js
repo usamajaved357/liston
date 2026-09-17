@@ -135,7 +135,7 @@ async function screenImages(prepared) {
     return prepared.map((image, index) => ({ ...image, screen: byIndex.get(index) || null }));
   } catch (err) {
     // Screening improves a gallery; it isn't worth losing a draft over.
-    logger.warn('Image screening unavailable — using the gallery unscreened', { error: err.message });
+    logger.warn('Image screening unavailable. Using the gallery unscreened', { error: err.message });
     return prepared;
   }
 }
