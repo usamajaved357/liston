@@ -600,6 +600,12 @@ export const api = {
       feedbackScore: number | null;
       feedbackPercent: string | null;
     }>(`/api/connections/${id}/store-profile`),
+  // Colour pairs suggested from the store logo (saved URL, or eBay's when blank).
+  getTemplatePalette: (id: string, logoUrl?: string) =>
+    request<{ logoUrl: string; colors: string[]; palettes: { name: string; accentColor: string; darkColor: string }[] }>(
+      `/api/connections/${id}/template/palette${logoUrl ? `?url=${encodeURIComponent(logoUrl)}` : ""}`
+    ),
+
   updateConnectionTemplate: (id: string, template: DescriptionTemplate) =>
     request<{ settings: { template: DescriptionTemplate } }>(`/api/connections/${id}/template`, {
       method: "PUT",

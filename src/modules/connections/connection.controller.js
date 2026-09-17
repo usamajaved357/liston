@@ -2,6 +2,7 @@ const { z } = require('zod');
 const connectionService = require('./connection.service');
 const ebayOauth = require('../ebay/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
+const logoPalette$ = require('./logo-palette');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
@@ -265,6 +266,26 @@ async function getStoreProfile(req, res, next) {
   }
 }
 
+// Colour suggestions for the description template, read from the store's
+// logo (the saved one, or the eBay store logo when none is set).
+async function logoPalette(req, res, next) {
+  try {
+    const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    let logoUrl = url;
+    if (!logoUrl) {
+      const profile = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) => ebayService.getStoreProfile(credentials));
+      logoUrl = profile.logoUrl || '';
+    }
+    if (!/^https?:\/\//i.test(logoUrl)) {
+      return res.status(400).json({ error: 'No logo to read colours from. Add a logo URL first.' });
+    }
+    const result = await logoPalette$.palettesFromLogo(logoUrl);
+    res.status(200).json({ logoUrl, ...result });
+  } catch (err) {
+    next(Object.assign(new Error("Couldn't read colours from that logo."), { statusCode: 400, cause: err }));
+  }
+}
+
 async function updateTemplate(req, res, next) {
   try {
     const parsed = updateTemplateSchema.safeParse(req.body);
@@ -316,5 +337,6 @@ module.exports = {
   updatePolicies,
   updatePricing,
   updateTemplate,
+  logoPalette,
   getStoreProfile,
 };

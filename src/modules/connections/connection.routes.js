@@ -23,6 +23,7 @@ router.put('/:id/policies', requireAuth, requireOwner, connectionController.upda
 // they're owner-only for the same reason policies are — never delegable.
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);
 router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
+router.get('/:id/template/palette', requireAuth, requireOwner, connectionController.logoPalette);
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
 router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
