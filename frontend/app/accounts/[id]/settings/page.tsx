@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ConnectionPolicies, DescriptionTemplate, LocationAddress, Policy, PricingSettings } from "@/lib/api";
+import { api, ApiError, ConnectionPolicies, DescriptionTemplate, EbaySettings, LocationAddress, Policy, PricingSettings } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { currencySymbol } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -310,9 +310,12 @@ export default function AccountSettingsPage() {
       .then((data) => {
         setPolicies(data);
         setPricing((p) => (connection.settings?.pricing?.currency ? p : { ...p, currency: data.marketplace.currency }));
-        setFulfillmentPolicyId(connection.settings?.ebay?.fulfillmentPolicyId || "");
-        setPaymentPolicyId(connection.settings?.ebay?.paymentPolicyId || "");
-        setReturnPolicyId(connection.settings?.ebay?.returnPolicyId || "");
+        // Nothing saved yet: preselect the first policy of each type so a
+        // new account never looks empty. The seller still has to press Save.
+        const saved: Partial<EbaySettings> = connection.settings?.ebay || {};
+        setFulfillmentPolicyId(saved.fulfillmentPolicyId || data.fulfillmentPolicies[0]?.fulfillmentPolicyId || "");
+        setPaymentPolicyId(saved.paymentPolicyId || data.paymentPolicies[0]?.paymentPolicyId || "");
+        setReturnPolicyId(saved.returnPolicyId || data.returnPolicies[0]?.returnPolicyId || "");
         const savedLocation = connection.settings?.ebay?.merchantLocationKey;
         const locations = data.merchantLocations || [];
         setMerchantLocationKey(savedLocation || (locations.length === 1 ? locations[0].merchantLocationKey : ""));
@@ -553,7 +556,7 @@ export default function AccountSettingsPage() {
                     </div>
                   ) : (
                     <button type="button" onClick={startLocationForm} className="btn btn-secondary btn-sm mt-2">
-                      {(policies?.merchantLocations || []).length ? "Add another location" : "Create from my eBay address"}
+                      {(policies?.merchantLocations || []).length ? "Add another location" : policies?.registrationAddress ? "Create from my eBay address" : "Add shipping location"}
                     </button>
                   )}
                 </Row>
