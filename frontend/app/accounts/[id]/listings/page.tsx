@@ -18,11 +18,6 @@ const PAGE_SIZES: { key: number | "all"; label: string }[] = [
   { key: "all", label: "All" },
 ];
 
-const ExternalIcon = (
-  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-    <path d="M14 5h5v5M19 5l-8 8M17 13v5a1 1 0 01-1 1H6a1 1 0 01-1-1V8a1 1 0 011-1h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
 const TrashIcon = (
   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
     <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -55,30 +50,38 @@ function StockBadge({ available }: { available: number }) {
   );
 }
 
-function ListingRow({ item }: { item: Listing }) {
+function ListingRow({ item, onEdit, editing }: { item: Listing; onEdit: () => void; editing: boolean }) {
+  const open = () => {
+    if (item.viewItemUrl) window.open(item.viewItemUrl, "_blank", "noopener");
+  };
   return (
-    <li className="flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)]">
+    <li
+      onClick={open}
+      className={`group flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)] ${item.viewItemUrl ? "cursor-pointer" : ""}`}
+    >
       <Thumb src={item.imageUrl} />
       <div className="min-w-0 flex-1">
-        <a href={item.viewItemUrl || undefined} target="_blank" rel="noreferrer" className="block truncate text-sm font-semibold text-[var(--color-ink)] hover:text-[var(--color-primary)]">
-          {item.title}
-        </a>
-        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="truncate text-[13.5px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{item.title}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-muted)]">
           <StockBadge available={item.quantityAvailable} />
-          <span className="text-[12px] text-[var(--color-muted)]">{item.quantitySold} sold</span>
-          {item.sku && <span className="chip !h-5 !px-2 !text-[10.5px]">SKU {item.sku}</span>}
-          {item.startTime && <span className="text-[12px] text-[var(--color-muted)]">Listed {formatShortDate(item.startTime)}</span>}
+          <span>{item.quantitySold} sold</span>
+          <span className="font-mono text-[11.5px] tracking-tight">#{item.itemId}</span>
+          {item.sku && <span className="truncate">SKU {item.sku}</span>}
+          {item.startTime && <span>Listed {formatShortDate(item.startTime)}</span>}
         </div>
       </div>
-      <div className="flex-shrink-0 text-right">
-        <p className="text-[15px] font-semibold tracking-tight text-[var(--color-ink)]">{formatMoney(item.price)}</p>
-        {item.convertedPrice && <p className="text-[11.5px] text-[var(--color-muted)]">≈ {formatMoney(item.convertedPrice)}</p>}
-      </div>
-      {item.viewItemUrl && (
-        <a href={item.viewItemUrl} target="_blank" rel="noreferrer" className="btn btn-ghost btn-icon -mr-2 flex-shrink-0" title="View on eBay" aria-label="View on eBay">
-          {ExternalIcon}
-        </a>
-      )}
+      <p className="w-20 flex-shrink-0 text-right text-[14px] font-medium tracking-tight text-[var(--color-ink)]">{formatMoney(item.price)}</p>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onEdit();
+        }}
+        disabled={editing}
+        className="btn flex-shrink-0 !h-7 !px-3 !text-[12px] bg-[var(--color-primary-soft)] font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white"
+      >
+        {editing ? "Opening…" : "Edit"}
+      </button>
     </li>
   );
 }
@@ -228,6 +231,7 @@ export default function AccountListingsPage() {
   // The selected tab lives in the URL, so opening a draft and coming back
   // lands on the same tab rather than resetting to Active.
   const urlFilter = searchParams.get("filter");
+  const updatedItemId = searchParams.get("updated");
   const [filter, setFilter] = useState<Tab>(urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active");
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -242,6 +246,7 @@ export default function AccountListingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [draftToDelete, setDraftToDelete] = useState<string | null>(null);
   const [deletingDraft, setDeletingDraft] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 250);
@@ -292,6 +297,19 @@ export default function AccountListingsPage() {
     setPage(1);
     setLoading(true);
     router.replace(`/accounts/${params.id}/listings${next === "active" ? "" : `?filter=${next}`}`, { scroll: false });
+  }
+
+  async function openLiveEdit(itemId: string) {
+    if (!connection) return;
+    setEditingItemId(itemId);
+    setError(null);
+    try {
+      const { listing } = await api.startLiveEdit(connection.id, itemId);
+      router.push(`/accounts/${connection.id}/listings/draft/${listing.id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't open this listing for editing. Try again.");
+      setEditingItemId(null);
+    }
   }
 
   async function handleDeleteDraft() {
@@ -346,19 +364,11 @@ export default function AccountListingsPage() {
       permissions={connection.permissions}
       user={user}
       header={
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Listings</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-              {connection.label} · {connection.platform_name}
-            </p>
-          </div>
-          <Link href={`/accounts/${connection.id}/listings/new`} className="btn btn-primary btn-sm">
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-              <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-            </svg>
-            Draft a listing
-          </Link>
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Listings</h1>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+            {connection.label} · {connection.platform_name}
+          </p>
         </div>
       }
     >
@@ -378,6 +388,15 @@ export default function AccountListingsPage() {
             </button>
           ))}
         </div>
+        <div className="flex items-center gap-2">
+          {filter === "draft" && (
+            <Link href={`/accounts/${connection.id}/listings/new`} className="btn btn-primary btn-sm">
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+              </svg>
+              Draft a listing
+            </Link>
+          )}
         <div className="relative w-72 max-w-full">
           <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
             <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
@@ -394,11 +413,17 @@ export default function AccountListingsPage() {
             className="input input-sm !pl-10"
           />
         </div>
+        </div>
       </div>
 
       {error && (
         <div className="notice notice-danger mb-4">
           <span className="flex-1">{error}</span>
+        </div>
+      )}
+      {updatedItemId && (
+        <div className="notice notice-success mb-4">
+          <span className="flex-1">Listing #{updatedItemId} has been updated on eBay. It can take a minute to show here.</span>
         </div>
       )}
 
@@ -432,7 +457,7 @@ export default function AccountListingsPage() {
           <>
             <ul className="divide-y divide-[var(--color-line)]">
               {items.map((item) => (
-                <ListingRow key={item.itemId} item={item} />
+                <ListingRow key={item.itemId} item={item} editing={editingItemId === item.itemId} onEdit={() => openLiveEdit(item.itemId)} />
               ))}
             </ul>
             <Footer

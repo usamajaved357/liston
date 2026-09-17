@@ -442,6 +442,8 @@ export interface DraftListing {
   error_message: string | null;
   created_at: string;
   updated_at: string;
+  // Set when this row is a live listing opened for editing (never a draft).
+  edit_of_item_id?: string | null;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
@@ -615,6 +617,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+
+  // Opens a live eBay listing in the editor; returns the transient working copy.
+  startLiveEdit: (connectionId: string, itemId: string) =>
+    request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit`, { method: "POST" }),
 
   listDraftListings: (connectionId: string) =>
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),

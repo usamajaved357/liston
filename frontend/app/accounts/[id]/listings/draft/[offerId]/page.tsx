@@ -1116,6 +1116,9 @@ export default function DraftEditorPage() {
   const variation = content && isVariationDraft(content) ? content : null;
   const single = content && !isVariationDraft(content) ? content : null;
   const editable = listing?.status === "pending_review";
+  // A live listing opened for editing: only two ways out, discard or push
+  // the changes to eBay. No draft is kept either way.
+  const isLiveEdit = Boolean(listing?.edit_of_item_id);
 
   const resetFrom = useCallback((row: DraftListing) => {
     const c = row.generated_data as DraftContent;
@@ -1281,7 +1284,17 @@ export default function DraftEditorPage() {
     setPublishing(true);
     setError(null);
     try {
+      // Editing a live listing is one step: unsaved changes go up with it.
+      if (isLiveEdit && dirty) {
+        const saved = await api.updateDraftListing(listing.id, buildPatch());
+        setListing(saved.listing);
+        resetFrom(saved.listing);
+      }
       const data = await api.publishDraftListing(listing.id);
+      if (isLiveEdit) {
+        router.push(`/accounts/${params.id}/listings?updated=${listing.edit_of_item_id}`);
+        return;
+      }
       setListing(data.listing);
       setPublished(data.listing);
     } catch (err) {
@@ -1296,7 +1309,7 @@ export default function DraftEditorPage() {
     setDeleting(true);
     try {
       await api.deleteDraftListing(listing.id);
-      router.push(`/accounts/${params.id}/listings?filter=draft`);
+      router.push(`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't delete this draft.");
       setDeleting(false);
@@ -1453,9 +1466,9 @@ export default function DraftEditorPage() {
   return (
     <main className="flex h-screen flex-col bg-[var(--color-paper)]">
       <EditorHeader
-        backHref={`/accounts/${params.id}/listings?filter=draft`}
-        backLabel="Back to drafts"
-        title={editable ? "Edit listing" : "Listing"}
+        backHref={`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`}
+        backLabel={isLiveEdit ? "Back to listings" : "Back to drafts"}
+        title={isLiveEdit ? "Edit live listing" : editable ? "Edit listing" : "Listing"}
         chips={
           notes.length > 0 ? (
             <button
@@ -1476,7 +1489,11 @@ export default function DraftEditorPage() {
           ) : null
         }
         actions={
-          editable ? (
+          isLiveEdit ? (
+            <span className="chip font-medium" title="eBay item number">
+              Live · #{listing.edit_of_item_id}
+            </span>
+          ) : editable ? (
             <>
               <span className="mr-1 hidden text-xs text-[var(--color-muted)] md:inline">{dirty ? "Unsaved changes" : "All changes saved"}</span>
               {dirty && (
@@ -1839,19 +1856,36 @@ export default function DraftEditorPage() {
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
             <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
               {Icon.trash}
-              <span>Delete draft</span>
+              <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
             </button>
             <div className="flex items-center gap-3">
-              {dirty && <span className="text-xs text-[var(--color-muted)]">Save your changes to publish</span>}
-              <button
-                type="button"
-                onClick={() => setConfirmPublish(true)}
-                disabled={!canPublish}
-                title={dirty ? "Save your changes first" : undefined}
-                className="btn btn-primary"
-              >
-                {publishing ? "Publishing…" : "Publish to eBay"}
-              </button>
+              {isLiveEdit ? (
+                <>
+                  {dirty && <span className="text-xs text-[var(--color-muted)]">Changes go live on eBay when you publish</span>}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPublish(true)}
+                    disabled={!editable || busy || !dirty || title.length > TITLE_MAX}
+                    title={!dirty ? "Nothing has changed yet" : title.length > TITLE_MAX ? "Shorten the title first" : undefined}
+                    className="btn btn-primary"
+                  >
+                    {publishing ? "Updating…" : "Publish changes"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {dirty && <span className="text-xs text-[var(--color-muted)]">Save your changes to publish</span>}
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPublish(true)}
+                    disabled={!canPublish}
+                    title={dirty ? "Save your changes first" : undefined}
+                    className="btn btn-primary"
+                  >
+                    {publishing ? "Publishing…" : "Publish to eBay"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </footer>
@@ -1861,18 +1895,26 @@ export default function DraftEditorPage() {
 
       <ConfirmDialog
         open={confirmPublish}
-        title="Publish this listing?"
-        description={`It goes live on eBay immediately${variation ? `, with ${variation.variants.length} variations` : ""}. Publishing creates the listing on eBay now, so this can take a minute or two for large variation sets.`}
-        confirmLabel="Publish"
+        title={isLiveEdit ? "Publish these changes?" : "Publish this listing?"}
+        description={
+          isLiveEdit
+            ? "The live eBay listing is updated in place. Buyers see the new title, photos, price, stock and description straight away."
+            : `It goes live on eBay immediately${variation ? `, with ${variation.variants.length} variations` : ""}. Publishing creates the listing on eBay now, so this can take a minute or two for large variation sets.`
+        }
+        confirmLabel={isLiveEdit ? "Publish changes" : "Publish"}
         loading={publishing}
         onCancel={() => setConfirmPublish(false)}
         onConfirm={handlePublish}
       />
       <ConfirmDialog
         open={confirmDelete}
-        title="Delete this draft?"
-        description="This removes the draft from Liston. Nothing has been created on eBay, so there's nothing to undo there."
-        confirmLabel="Delete"
+        title={isLiveEdit ? "Discard your changes?" : "Delete this draft?"}
+        description={
+          isLiveEdit
+            ? "The listing on eBay stays exactly as it is. Nothing you changed here is kept."
+            : "This removes the draft from Liston. Nothing has been created on eBay, so there's nothing to undo there."
+        }
+        confirmLabel={isLiveEdit ? "Discard" : "Delete"}
         danger
         loading={deleting}
         onCancel={() => setConfirmDelete(false)}

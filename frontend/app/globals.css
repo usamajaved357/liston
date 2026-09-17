@@ -56,8 +56,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-a {
-  color: inherit;
+/* In @layer base so utilities (btn-primary's white text, for one) win over it. */
+@layer base {
+  a {
+    color: inherit;
+  }
 }
 
 :focus-visible {

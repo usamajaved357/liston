@@ -341,6 +341,21 @@ async function listUnsoldListings(credentials, opts) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
+async function getLiveItem(credentials, itemId) {
+  const { accessToken } = await ensureValidAccessToken(credentials);
+  return ebayTrading.getItem(accessToken, itemId);
+}
+
+async function reviseLiveListing(credentials, itemId, payload) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.reviseListing(accessToken, itemId, payload);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
+function conditionIdFor(condition) {
+  return ebayTrading.CONDITION_IDS[condition] || undefined;
+}
+
 async function listOrders(credentials, opts) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
   const result = await ebayTrading.getOrders(accessToken, opts);
@@ -656,6 +671,9 @@ module.exports = {
   getStoreProfile,
   listUnsoldListings,
   listOrders,
+  getLiveItem,
+  reviseLiveListing,
+  conditionIdFor,
   listListingsDetailed,
   invalidateListings,
   listOrdersDetailed,
