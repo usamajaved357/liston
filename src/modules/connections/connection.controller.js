@@ -85,7 +85,14 @@ async function getListings(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Listings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listListingsDetailed(credentials, { connectionId: req.params.id, status, search, page, perPage });
+      return ebayService.listListingsDetailed(credentials, {
+        connectionId: req.params.id,
+        status,
+        search,
+        page,
+        perPage,
+        hiddenItemIds: status === 'inactive' ? connection.settings?.hiddenItemIds || [] : [],
+      });
     });
 
     res.status(200).json({

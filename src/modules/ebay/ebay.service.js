@@ -341,6 +341,17 @@ async function listUnsoldListings(credentials, opts) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// Best-effort removal of the Inventory API objects behind a listing Liston
+// published (offer, then the item or group). Anything already gone is fine.
+async function deleteInventoryObjects(credentials, { offerId, groupKey, skus = [] }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const quiet = (p) => p.catch(() => {});
+  if (offerId) await quiet(ebayClient.deleteOffer(accessToken, offerId));
+  if (groupKey) await quiet(ebayClient.deleteInventoryItemGroup(accessToken, groupKey));
+  for (const sku of skus) await quiet(ebayClient.deleteInventoryItem(accessToken, sku));
+  return { credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function getLiveItem(credentials, itemId) {
   const { accessToken } = await ensureValidAccessToken(credentials);
   return ebayTrading.getItem(accessToken, itemId);
@@ -495,9 +506,13 @@ const listingsCache = createSwrCache({
  * Listings for the Listings tab: the cached full set, searched and paged in
  * memory. `perPage` of 0 means everything on one page.
  */
-async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25 }) {
+async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25, hiddenItemIds = [] }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const all = await listingsCache.get(`${connectionId}:${status}`, { accessToken, status });
+  let all = await listingsCache.get(`${connectionId}:${status}`, { accessToken, status });
+  if (hiddenItemIds.length) {
+    const hidden = new Set(hiddenItemIds.map(String));
+    all = all.filter((item) => !hidden.has(item.itemId));
+  }
 
   let filtered = all;
   if (search && search.trim()) {
@@ -672,6 +687,7 @@ module.exports = {
   listUnsoldListings,
   listOrders,
   getLiveItem,
+  deleteInventoryObjects,
   reviseLiveListing,
   conditionIdFor,
   listListingsDetailed,

@@ -50,7 +50,7 @@ function StockBadge({ available }: { available: number }) {
   );
 }
 
-function ListingRow({ item, onEdit, editing }: { item: Listing; onEdit: () => void; editing: boolean }) {
+function ListingRow({ item, onEdit, editing, onDelete }: { item: Listing; onEdit: () => void; editing: boolean; onDelete?: () => void }) {
   const open = () => {
     if (item.viewItemUrl) window.open(item.viewItemUrl, "_blank", "noopener");
   };
@@ -82,32 +82,68 @@ function ListingRow({ item, onEdit, editing }: { item: Listing; onEdit: () => vo
       >
         {editing ? "Opening…" : "Edit"}
       </button>
+      {onDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="btn btn-danger-ghost btn-icon -mr-2 flex-shrink-0"
+          title="Delete permanently"
+          aria-label="Delete permanently"
+        >
+          {TrashIcon}
+        </button>
+      )}
     </li>
   );
 }
 
 function DraftRow({ draft, connectionId, onDelete }: { draft: DraftListing; connectionId: string; onDelete: () => void }) {
+  const router = useRouter();
   const content = draft.generated_data;
   const isVariation = isVariationDraft(content);
   const title = isVariation ? content.commonTitle : content.title;
   const image = content.imageUrls[0];
   const price = isVariation ? content.variants[0]?.price : content.price;
   const variantCount = isVariation ? content.variants.length : null;
+  const href = `/accounts/${connectionId}/listings/draft/${draft.id}`;
   return (
-    <li className="flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)]">
-      <Link href={`/accounts/${connectionId}/listings/draft/${draft.id}`} className="flex min-w-0 flex-1 items-center gap-4">
-        <Thumb src={image || null} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-[var(--color-ink)]">{title}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="chip chip-warning !h-5 !px-2 !text-[10.5px]">Draft</span>
-            <span className="text-[12px] text-[var(--color-muted)]">{variantCount !== null ? `${variantCount} variations` : "Single listing"}</span>
-            {draft.created_at && <span className="text-[12px] text-[var(--color-muted)]">Drafted {formatShortDate(draft.created_at)}</span>}
-          </div>
+    <li onClick={() => router.push(href)} className="group flex cursor-pointer items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)]">
+      <Thumb src={image || null} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13.5px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{title}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-muted)]">
+          <span className="inline-flex items-center gap-1.5 font-medium text-amber-700">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            Draft
+          </span>
+          <span>{variantCount !== null ? `${variantCount} variations` : "Single listing"}</span>
+          {draft.sku && <span className="truncate">SKU {draft.sku}</span>}
+          {draft.created_at && <span>Drafted {formatShortDate(draft.created_at)}</span>}
         </div>
-        <p className="flex-shrink-0 text-[15px] font-semibold tracking-tight text-[var(--color-ink)]">{price ? formatMoney({ amount: Number(price.value), currency: price.currency }) : ""}</p>
+      </div>
+      <p className="w-20 flex-shrink-0 text-right text-[14px] font-medium tracking-tight text-[var(--color-ink)]">
+        {price ? formatMoney({ amount: Number(price.value), currency: price.currency }) : ""}
+      </p>
+      <Link
+        href={href}
+        onClick={(e) => e.stopPropagation()}
+        className="btn flex-shrink-0 !h-7 !px-3 !text-[12px] bg-[var(--color-primary-soft)] font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white"
+      >
+        Edit
       </Link>
-      <button type="button" onClick={onDelete} className="btn btn-danger-ghost btn-icon -mr-2 flex-shrink-0" title="Delete draft" aria-label="Delete draft">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        className="btn btn-danger-ghost btn-icon -mr-2 flex-shrink-0"
+        title="Delete draft"
+        aria-label="Delete draft"
+      >
         {TrashIcon}
       </button>
     </li>
@@ -247,6 +283,8 @@ export default function AccountListingsPage() {
   const [draftToDelete, setDraftToDelete] = useState<string | null>(null);
   const [deletingDraft, setDeletingDraft] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<Listing | null>(null);
+  const [deletingItem, setDeletingItem] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search.trim()), 250);
@@ -309,6 +347,22 @@ export default function AccountListingsPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't open this listing for editing. Try again.");
       setEditingItemId(null);
+    }
+  }
+
+  async function handleDeleteItem() {
+    if (!connection || !itemToDelete) return;
+    setDeletingItem(true);
+    try {
+      await api.removeInactiveListing(connection.id, itemToDelete.itemId);
+      setItems((list) => list.filter((i) => i.itemId !== itemToDelete.itemId));
+      setTotalEntries((n) => Math.max(0, n - 1));
+      setCounts((c) => ({ ...c, inactive: Math.max(0, (c.inactive || 1) - 1) }));
+      setItemToDelete(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't delete this listing. Try again.");
+    } finally {
+      setDeletingItem(false);
     }
   }
 
@@ -457,7 +511,13 @@ export default function AccountListingsPage() {
           <>
             <ul className="divide-y divide-[var(--color-line)]">
               {items.map((item) => (
-                <ListingRow key={item.itemId} item={item} editing={editingItemId === item.itemId} onEdit={() => openLiveEdit(item.itemId)} />
+                <ListingRow
+                  key={item.itemId}
+                  item={item}
+                  editing={editingItemId === item.itemId}
+                  onEdit={() => openLiveEdit(item.itemId)}
+                  onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
+                />
               ))}
             </ul>
             <Footer
@@ -478,6 +538,16 @@ export default function AccountListingsPage() {
         )}
       </div>
 
+      <ConfirmDialog
+        open={itemToDelete !== null}
+        title="Delete this listing permanently?"
+        description="It's removed from Liston for good and cleared from eBay's inventory where Liston created it. This can't be undone. eBay may still show it under Unsold in Seller Hub until it purges old entries."
+        confirmLabel="Delete"
+        danger
+        loading={deletingItem}
+        onCancel={() => setItemToDelete(null)}
+        onConfirm={handleDeleteItem}
+      />
       <ConfirmDialog
         open={draftToDelete !== null}
         title="Delete this draft?"

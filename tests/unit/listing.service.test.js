@@ -575,3 +575,21 @@ test('publish on a live edit revises the item in place and removes the working c
   assert.strictEqual(result.external_product_id, '407000000001');
   assert.strictEqual(result.deleted, true);
 });
+
+test('removeInactiveListing clears Liston records, deletes eBay inventory objects it created and hides the item', async () => {
+  mock.method(listingRepository, 'findAllByItemId', async () => [
+    { platform_offer_id: 'offer-9', platform_group_key: null, sku: 'SKU-9', generated_data: {} },
+  ]);
+  const delObjects = mock.method(ebayService, 'deleteInventoryObjects', async () => ({}));
+  const settings = mock.method(connectionService, 'updateConnectionSettings', async (id, userId, patch) => patch);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection({ settings: { hiddenItemIds: ['1'] } })));
+  const delRows = mock.method(listingRepository, 'deleteByItemId', async () => {});
+  mock.method(ebayService, 'invalidateListings', () => {});
+
+  await listingService.removeInactiveListing(CONNECTION_ID, USER_ID, '407000000009');
+
+  assert.deepStrictEqual(delObjects.mock.calls[0].arguments[1], { offerId: 'offer-9' });
+  assert.deepStrictEqual(delObjects.mock.calls[1].arguments[1], { skus: ['SKU-9'] });
+  assert.deepStrictEqual(settings.mock.calls[0].arguments[2], { hiddenItemIds: ['1', '407000000009'] });
+  assert.deepStrictEqual(delRows.mock.calls[0].arguments, [CONNECTION_ID, '407000000009']);
+});

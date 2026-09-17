@@ -68,6 +68,15 @@ async function findPublishedByItemId(connectionId, itemId) {
   return result.rows[0] || null;
 }
 
+async function findAllByItemId(connectionId, itemId) {
+  const result = await query('SELECT * FROM listings WHERE connection_id = $1 AND external_product_id = $2', [connectionId, itemId]);
+  return result.rows;
+}
+
+async function deleteByItemId(connectionId, itemId) {
+  await query('DELETE FROM listings WHERE connection_id = $1 AND external_product_id = $2', [connectionId, itemId]);
+}
+
 async function deleteById(id) {
   await query('DELETE FROM listings WHERE id = $1', [id]);
 }
@@ -125,6 +134,8 @@ module.exports = {
   createLiveEdit,
   findPublishedByItemId,
   deleteById,
+  findAllByItemId,
+  deleteByItemId,
   createDraft,
   findByIdForUser,
   findPendingByConnection,

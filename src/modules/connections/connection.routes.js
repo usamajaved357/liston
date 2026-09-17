@@ -26,6 +26,7 @@ router.put('/:id/template', requireAuth, requireOwner, connectionController.upda
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
 router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
+router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingController.removeInactive);
 // Step one of drafting: read both listings so the seller can pick which
 // variations to list, before anything is generated or paid for.
 router.post('/:id/listings/drafts/preview', requireAuth, requireFeature('listings'), listingController.previewDraft);

@@ -618,6 +618,11 @@ export const api = {
       body: JSON.stringify(input),
     }),
 
+  // Permanently removes an ended listing (eBay inventory objects Liston
+  // created, Liston's records, and hides it from the Inactive tab).
+  removeInactiveListing: (connectionId: string, itemId: string) =>
+    request<void>(`/api/connections/${connectionId}/listings/${itemId}`, { method: "DELETE" }),
+
   // Opens a live eBay listing in the editor; returns the transient working copy.
   startLiveEdit: (connectionId: string, itemId: string) =>
     request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit`, { method: "POST" }),

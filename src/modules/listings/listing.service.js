@@ -702,6 +702,35 @@ async function publishLiveEdit(listing, userId) {
   return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true };
 }
 
+// Removes an ended listing for good: eBay's own Inventory objects if Liston
+// created them, every Liston record of it, and it's hidden from the Inactive
+// tab from now on. eBay has no API for clearing its own Unsold list, so the
+// entry can linger in Seller Hub until eBay purges it (90 days).
+async function removeInactiveListing(connectionId, userId, itemId) {
+  const rows = await listingRepository.findAllByItemId(connectionId, itemId);
+  const offerIds = rows.map((r) => r.platform_offer_id).filter(Boolean);
+  const groupKeys = rows.map((r) => r.platform_group_key).filter(Boolean);
+  const skus = rows.flatMap((r) => {
+    const d = r.generated_data || {};
+    return Array.isArray(d.variants) ? d.variants.map((v) => v.sku).filter(Boolean) : r.sku ? [r.sku] : [];
+  });
+
+  await connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
+    if (offerIds.length || groupKeys.length || skus.length) {
+      for (const offerId of offerIds) await ebayService.deleteInventoryObjects(credentials, { offerId });
+      for (const groupKey of groupKeys) await ebayService.deleteInventoryObjects(credentials, { groupKey });
+      if (skus.length) await ebayService.deleteInventoryObjects(credentials, { skus });
+    }
+    const hidden = new Set((connection.settings?.hiddenItemIds || []).map(String));
+    hidden.add(String(itemId));
+    await connectionService.updateConnectionSettings(connectionId, userId, { hiddenItemIds: [...hidden] });
+    return {};
+  });
+
+  await listingRepository.deleteByItemId(connectionId, itemId);
+  ebayService.invalidateListings(connectionId);
+}
+
 async function publish(id, userId) {
   const listing = await listingRepository.findByIdForUser(id, userId);
   if (!listing) {
@@ -818,5 +847,6 @@ module.exports = {
   removeAxisValue,
   publish,
   startLiveEdit,
+  removeInactiveListing,
   htmlToText,
 };

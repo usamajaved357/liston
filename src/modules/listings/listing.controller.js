@@ -77,6 +77,18 @@ async function startLiveEdit(req, res, next) {
   }
 }
 
+async function removeInactive(req, res, next) {
+  try {
+    if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
+      return res.status(400).json({ error: 'That does not look like an eBay item number.' });
+    }
+    await listingService.removeInactiveListing(req.params.id, req.ownerId, String(req.params.itemId));
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getOne(req, res, next) {
   try {
     const { listing, policies } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
@@ -248,4 +260,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };
