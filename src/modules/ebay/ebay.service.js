@@ -327,6 +327,23 @@ async function withdrawDraft(credentials, offerId) {
 
 // Active + ended listings read from the seller's real eBay catalog (Trading
 // API) — this sees everything on the account, not just what Liston created.
+// The one number the Overview needs per account, cached so a page of
+// stat tiles costs one eBay call per account per five minutes, not per view.
+const activeCountCache = createSwrCache({
+  freshMs: 5 * 60 * 1000,
+  staleMs: 2 * 60 * 60 * 1000,
+  fetcher: async ({ accessToken, siteId }) => {
+    const result = await ebayTrading.getActiveListings(accessToken, { pageNumber: 1, entriesPerPage: 1, siteId });
+    return { value: result.totalEntries || 0, meta: null };
+  },
+});
+
+async function countActiveListings(credentials, connectionId) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const totalEntries = await activeCountCache.get(`${connectionId}`, { accessToken, siteId });
+  return { totalEntries, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function listActiveListings(credentials, opts) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const result = await ebayTrading.getActiveListings(accessToken, { ...opts, siteId });
@@ -522,9 +539,8 @@ async function fetchAllOrdersInWindow(accessToken, createTimeFrom, createTimeTo,
 // range, status tab, search and earnings figure is derived from it in
 // memory. See swr-cache.js for how it stays warm.
 const ordersCache = createSwrCache({
-  freshMs: 2 * 60 * 1000,
-  staleMs: 30 * 60 * 1000,
-  warmWindowMs: 30 * 60 * 1000,
+  freshMs: 5 * 60 * 1000,
+  staleMs: 2 * 60 * 60 * 1000,
   fetcher: async ({ accessToken, siteId }, meta) => {
     const now = new Date();
     const start = new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
@@ -538,7 +554,7 @@ function getOrdersLast90Cached(connectionId, accessToken, siteId) {
 }
 
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
-const ITEM_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
+const ITEM_SUMMARY_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // a listing's photo and URL hardly ever change
 
 // The listings tab works the same way: the whole active (or unsold) set is
 // pulled once, so paging, page size and search never go back to eBay.
@@ -559,9 +575,8 @@ async function fetchAllListings(accessToken, status, expectedPages = 1, siteId =
 }
 
 const listingsCache = createSwrCache({
-  freshMs: 2 * 60 * 1000,
-  staleMs: 30 * 60 * 1000,
-  warmWindowMs: 30 * 60 * 1000,
+  freshMs: 5 * 60 * 1000,
+  staleMs: 2 * 60 * 60 * 1000,
   fetcher: async ({ accessToken, status, siteId }, meta) => {
     const { items, totalPages } = await fetchAllListings(accessToken, status, meta?.totalPages, siteId);
     return { value: items, meta: { totalPages } };
@@ -749,6 +764,7 @@ module.exports = {
   publishGroup,
   withdrawDraft,
   listActiveListings,
+  countActiveListings,
   getStoreProfile,
   listUnsoldListings,
   listOrders,

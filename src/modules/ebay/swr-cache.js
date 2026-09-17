@@ -1,31 +1,23 @@
-// A per-key in-memory cache for slow eBay reads, with three behaviours that
+// A per-key in-memory cache for slow eBay reads, with two behaviours that
 // together make pages feel instant:
 //   - one fetch at a time per key: concurrent callers share the promise;
 //   - stale-while-revalidate: within `freshMs` the copy is served as is; up
 //     to `staleMs` it's served immediately while a refresh runs behind it;
-//     only a cold or very old entry makes the caller wait;
-//   - keep-warm: keys touched in the last `warmWindowMs` are refreshed on a
-//     timer, so a return visit never waits on eBay.
+//     only a cold or very old entry makes the caller wait.
+// Nothing refreshes on a timer: eBay's Trading API gives an app a fixed
+// daily call allowance, and a background refresh across every account
+// burned through it. eBay is only ever called because someone looked.
 // Process-local. Would move to Redis once this runs on several instances.
-function createSwrCache({ freshMs, staleMs, warmWindowMs, fetcher }) {
+function createSwrCache({ freshMs, staleMs, fetcher }) {
   const entries = new Map(); // key -> { fetchedAt, value, meta, inflight, lastAccess, ctx }
-  let timer = null;
+  const MAX_ENTRIES = 500;
 
-  function ensureTimer() {
-    if (timer) return;
-    timer = setInterval(() => {
-      const now = Date.now();
-      for (const [key, entry] of entries) {
-        if (now - (entry.lastAccess || 0) > warmWindowMs) {
-          entries.delete(key);
-          continue;
-        }
-        if (!entry.inflight && now - (entry.fetchedAt || 0) >= freshMs) {
-          get(key, entry.ctx, { touch: false }).catch(() => {});
-        }
-      }
-    }, freshMs);
-    timer.unref();
+  function evictOld() {
+    if (entries.size < MAX_ENTRIES) return;
+    const now = Date.now();
+    for (const [key, entry] of entries) {
+      if (now - (entry.lastAccess || 0) > staleMs) entries.delete(key);
+    }
   }
 
   // `ctx` is whatever the fetcher needs (an access token, say); the latest
@@ -37,7 +29,7 @@ function createSwrCache({ freshMs, staleMs, warmWindowMs, fetcher }) {
     if (touch) entry.lastAccess = Date.now();
     entry.ctx = ctx;
     entries.set(key, entry);
-    ensureTimer();
+    evictOld();
     const age = entry.fetchedAt ? Date.now() - entry.fetchedAt : Infinity;
 
     if (entry.value !== undefined && age < freshMs) return entry.value;

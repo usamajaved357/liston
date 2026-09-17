@@ -55,8 +55,13 @@ async function tradingRequest(accessToken, callName, bodyXml, siteId = 0) {
   }
   if (body.Ack === 'Failure' || body.Ack === 'PartialFailure') {
     const errors = toArray(body.Errors);
-    const message = errors[0]?.LongMessage || errors[0]?.ShortMessage || `${callName} failed`;
-    throw new EbayTradingError(message, 502, errors);
+    const raw = errors[0]?.LongMessage || errors[0]?.ShortMessage || `${callName} failed`;
+    // eBay's daily Trading allowance for the app is spent. Nothing here is
+    // wrong on the account; the figures come back when eBay resets it.
+    const message = /exceeded usage limit/i.test(raw)
+      ? "eBay's daily API allowance for Liston is used up for today. Live figures return when eBay resets it (midnight Pacific time)."
+      : raw;
+    throw new EbayTradingError(message, /exceeded usage limit/i.test(raw) ? 429 : 502, errors);
   }
   return body;
 }
