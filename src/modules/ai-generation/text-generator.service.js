@@ -34,7 +34,7 @@ const SINGLE_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
-      title: { type: 'string', maxLength: 80 },
+      title: { type: 'string', maxLength: 80, description: 'Between 70 and 80 characters. Use the full space.' },
       description: { type: 'string' },
       condition: { type: 'string', enum: ['NEW', 'USED_EXCELLENT', 'USED_GOOD', 'USED_ACCEPTABLE'] },
       aspects: {
@@ -53,7 +53,7 @@ const VARIATION_TOOL = {
   input_schema: {
     type: 'object',
     properties: {
-      commonTitle: { type: 'string', maxLength: 80 },
+      commonTitle: { type: 'string', maxLength: 80, description: 'Between 70 and 80 characters. Use the full space.' },
       commonDescription: { type: 'string' },
       condition: { type: 'string', enum: ['NEW', 'USED_EXCELLENT', 'USED_GOOD', 'USED_ACCEPTABLE'] },
       sharedAspects: {
@@ -80,18 +80,30 @@ const VARIATION_TOOL = {
   },
 };
 
-function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema }) {
+// eBay's title limit is 80 characters and search rewards using it: a short
+// title leaves keywords buyers type on the table.
+const TITLE_RULE =
+  `TITLE RULE: the title MUST be between 70 and 80 characters long (count them). Pack it with the words buyers ` +
+  `search for: product type, key feature, use, compatibility, size or pack count, colour if fixed. No filler ` +
+  `words, no ALL CAPS, no "wow"/"L@@K", no seller name.\n`;
+
+function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema, categoryPath }) {
   const hasVariants = source.variants.length > 0;
   const schemaText = describeSchemaForPrompt(aspectSchema);
   return (
-    `You are drafting a new eBay listing for a seller. Compare a competitor's live eBay listing against the ` +
-    `seller's own source product (from a supplier), and draft an ORIGINAL, improved listing for the source ` +
-    `product — better organized and clearer than the competitor's, adapted to fit the source product's own ` +
-    `real attributes. Never copy the competitor's text verbatim.\n` +
+    (competitor
+      ? `You are drafting a new eBay listing for a seller. Compare a competitor's live eBay listing against the ` +
+        `seller's own source product (from a supplier), and draft an ORIGINAL, improved listing for the source ` +
+        `product — better organized and clearer than the competitor's, adapted to fit the source product's own ` +
+        `real attributes. Never copy the competitor's text verbatim.\n`
+      : `You are drafting a new eBay listing for a seller from their supplier's product page alone. Draft an ` +
+        `ORIGINAL, well organised listing that reads like an established UK retailer wrote it.\n`) +
     `The seller is a UK business dispatching from the UK. Never mention China, AliExpress, overseas shipping, ` +
-    `import, or any supplier in the title, description or item specifics.\n\n` +
-    `The seller pays ${currency} ${costPrice} per unit and will sell at ${currency} ${sellPrice}.\n\n` +
-    `--- Competitor's eBay listing ---\n${summarizeListing(competitor)}\n\n` +
+    `import, or any supplier in the title, description or item specifics.\n` +
+    TITLE_RULE +
+    `\nThe seller pays ${currency} ${costPrice} per unit and will sell at ${currency} ${sellPrice}.\n\n` +
+    (competitor ? `--- Competitor's eBay listing ---\n${summarizeListing(competitor)}\n\n` : '') +
+    (categoryPath?.length ? `--- eBay category this will be listed in ---\n${categoryPath.join(' > ')}\n\n` : '') +
     `--- Source product (what will actually be sold) ---\n${summarizeListing(source)}\n\n` +
     (hasVariants
       ? `The source product has these variant options for "${
@@ -103,7 +115,7 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
         `variants share the same value. If the options combine two things (e.g. "2PCS Warm White" is a pack ` +
         `size AND a colour), keep enough of both in the value to stay distinct, and name the axis accordingly.`
       : `Draft a single listing (title, description, condition, item specifics).`) +
-    (Object.keys(competitor.specifics || {}).length
+    (Object.keys(competitor?.specifics || {}).length
       ? `\n\n--- Item specifics the competitor filled in ---\nThe competitor's listing carries these ${
           Object.keys(competitor.specifics).length
         } item specifics: ${Object.keys(competitor.specifics).join(', ')}. These are what buyers filter and ` +
@@ -123,7 +135,57 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
   );
 }
 
-async function generateListingContent({ competitor, source, costPrice, sellPrice, currency, aspectSchema }) {
+// The model often stops short of the 70-character floor even when told.
+// One small follow-up call, given only the title and the product facts,
+// brings a short title up to length; a title that's already long enough
+// costs nothing extra.
+const TITLE_MIN = 70;
+const TITLE_MAX = 80;
+const LENGTHEN_TOOL = {
+  name: 'submit_title',
+  description: 'Submit the lengthened eBay title.',
+  input_schema: {
+    type: 'object',
+    properties: { title: { type: 'string', maxLength: 80 } },
+    required: ['title'],
+  },
+};
+
+function trimTitle(title) {
+  if (typeof title !== 'string' || title.length <= TITLE_MAX) return title;
+  const cut = title.slice(0, TITLE_MAX);
+  return (cut.lastIndexOf(' ') > 60 ? cut.slice(0, cut.lastIndexOf(' ')) : cut).trim();
+}
+
+async function ensureTitleLength(anthropic, title, facts) {
+  if (typeof title !== 'string' || title.length >= TITLE_MIN) return trimTitle(title);
+  try {
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 256,
+      tools: [LENGTHEN_TOOL],
+      tool_choice: { type: 'tool', name: LENGTHEN_TOOL.name },
+      messages: [
+        {
+          role: 'user',
+          content:
+            `This eBay title is ${title.length} characters; eBay allows ${TITLE_MAX} and search rewards using them. ` +
+            `Rewrite it to between ${TITLE_MIN} and ${TITLE_MAX} characters by adding the words buyers search for ` +
+            `(use, compatibility, key feature, material, pack size), keeping every existing fact. No filler, no ` +
+            `punctuation tricks, no ALL CAPS, never mention China or any supplier.\n\nTitle: ${title}\n\n` +
+            (facts ? `Product facts:\n${facts}\n` : ''),
+        },
+      ],
+    });
+    const toolUse = response.content.find((block) => block.type === 'tool_use');
+    const longer = toolUse?.input?.title;
+    return typeof longer === 'string' && longer.length > title.length ? trimTitle(longer) : title;
+  } catch {
+    return title;
+  }
+}
+
+async function generateListingContent({ competitor, source, costPrice, sellPrice, currency, aspectSchema, categoryPath }) {
   const anthropic = client();
   const hasVariants = source.variants.length > 0;
   const tool = hasVariants ? VARIATION_TOOL : SINGLE_TOOL;
@@ -136,7 +198,7 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
     tools: [tool],
     tool_choice: { type: 'tool', name: tool.name },
     messages: [
-      { role: 'user', content: buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema }) },
+      { role: 'user', content: buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema, categoryPath }) },
     ],
   });
 
@@ -160,7 +222,7 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   const variationAxes = new Set(
     hasVariants ? [content.varyingAspectName, ...Object.keys(source.variants[0]?.attributes || {})].map((n) => String(n).toLowerCase()) : []
   );
-  const missing = Object.keys(competitor.specifics || {}).filter(
+  const missing = Object.keys(competitor?.specifics || {}).filter(
     (name) => !ours.has(name.toLowerCase()) && !variationAxes.has(name.toLowerCase())
   );
   if (missing.length) {
@@ -175,13 +237,90 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   // 89-character camera title came back and blocked Save). Trim at a word
   // boundary rather than mid-word.
   const titleKey = hasVariants ? 'commonTitle' : 'title';
-  if (typeof content[titleKey] === 'string' && content[titleKey].length > 80) {
-    const cut = content[titleKey].slice(0, 80);
-    content[titleKey] = (cut.lastIndexOf(' ') > 60 ? cut.slice(0, cut.lastIndexOf(' ')) : cut).trim();
+  if (typeof content[titleKey] === 'string' && content[titleKey].length > TITLE_MAX) {
+    content[titleKey] = trimTitle(content[titleKey]);
     warnings.push('The title was longer than eBay\'s 80-character limit and has been shortened. Check it still reads well.');
   }
+  content[titleKey] = await ensureTitleLength(anthropic, content[titleKey], summarizeListing(source));
 
   return { ...content, [aspectKey]: aspects, aspectWarnings: warnings };
 }
 
-module.exports = { generateListingContent };
+const REFIT_TOOL = {
+  name: 'submit_refit',
+  description: 'Submit the listing content refitted to the new eBay category.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', maxLength: 80, description: 'Between 70 and 80 characters. Use the full space.' },
+      description: { type: 'string' },
+      aspects: {
+        type: 'object',
+        description: 'The complete set of item specifics for the new category, as { aspectName: [value] }',
+        additionalProperties: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    required: ['title', 'description', 'aspects'],
+  },
+};
+
+// A listing moved to a different category needs its specifics re-expressed
+// in that category's vocabulary (a bag's "Exterior Colour" is a phone case's
+// "Colour"), and often a title/description angle to match. The product facts
+// come from the draft as it stands plus the original supplier data; nothing
+// is invented to fill a required aspect.
+async function refitContentForCategory({ draft, source, categoryPath, aspectSchema, variationAxes = [] }) {
+  const anthropic = client();
+  const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const title = isVariation ? draft.commonTitle : draft.title;
+  const description = isVariation ? draft.commonDescription : draft.description;
+  const aspects = isVariation ? draft.variesBy?.aspects : draft.aspects;
+  const schemaText = describeSchemaForPrompt(aspectSchema);
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 4096,
+    tools: [REFIT_TOOL],
+    tool_choice: { type: 'tool', name: REFIT_TOOL.name },
+    messages: [
+      {
+        role: 'user',
+        content:
+          `An eBay seller has moved their draft listing to a different category. Rewrite the title, description ` +
+          `and item specifics so they fit the NEW category, keeping every product fact the same. Keep the ` +
+          `description's structure and tone; change wording only where the category angle calls for it.\n` +
+          `The seller is a UK business dispatching from the UK. Never mention China, AliExpress, overseas shipping, ` +
+          `import, or any supplier.\n` +
+          TITLE_RULE +
+          (variationAxes.length
+            ? `This is a multi-variation listing: buyers choose ${variationAxes.join(' and ')}. The title and shared ` +
+              `specifics must NOT name any one option (no single colour, size or model); the ${variationAxes.join('/')} ` +
+              `specifics are carried per variation and must be left out of your aspects.\n`
+            : '') +
+          `\nNew category: ${categoryPath.join(' > ')}\n\n` +
+          `Current title: ${title}\n\nCurrent description:\n${description}\n\n` +
+          `Current item specifics: ${JSON.stringify(aspects || {})}\n\n` +
+          (source ? `--- Supplier's product data, for facts ---\n${summarizeListing(source)}\n\n` : '') +
+          (schemaText
+            ? `--- eBay's item specifics for the NEW category ---\nUse these names verbatim. Fill every REQUIRED one you ` +
+              `can genuinely determine; carry over any current specific that still applies (renamed to the new ` +
+              `category's name for it where one exists); drop specifics that make no sense in this category. If a ` +
+              `required value isn't knowable, leave it out rather than inventing it.\n${schemaText}`
+            : ''),
+      },
+    ],
+  });
+
+  const toolUse = response.content.find((block) => block.type === 'tool_use');
+  if (!toolUse?.input) {
+    throw new AiGenerationError('The AI drafting model returned an unexpected response. Try again.');
+  }
+  const content = toolUse.input;
+  const { aspects: validated, warnings } = validateAspects(content.aspects, aspectSchema);
+  // The varying specifics live on each variation, never on the listing.
+  for (const axis of variationAxes) delete validated[axis];
+  const finalTitle = await ensureTitleLength(anthropic, trimTitle(content.title), source ? summarizeListing(source) : null);
+  return { title: finalTitle, description: content.description, aspects: validated, warnings };
+}
+
+module.exports = { generateListingContent, refitContentForCategory };

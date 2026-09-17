@@ -26,6 +26,11 @@ router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updat
 router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
 router.get('/:id/template/palette', requireAuth, requireOwner, connectionController.logoPalette);
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
+// Category picker data. Anyone who can edit listings can browse categories.
+router.get('/:id/categories/search', requireAuth, requireFeature('listings'), connectionController.searchCategories);
+router.get('/:id/categories/children', requireAuth, requireFeature('listings'), connectionController.categoryChildren);
+router.get('/:id/categories/:categoryId', requireAuth, requireFeature('listings'), connectionController.categoryDetail);
+router.get('/:id/store-categories', requireAuth, requireFeature('listings'), connectionController.storeCategories);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
 router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
 router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingController.removeInactive);

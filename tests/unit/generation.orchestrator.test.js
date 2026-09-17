@@ -507,3 +507,49 @@ test('applyOrigin adds the standard eBay origin aspect when none was present', (
   const result = orchestrator.applyOrigin({ Brand: ['X'] }, 'United Kingdom');
   assert.deepStrictEqual(result['Country/Region of Manufacture'], ['United Kingdom']);
 });
+
+test('generateDraftInput drafts without a competitor, taking the category from eBay’s suggestions', async () => {
+  const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+  const fetchListingMock = mock.method(ebaySource, 'fetchListing', async () => {
+    throw new Error('should not be called');
+  });
+  mock.method(aliexpressSource, 'fetchProduct', async () => ({
+    title: 'Coin dispenser holder',
+    priceText: '£2.00',
+    imageUrls: ['https://example.com/a.jpg'],
+    specifics: {},
+    variants: [],
+  }));
+  mock.method(ebayTaxonomy, 'suggestCategories', async () => [
+    { id: '63691', name: 'Cup Holders', path: ['Vehicle Parts & Accessories', 'Cup Holders'] },
+    { id: '549', name: 'Supplies/Equipment', path: ['Coins', 'Supplies/Equipment'] },
+  ]);
+  mock.method(ebayTaxonomy, 'getAspectSchema', async () => null);
+  const generateMock = mock.method(textGenerator, 'generateListingContent', async ({ competitor, categoryPath }) => {
+    assert.strictEqual(competitor, null);
+    assert.deepStrictEqual(categoryPath, ['Vehicle Parts & Accessories', 'Cup Holders']);
+    return { title: 'x'.repeat(72), description: 'desc', condition: 'NEW', aspects: {} };
+  });
+  mock.method(imagePipeline, 'buildGalleryImages', async ({ sourceImageUrls }) => ({ imageUrls: sourceImageUrls, warnings: [] }));
+
+  const { draftInput, competitor, warnings } = await orchestrator.generateDraftInput({
+    sourceUrl: 'https://aliexpress.com/item/1.html',
+    merchantLocationKey: 'main',
+  });
+
+  assert.strictEqual(fetchListingMock.mock.calls.length, 0);
+  assert.strictEqual(generateMock.mock.calls.length, 1);
+  assert.strictEqual(competitor, null);
+  assert.strictEqual(draftInput.categoryId, '63691');
+  assert.deepStrictEqual(draftInput.categoryPath, ['Vehicle Parts & Accessories', 'Cup Holders']);
+  assert.strictEqual(draftInput.categorySuggestions.length, 2);
+  // No competitor means no "couldn't read the competitor's price" noise.
+  assert.ok(!warnings.some((w) => /competitor/.test(w)), warnings.join(' | '));
+});
+
+test('readSources refuses a no-competitor draft when eBay has no category suggestion', async () => {
+  const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+  mock.method(aliexpressSource, 'fetchProduct', async () => ({ title: 'zzz', priceText: '£1', imageUrls: [], specifics: {}, variants: [] }));
+  mock.method(ebayTaxonomy, 'suggestCategories', async () => []);
+  await assert.rejects(() => orchestrator.readSources({ sourceUrl: 'https://aliexpress.com/item/1.html' }), ScrapingError);
+});

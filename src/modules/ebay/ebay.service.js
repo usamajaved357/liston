@@ -25,11 +25,23 @@ function sleep(ms) {
 // giving up, rather than failing the whole draft over a timing race.
 const SKU_PROPAGATION_DELAY_PATTERN = /could not be found|is not available in the system/i;
 
+// A seller-chosen SKU stays the same across publish attempts, so a retry
+// after a failure finds the offer the failed attempt already created.
+const OFFER_EXISTS_PATTERN = /offer (entity )?already exists|already has an offer/i;
+
 async function createOfferWithRetry(accessToken, offerInput, attempts = 4, delayMs = 2000) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       return await ebayClient.createOffer(accessToken, offerInput);
     } catch (err) {
+      if (OFFER_EXISTS_PATTERN.test(err.message)) {
+        const existing = await ebayClient.getOffersBySku(accessToken, offerInput.sku, offerInput.marketplaceId);
+        const offer = (existing.offers || []).find((o) => o.marketplaceId === offerInput.marketplaceId) || existing.offers?.[0];
+        if (offer?.offerId) {
+          await ebayClient.updateOffer(accessToken, offer.offerId, offerInput);
+          return { offerId: offer.offerId };
+        }
+      }
       const isPropagationDelay = SKU_PROPAGATION_DELAY_PATTERN.test(err.message);
       if (!isPropagationDelay || attempt === attempts) throw err;
       await sleep(delayMs * attempt);
@@ -113,13 +125,17 @@ function buildInventoryItem({ title, description, imageUrls, aspects, condition,
   };
 }
 
-function buildOffer({ sku, marketplaceId, categoryId, description, listingDescription, price, merchantLocationKey, quantity, listingPolicies }) {
+function buildOffer({ sku, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, description, listingDescription, price, merchantLocationKey, quantity, listingPolicies }) {
   return {
     sku,
     marketplaceId: marketplaceId || 'EBAY_GB',
     format: 'FIXED_PRICE',
     availableQuantity: quantity,
     categoryId,
+    // eBay allows a second item category (fees may apply) and up to two Shop
+    // categories, given as "/Department/Sub" paths of the seller's own Shop.
+    ...(secondaryCategoryId ? { secondaryCategoryId } : {}),
+    ...(storeCategoryNames?.length ? { storeCategoryNames } : {}),
     listingDescription: listingDescription || description,
     pricingSummary: { price },
     merchantLocationKey,
@@ -220,7 +236,7 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, merchantLocationKey, locationInput, listingPolicies }) {
+async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, merchantLocationKey, locationInput, listingPolicies }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   ensureListingPolicies(listingPolicies);
@@ -252,6 +268,8 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         sku: variant.sku,
         marketplaceId,
         categoryId,
+        secondaryCategoryId,
+        storeCategoryNames,
         description: commonDescription,
         listingDescription: commonListingDescription,
         price: variant.price,
@@ -376,6 +394,14 @@ async function deleteInventoryObjects(credentials, { offerId, groupKey, skus = [
 // Which eBay site this seller is on (from their registration), plus the
 // address eBay holds for them. Used once to set a connection's marketplace
 // and to offer a ready-made shipping location.
+// The seller's Shop categories, for filing a listing under their own
+// departments. Sellers without an eBay Shop simply have none.
+async function getStoreCategories(credentials) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const categories = await ebayTrading.getStoreCategories(accessToken, { siteId });
+  return { categories, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function detectMarketplace(credentials) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
@@ -770,6 +796,7 @@ module.exports = {
   listOrders,
   getLiveItem,
   detectMarketplace,
+  getStoreCategories,
   createMerchantLocation,
   deleteInventoryObjects,
   reviseLiveListing,

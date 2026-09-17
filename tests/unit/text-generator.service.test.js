@@ -50,7 +50,7 @@ test('generateListingContent requests the single-item tool schema when the sourc
 
   let capturedArgs;
   mock.method(messagesProto, 'create', async (args) => {
-    capturedArgs = args;
+    if (!capturedArgs) capturedArgs = args;
     return toolResultResponse({
       title: 'A great widget',
       description: 'desc',
@@ -87,7 +87,7 @@ test('generateListingContent requests the variation tool schema when the source 
 
   let capturedArgs;
   mock.method(messagesProto, 'create', async (args) => {
-    capturedArgs = args;
+    if (!capturedArgs) capturedArgs = args;
     return toolResultResponse({
       commonTitle: 'A great widget',
       commonDescription: 'desc',
@@ -158,4 +158,82 @@ test('generateListingContent shortens a title the model made longer than 80 char
   assert.ok(result.title.length <= 80, result.title);
   assert.ok(!result.title.endsWith(' '));
   assert.match(result.aspectWarnings.join(' '), /80-character limit/);
+});
+
+test('generateListingContent lengthens a title the model left under 70 characters', async () => {
+  config.anthropicApiKey = 'test-key';
+  delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+  const calls = [];
+  mock.method(messagesProto, 'create', async (args) => {
+    calls.push(args);
+    if (args.tools[0].name === 'submit_title') {
+      return { content: [{ type: 'tool_use', name: 'submit_title', input: { title: 'Coin Dispenser Holder Organiser with Spring 8 Slots for Cashiers Drivers Waiters' } }] };
+    }
+    return toolResultResponse({ title: 'Coin Dispenser Holder', description: 'desc', condition: 'NEW', aspects: {} });
+  });
+
+  const result = await textGenerator.generateListingContent({
+    competitor: null,
+    source: { title: 'Coin dispenser', variants: [], specifics: {}, categoryBreadcrumb: [] },
+    costPrice: 5,
+    sellPrice: 15,
+    currency: 'GBP',
+  });
+
+  assert.strictEqual(calls.length, 2);
+  assert.ok(result.title.length >= 70 && result.title.length <= 80, result.title);
+});
+
+test('generateListingContent drafts without a competitor and mentions the category instead', async () => {
+  config.anthropicApiKey = 'test-key';
+  delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+  let prompt;
+  mock.method(messagesProto, 'create', async (args) => {
+    if (!prompt) prompt = args.messages[0].content;
+    return toolResultResponse({ title: 'x'.repeat(72), description: 'desc', condition: 'NEW', aspects: {} });
+  });
+
+  const result = await textGenerator.generateListingContent({
+    competitor: null,
+    source: { title: 'Source widget', variants: [], specifics: {}, categoryBreadcrumb: [] },
+    costPrice: 5,
+    sellPrice: 15,
+    currency: 'GBP',
+    categoryPath: ['Home, Furniture & DIY', 'Bath', 'Soap Dishes & Dispensers'],
+  });
+
+  assert.ok(!prompt.includes("Competitor's eBay listing"));
+  assert.ok(prompt.includes('Soap Dishes & Dispensers'));
+  assert.strictEqual(result.aspectWarnings.length, 0);
+});
+
+test('refitContentForCategory drops the variation axes from the shared specifics', async () => {
+  config.anthropicApiKey = 'test-key';
+  delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+  mock.method(messagesProto, 'create', async () => ({
+    content: [
+      {
+        type: 'tool_use',
+        name: 'submit_refit',
+        input: { title: 'y'.repeat(75), description: 'new desc', aspects: { Type: ['Cup Holder'], Colour: ['Black'] } },
+      },
+    ],
+  }));
+
+  const result = await textGenerator.refitContentForCategory({
+    draft: { commonTitle: 'old', commonDescription: 'old desc', variesBy: { aspects: { Type: ['Coin Holder'] } }, variants: [{}] },
+    source: null,
+    categoryPath: ['Vehicle Parts & Accessories', 'Cup Holders'],
+    aspectSchema: null,
+    variationAxes: ['Colour'],
+  });
+
+  assert.deepStrictEqual(result.aspects, { Type: ['Cup Holder'] });
+  assert.strictEqual(result.title.length, 75);
 });

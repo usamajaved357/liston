@@ -272,6 +272,23 @@ async function reviseDescription(accessToken, itemId, descriptionHtml, { siteId 
   return { itemId: String(body.ItemID || itemId) };
 }
 
+// The seller's Shop categories (only sellers with an eBay Shop subscription
+// have any): the custom departments a listing can be filed under, two levels
+// deep. Returned as a tree of { id, name, children }.
+async function getStoreCategories(accessToken, { siteId } = {}) {
+  const res = await tradingRequest(accessToken, 'GetStore', '<CategoryStructureOnly>true</CategoryStructureOnly>', siteId).catch((err) => {
+    // "not a store subscriber" is a plain no, not a failure.
+    if (err.statusCode === 429) throw err;
+    return null;
+  });
+  const map = (node) => ({
+    id: String(node.CategoryID),
+    name: String(node.Name),
+    children: toArray(node.ChildCategory).map(map),
+  });
+  return toArray(res?.Store?.CustomCategories?.CustomCategory).map(map);
+}
+
 // Trading's numeric condition ids <-> the Inventory API enum the drafts use.
 const CONDITION_IDS = {
   NEW: 1000,
@@ -420,6 +437,7 @@ async function getUserProfile(accessToken) {
 module.exports = {
   EbayTradingError,
   getUserProfile,
+  getStoreCategories,
   CONDITION_IDS,
   getActiveListings,
   getUnsoldListings,

@@ -286,6 +286,47 @@ export interface ListingPolicies {
   returnPolicyId: string;
 }
 
+// eBay's own guesses at the right leaf category for a product.
+export interface CategorySuggestion {
+  id: string;
+  name: string;
+  path: string[];
+}
+
+// One row of the category picker.
+export interface CategoryNode {
+  id: string;
+  name: string;
+  leaf: boolean;
+  childCount: number;
+  path?: string[];
+}
+
+// One item specific eBay lists for a category, filled or not.
+export interface AspectSchemaEntry {
+  name: string;
+  required: boolean;
+  recommended: boolean;
+  selectionOnly: boolean;
+  multiValue: boolean;
+  variation: boolean;
+  allowedValues: string[];
+  hasMoreValues: boolean;
+}
+
+export interface DraftCategoryInfo {
+  id: string;
+  path: string[] | { id: string; name: string }[];
+  variationsSupported: boolean | null;
+  aspects: AspectSchemaEntry[];
+}
+
+export interface StoreCategory {
+  id: string;
+  name: string;
+  children: StoreCategory[];
+}
+
 export interface SingleDraftContent {
   title: string;
   description: string;
@@ -295,6 +336,10 @@ export interface SingleDraftContent {
   quantity: number;
   categoryId: string;
   categoryPath?: string[];
+  categorySuggestions?: CategorySuggestion[];
+  secondaryCategoryId?: string | null;
+  storeCategoryNames?: string[];
+  sku?: string;
   price: OfferPrice;
   priceBreakdown?: PriceBreakdown;
   marketplaceId?: string;
@@ -328,6 +373,10 @@ export interface VariationDraftContent {
   variants: VariationDraftVariant[];
   categoryId: string;
   categoryPath?: string[];
+  categorySuggestions?: CategorySuggestion[];
+  secondaryCategoryId?: string | null;
+  storeCategoryNames?: string[];
+  sku?: string;
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
@@ -350,7 +399,9 @@ export interface DraftPreviewAxisValue {
 
 export interface DraftPreview {
   previewId: string;
-  competitor: { title: string; priceText: string | null; categoryPath: string[] };
+  competitor: { title: string; priceText: string | null; categoryPath: string[] } | null;
+  category: { id: string; path: string[] };
+  categorySuggestions: CategorySuggestion[];
   source: {
     title: string;
     priceText: string | null;
@@ -361,7 +412,7 @@ export interface DraftPreview {
 }
 
 export type GenerateDraftInput =
-  | { competitorUrl: string; sourceUrl: string }
+  | { competitorUrl?: string; sourceUrl: string }
   | { previewId: string; variantSelection?: Record<string, string[]> };
 
 // Listing settings — every sell price is derived from these plus the
@@ -435,6 +486,10 @@ export interface DraftPatch {
   variants?: Record<string, { price?: OfferPrice; quantity?: number; imageUrls?: string[] }>;
   removeAxisValues?: { axis: string; value: string }[];
   variantSkusToRemove?: string[];
+  sku?: string;
+  categoryId?: string;
+  secondaryCategoryId?: string | null;
+  storeCategoryNames?: string[];
 }
 
 export interface ImageCheck {
@@ -647,7 +702,7 @@ export const api = {
     }),
   previewDraftDescription: (listingId: string) =>
     request<{ html: string }>(`/api/listings/${listingId}/description-preview`),
-  previewDraftListing: (connectionId: string, input: { competitorUrl: string; sourceUrl: string }) =>
+  previewDraftListing: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<DraftPreview>(`/api/connections/${connectionId}/listings/drafts/preview`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -671,7 +726,23 @@ export const api = {
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
 
   getDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; policies: ConnectionPolicies | null }>(`/api/listings/${listingId}`),
+    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null }>(`/api/listings/${listingId}`),
+
+  // Lifts one variation out into a single-item draft of its own.
+  splitDraftVariant: (listingId: string, index: number) =>
+    request<{ listing: DraftListing }>(`/api/listings/${listingId}/variants/${index}/split`, { method: "POST" }),
+
+  // Category picker data, from eBay's tree for the account's marketplace.
+  searchCategories: (connectionId: string, q: string) =>
+    request<{ results: CategoryNode[] }>(`/api/connections/${connectionId}/categories/search?q=${encodeURIComponent(q)}`),
+  categoryChildren: (connectionId: string, parentId?: string) =>
+    request<{ children: CategoryNode[]; path: { id: string; name: string }[] }>(
+      `/api/connections/${connectionId}/categories/children${parentId ? `?parent=${encodeURIComponent(parentId)}` : ""}`
+    ),
+  getCategory: (connectionId: string, categoryId: string) =>
+    request<DraftCategoryInfo>(`/api/connections/${connectionId}/categories/${encodeURIComponent(categoryId)}`),
+  getStoreCategories: (connectionId: string) =>
+    request<{ categories: StoreCategory[]; unavailable?: string }>(`/api/connections/${connectionId}/store-categories`),
 
   publishDraftListing: (listingId: string) =>
     request<{ listing: DraftListing }>(`/api/listings/${listingId}/publish`, { method: "POST" }),

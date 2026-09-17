@@ -4,6 +4,7 @@ const ebayOauth = require('../ebay/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
+const ebayTaxonomy = require('../ebay/ebay.taxonomy');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
@@ -387,6 +388,78 @@ async function updatePricing(req, res, next) {
   }
 }
 
+// ---- Categories, for the listing editor's picker ----
+// All read from eBay's own tree for the account's marketplace, so the picker
+// offers exactly the categories this seller can list in.
+async function marketplaceOf(req) {
+  const ensured = await connectionService.ensureMarketplace(req.params.id, req.ownerId, ebayService);
+  return ensured.settings?.ebay?.marketplaceId || marketplaces.DEFAULT_ID;
+}
+
+async function searchCategories(req, res, next) {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (q.length < 2) return res.status(200).json({ results: [] });
+    const marketplaceId = await marketplaceOf(req);
+    res.status(200).json({ results: await ebayTaxonomy.searchCategories(marketplaceId, q) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function categoryChildren(req, res, next) {
+  try {
+    const marketplaceId = await marketplaceOf(req);
+    const parent = typeof req.query.parent === 'string' && req.query.parent ? req.query.parent : null;
+    const [children, path] = await Promise.all([
+      ebayTaxonomy.getCategoryChildren(marketplaceId, parent),
+      parent ? ebayTaxonomy.getCategoryPath(marketplaceId, parent) : [],
+    ]);
+    res.status(200).json({ children, path });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function categoryDetail(req, res, next) {
+  try {
+    const marketplaceId = await marketplaceOf(req);
+    const categoryId = String(req.params.categoryId);
+    const [path, variationsSupported, aspects] = await Promise.all([
+      ebayTaxonomy.getCategoryPath(marketplaceId, categoryId),
+      ebayTaxonomy.getVariationsSupported(marketplaceId, categoryId),
+      ebayTaxonomy.getEditorAspectSchema(marketplaceId, categoryId),
+    ]);
+    if (!path.length) return res.status(404).json({ error: 'That category is not in eBay\'s tree for this marketplace.' });
+    res.status(200).json({ id: categoryId, path, variationsSupported, aspects: aspects || [] });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Per connection, briefly: the Trading call behind it is rationed.
+const storeCategoryCache = new Map();
+const STORE_CATEGORY_TTL_MS = 60 * 60 * 1000;
+
+async function storeCategories(req, res, next) {
+  try {
+    const cached = storeCategoryCache.get(req.params.id);
+    if (cached && cached.expiresAt > Date.now()) return res.status(200).json({ categories: cached.categories });
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+    if (connection.platform_key !== 'ebay') return res.status(200).json({ categories: [] });
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
+      ebayService.getStoreCategories(credentials)
+    );
+    storeCategoryCache.set(req.params.id, { categories: result.categories, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
+    res.status(200).json({ categories: result.categories });
+  } catch (err) {
+    // A rationed Trading call shouldn't break the editor: no Shop categories
+    // is a valid state, and the notice says why.
+    if (err.statusCode === 429) return res.status(200).json({ categories: [], unavailable: err.message });
+    next(err);
+  }
+}
+
 module.exports = {
   list,
   listPlatforms,
@@ -403,4 +476,8 @@ module.exports = {
   updateTemplate,
   logoPalette,
   getStoreProfile,
+  searchCategories,
+  categoryChildren,
+  categoryDetail,
+  storeCategories,
 };

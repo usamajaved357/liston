@@ -5,7 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import {
   api,
   ApiError,
+  AspectSchemaEntry,
   ConnectionPolicies,
+  DraftCategoryInfo,
   DraftContent,
   DraftListing,
   DraftPatch,
@@ -19,6 +21,7 @@ import {
 import { Alert } from "@/components/Alert";
 import { EditorHeader } from "@/components/EditorHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { CategoryPicker, CategorySelection } from "@/components/CategoryPicker";
 import { currencySymbol, formatPrice } from "@/lib/format";
 
 // The draft editor. A draft lives only in Liston until Publish, so every
@@ -545,8 +548,18 @@ function VariationsTable({
   onUploadImage,
   onApplyAll,
   disabled,
+  variationsSupported,
+  onSplit,
+  splitting,
+  splitDone,
+  accountId,
 }: {
   variants: VariationDraftVariant[];
+  variationsSupported: boolean | null;
+  onSplit?: (index: number) => void;
+  splitting: number | null;
+  splitDone: { id: string; title: string }[];
+  accountId: string;
   specifications: { name: string; values: string[] }[];
   galleryImages: string[];
   removedIndexes: Set<number>;
@@ -609,6 +622,32 @@ function VariationsTable({
         )}
       </div>
 
+      {variationsSupported === false && (
+        <div className="mt-3 rounded-2xl border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-4 py-3 text-sm text-[var(--color-ink)]">
+          <p>
+            <strong>eBay doesn&apos;t allow variations in this category.</strong> Publishing this as one listing will be refused. Either
+            change the category, or use <em>List separately</em> on each variation you want to sell: each becomes its own single-item
+            draft with the shared title, photos and specifics plus that option&apos;s own.
+          </p>
+        </div>
+      )}
+      {splitDone.length > 0 && (
+        <div className="mt-3 rounded-2xl border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
+          <p className="font-semibold text-[var(--color-ink)]">
+            {splitDone.length} separate draft{splitDone.length === 1 ? "" : "s"} created
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {splitDone.map((d) => (
+              <li key={d.id}>
+                <a href={`/accounts/${accountId}/listings/draft/${d.id}`} className="text-[var(--color-primary)] hover:underline">
+                  {d.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Attribute values — remove a whole colour or size at once */}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {specifications.map((spec) => (
@@ -665,7 +704,7 @@ function VariationsTable({
               <th className={`${cell} w-36 text-center`}>Price ({currencySymbol(currency)})</th>
               <th className={`${cell} w-24 text-center`}>Qty</th>
               <th className={`${cell} w-24 text-center`}>ROI</th>
-              <th className={`${cell} w-14`} />
+              <th className={`${cell} ${onSplit ? "w-44" : "w-14"}`} />
             </tr>
           </thead>
           <tbody>
@@ -796,6 +835,17 @@ function VariationsTable({
                     )}
                   </td>
                   <td className={`${cell} text-center`}>
+                    {!disabled && onSplit && !gone && (
+                      <button
+                        type="button"
+                        onClick={() => onSplit(i)}
+                        disabled={splitting !== null}
+                        title="Create a separate single-item draft for this variation"
+                        className={`btn btn-sm mr-1 !h-7 !px-2.5 !text-[12px] ${variationsSupported === false ? "btn-accent" : "btn-secondary"}`}
+                      >
+                        {splitting === i ? "Creating…" : "List separately"}
+                      </button>
+                    )}
                     {!disabled &&
                       (rowRemovedDirectly ? (
                         <button type="button" onClick={() => onRestoreRow(i)} title="Restore this variation" aria-label="Restore this variation" className="btn btn-secondary btn-icon text-[var(--color-accent)]">
@@ -1058,6 +1108,25 @@ function PublishedDialog({ listing, onClose }: { listing: DraftListing; onClose:
 
 // --- Page ------------------------------------------------------------------
 
+// Every item specific eBay lists for the category appears as a row, filled
+// or not, so the seller sees what's required and what else could help.
+// Required ones sit first, then filled, then recommended, then the rest.
+function withSchemaRows(rows: { name: string; value: string }[], info: DraftCategoryInfo | null) {
+  if (!info?.aspects?.length) return rows;
+  const byName = new Map(info.aspects.map((a) => [a.name.toLowerCase(), a]));
+  const have = new Set(rows.map((r) => r.name.trim().toLowerCase()));
+  const missing = info.aspects.filter((a) => !have.has(a.name.toLowerCase())).map((a) => ({ name: a.name, value: "" }));
+  const merged = [...rows, ...missing];
+  const rank = (r: { name: string; value: string }) => {
+    const entry = byName.get(r.name.trim().toLowerCase());
+    if (entry?.required) return 0;
+    if (r.value.trim()) return 1;
+    if (entry?.recommended) return 2;
+    return 3;
+  };
+  return merged.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i).map((x) => x.r);
+}
+
 export default function DraftEditorPage() {
   const params = useParams<{ id: string; offerId: string }>();
   const router = useRouter();
@@ -1092,6 +1161,19 @@ export default function DraftEditorPage() {
   });
   const [showNotes, setShowNotes] = useState(false);
   const [imageOverrides, setImageOverrides] = useState<Record<number, string>>({});
+  // eBay's custom label, the second item category and Shop categories are
+  // plain fields saved with everything else. The primary category is not:
+  // changing it refits the whole draft, so it's applied on its own at once.
+  const [sku, setSku] = useState("");
+  const [secondaryCategoryId, setSecondaryCategoryId] = useState<string | null>(null);
+  const [secondaryCategoryPath, setSecondaryCategoryPath] = useState<string[]>([]);
+  const [storeCategoryNames, setStoreCategoryNames] = useState<string[]>([]);
+  const [categoryInfo, setCategoryInfo] = useState<DraftCategoryInfo | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [refitting, setRefitting] = useState(false);
+  const [showOptionalSpecifics, setShowOptionalSpecifics] = useState(false);
+  const [splitting, setSplitting] = useState<number | null>(null);
+  const [splitDone, setSplitDone] = useState<{ id: string; title: string }[]>([]);
   const [imageCheck, setImageCheck] = useState<ImageCheck | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -1120,13 +1202,33 @@ export default function DraftEditorPage() {
   // the changes to eBay. No draft is kept either way.
   const isLiveEdit = Boolean(listing?.edit_of_item_id);
 
+  // The category schema in force, for resetFrom to merge unfilled rows in.
+  // A ref, kept in step wherever categoryInfo is set, so a save (which also
+  // resets) keeps the same rows without the callback depending on state.
+  const categoryInfoRef = useRef<DraftCategoryInfo | null>(null);
+
+  // Reads the second category's readable path once per draft load.
+  const loadSecondaryPath = useCallback(
+    (categoryId: string | null | undefined) => {
+      if (!categoryId) {
+        setSecondaryCategoryPath([]);
+        return;
+      }
+      api
+        .getCategory(params.id, categoryId)
+        .then((info) => setSecondaryCategoryPath(info.path.map((p) => (typeof p === "string" ? p : p.name))))
+        .catch(() => setSecondaryCategoryPath([`Category ${categoryId}`]));
+    },
+    [params.id]
+  );
+
   const resetFrom = useCallback((row: DraftListing) => {
     const c = row.generated_data as DraftContent;
     setTitle(isVariationDraft(c) ? c.commonTitle : c.title);
     setDescription(isVariationDraft(c) ? c.commonDescription : c.description);
     setEditingDescription(false);
     const aspects = isVariationDraft(c) ? c.variesBy.aspects : c.aspects;
-    setSpecifics(Object.entries(aspects || {}).map(([name, values]) => ({ name, value: values.join(", ") })));
+    setSpecifics(withSchemaRows(Object.entries(aspects || {}).map(([name, values]) => ({ name, value: values.join(", ") })), categoryInfoRef.current));
     setImages(c.imageUrls || []);
     setSelectedImage(0);
     setRemovedRows(new Set());
@@ -1142,6 +1244,9 @@ export default function DraftEditorPage() {
       returnPolicyId: c.listingPolicies?.returnPolicyId || "",
     });
     setImageOverrides({});
+    setSku(c.sku || "");
+    setSecondaryCategoryId(c.secondaryCategoryId || null);
+    setStoreCategoryNames(c.storeCategoryNames || []);
   }, []);
 
   // The branded eBay render of the description. Rebuilt whenever the stored
@@ -1165,12 +1270,24 @@ export default function DraftEditorPage() {
       .then((data) => {
         setListing(data.listing);
         setPolicies(data.policies);
+        categoryInfoRef.current = data.category;
+        setCategoryInfo(data.category);
         resetFrom(data.listing);
+        loadSecondaryPath((data.listing.generated_data as DraftContent).secondaryCategoryId);
         loadDescriptionPreview(data.listing.id);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load this draft."))
       .finally(() => setLoading(false));
-  }, [params.offerId, resetFrom, loadDescriptionPreview]);
+  }, [params.offerId, resetFrom, loadDescriptionPreview, loadSecondaryPath]);
+
+  // Every item specific eBay lists for the category appears as a row, filled
+  // or not, so the seller sees what's required and what else could help.
+  // Required ones sit first; unfilled optional ones are tucked behind a toggle.
+  const schemaByName = useMemo(() => {
+    const map = new Map<string, AspectSchemaEntry>();
+    for (const entry of categoryInfo?.aspects || []) map.set(entry.name.toLowerCase(), entry);
+    return map;
+  }, [categoryInfo]);
 
   const originalAspects = useMemo(
     () => (variation ? variation.variesBy.aspects : single?.aspects) || {},
@@ -1194,7 +1311,10 @@ export default function DraftEditorPage() {
     }
     return out;
   }, [specifics, originalAspects]);
-  const aspectsChanged = JSON.stringify(editedAspects) !== JSON.stringify(originalAspects);
+  // Order-insensitive: schema rows are sorted for display (required first),
+  // which must not read as an edit.
+  const stableAspects = (a: Record<string, string[]>) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]]));
+  const aspectsChanged = stableAspects(editedAspects) !== stableAspects(originalAspects);
 
   const policiesChanged =
     !!content?.listingPolicies &&
@@ -1218,9 +1338,12 @@ export default function DraftEditorPage() {
       removedAxisValues.length > 0 ||
       Object.keys(priceOverrides).length > 0 ||
       Object.keys(quantityOverrides).length > 0 ||
-      Object.keys(imageOverrides).length > 0
+      Object.keys(imageOverrides).length > 0 ||
+      sku !== (content.sku || "") ||
+      (secondaryCategoryId || null) !== (content.secondaryCategoryId || null) ||
+      JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])
     );
-  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides]);
+  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, sku, secondaryCategoryId, storeCategoryNames]);
 
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
@@ -1258,7 +1381,58 @@ export default function DraftEditorPage() {
     if (Object.keys(variantChanges).length) patch.variants = variantChanges;
     if (removedRows.size) patch.variantSkusToRemove = [...removedRows].map(String);
     if (removedAxisValues.length) patch.removeAxisValues = removedAxisValues;
+    if (content && sku.trim() && sku.trim() !== (content.sku || "")) patch.sku = sku.trim();
+    if (content && (secondaryCategoryId || null) !== (content.secondaryCategoryId || null)) patch.secondaryCategoryId = secondaryCategoryId;
+    if (content && JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])) patch.storeCategoryNames = storeCategoryNames;
     return patch;
+  }
+
+  // The primary category is applied immediately: the server refits title,
+  // specifics and description to it, which is a change the seller should see
+  // right away rather than at the next Save. Pending edits are saved first so
+  // nothing typed is lost under the refit.
+  async function applyCategory(next: CategorySelection) {
+    if (!listing || !content) return;
+    setPickerOpen(false);
+    setSecondaryCategoryId(next.secondaryCategoryId);
+    setSecondaryCategoryPath(next.secondaryCategoryPath);
+    setStoreCategoryNames(next.storeCategoryNames);
+    if (next.categoryId === content.categoryId) return;
+
+    setRefitting(true);
+    setError(null);
+    try {
+      const pending = buildPatch();
+      delete pending.aspects; // the refit replaces specifics wholesale
+      if (Object.keys(pending).length) await api.updateDraftListing(listing.id, pending);
+      const data = await api.updateDraftListing(listing.id, { categoryId: next.categoryId });
+      const detail = await api.getDraftListing(listing.id);
+      setListing(detail.listing);
+      categoryInfoRef.current = detail.category;
+      setCategoryInfo(detail.category);
+      setImageCheck(data.imageCheck);
+      resetFrom(detail.listing);
+      loadDescriptionPreview(detail.listing.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't change the category. Try again.");
+    } finally {
+      setRefitting(false);
+    }
+  }
+
+  async function handleSplit(index: number) {
+    if (!listing) return;
+    setSplitting(index);
+    setError(null);
+    try {
+      const { listing: created } = await api.splitDraftVariant(listing.id, index);
+      const c = created.generated_data as DraftContent;
+      setSplitDone((list) => [...list, { id: created.id, title: isVariationDraft(c) ? c.commonTitle : c.title }]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't create a listing for that variation.");
+    } finally {
+      setSplitting(null);
+    }
   }
 
   async function handleSave() {
@@ -1458,7 +1632,7 @@ export default function DraftEditorPage() {
     );
   }
 
-  const busy = saving || publishing || deleting || aiBusy;
+  const busy = saving || publishing || deleting || aiBusy || refitting || splitting !== null;
   const canPublish = editable && !dirty && !busy;
   const conditionLabel = CONDITIONS.find((c) => c.value === condition)?.label || condition;
   const notes = content.warnings || [];
@@ -1632,11 +1806,79 @@ export default function DraftEditorPage() {
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-3">
-                    <p className={labelClass}>Category</p>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className={labelClass}>Category</p>
+                      {editable && (
+                        <button type="button" onClick={() => setPickerOpen(true)} disabled={busy} className={smallButton}>
+                          {refitting ? "Refitting…" : "Change"}
+                        </button>
+                      )}
+                    </div>
                     <p className="mt-1.5 text-sm text-[var(--color-ink)]">
                       {content.categoryPath?.length ? content.categoryPath.join(" › ") : `Category ${content.categoryId}`}
                     </p>
-                    {content.categoryPath?.length ? <p className="text-xs text-[var(--color-muted)]">eBay category {content.categoryId}</p> : null}
+                    <p className="text-xs text-[var(--color-muted)]">
+                      eBay category {content.categoryId}
+                      {secondaryCategoryId ? ` · also in ${secondaryCategoryPath.join(" › ") || secondaryCategoryId}` : ""}
+                      {storeCategoryNames.length ? ` · Shop: ${storeCategoryNames.map((n) => n.replace(/^\//, "").replace(/\//g, " › ")).join(", ")}` : ""}
+                    </p>
+                    {refitting && (
+                      <p className="mt-2 text-xs font-semibold text-[var(--color-primary)]">
+                        Refitting the title, item specifics and description to the new category…
+                      </p>
+                    )}
+                    {variation && categoryInfo?.variationsSupported === false && (
+                      <div className="mt-2 rounded-xl border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-3 py-2 text-xs text-[var(--color-ink)]">
+                        <p>
+                          eBay doesn&apos;t allow multi-variation listings in this category. Change the category, or list each variation
+                          separately from the variations table below.
+                        </p>
+                      </div>
+                    )}
+                    {editable && (content.categorySuggestions || []).some((sg) => sg.id !== content.categoryId) && (
+                      <div className="mt-2">
+                        <p className="text-xs text-[var(--color-muted)]">eBay also suggests:</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {(content.categorySuggestions || [])
+                            .filter((sg) => sg.id !== content.categoryId)
+                            .slice(0, 3)
+                            .map((sg) => (
+                              <button
+                                key={sg.id}
+                                type="button"
+                                disabled={busy}
+                                title={sg.path.join(" › ")}
+                                onClick={() =>
+                                  applyCategory({
+                                    categoryId: sg.id,
+                                    categoryPath: sg.path,
+                                    secondaryCategoryId,
+                                    secondaryCategoryPath,
+                                    storeCategoryNames,
+                                  })
+                                }
+                                className="chip hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] disabled:opacity-50"
+                              >
+                                {sg.name}
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="sm:col-span-3">
+                    <label className={labelClass}>SKU (custom label)</label>
+                    <input
+                      className={`${inputClass} mt-1.5 font-mono text-[13px]`}
+                      value={sku}
+                      maxLength={50}
+                      placeholder="e.g. Liston-1005006"
+                      onChange={(e) => setSku(e.target.value)}
+                      disabled={!editable || busy}
+                    />
+                    {variation && sku.trim() && (
+                      <p className="mt-1 text-xs text-[var(--color-muted)]">Variations publish as {sku.trim()}-1, {sku.trim()}-2, …</p>
+                    )}
                   </div>
                   <div>
                     <label className={labelClass}>Condition</label>
@@ -1730,7 +1972,7 @@ export default function DraftEditorPage() {
               <div className={cardClass}>
                 <div className="flex items-baseline justify-between">
                   <h3 className={cardTitleClass}>
-                    Item specifics <span className="font-medium text-[var(--color-muted)]">· {specifics.length}</span>
+                    Item specifics <span className="font-medium text-[var(--color-muted)]">· {specifics.filter((r) => r.value.trim()).length}</span>
                   </h3>
                   {editable && (
                     <button type="button" onClick={() => setSpecifics((rows) => [...rows, { name: "", value: "" }])} disabled={busy} className="btn btn-secondary btn-sm">
@@ -1742,7 +1984,13 @@ export default function DraftEditorPage() {
                   <p className="mt-3 text-sm text-[var(--color-muted)]">No item specifics yet.</p>
                 ) : (
                   <div className="mt-3 grid gap-x-6 md:grid-cols-2">
-                    {specifics.map((row, i) => (
+                    {specifics.map((row, i) => {
+                      const entry = schemaByName.get(row.name.trim().toLowerCase());
+                      const unfilled = !row.value.trim();
+                      const optionalHidden = unfilled && !entry?.required && !showOptionalSpecifics;
+                      if (optionalHidden) return null;
+                      const listId = entry?.allowedValues.length ? `aspect-values-${i}` : undefined;
+                      return (
                       <div key={i} className="flex items-center gap-1 border-b border-[var(--color-line)] py-0.5 text-[13px]">
                         <input
                           className="h-7 w-[42%] min-w-0 rounded-full border border-transparent bg-transparent px-2 text-[var(--color-muted)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
@@ -1751,13 +1999,26 @@ export default function DraftEditorPage() {
                           onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
                           disabled={!editable || busy}
                         />
+                        {entry?.required && unfilled && (
+                          <span className="shrink-0 rounded-full bg-[var(--color-danger-soft)] px-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-danger)]">
+                            Required
+                          </span>
+                        )}
                         <input
-                          className="h-7 min-w-0 flex-1 rounded-full border border-transparent bg-transparent px-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
+                          className={`h-7 min-w-0 flex-1 rounded-full border border-transparent bg-transparent px-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100 ${unfilled ? "placeholder:italic" : ""}`}
                           value={row.value}
-                          placeholder="Value"
+                          list={listId}
+                          placeholder={entry ? (entry.required ? "Required by eBay" : "Optional") : "Value"}
                           onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
                           disabled={!editable || busy}
                         />
+                        {listId && (
+                          <datalist id={listId}>
+                            {entry!.allowedValues.map((v) => (
+                              <option key={v} value={v} />
+                            ))}
+                          </datalist>
+                        )}
                         {editable && (
                           <button
                             type="button"
@@ -1770,9 +2031,19 @@ export default function DraftEditorPage() {
                           </button>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
+                {(() => {
+                  const hiddenCount = specifics.filter((r) => !r.value.trim() && !schemaByName.get(r.name.trim().toLowerCase())?.required).length;
+                  if (!hiddenCount && !showOptionalSpecifics) return null;
+                  return (
+                    <button type="button" onClick={() => setShowOptionalSpecifics((v) => !v)} className="mt-3 text-xs font-semibold text-[var(--color-primary)] hover:underline">
+                      {showOptionalSpecifics ? "Hide empty optional specifics" : `Show ${hiddenCount} more optional specific${hiddenCount === 1 ? "" : "s"} eBay lists for this category`}
+                    </button>
+                  );
+                })()}
               </div>
 
               {/* Description */}
@@ -1842,6 +2113,11 @@ export default function DraftEditorPage() {
                 onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
                 onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
                 onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
+                variationsSupported={categoryInfo?.variationsSupported ?? null}
+                onSplit={editable ? handleSplit : undefined}
+                splitting={splitting}
+                splitDone={splitDone}
+                accountId={params.id}
                 onApplyAll={applyToAllVariants}
                 disabled={!editable || busy}
               />
@@ -1893,6 +2169,21 @@ export default function DraftEditorPage() {
 
       {published && <PublishedDialog listing={published} onClose={() => router.push(`/accounts/${params.id}/listings`)} />}
 
+      {listing && content && pickerOpen && (
+        <CategoryPicker
+          connectionId={params.id}
+          value={{
+            categoryId: content.categoryId,
+            categoryPath: content.categoryPath || [],
+            secondaryCategoryId,
+            secondaryCategoryPath,
+            storeCategoryNames,
+          }}
+          suggestions={content.categorySuggestions || []}
+          onApply={applyCategory}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       <ConfirmDialog
         open={confirmPublish}
         title={isLiveEdit ? "Publish these changes?" : "Publish this listing?"}

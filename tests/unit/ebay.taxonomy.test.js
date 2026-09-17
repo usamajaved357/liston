@@ -107,3 +107,97 @@ test('getAspectSchema degrades to null rather than failing the whole draft', asy
   // drafting proceeds on the model's own judgement, as it did before.
   assert.strictEqual(await taxonomy.getAspectSchema('EBAY_GB', '20702'), null);
 });
+
+// --- the local category index --------------------------------------------
+
+const fs = require('fs');
+const path = require('path');
+
+// A tiny tree in the real get_category_tree shape.
+const TREE_RESPONSE = {
+  categoryTreeId: '999',
+  categoryTreeVersion: '1',
+  rootCategoryNode: {
+    category: { categoryId: '0', categoryName: 'Root' },
+    categoryTreeNodeLevel: 0,
+    childCategoryTreeNodes: [
+      {
+        category: { categoryId: '10', categoryName: 'Vehicle Parts' },
+        categoryTreeNodeLevel: 1,
+        childCategoryTreeNodes: [
+          { category: { categoryId: '11', categoryName: 'Cup Holders' }, categoryTreeNodeLevel: 2, leafCategoryTreeNode: true },
+          { category: { categoryId: '12', categoryName: 'Other Car Parts' }, categoryTreeNodeLevel: 2, leafCategoryTreeNode: true },
+        ],
+      },
+      {
+        category: { categoryId: '20', categoryName: 'Coins' },
+        categoryTreeNodeLevel: 1,
+        childCategoryTreeNodes: [{ category: { categoryId: '21', categoryName: 'Coin Holders' }, categoryTreeNodeLevel: 2, leafCategoryTreeNode: true }],
+      },
+    ],
+  },
+};
+
+const TEST_MARKET = 'EBAY_TEST';
+const treeFile = path.join(process.cwd(), '.cache', `category-tree-${TEST_MARKET}.json`);
+
+function stubTreeFetch() {
+  return stubFetch((url) => {
+    if (url.includes('get_default_category_tree_id')) return { categoryTreeId: '999' };
+    if (url.includes('get_category_suggestions')) return { categorySuggestions: [{ category: { categoryId: '11', categoryName: 'Cup Holders' } }] };
+    if (url.includes('get_listing_structure_policies')) return { listingStructurePolicies: [{ categoryId: '12', variationsSupported: false }] };
+    if (url.includes('/category_tree/999')) return TREE_RESPONSE;
+    return { access_token: 'app-token', expires_in: 7200 };
+  });
+}
+
+test.afterEach(() => {
+  try {
+    fs.unlinkSync(treeFile);
+  } catch {
+    // not written by this test
+  }
+});
+
+test('getCategoryPath walks the tree from the top level down, excluding the root', async () => {
+  stubTreeFetch();
+  const path = await taxonomy.getCategoryPath(TEST_MARKET, '11');
+  assert.deepStrictEqual(path.map((p) => p.name), ['Vehicle Parts', 'Cup Holders']);
+  assert.deepStrictEqual(await taxonomy.getCategoryPath(TEST_MARKET, 'nope'), []);
+});
+
+test('getCategoryChildren lists top-level categories, then a branch, with leaf flags', async () => {
+  stubTreeFetch();
+  const top = await taxonomy.getCategoryChildren(TEST_MARKET);
+  assert.deepStrictEqual(top.map((c) => c.name), ['Vehicle Parts', 'Coins']);
+  assert.strictEqual(top[0].leaf, false);
+  const branch = await taxonomy.getCategoryChildren(TEST_MARKET, '10');
+  assert.deepStrictEqual(branch.map((c) => [c.name, c.leaf]), [['Cup Holders', true], ['Other Car Parts', true]]);
+});
+
+test('searchCategories puts eBay suggestions first, then local name matches with paths', async () => {
+  stubTreeFetch();
+  const results = await taxonomy.searchCategories(TEST_MARKET, 'coin');
+  // The suggestion (Cup Holders) leads even though its name does not match;
+  // Coin Holders follows from the local name search.
+  assert.deepStrictEqual(results.map((r) => r.name), ['Cup Holders', 'Coin Holders', 'Coins']);
+  assert.deepStrictEqual(results[1].path, ['Coins', 'Coin Holders']);
+});
+
+test('getVariationsSupported reads the Metadata API and returns null for an unknown category', async () => {
+  stubTreeFetch();
+  assert.strictEqual(await taxonomy.getVariationsSupported(TEST_MARKET, '12'), false);
+  assert.strictEqual(await taxonomy.getVariationsSupported(TEST_MARKET, '11'), null);
+});
+
+test('the category tree is cached on disk and reused without refetching', async () => {
+  const fetchMock = stubTreeFetch();
+  await taxonomy.getCategoryPath(TEST_MARKET, '11');
+  assert.ok(fs.existsSync(treeFile));
+  const treeCalls = () => fetchMock.mock.calls.filter((c) => /category_tree\/999(\?|$)/.test(String(c.arguments[0]))).length;
+  assert.strictEqual(treeCalls(), 1);
+
+  taxonomy.resetTaxonomyCache();
+  await taxonomy.getCategoryPath(TEST_MARKET, '21');
+  assert.strictEqual(treeCalls(), 1);
+});

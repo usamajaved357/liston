@@ -9,6 +9,8 @@ const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
 const descriptionTemplate = require('./description-template');
+const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const textGenerator = require('../ai-generation/text-generator.service');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -110,10 +112,11 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
   }
   const marketplaceId = connection.settings?.ebay?.marketplaceId || 'EBAY_GB';
 
-  const { competitor, source } = await orchestrator.readSources({ competitorUrl, sourceUrl, marketplaceId });
+  const { competitor, source, categorySuggestions } = await orchestrator.readSources({ competitorUrl, sourceUrl, marketplaceId });
 
   const previewId = crypto.randomUUID();
-  previews.set(previewId, { competitor, source, userId, connectionId, competitorUrl, sourceUrl, expiresAt: Date.now() + PREVIEW_TTL_MS });
+  previews.set(previewId, { competitor, source, categorySuggestions, userId, connectionId, competitorUrl, sourceUrl, expiresAt: Date.now() + PREVIEW_TTL_MS });
+  const category = await orchestrator.resolveCategory({ competitor, categorySuggestions, marketplaceId });
 
   // Per option, a thumbnail where the supplier has one, so a colour can be
   // chosen by eye rather than by name.
@@ -129,7 +132,9 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
 
   return {
     previewId,
-    competitor: { title: competitor.title, priceText: competitor.priceText, categoryPath: competitor.categoryBreadcrumb },
+    competitor: competitor ? { title: competitor.title, priceText: competitor.priceText, categoryPath: competitor.categoryBreadcrumb } : null,
+    category: { id: category.categoryId, path: category.categoryPath },
+    categorySuggestions,
     source: {
       title: source.title,
       priceText: source.priceText,
@@ -185,6 +190,7 @@ async function generateEbayDraftFromUrls(
     sourceUrl,
     competitor: preRead?.competitor,
     source: preRead?.source,
+    categorySuggestions: preRead?.categorySuggestions,
     variantSelection,
     accessToken,
     // Sell prices are derived from the supplier's own cost plus these
@@ -204,7 +210,10 @@ async function generateEbayDraftFromUrls(
   // (see withSkus). A draft that's edited for days shouldn't be holding SKUs
   // reserved against an eBay index that will have moved on by the time it
   // goes live.
-  const finalDraftInput = { ...draftInput, skuBase: baseSkuFromSourceUrl(sourceUrl) };
+  // The seller-visible SKU (eBay's "custom label"). Defaults to a Liston
+  // prefix plus the supplier's product id; editable on the draft.
+  const skuBase = baseSkuFromSourceUrl(sourceUrl);
+  const finalDraftInput = { ...draftInput, skuBase, sku: `Liston-${skuBase.replace(/^AE/, '')}` };
 
   return createEbayDraft(connectionId, userId, finalDraftInput, {
     sourceData: { competitor, source },
@@ -238,7 +247,20 @@ async function getDraftDetail(id, userId) {
     }
   }
 
-  return { listing, policies };
+  return { listing, policies, category: await categoryInfoFor(listing.generated_data || {}) };
+}
+
+// What the editor needs to know about a draft's category: whether eBay lets
+// it carry variations, and its full item-specifics schema so every specific
+// eBay lists (required or optional) can be shown, filled or not.
+async function categoryInfoFor(draft) {
+  if (!draft.categoryId) return null;
+  const marketplaceId = draft.marketplaceId || 'EBAY_GB';
+  const [variationsSupported, aspects] = await Promise.all([
+    ebayTaxonomy.getVariationsSupported(marketplaceId, draft.categoryId),
+    ebayTaxonomy.getEditorAspectSchema(marketplaceId, draft.categoryId),
+  ]);
+  return { id: String(draft.categoryId), path: draft.categoryPath || [], variationsSupported, aspects: aspects || [] };
 }
 
 // Only a draft can be edited. Once a listing is live, eBay owns it — editing
@@ -310,8 +332,48 @@ async function updateDraft(id, userId, patch) {
     draft = removeAxisValue(draft, removal.axis, removal.value);
   }
 
-  for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'imageUrls']) {
+  for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'imageUrls', 'sku', 'storeCategoryNames']) {
     if (patch[field] !== undefined) draft[field] = patch[field];
+  }
+  if (patch.secondaryCategoryId !== undefined) draft.secondaryCategoryId = patch.secondaryCategoryId || null;
+
+  // Moving category: the path comes from eBay's tree (never typed), and the
+  // title, description and specifics are refitted by the model to the new
+  // category's vocabulary and required specifics. Facts stay; wording moves.
+  if (patch.categoryId !== undefined && String(patch.categoryId) !== String(draft.categoryId)) {
+    const marketplaceId = draft.marketplaceId || 'EBAY_GB';
+    const path = await ebayTaxonomy.getCategoryPath(marketplaceId, patch.categoryId);
+    if (!path.length) throw new ListingError("That category isn't in eBay's tree for this marketplace.", 400);
+    const leaf = (await ebayTaxonomy.getCategoryChildren(marketplaceId, patch.categoryId)).length === 0;
+    if (!leaf) throw new ListingError('Pick a final category (one with no sub-categories); eBay only lists in those.', 400);
+
+    draft.categoryId = String(patch.categoryId);
+    draft.categoryPath = path.map((p) => p.name);
+
+    const aspectSchema = await ebayTaxonomy.getAspectSchema(marketplaceId, draft.categoryId);
+    const refit = await textGenerator.refitContentForCategory({
+      draft,
+      source: listing.source_data?.source || null,
+      categoryPath: draft.categoryPath,
+      aspectSchema,
+      variationAxes: (draft.variesBy?.specifications || []).map((spec) => spec.name),
+    });
+    const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+    const origin = draft.variesBy?.aspects?.['Country/Region of Manufacture'] || draft.aspects?.['Country/Region of Manufacture'];
+    const aspects = { ...refit.aspects, ...(origin ? { 'Country/Region of Manufacture': origin } : {}) };
+    if (isVariation) {
+      draft.commonTitle = refit.title;
+      draft.commonDescription = refit.description;
+      draft.variesBy = { ...draft.variesBy, aspects };
+    } else {
+      draft.title = refit.title;
+      draft.description = refit.description;
+      draft.aspects = aspects;
+    }
+    draft.warnings = [...(draft.warnings || []).filter((w) => !/^Category changed/.test(w)), ...refit.warnings];
+    draft.warnings.unshift(`Category changed to ${draft.categoryPath.join(' > ')}: title, description and item specifics were refitted. Check them.`);
+    // Nothing the patch also carries for these fields should win over a
+    // refit the seller just asked for; the editor sends the category alone.
   }
   // Shared item specifics live under variesBy on a variation draft, at the
   // top level on a plain one — the editor sends one `aspects` either way.
@@ -362,7 +424,12 @@ async function updateDraft(id, userId, patch) {
     throw new ListingError("A variation listing needs at least one variation. You've removed them all.", 400);
   }
 
-  const updated = await listingRepository.updateGeneratedData(id, draft);
+  let updated = await listingRepository.updateGeneratedData(id, draft);
+  // A recorded publish failure was about the draft as it was; a category
+  // change is the usual fix for it, so the stale message goes with it.
+  if (patch.categoryId !== undefined && listing.error_message) {
+    updated = await listingRepository.updateStatus(id, 'pending_review', { errorMessage: null });
+  }
   // Returned rather than enforced: an edit that leaves a gap should be
   // visible immediately in the editor, not only refused later at publish.
   return { listing: updated, imageCheck: imageGates.checkDraftImages(draft) };
@@ -476,6 +543,58 @@ async function fetchDraftImage(id, userId, url) {
   const meta = await imageOps.describe(buffer).catch(() => ({ format: 'jpeg' }));
   const ext = meta.format === 'jpeg' ? 'jpg' : meta.format || 'jpg';
   return { buffer, contentType: `image/${meta.format || 'jpeg'}`, extension: ext };
+}
+
+// Lifts one variation out of a variation draft into a plain single-item
+// draft of its own. The way to list a product whose category refuses
+// multi-variation listings: each option becomes its own listing.
+async function splitVariant(id, userId, index) {
+  const listing = await loadEditableDraft(id, userId);
+  const draft = listing.generated_data || {};
+  const variant = (draft.variants || [])[index];
+  if (!variant) throw new ListingError('That variation is no longer on the draft.', 404);
+
+  const optionLabel = Object.values(variant.aspects || {})
+    .map((values) => values[0])
+    .filter(Boolean)
+    .join(' ');
+  let title = draft.commonTitle || '';
+  if (optionLabel && !title.toLowerCase().includes(optionLabel.toLowerCase())) {
+    const candidate = `${title} ${optionLabel}`.trim();
+    title = candidate.length <= 80 ? candidate : `${title.slice(0, 80 - optionLabel.length - 1).trimEnd()} ${optionLabel}`;
+  }
+
+  const imageUrls = [...new Set([...(variant.imageUrls || []), ...(draft.imageUrls || [])])];
+  const single = {
+    title,
+    description: draft.commonDescription,
+    imageUrls,
+    aspects: { ...(draft.variesBy?.aspects || {}), ...(variant.aspects || {}) },
+    condition: variant.condition || 'NEW',
+    quantity: variant.quantity ?? 1,
+    categoryId: draft.categoryId,
+    categoryPath: draft.categoryPath || [],
+    categorySuggestions: draft.categorySuggestions || [],
+    secondaryCategoryId: draft.secondaryCategoryId || null,
+    storeCategoryNames: draft.storeCategoryNames || [],
+    price: variant.price,
+    priceBreakdown: variant.priceBreakdown,
+    merchantLocationKey: draft.merchantLocationKey,
+    marketplaceId: draft.marketplaceId,
+    listingPolicies: draft.listingPolicies,
+    skuBase: draft.skuBase,
+    sku: draft.sku ? `${draft.sku}-${index + 1}` : undefined,
+    splitFromListingId: id,
+  };
+
+  return listingRepository.createDraft({
+    connectionId: listing.connection_id,
+    sku: single.sku || null,
+    platformOfferId: null,
+    platformGroupKey: null,
+    generatedData: single,
+    sourceData: listing.source_data,
+  });
 }
 
 async function removeDraft(id, userId) {
@@ -757,6 +876,19 @@ async function publish(id, userId) {
 
   const draft = listing.generated_data || {};
   const marketplaceId = draft.marketplaceId;
+
+  // A category that refuses variations fails at eBay with an opaque error
+  // after minutes of building; say it up front, with the way out.
+  if (Array.isArray(draft.variants) && draft.variants.length > 1 && draft.categoryId) {
+    const supported = await ebayTaxonomy.getVariationsSupported(marketplaceId || 'EBAY_GB', draft.categoryId);
+    if (supported === false) {
+      throw new ListingError(
+        `eBay doesn't allow multi-variation listings in "${(draft.categoryPath || []).slice(-1)[0] || draft.categoryId}". ` +
+          `Change the category, or list each variation separately from the variations table.`,
+        400
+      );
+    }
+  }
   // Drafts created before drafts went local already have their eBay objects;
   // anything newer is built here, now.
   const alreadyOnEbay = Boolean(listing.platform_offer_id || listing.platform_group_key);
@@ -815,19 +947,20 @@ async function publish(id, userId) {
 // Assigns the SKUs (and group key) a publish needs, without mutating the
 // stored draft.
 function withSkus(draft, connectionId) {
-  // `skuBase` is set when the draft is generated from URLs; the fallback
-  // covers drafts created another way.
-  const base = draft.skuBase || draft.sku || `SKU${connectionId.slice(0, 8)}`;
-  const runSuffix = shortRandomSuffix();
+  // The seller's own SKU (custom label) is used as-is when they set one;
+  // otherwise the generated base gets a per-attempt suffix so a retried
+  // publish never collides with SKUs a failed attempt left behind.
+  const own = typeof draft.sku === 'string' && draft.sku.trim() ? draft.sku.trim() : null;
+  const base = own || `${draft.skuBase || `SKU${connectionId.slice(0, 8)}`}-${shortRandomSuffix()}`;
 
   if (Array.isArray(draft.variants) && draft.variants.length) {
     return {
       ...draft,
-      groupKey: `${base}-${runSuffix}`,
-      variants: draft.variants.map((variant, index) => ({ ...variant, sku: `${base}-${runSuffix}-${index + 1}` })),
+      groupKey: base,
+      variants: draft.variants.map((variant, index) => ({ ...variant, sku: `${base}-${index + 1}` })),
     };
   }
-  return { ...draft, sku: `${base}-${runSuffix}` };
+  return { ...draft, sku: base };
 }
 
 module.exports = {
@@ -842,6 +975,7 @@ module.exports = {
   getDraftDetail,
   previewDescription,
   updateDraft,
+  splitVariant,
   removeDraft,
   proposeTextRevision,
   proposeImageRevision,
