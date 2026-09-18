@@ -507,6 +507,26 @@ async function getStoreCategories(credentials) {
   return { categories, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// The Shop's departments change rarely and the Trading call behind them is
+// rationed, so one read an hour per account serves the editor, the AI and
+// drafting alike. A rationed refusal is reported, not thrown: no Shop
+// categories is a valid state.
+const storeCategoryCache = new Map(); // connectionId -> { categories, expiresAt }
+const STORE_CATEGORY_TTL_MS = 60 * 60 * 1000;
+async function getStoreCategoriesCached(credentials, connectionId) {
+  const id = String(connectionId);
+  const cached = storeCategoryCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) return { categories: cached.categories, unavailable: null };
+  try {
+    const { categories } = await getStoreCategories(credentials);
+    storeCategoryCache.set(id, { categories, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
+    return { categories, unavailable: null };
+  } catch (err) {
+    if (err.statusCode === 429 || err.code === 'EBAY_BUDGET') return { categories: [], unavailable: err.message };
+    throw err;
+  }
+}
+
 async function detectMarketplace(credentials) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
@@ -1227,6 +1247,7 @@ module.exports = {
   getLiveItem,
   detectMarketplace,
   getStoreCategories,
+  getStoreCategoriesCached,
   createMerchantLocation,
   deleteInventoryObjects,
   reviseLiveListing,

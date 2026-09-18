@@ -6,6 +6,8 @@ const marketplaces = require('../ebay/marketplaces');
 const orchestrator = require('../ai-generation/generation.orchestrator');
 const imageGates = require('../ai-generation/image-pipeline/gates');
 const { prepareAspectsForEbay } = require('../ai-generation/aspect-validator');
+const storeCategory = require('./store-category');
+const logger = require('../../utils/logger');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
@@ -223,7 +225,10 @@ async function generateEbayDraftFromUrlsNow(
   // The seller-visible SKU (eBay's "custom label"). Defaults to a Liston
   // prefix plus the supplier's product id; editable on the draft.
   const skuBase = baseSkuFromSourceUrl(sourceUrl);
-  const finalDraftInput = { ...draftInput, skuBase, sku: `Liston-${skuBase.replace(/^AE/, '')}` };
+  // Filed under the seller's own Shop department when one fits (their
+  // "New in" when none does); editable on the draft.
+  const storeCategoryNames = await suggestStoreCategoriesFor(connectionId, userId, draftInput);
+  const finalDraftInput = { ...draftInput, skuBase, sku: `Liston-${skuBase.replace(/^AE/, '')}`, ...(storeCategoryNames.length ? { storeCategoryNames } : {}) };
 
   return createEbayDraft(connectionId, userId, finalDraftInput, {
     sourceData: { competitor, source },
@@ -232,6 +237,23 @@ async function generateEbayDraftFromUrlsNow(
     // than the seller finding out from a live listing.
     warnings,
   });
+}
+
+async function suggestStoreCategoriesFor(connectionId, userId, draft) {
+  try {
+    const { categories } = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+      ebayService.getStoreCategoriesCached(credentials, connectionId)
+    );
+    const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+    return storeCategory.suggestStoreCategories(categories, {
+      title: isVariation ? draft.commonTitle : draft.title,
+      categoryPath: draft.categoryPath || [],
+      specifics: isVariation ? draft.variesBy?.aspects : draft.aspects,
+    }).names;
+  } catch (err) {
+    logger.warn('Could not suggest a Shop category', { connectionId, error: err.message });
+    return [];
+  }
 }
 
 async function listPendingDrafts(connectionId, userId) {

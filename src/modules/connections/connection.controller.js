@@ -552,25 +552,15 @@ async function categoryDetail(req, res, next) {
   }
 }
 
-// Per connection, briefly: the Trading call behind it is rationed.
-const storeCategoryCache = new Map();
-const STORE_CATEGORY_TTL_MS = 60 * 60 * 1000;
-
 async function storeCategories(req, res, next) {
   try {
-    const cached = storeCategoryCache.get(req.params.id);
-    if (cached && cached.expiresAt > Date.now()) return res.status(200).json({ categories: cached.categories });
     const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
     if (connection.platform_key !== 'ebay') return res.status(200).json({ categories: [] });
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
-      ebayService.getStoreCategories(credentials)
+      ebayService.getStoreCategoriesCached(credentials, req.params.id)
     );
-    storeCategoryCache.set(req.params.id, { categories: result.categories, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
-    res.status(200).json({ categories: result.categories });
+    res.status(200).json({ categories: result.categories, ...(result.unavailable ? { unavailable: result.unavailable } : {}) });
   } catch (err) {
-    // A rationed Trading call shouldn't break the editor: no Shop categories
-    // is a valid state, and the notice says why.
-    if (err.statusCode === 429) return res.status(200).json({ categories: [], unavailable: err.message });
     next(err);
   }
 }

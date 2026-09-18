@@ -15,6 +15,7 @@ import {
   ImageProposal,
   PriceBreakdown,
   RevisionCurrentState,
+  StoreCategory,
   TextProposal,
   VariationDraftVariant,
   VariationFixes,
@@ -23,7 +24,7 @@ import {
 import { Alert } from "@/components/Alert";
 import { EditorHeader } from "@/components/EditorHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { CategoryPicker, CategorySelection } from "@/components/CategoryPicker";
+import { CategoryPicker, CategorySelection, ShopCategoryPicker, shopCategoryLabel } from "@/components/CategoryPicker";
 import { currencySymbol, formatPrice } from "@/lib/format";
 
 // The draft editor. A draft lives only in Liston until Publish, so every
@@ -97,6 +98,10 @@ function plainDescription(text: string) {
     .replace(/==([\s\S]*?)==/g, "$1")
     .replace(/\[color=#[0-9a-fA-F]{6}\]([\s\S]*?)\[\/color\]/g, "$1")
     .replace(/\[size=(?:sm|lg|xl)\]([\s\S]*?)\[\/size\]/g, "$1");
+}
+
+function flattenStorePaths(categories: StoreCategory[], prefix = ""): string[] {
+  return categories.flatMap((c) => [`${prefix}/${c.name}`, ...flattenStorePaths(c.children || [], `${prefix}/${c.name}`)]);
 }
 
 const CONDITIONS = [
@@ -1532,6 +1537,10 @@ export default function DraftEditorPage() {
   const [storeCategoryNames, setStoreCategoryNames] = useState<string[]>([]);
   const [categoryInfo, setCategoryInfo] = useState<DraftCategoryInfo | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [shopPickerOpen, setShopPickerOpen] = useState(false);
+  // The Shop's departments, read once per page (cached server-side): for
+  // the Shop category dialog and so the AI knows what it may file under.
+  const [storeCategories, setStoreCategories] = useState<{ categories: StoreCategory[]; note: string | null } | null>(null);
   const [refitting, setRefitting] = useState(false);
   const [showOptionalSpecifics, setShowOptionalSpecifics] = useState(false);
   const [splitting, setSplitting] = useState<number | null>(null);
@@ -1640,6 +1649,13 @@ export default function DraftEditorPage() {
     setDescriptionPreview(null);
     if (descMode === "preview") loadDescriptionPreview(listingId);
   }
+
+  useEffect(() => {
+    api
+      .getStoreCategories(params.id)
+      .then((data) => setStoreCategories({ categories: data.categories, note: data.unavailable || null }))
+      .catch(() => setStoreCategories({ categories: [], note: null }));
+  }, [params.id]);
 
   useEffect(() => {
     api
@@ -2023,6 +2039,7 @@ export default function DraftEditorPage() {
         : [],
       policies: content?.listingPolicies ? { postage: policyLabel("fulfillmentPolicyId"), payment: policyLabel("paymentPolicyId"), returns: policyLabel("returnPolicyId") } : undefined,
       storeCategoryNames,
+      storeCategories: flattenStorePaths(storeCategories?.categories || []),
     };
   }
 
@@ -2402,7 +2419,6 @@ export default function DraftEditorPage() {
                     <p className="text-[11.5px] text-[var(--color-muted)]">
                       #{content.categoryId}
                       {secondaryCategoryId ? ` · also in ${secondaryCategoryPath.join(" › ") || secondaryCategoryId}` : ""}
-                      {storeCategoryNames.length ? ` · Shop: ${storeCategoryNames.map((n) => n.replace(/^\//, "").replace(/\//g, " › ")).join(", ")}` : ""}
                     </p>
                     {refitting && <p className="mt-1 text-xs font-semibold text-[var(--color-primary)]">Refitting the title, item specifics and description to the new category…</p>}
                     {variation && categoryInfo?.variationsSupported === false && (
@@ -2431,7 +2447,31 @@ export default function DraftEditorPage() {
                   </div>
                   {editable && (
                     <button type="button" onClick={() => setPickerOpen(true)} disabled={busy} className={smallButton}>
-                      {refitting ? "Refitting…" : "Change"}
+                      {refitting ? "Refitting…" : "Edit"}
+                    </button>
+                  )}
+                </div>
+
+                {/* The seller's own Shop departments: a different thing from
+                    eBay's category, so its own row and its own dialog. */}
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl bg-[var(--color-paper)] px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className={labelClass}>Shop category</p>
+                    {storeCategoryNames.length ? (
+                      <p className="mt-0.5 truncate text-[13px] text-[var(--color-ink)]">{storeCategoryNames.map(shopCategoryLabel).join(" · ")}</p>
+                    ) : (
+                      <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+                        {storeCategories?.note
+                          ? storeCategories.note
+                          : storeCategories && storeCategories.categories.length === 0
+                            ? "No eBay Shop departments on this account."
+                            : "Not filed under a Shop department."}
+                      </p>
+                    )}
+                  </div>
+                  {editable && (
+                    <button type="button" onClick={() => setShopPickerOpen(true)} disabled={busy || !storeCategories} className={smallButton}>
+                      {storeCategoryNames.length ? "Edit" : "Add"}
                     </button>
                   )}
                 </div>
@@ -2759,6 +2799,18 @@ export default function DraftEditorPage() {
           suggestions={content.categorySuggestions || []}
           onApply={applyCategory}
           onClose={() => setPickerOpen(false)}
+        />
+      )}
+      {shopPickerOpen && storeCategories && (
+        <ShopCategoryPicker
+          value={storeCategoryNames}
+          categories={storeCategories.categories}
+          note={storeCategories.note}
+          onApply={(names) => {
+            setStoreCategoryNames(names);
+            setShopPickerOpen(false);
+          }}
+          onClose={() => setShopPickerOpen(false)}
         />
       )}
       <ConfirmDialog

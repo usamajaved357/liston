@@ -199,7 +199,9 @@ function CategoryBrowser({
 }
 
 // Mounted only while open (the parent renders it conditionally), so its
-// working copy of the selection starts fresh each time it's opened.
+// working copy of the selection starts fresh each time it's opened. Item
+// categories only: the Shop's own departments are a different thing with
+// their own dialog (ShopCategoryPicker).
 export function CategoryPicker({
   connectionId,
   value,
@@ -215,51 +217,7 @@ export function CategoryPicker({
 }) {
   const [draft, setDraft] = useState<CategorySelection>(value);
   const [editing, setEditing] = useState<Slot | null>(null);
-  const [store, setStore] = useState<{ categories: StoreCategory[]; note: string | null } | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getStoreCategories(connectionId)
-      .then((data) => {
-        if (!cancelled) setStore({ categories: data.categories, note: data.unavailable || null });
-      })
-      .catch(() => {
-        if (!cancelled) setStore({ categories: [], note: null });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [connectionId]);
-
-  const storeOptions = useMemo(() => storePaths(store?.categories || []), [store]);
-  const storeNote = store?.note || null;
-
   const rowClass = "flex items-center justify-between gap-4 border-b border-[var(--color-line)] py-3";
-
-  function storeSelect(index: 0 | 1) {
-    const current = draft.storeCategoryNames[index] || "";
-    return (
-      <select
-        className="input input-sm max-w-[60%]"
-        value={current}
-        disabled={!storeOptions.length}
-        onChange={(e) => {
-          const names = [...draft.storeCategoryNames];
-          if (e.target.value) names[index] = e.target.value;
-          else names.splice(index, 1);
-          setDraft({ ...draft, storeCategoryNames: names.filter(Boolean).slice(0, 2) });
-        }}
-      >
-        <option value="">{storeOptions.length ? "None" : "No Shop categories"}</option>
-        {storeOptions.map((o) => (
-          <option key={o.path} value={o.path}>
-            {`${"  ".repeat(o.depth)}${o.label}`}
-          </option>
-        ))}
-      </select>
-    );
-  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
@@ -295,7 +253,7 @@ export function CategoryPicker({
                   <p className="truncate text-sm text-[var(--color-primary)]">{draft.categoryPath.join(" › ") || "Not set"}</p>
                 </div>
                 <button type="button" onClick={() => setEditing("primary")} className="btn btn-secondary btn-sm shrink-0">
-                  Change
+                  Edit
                 </button>
               </div>
               <div className={rowClass}>
@@ -311,24 +269,9 @@ export function CategoryPicker({
                     </button>
                   )}
                   <button type="button" onClick={() => setEditing("secondary")} className="btn btn-secondary btn-sm">
-                    {draft.secondaryCategoryId ? "Change" : "Add"}
+                    {draft.secondaryCategoryId ? "Edit" : "Add"}
                   </button>
                 </div>
-              </div>
-            </div>
-
-            <div className="mt-5">
-              <h3 className="text-base font-bold text-[var(--color-ink)]">Shop category</h3>
-              <p className="text-xs text-[var(--color-muted)]">
-                {storeNote ? storeNote : "If you have an eBay Shop, file the listing under your own departments."}
-              </p>
-              <div className={rowClass}>
-                <p className="text-sm font-semibold text-[var(--color-ink)]">First category</p>
-                {store === null ? <span className="text-xs text-[var(--color-muted)]">Loading…</span> : storeSelect(0)}
-              </div>
-              <div className={rowClass}>
-                <p className="text-sm font-semibold text-[var(--color-ink)]">Second category</p>
-                {store === null ? <span className="text-xs text-[var(--color-muted)]">Loading…</span> : storeSelect(1)}
               </div>
             </div>
 
@@ -342,6 +285,90 @@ export function CategoryPicker({
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Turns a stored "/Department/Sub" path into "Department › Sub".
+export function shopCategoryLabel(path: string) {
+  return path.replace(/^\//, "").split("/").join(" › ");
+}
+
+// The seller's own eBay Shop departments — up to two per listing. Loaded
+// once per connection by the page (they're cached server-side) and passed
+// in, so the dialog opens ready.
+export function ShopCategoryPicker({
+  value,
+  categories,
+  note,
+  onApply,
+  onClose,
+}: {
+  value: string[];
+  categories: StoreCategory[];
+  note: string | null;
+  onApply: (names: string[]) => void;
+  onClose: () => void;
+}) {
+  const [names, setNames] = useState<string[]>(value);
+  const options = useMemo(() => storePaths(categories), [categories]);
+  const rowClass = "flex items-center justify-between gap-4 border-b border-[var(--color-line)] py-3";
+
+  function select(index: 0 | 1) {
+    const current = names[index] || "";
+    return (
+      <select
+        className="input input-sm max-w-[60%]"
+        value={current}
+        disabled={!options.length}
+        onChange={(e) => {
+          const next = [...names];
+          if (e.target.value) next[index] = e.target.value;
+          else next.splice(index, 1);
+          setNames(next.filter(Boolean).slice(0, 2));
+        }}
+      >
+        <option value="">{options.length ? "None" : "No Shop categories"}</option>
+        {options.map((o) => (
+          <option key={o.path} value={o.path}>
+            {`${"\u00a0\u00a0".repeat(o.depth)}${o.label}`}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-xl rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-[var(--color-ink)]">Shop category</h2>
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+            Close
+          </button>
+        </div>
+        <p className="mt-1 text-xs text-[var(--color-muted)]">
+          {note || (options.length ? "File the listing under your own eBay Shop departments, so buyers browsing your Shop find it." : "This account has no eBay Shop departments to file under.")}
+        </p>
+        <div className="mt-2">
+          <div className={rowClass}>
+            <p className="text-sm font-semibold text-[var(--color-ink)]">First category</p>
+            {select(0)}
+          </div>
+          <div className={rowClass}>
+            <p className="text-sm font-semibold text-[var(--color-ink)]">Second category</p>
+            {select(1)}
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+            Cancel
+          </button>
+          <button type="button" onClick={() => onApply(names)} className="btn btn-primary btn-sm">
+            Done
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -141,6 +141,11 @@ test('generateEbayDraftFromUrls records a SKU base, forwards sourceData, and cre
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
   mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
   mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1', status: 'drafted' }));
+  // The seller's Shop departments: the draft is filed under the one that fits.
+  mock.method(ebayService, 'getStoreCategoriesCached', async () => ({
+    categories: [{ id: '1', name: 'New In', children: [] }, { id: '2', name: 'Widgets', children: [] }],
+    unavailable: null,
+  }));
   const createDraftMock = mock.method(listingRepository, 'createDraft', async (row) => ({ id: 'listing-1', ...row }));
 
   await listingService.generateEbayDraftFromUrls(CONNECTION_ID, USER_ID, {
@@ -156,6 +161,7 @@ test('generateEbayDraftFromUrls records a SKU base, forwards sourceData, and cre
   // publish, so a draft edited over days isn't holding SKUs against eBay's
   // eventually-consistent index.
   assert.strictEqual(call.generatedData.skuBase, 'AE1234567890');
+  assert.deepStrictEqual(call.generatedData.storeCategoryNames, ['/Widgets'], 'filed under the matching Shop department');
   assert.strictEqual(call.platformOfferId, null);
   // costPrice is no longer part of sourceData — the cost comes from the
   // supplier's own price at draft time, and the derived price plus its full
