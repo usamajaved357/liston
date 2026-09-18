@@ -117,7 +117,8 @@ async function descriptionPreview(req, res, next) {
 async function publish(req, res, next) {
   try {
     const listing = await listingService.publish(req.params.listingId, req.ownerId);
-    res.status(200).json({ listing });
+    const { warnings = [], ...row } = listing;
+    res.status(200).json({ listing: row, warnings });
   } catch (err) {
     next(err);
   }

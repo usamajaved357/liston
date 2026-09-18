@@ -1931,7 +1931,9 @@ export default function DraftEditorPage() {
       }
       const data = await api.publishDraftListing(listing.id);
       if (isLiveEdit) {
-        router.push(`/accounts/${params.id}/listings?updated=${listing.edit_of_item_id}`);
+        // eBay may have applied only part of the revision; say so on the way out.
+        const warning = data.warnings?.length ? `&warning=${encodeURIComponent(data.warnings.join(" "))}` : "";
+        router.push(`/accounts/${params.id}/listings?updated=${listing.edit_of_item_id}${warning}`);
         return;
       }
       setListing(data.listing);

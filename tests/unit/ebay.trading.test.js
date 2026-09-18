@@ -144,3 +144,20 @@ test('a Trading API failure response throws EbayTradingError with eBay\'s messag
     }
   );
 });
+
+// eBay keeps the parts of a revision it refuses and says so only as a
+// warning on a successful call. That warning must reach the seller.
+test('reviseListing passes eBay\'s warnings back instead of swallowing them', async () => {
+  mock.method(global, 'fetch', async () =>
+    fakeResponse(`<?xml version="1.0"?>
+      <ReviseFixedPriceItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+        <Ack>Warning</Ack>
+        <Errors><SeverityCode>Warning</SeverityCode><ShortMessage>Description not revised.</ShortMessage><LongMessage>The description cannot be changed on a listing that has sales; the rest of the revision was applied.</LongMessage></Errors>
+        <ItemID>407219164790</ItemID>
+      </ReviseFixedPriceItemResponse>`)
+  );
+
+  const result = await ebayTrading.reviseListing('token', '407219164790', { descriptionHtml: '<p>new</p>', title: 'T' });
+  assert.strictEqual(result.itemId, '407219164790');
+  assert.deepStrictEqual(result.warnings, ['The description cannot be changed on a listing that has sales; the rest of the revision was applied.']);
+});

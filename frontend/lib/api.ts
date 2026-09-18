@@ -852,7 +852,7 @@ export const api = {
     request<{ categories: StoreCategory[]; unavailable?: string }>(`/api/connections/${connectionId}/store-categories`),
 
   publishDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
+    request<{ listing: DraftListing; warnings?: string[] }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
 
   // A draft lives only in Liston until Publish, so every edit below is a
   // plain update — nothing touches eBay until the seller decides to go live.

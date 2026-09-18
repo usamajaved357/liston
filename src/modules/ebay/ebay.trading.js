@@ -6,6 +6,7 @@
 // via the X-EBAY-API-IAF-TOKEN header, which eBay accepts for this API too.
 const { XMLParser } = require('fast-xml-parser');
 const governor = require('./request-governor');
+const logger = require('../../utils/logger');
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
 
@@ -69,6 +70,17 @@ async function tradingRequestNow(accessToken, callName, bodyXml, siteId = 0) {
       ? "eBay's daily API allowance for Liston is used up for today. Live figures return when eBay resets it (midnight Pacific time)."
       : raw;
     throw new EbayTradingError(message, /exceeded usage limit/i.test(raw) ? 429 : 502, errors);
+  }
+  // Ack=Warning is a success that did LESS than asked — eBay keeps parts of
+  // a revision it refuses (a description on a listing with sales, say) and
+  // only says so here. Logged, and handed to callers that can tell the
+  // seller.
+  if (body.Ack === 'Warning') {
+    const warnings = toArray(body.Errors).map((e) => e.LongMessage || e.ShortMessage).filter(Boolean);
+    if (warnings.length) {
+      logger.warn(`eBay ${callName} completed with warnings`, { warnings });
+      body._warnings = warnings;
+    }
   }
   return body;
 }
@@ -445,7 +457,7 @@ async function reviseListing(accessToken, itemId, { title, descriptionHtml, pric
   }
   body += '</Item>';
   const res = await tradingRequest(accessToken, 'ReviseFixedPriceItem', body, siteId);
-  return { itemId: String(res.ItemID || itemId) };
+  return { itemId: String(res.ItemID || itemId), warnings: res._warnings || [] };
 }
 
 // Which eBay site the seller registered on, and the address eBay holds for

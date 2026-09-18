@@ -270,6 +270,7 @@ export default function AccountListingsPage() {
   // lands on the same tab rather than resetting to Active.
   const urlFilter = searchParams.get("filter");
   const updatedItemId = searchParams.get("updated");
+  const updateWarning = searchParams.get("warning");
   const [filter, setFilter] = useState<Tab>(urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active");
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -506,9 +507,16 @@ export default function AccountListingsPage() {
           <span className="flex-1">{error}</span>
         </div>
       )}
-      {updatedItemId && (
+      {updatedItemId && !updateWarning && (
         <div className="notice notice-success mb-4">
           <span className="flex-1">Listing #{updatedItemId} has been updated on eBay. It can take a minute to show here.</span>
+        </div>
+      )}
+      {updatedItemId && updateWarning && (
+        <div className="notice notice-warning mb-4">
+          <span className="flex-1">
+            Listing #{updatedItemId} was updated, but eBay didn&apos;t apply everything: {updateWarning}
+          </span>
         </div>
       )}
 

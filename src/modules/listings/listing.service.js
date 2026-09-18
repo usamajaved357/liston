@@ -1056,13 +1056,16 @@ async function publishLiveEdit(listing, userId) {
     payload.quantity = draft.quantity;
   }
 
-  await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
+  const revised = await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
     ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload)
   );
   resyncListings(listing.connection_id, userId);
   // The edit is now live; the working copy has done its job.
   await listingRepository.deleteById(listing.id);
-  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true };
+  // eBay applies what it can and warns about the rest (a description it
+  // refused to replace, for one). The seller must hear that, or they trust
+  // a preview that never went live.
+  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, warnings: revised.warnings || [] };
 }
 
 // Removes an ended listing for good: eBay's own Inventory objects if Liston
