@@ -828,6 +828,68 @@ async function listListingsDetailed(credentials, { connectionId, status = 'activ
   };
 }
 
+// The account's best sellers, for the "More from our store" row in every
+// description: ranked by units sold in the last 90 days (from the mirrored
+// orders), then by the listing's lifetime sold count, then by recency. Reads
+// only the mirror, so rendering a description never spends an eBay call.
+//
+// Every listing gets its own mix: the row is drawn from a pool of the top
+// sellers, shuffled with the listing as the seed, so two listings show
+// different best sellers while one listing always renders the same row.
+function seededShuffle(list, seed) {
+  let h = 2166136261;
+  for (const ch of String(seed || '')) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    h = (Math.imul(h, 1664525) + 1013904223) >>> 0;
+    const j = h % (i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+async function bestSellingListings(credentials, connectionId, { exclude, count = 12, push = false, seed = null } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const [items, orders] = await Promise.all([
+    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }),
+    getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
+  ]);
+
+  const soldRecently = new Map();
+  for (const order of orders || []) {
+    if (order.cancelStatus && order.cancelStatus !== 'NotApplicable') continue;
+    for (const line of order.lineItems || []) {
+      if (!line.itemId) continue;
+      soldRecently.set(line.itemId, (soldRecently.get(line.itemId) || 0) + (Number(line.quantityPurchased) || 1));
+    }
+  }
+
+  const ranked = (items || [])
+    .filter((item) => item.viewItemUrl && item.itemId !== String(exclude || ''))
+    .map((item) => ({ item, recent: soldRecently.get(item.itemId) || 0, lifetime: Number(item.quantitySold) || 0 }))
+    .sort((a, b) => b.recent - a.recent || b.lifetime - a.lifetime || String(b.item.itemId).localeCompare(String(a.item.itemId)));
+  // The pool is three rows' worth of the best sellers (at least 24); each
+  // listing shows `count` of them in its own order.
+  const pool = ranked.slice(0, Math.max(count * 3, 24));
+  const chosen = (seed ? seededShuffle(pool, seed) : pool).slice(0, count);
+  const rows = chosen.map(({ item, recent, lifetime }) => ({
+      url: item.viewItemUrl,
+      imageUrl: item.imageUrl,
+      name: item.title,
+      price: item.price ? formatMoneyFor(item.price) : null,
+      sold: recent || lifetime || 0,
+    }));
+
+  return { items: rows, credentialsChanged, credentials: refreshedCredentials };
+}
+
+const CURRENCY_SYMBOLS = { GBP: '£', USD: '$', EUR: '€', AUD: 'A$', CAD: 'C$' };
+function formatMoneyFor(price) {
+  const symbol = CURRENCY_SYMBOLS[price.currency] || `${price.currency || ''} `;
+  return `${symbol}${Number(price.amount).toFixed(2)}`;
+}
+
 // Something we did changed the live set (a publish, a revision, an ended
 // item removed). The copy keeps being shown, and refreshes behind the next
 // look, so nobody waits on eBay for a change they already know about.
@@ -1116,6 +1178,7 @@ module.exports = {
   getStoreProfile,
   getBestReviews,
   listUnsoldListings,
+  bestSellingListings,
   listOrders,
   getLiveItem,
   detectMarketplace,

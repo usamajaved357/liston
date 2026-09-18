@@ -230,7 +230,7 @@ function renderDescription({ template, marketplaceId, productName, description, 
     : '';
   const recommendedHtml = recommended.length
     ? `<div class="eb-sec">
-    <div class="eb-stitle">More From Our Store</div>
+    <div class="eb-stitle">Best Sellers From Our Store</div>
     <p class="eb-rhint">Scroll to see more →</p>
     <div class="eb-rgrid">${recommended
       .slice(0, Number(t.recommendedCount) || 12)
@@ -238,7 +238,7 @@ function renderDescription({ template, marketplaceId, productName, description, 
         (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard">${
           item.imageUrl ? `<img class="eb-rimg" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : '<div class="eb-rimg"></div>'
         }<div class="eb-rinfo"><div class="eb-rname">${escapeHtml(item.name)}</div>${
-          item.price ? `<span class="eb-rfrom">From</span><div class="eb-rprice">${escapeHtml(item.price)}</div>` : ''
+          item.price ? `<span class="eb-rfrom">${item.sold > 1 ? `${escapeHtml(String(item.sold))} sold` : 'From'}</span><div class="eb-rprice">${escapeHtml(item.price)}</div>` : ''
         }</div></a>`
       )
       .join('')}</div>

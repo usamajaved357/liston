@@ -769,18 +769,17 @@ async function removeDraft(id, userId) {
 // The account's own live listings, for the "You may also like" cards. Read
 // at render time so the carousel is always current, and never includes the
 // listing being published. Failure here costs the carousel, not the publish.
-async function recommendedListings(credentials, connection, { exclude, count }) {
+// The account's best sellers, from the mirror (no eBay call per render).
+async function recommendedListings(credentials, connection, { exclude, count, seed }) {
+  if (!(Number(count) > 0)) return [];
   try {
-    const { items } = await ebayService.listActiveListings(credentials, { pageNumber: 1, entriesPerPage: 50 });
-    return (items || [])
-      .filter((item) => item.viewItemUrl && item.itemId !== exclude)
-      .slice(0, count)
-      .map((item) => ({
-        url: item.viewItemUrl,
-        imageUrl: item.imageUrl,
-        name: item.title,
-        price: item.price ? `£${Number(item.price.amount).toFixed(2)}` : null,
-      }));
+    const { items } = await ebayService.bestSellingListings(credentials, connection.id, {
+      exclude,
+      count: Number(count),
+      push: ebayService.pushEnabled(connection),
+      seed,
+    });
+    return items;
   } catch {
     return [];
   }
@@ -796,16 +795,18 @@ async function renderDraftDescription(listing, userId) {
     productName: isVariation ? draft.commonTitle : draft.title,
     description: isVariation ? draft.commonDescription : draft.description,
     condition: (isVariation ? draft.variants[0]?.condition : draft.condition) || 'NEW',
-    exclude: listing.external_product_id,
+    exclude: listing.external_product_id || listing.edit_of_item_id,
+    // The listing's own mix of best sellers, stable across preview and publish.
+    seed: listing.edit_of_item_id || listing.id,
   });
 }
 
 // The Theme tab's preview: an unsaved template over a sample product.
 function renderTemplatePreview(connectionId, userId, template, sample) {
-  return renderWithTemplate(connectionId, userId, { template, ...sample, exclude: null });
+  return renderWithTemplate(connectionId, userId, { template, ...sample, exclude: null, seed: null });
 }
 
-async function renderWithTemplate(connectionId, userId, { template: override, productName, description, condition, exclude }) {
+async function renderWithTemplate(connectionId, userId, { template: override, productName, description, condition, exclude, seed }) {
   return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
     const marketplaceId = connection.settings?.ebay?.marketplaceId;
     let template = descriptionTemplate.templateWithDefaults(override || connection.settings?.template, marketplaceId);
@@ -828,7 +829,7 @@ async function renderWithTemplate(connectionId, userId, { template: override, pr
       }
     }
 
-    const recommended = await recommendedListings(credentials, connection, { exclude, count: template.recommendedCount });
+    const recommended = await recommendedListings(credentials, connection, { exclude, count: template.recommendedCount, seed });
     return descriptionTemplate.renderDescription({ template, marketplaceId, productName, description, recommended, condition });
   });
 }
