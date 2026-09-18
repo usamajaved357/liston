@@ -13,6 +13,13 @@ import { Alert } from "@/components/Alert";
 interface AccountShellProps {
   children: React.ReactNode;
   header?: React.ReactNode;
+  // A page's own controls for the header's right side (a Save button, say),
+  // shown next to the Dashboard button so the two line up.
+  actions?: React.ReactNode;
+  // A full-width row under the title (tabs, say) that stays put while the
+  // page scrolls; it spans the same width as the content, so anything
+  // aligned in it lines up with the cards below.
+  subheader?: React.ReactNode;
   connectionId: string;
   label: string;
   platformKey: string;
@@ -35,6 +42,8 @@ interface AccountShellProps {
 export function AccountShell({
   children,
   header,
+  actions,
+  subheader,
   connectionId,
   label,
   platformKey,
@@ -192,8 +201,10 @@ export function AccountShell({
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">
         {header && (
-          <div className="flex flex-shrink-0 items-start gap-4 bg-[var(--color-paper)] px-10 pt-8 pb-6">
+          <div className="flex-shrink-0 bg-[var(--color-paper)] px-10 pt-8 pb-6">
+          <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">{header}</div>
+            {actions}
             {/* Owners came from the main dashboard; members have no dashboard,
                 their way out is the sidebar footer. */}
             {permissions === undefined && (
@@ -204,6 +215,8 @@ export function AccountShell({
                 Dashboard
               </Link>
             )}
+          </div>
+          {subheader && <div className="mt-5">{subheader}</div>}
           </div>
         )}
         <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>

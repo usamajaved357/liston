@@ -583,9 +583,11 @@ function InlineName({
     >
       <span>{value}</span>
       {!disabled && (
-        <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 opacity-40 transition-opacity group-hover/name:opacity-90">
-          <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-        </svg>
+        <span className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-paper)] text-[var(--color-muted)] group-hover/name:bg-[var(--color-primary)] group-hover/name:text-white" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3">
+            <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+          </svg>
+        </span>
       )}
     </button>
   );
@@ -673,8 +675,15 @@ function VariationsTable({
   axisRenames,
   onRenameValue,
   onRenameAxis,
+  addedValues,
+  onAddValue,
+  onUndoAddValue,
 }: {
   variants: VariationDraftVariant[];
+  // Options added since the last save (they exist only once saved).
+  addedValues: { axis: string; value: string; copyFrom: string }[];
+  onAddValue: (axis: string, value: string, copyFrom: string) => void;
+  onUndoAddValue: (axis: string, value: string) => void;
   valueRenames: Renames;
   axisRenames: Record<string, string>;
   onRenameValue: (axis: string, from: string, to: string) => void;
@@ -705,6 +714,7 @@ function VariationsTable({
   const [bulkPrice, setBulkPrice] = useState("");
   const [bulkQty, setBulkQty] = useState("");
   const [pickerFor, setPickerFor] = useState<number | null>(null);
+  const [adding, setAdding] = useState<{ axis: string; value: string } | null>(null);
   // Names as the seller has renamed them (unsaved), falling back to the draft's.
   const showAxis = (axis: string) => axisRenames[axis] || axis;
   const showValue = (axis: string, value: string) => valueRenames[axis]?.[value] || value;
@@ -781,7 +791,7 @@ function VariationsTable({
 
       {!disabled && (
         <p className="mt-3 text-xs text-[var(--color-muted)]">
-          Click an attribute or option name to rename it. Click a photo in the table to choose or upload that variation&apos;s picture. Bin an option to drop every combination using it.
+          Click an attribute or option name to rename it, or press &ldquo;+ Add option&rdquo; to add one (it copies the first option&apos;s price, quantity and photo; edit them after saving). Click a photo in the table to change it. Bin an option to drop it.
         </p>
       )}
 
@@ -829,6 +839,57 @@ function VariationsTable({
                   </span>
                 );
               })}
+              {addedValues
+                .filter((a) => a.axis === spec.name)
+                .map((a) => (
+                  <span key={`new-${a.value}`} className="inline-flex h-8 items-center gap-2 rounded-full border border-dashed border-[var(--color-primary)] bg-[var(--color-primary-soft)] pl-3 pr-1 text-[13px] text-[var(--color-ink)]">
+                    <span className="font-medium">{a.value}</span>
+                    <span className="text-[11px] font-semibold text-[var(--color-primary)]">new</span>
+                    {!disabled && (
+                      <button type="button" aria-label={`Undo adding ${a.value}`} title="Undo" onClick={() => onUndoAddValue(spec.name, a.value)} className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)]">
+                        {Icon.close}
+                      </button>
+                    )}
+                  </span>
+                ))}
+              {!disabled &&
+                (adding?.axis === spec.name ? (
+                  <form
+                    className="inline-flex h-8 items-center gap-1"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const value = adding.value.trim();
+                      const taken = spec.values.some((v) => showValue(spec.name, v).toLowerCase() === value.toLowerCase()) || addedValues.some((a) => a.axis === spec.name && a.value.toLowerCase() === value.toLowerCase());
+                      if (!value || taken) return;
+                      onAddValue(spec.name, value, spec.values[0]);
+                      setAdding(null);
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      className="h-8 w-32 rounded-full border border-[var(--color-primary)] bg-[var(--color-panel)] px-3 text-[13px] focus:outline-none"
+                      placeholder={`New ${showAxis(spec.name).toLowerCase()}`}
+                      value={adding.value}
+                      maxLength={50}
+                      onChange={(e) => setAdding({ axis: spec.name, value: e.target.value })}
+                      onKeyDown={(e) => e.key === "Escape" && setAdding(null)}
+                    />
+                    <button type="submit" className="btn btn-primary btn-sm !h-8">
+                      Add
+                    </button>
+                    <button type="button" onClick={() => setAdding(null)} className="btn btn-ghost btn-sm !h-8">
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAdding({ axis: spec.name, value: "" })}
+                    className="inline-flex h-8 items-center gap-1 rounded-full border border-dashed border-[var(--color-line-strong)] px-3 text-[13px] font-medium text-[var(--color-muted)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+                  >
+                    + Add option
+                  </button>
+                ))}
             </div>
           </div>
         ))}
@@ -1306,6 +1367,7 @@ export default function DraftEditorPage() {
   // Renamed option and attribute names, keyed by the draft's current names.
   const [valueRenames, setValueRenames] = useState<Renames>({});
   const [axisRenames, setAxisRenames] = useState<Record<string, string>>({});
+  const [addedValues, setAddedValues] = useState<{ axis: string; value: string; copyFrom: string }[]>([]);
   const [priceOverrides, setPriceOverrides] = useState<Record<number, string>>({});
   const [quantityOverrides, setQuantityOverrides] = useState<Record<number, string>>({});
   const [condition, setCondition] = useState("NEW");
@@ -1392,6 +1454,7 @@ export default function DraftEditorPage() {
     setRemovedAxisValues([]);
     setValueRenames({});
     setAxisRenames({});
+    setAddedValues([]);
     setPriceOverrides({});
     setQuantityOverrides({});
     setCondition((isVariationDraft(c) ? c.variants[0]?.condition : c.condition) || "NEW");
@@ -1500,11 +1563,12 @@ export default function DraftEditorPage() {
       Object.keys(imageOverrides).length > 0 ||
       Object.keys(valueRenames).length > 0 ||
       Object.keys(axisRenames).length > 0 ||
+      addedValues.length > 0 ||
       sku !== (content.sku || "") ||
       (secondaryCategoryId || null) !== (content.secondaryCategoryId || null) ||
       JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])
     );
-  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, valueRenames, axisRenames, sku, secondaryCategoryId, storeCategoryNames]);
+  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, valueRenames, axisRenames, addedValues, sku, secondaryCategoryId, storeCategoryNames]);
 
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
@@ -1547,6 +1611,14 @@ export default function DraftEditorPage() {
     const renameAxes = Object.entries(axisRenames).map(([from, to]) => ({ from, to }));
     if (renameAxisValues.length) patch.renameAxisValues = renameAxisValues;
     if (renameAxes.length) patch.renameAxes = renameAxes;
+    // Added options refer to renamed names too (renames apply first).
+    if (addedValues.length) {
+      patch.addAxisValues = addedValues.map((a) => ({
+        axis: axisRenames[a.axis] || a.axis,
+        value: a.value,
+        copyFrom: valueRenames[a.axis]?.[a.copyFrom] || a.copyFrom,
+      }));
+    }
     if (removedAxisValues.length) {
       patch.removeAxisValues = removedAxisValues.map((r) => ({
         axis: axisRenames[r.axis] || r.axis,
@@ -2289,6 +2361,9 @@ export default function DraftEditorPage() {
                 axisRenames={axisRenames}
                 onRenameValue={(axis, from, to) => setValueRenames((r) => ({ ...r, [axis]: { ...(r[axis] || {}), [from]: to } }))}
                 onRenameAxis={(from, to) => setAxisRenames((r) => ({ ...r, [from]: to }))}
+                addedValues={addedValues}
+                onAddValue={(axis, value, copyFrom) => setAddedValues((list) => [...list, { axis, value, copyFrom }])}
+                onUndoAddValue={(axis, value) => setAddedValues((list) => list.filter((a) => !(a.axis === axis && a.value === value)))}
                 variationsSupported={categoryInfo?.variationsSupported ?? null}
                 onSplit={editable ? handleSplit : undefined}
                 splitting={splitting}

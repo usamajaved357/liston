@@ -784,3 +784,33 @@ test('updateDraft refuses to rename an option onto one that already exists', asy
     /already an option/
   );
 });
+
+test('updateDraft adds an option by copying the variations of an existing one', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      commonTitle: 't',
+      commonDescription: 'd',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Unit Quantity', values: ['1', '2'] }] },
+      variants: [
+        { aspects: { 'Unit Quantity': ['1'] }, imageUrls: ['https://i.ebayimg.com/1.jpg'], price: { value: '6.99', currency: 'GBP' }, quantity: 3 },
+        { aspects: { 'Unit Quantity': ['2'] }, imageUrls: ['https://i.ebayimg.com/2.jpg'], price: { value: '9.99', currency: 'GBP' }, quantity: 3 },
+      ],
+    })
+  );
+  const updateMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  await listingService.updateDraft('listing-1', USER_ID, { addAxisValues: [{ axis: 'Unit Quantity', value: '5', copyFrom: '2' }] });
+
+  const saved = updateMock.mock.calls[0].arguments[1];
+  assert.strictEqual(saved.variants.length, 3);
+  assert.deepStrictEqual(saved.variants[2].aspects, { 'Unit Quantity': ['5'] });
+  assert.strictEqual(saved.variants[2].price.value, '9.99');
+  assert.deepStrictEqual(saved.variants[2].imageUrls, ['https://i.ebayimg.com/2.jpg']);
+  assert.deepStrictEqual(saved.variesBy.specifications[0].values, ['1', '2', '5']);
+
+  await assert.rejects(
+    () => listingService.updateDraft('listing-1', USER_ID, { addAxisValues: [{ axis: 'Unit Quantity', value: '2' }] }),
+    /already an option/
+  );
+});

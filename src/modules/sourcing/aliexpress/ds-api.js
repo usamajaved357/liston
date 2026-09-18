@@ -202,9 +202,24 @@ async function getValidAccessToken() {
 
   // Concurrent callers share one refresh rather than racing.
   if (!refreshing) {
-    refreshing = refreshAccessToken(state).finally(() => {
-      refreshing = null;
-    });
+    refreshing = refreshAccessToken(state)
+      .catch(async (err) => {
+        // The copy in memory may simply be stale: someone re-authorised
+        // (scripts/aliexpress-auth.js) since this process loaded it. Re-read
+        // the database once before giving up, so a renewal never needs a
+        // restart to take effect.
+        tokenState = null;
+        const latest = await loadTokenState();
+        if (latest.refreshToken && latest.refreshToken !== state.refreshToken) {
+          logger.info('AliExpress token was renewed elsewhere; using the new one');
+          const stillFresh = latest.accessToken && latest.accessExpiresMs && Date.now() < latest.accessExpiresMs - REFRESH_SKEW_MS;
+          return stillFresh ? latest : refreshAccessToken(latest);
+        }
+        throw err;
+      })
+      .finally(() => {
+        refreshing = null;
+      });
   }
   return (await refreshing).accessToken;
 }

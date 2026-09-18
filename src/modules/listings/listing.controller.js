@@ -166,6 +166,10 @@ const updateDraftSchema = z
     renameAxisValues: z.array(z.object({ axis: z.string().min(1), from: z.string().min(1), to: z.string().trim().min(1).max(50) })).optional(),
     // "Color" → "Colour": the attribute the buyer picks from.
     renameAxes: z.array(z.object({ from: z.string().min(1), to: z.string().trim().min(1).max(65) })).optional(),
+    // A new option on an existing attribute ("20" on Unit Quantity): its
+    // variations are copied from an existing option's (price, quantity,
+    // photo) so the seller edits from something rather than nothing.
+    addAxisValues: z.array(z.object({ axis: z.string().min(1), value: z.string().trim().min(1).max(50), copyFrom: z.string().min(1).optional() })).optional(),
     variantSkusToRemove: z.array(z.string()).optional(),
     // eBay's custom label: up to 50 characters, no whitespace at the ends.
     sku: z.string().trim().min(1).max(50, 'SKUs are limited to 50 characters').optional(),

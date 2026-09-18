@@ -517,6 +517,7 @@ export interface DraftPatch {
   removeAxisValues?: { axis: string; value: string }[];
   renameAxisValues?: { axis: string; from: string; to: string }[];
   renameAxes?: { from: string; to: string }[];
+  addAxisValues?: { axis: string; value: string; copyFrom?: string }[];
   variantSkusToRemove?: string[];
   sku?: string;
   categoryId?: string;

@@ -215,6 +215,8 @@ export default function AccountSettingsPage() {
   const [pricingError, setPricingError] = useState<string | null>(null);
 
   const [template, setTemplate] = useState<DescriptionTemplate>(DEFAULT_TEMPLATE);
+  // What each tab last saved (or loaded), so Save only lights up on a change.
+  const [savedSnapshot, setSavedSnapshot] = useState<{ policies: string; pricing: string; template: string }>({ policies: "", pricing: "", template: "" });
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [templateSaved, setTemplateSaved] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
@@ -271,14 +273,23 @@ export default function AccountSettingsPage() {
       setLoading(false);
       return;
     }
-    setPricing({ ...DEFAULT_PRICING, ...(connection.marketplace ? { currency: connection.marketplace.currency } : {}), ...(connection.settings?.pricing || {}) });
-    setTemplate({ ...templateForMarket(connection.settings?.template, connection.marketplace), storeName: connection.settings?.template?.storeName || connection.label });
+    const initialPricing = { ...DEFAULT_PRICING, ...(connection.marketplace ? { currency: connection.marketplace.currency } : {}), ...(connection.settings?.pricing || {}) };
+    const initialTemplate = { ...templateForMarket(connection.settings?.template, connection.marketplace), storeName: connection.settings?.template?.storeName || connection.label };
+    setPricing(initialPricing);
+    setTemplate(initialTemplate);
+    setSavedSnapshot((snap) => ({ ...snap, pricing: JSON.stringify(initialPricing), template: JSON.stringify(initialTemplate) }));
 
     api
       .getConnectionPolicies(connection.id)
       .then((data) => {
         setPolicies(data);
-        setPricing((p) => (connection.settings?.pricing?.currency ? p : { ...p, currency: data.marketplace.currency }));
+        if (!connection.settings?.pricing?.currency) {
+          setPricing((p) => {
+            const next = { ...p, currency: data.marketplace.currency };
+            setSavedSnapshot((snap) => ({ ...snap, pricing: JSON.stringify(next) }));
+            return next;
+          });
+        }
         // Nothing saved yet: preselect the first policy of each type so a
         // new account never looks empty. The seller still has to press Save.
         const saved: Partial<EbaySettings> = connection.settings?.ebay || {};
@@ -288,6 +299,12 @@ export default function AccountSettingsPage() {
         const savedLocation = connection.settings?.ebay?.merchantLocationKey;
         const locations = data.merchantLocations || [];
         setMerchantLocationKey(savedLocation || (locations.length === 1 ? locations[0].merchantLocationKey : ""));
+        // Only what's actually saved counts as clean; preselected defaults
+        // still need a Save.
+        setSavedSnapshot((snap) => ({
+          ...snap,
+          policies: JSON.stringify([saved.fulfillmentPolicyId || "", saved.paymentPolicyId || "", saved.returnPolicyId || "", savedLocation || ""]),
+        }));
       })
       .catch(() => setError("Couldn't load your eBay business policies. Try again."))
       .finally(() => setLoading(false));
@@ -314,7 +331,9 @@ export default function AccountSettingsPage() {
         returnPolicyId,
         merchantLocationKey,
       });
+      setSavedSnapshot((snap) => ({ ...snap, policies: JSON.stringify([fulfillmentPolicyId, paymentPolicyId, returnPolicyId, merchantLocationKey]) }));
       setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save your policies. Try again.");
     } finally {
@@ -360,7 +379,9 @@ export default function AccountSettingsPage() {
     setPricingError(null);
     try {
       await api.updateConnectionPricing(connection.id, pricing);
+      setSavedSnapshot((snap) => ({ ...snap, pricing: JSON.stringify(pricing) }));
       setPricingSaved(true);
+      setTimeout(() => setPricingSaved(false), 2000);
     } catch (err) {
       setPricingError(err instanceof ApiError ? err.message : "Couldn't save your pricing. Try again.");
     } finally {
@@ -441,7 +462,9 @@ export default function AccountSettingsPage() {
     setTemplateError(null);
     try {
       await api.updateConnectionTemplate(connection.id, template);
+      setSavedSnapshot((snap) => ({ ...snap, template: JSON.stringify(template) }));
       setTemplateSaved(true);
+      setTimeout(() => setTemplateSaved(false), 2000);
     } catch (err) {
       setTemplateError(err instanceof ApiError ? err.message : "Couldn't save your template. Try again.");
     } finally {
@@ -478,6 +501,23 @@ export default function AccountSettingsPage() {
   const activePalette = (p: { accentColor: string; darkColor: string }) =>
     p.accentColor.toLowerCase() === template.accentColor.toLowerCase() && p.darkColor.toLowerCase() === template.darkColor.toLowerCase();
 
+  const saveState =
+    tab === "policies"
+      ? { dirty: JSON.stringify([fulfillmentPolicyId, paymentPolicyId, returnPolicyId, merchantLocationKey]) !== savedSnapshot.policies, saving, saved, error, onSave: handleSave, can: canSavePolicies }
+      : tab === "pricing"
+        ? { dirty: JSON.stringify(pricing) !== savedSnapshot.pricing, saving: savingPricing, saved: pricingSaved, error: pricingError, onSave: handleSavePricing, can: true }
+        : { dirty: JSON.stringify(template) !== savedSnapshot.template, saving: savingTemplate, saved: templateSaved, error: templateError, onSave: handleSaveTemplate, can: true };
+  const saveControl = (
+    <div className="flex items-center gap-3">
+      {(saveState.error || saveState.saved) && (
+        <span className={`text-[12.5px] ${saveState.error ? "text-[var(--color-danger)]" : "text-[var(--color-accent)]"}`}>{saveState.error || "Saved"}</span>
+      )}
+      <button type="button" onClick={saveState.onSave} disabled={saveState.saving || !saveState.dirty || !saveState.can} className="btn btn-primary btn-sm">
+        {saveState.saving ? "Saving…" : "Save"}
+      </button>
+    </div>
+  );
+
   return (
     <AccountShell
       connectionId={connection.id}
@@ -488,64 +528,44 @@ export default function AccountSettingsPage() {
       permissions={connection.permissions}
       user={user}
       header={
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Settings</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-              {connection.label} · {connection.platform_name}
-            </p>
-          </div>
-          {connection.platform_key === "ebay" && !loading && (
-            <div className="flex items-center gap-3">
-              {tab === "policies" && (
-                <>
-                  <span className={`text-[12.5px] ${error ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>{error || (saved ? "Saved" : "")}</span>
-                  <button type="button" onClick={handleSave} disabled={saving || !canSavePolicies} className="btn btn-primary btn-sm">
-                    {saving ? "Saving…" : "Save policies"}
-                  </button>
-                </>
-              )}
-              {tab === "pricing" && (
-                <>
-                  <span className={`text-[12.5px] ${pricingError ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>{pricingError || (pricingSaved ? "Saved" : "")}</span>
-                  <button type="button" onClick={handleSavePricing} disabled={savingPricing} className="btn btn-primary btn-sm">
-                    {savingPricing ? "Saving…" : "Save pricing"}
-                  </button>
-                </>
-              )}
-              {tab === "template" && (
-                <>
-                  <span className={`text-[12.5px] ${templateError ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>{templateError || (templateSaved ? "Saved" : "")}</span>
-                  <button type="button" onClick={handleSaveTemplate} disabled={savingTemplate} className="btn btn-primary btn-sm">
-                    {savingTemplate ? "Saving…" : "Save template"}
-                  </button>
-                </>
-              )}
-            </div>
-          )}
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Settings</h1>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+            {connection.label} · {connection.platform_name}
+          </p>
         </div>
+      }
+      subheader={
+        connection.platform_key === "ebay" && (
+            // Tabs and Save stay put while the page scrolls. The row spans
+            // exactly the left column, so Save sits on that column's edge.
+            <div className={tab === "template" ? "max-w-6xl xl:grid xl:grid-cols-[minmax(0,1fr)_460px] xl:gap-6" : "max-w-3xl"}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+                  {tabs.map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setTab(t.key)}
+                      className={`flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
+                        tab === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                      }`}
+                    >
+                      {t.label}
+                      {t.attention && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
+                    </button>
+                  ))}
+                </div>
+                {!loading && saveControl}
+              </div>
+            </div>
+        )
       }
     >
       {connection.platform_key !== "ebay" ? (
         <Alert variant="info">Settings aren&apos;t available for {connection.platform_name} yet.</Alert>
       ) : (
         <div className={tab === "template" ? "max-w-6xl" : "max-w-3xl"}>
-          <div className="mb-4 inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-            {tabs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                className={`flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
-                  tab === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                }`}
-              >
-                {t.label}
-                {t.attention && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
-              </button>
-            ))}
-          </div>
-
           {tab === "policies" &&
             (loading ? (
               <Skeleton />
@@ -791,22 +811,23 @@ export default function AccountSettingsPage() {
               <div className="card overflow-hidden">
                 <SectionHead
                   title="Customer reviews"
-                  blurb="Up to ten, shown as a scrolling row. Taken from the feedback buyers left you on eBay. Left out when empty. Invented reviews get listings removed."
-                  action={
-                    template.reviews.length < 10 ? (
-                      <button type="button" onClick={() => setT({ reviews: [...template.reviews, { stars: 5, text: "", buyer: "", date: "" }] })} className="btn btn-secondary btn-sm flex-shrink-0">
-                        Add review
-                      </button>
-                    ) : undefined
-                  }
+                  blurb="Up to ten, shown as a scrolling row in every description. Only feedback buyers actually left you on eBay; the section is left out when empty."
                 />
-                <div className="border-b border-[var(--color-line)] px-6 py-4">
+                <div className="px-6 py-4">
                   {(() => {
-                    const inTemplate = (r: StoreReview) => template.reviews.some((t) => t.text === r.text && t.buyer === r.buyer);
+                    const same = (a: { text: string; buyer: string }, b: { text: string; buyer: string }) => a.text === b.text && a.buyer === b.buyer;
+                    const inTemplate = (r: StoreReview) => template.reviews.some((t) => same(t, r));
                     const pool = (ebayReviews?.list || []).filter((r) => !inTemplate(r));
                     const pages = Math.max(1, Math.ceil(pool.length / REVIEWS_PER_PAGE));
                     const page = Math.min(reviewPage, pages - 1);
-                    const shown = pool.slice(page * REVIEWS_PER_PAGE, page * REVIEWS_PER_PAGE + REVIEWS_PER_PAGE);
+                    const fresh = pool.slice(page * REVIEWS_PER_PAGE, page * REVIEWS_PER_PAGE + REVIEWS_PER_PAGE);
+                    // Chosen ones at the bottom; a review added by hand in the
+                    // past (no eBay match) still shows so it can be removed.
+                    const chosen: StoreReview[] = template.reviews.map((t) => {
+                      const match = (ebayReviews?.list || []).find((r) => same(r, t));
+                      return { stars: t.stars || 5, text: t.text, buyer: t.buyer, date: t.date, itemTitle: match?.itemTitle };
+                    });
+                    const full = template.reviews.length >= 10;
                     const reread = () => {
                       setEbayReviews(null);
                       setReviewPage(0);
@@ -815,11 +836,49 @@ export default function AccountSettingsPage() {
                         .then((d) => setEbayReviews({ list: d.reviews, note: d.unavailable || null }))
                         .catch(() => setEbayReviews({ list: [], note: "Couldn't read your eBay feedback." }));
                     };
+                    const card = (review: StoreReview, checked: boolean) => (
+                      <button
+                        key={`${checked ? "on" : "off"}-${review.buyer}-${review.text.slice(0, 24)}`}
+                        type="button"
+                        onClick={() => (checked ? setT({ reviews: template.reviews.filter((t) => !same(t, review)) }) : toggleEbayReview(review))}
+                        disabled={!checked && full}
+                        title={checked ? "Remove from the template" : full ? "The template holds ten reviews; untick one to swap it" : "Add to the template"}
+                        className={`group/rev relative flex items-start gap-2.5 rounded-xl border px-3 py-2 text-left transition-colors disabled:opacity-50 ${
+                          checked
+                            ? "border-[var(--color-primary)]/35 bg-[var(--color-primary-soft)]/50"
+                            : "border-[var(--color-line)] hover:border-[var(--color-primary)]"
+                        }`}
+                      >
+                        <span
+                          className={`mt-0.5 flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                            checked
+                              ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
+                              : "border-[var(--color-line-strong)] bg-[var(--color-panel)] text-transparent group-hover/rev:border-[var(--color-primary)] group-hover/rev:text-[var(--color-primary)]/40"
+                          }`}
+                          aria-hidden
+                        >
+                          <svg viewBox="0 0 16 16" fill="none" className="h-2.5 w-2.5">
+                            <path d="M3.5 8.5l2.8 2.8L12.5 5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className={`line-clamp-2 text-[12.5px] leading-snug ${checked ? "text-[var(--color-muted)]" : "text-[var(--color-ink)]"}`} title={review.text}>
+                            {review.text}
+                          </span>
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+                            <span className={checked ? "text-amber-400/60" : "text-amber-500"}>{"★".repeat(review.stars || 5)}</span>
+                            <span className="truncate">
+                              {review.buyer || "eBay buyer"}{review.date ? ` · ${review.date}` : ""}{review.itemTitle ? ` · ${review.itemTitle.slice(0, 32)}` : ""}
+                            </span>
+                          </span>
+                        </span>
+                      </button>
+                    );
                     return (
                       <>
                         <div className="flex flex-wrap items-baseline justify-between gap-2">
                           <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                            Best reviews on your eBay account{pool.length ? ` · ${pool.length} available` : ""}
+                            From your eBay feedback{pool.length ? ` · ${pool.length} more available` : ""} · {template.reviews.length} of 10 in the template
                           </p>
                           <div className="flex gap-3 text-[12px] font-semibold">
                             {pool.length > REVIEWS_PER_PAGE && (
@@ -833,59 +892,22 @@ export default function AccountSettingsPage() {
                           </div>
                         </div>
                         {ebayReviews === null ? (
-                          <div className="mt-3 h-16 animate-pulse rounded-xl bg-[var(--color-paper)]" />
-                        ) : shown.length === 0 ? (
-                          <p className="mt-2 text-[13px] text-[var(--color-muted)]">
-                            {ebayReviews.note || (ebayReviews.list.length ? "Every review read from eBay is already in your template. Re-read from eBay to look for newer ones." : "No written positive feedback found on this account yet.")}
-                          </p>
+                          <div className="mt-3 h-24 animate-pulse rounded-xl bg-[var(--color-paper)]" />
+                        ) : fresh.length === 0 && chosen.length === 0 ? (
+                          <p className="mt-2 text-[13px] text-[var(--color-muted)]">{ebayReviews.note || "No written positive feedback found on this account yet."}</p>
                         ) : (
-                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                            {shown.map((review) => {
-                              const full = template.reviews.length >= 10;
-                              return (
-                                <button
-                                  key={`${review.buyer}-${review.text.slice(0, 20)}`}
-                                  type="button"
-                                  onClick={() => toggleEbayReview(review)}
-                                  disabled={full}
-                                  title={full ? "The template holds ten reviews; remove one below to swap it" : "Add to the template"}
-                                  className="rounded-2xl border border-[var(--color-line)] px-4 py-3 text-left transition-colors hover:border-[var(--color-primary)] disabled:opacity-50"
-                                >
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[12px] tracking-wide text-amber-500">{"★".repeat(review.stars)}</span>
-                                    <span className="text-[11px] font-semibold text-[var(--color-primary)]">+ Add</span>
-                                  </div>
-                                  <p className="mt-1 text-[13px] leading-snug text-[var(--color-ink)]">&ldquo;{review.text}&rdquo;</p>
-                                  <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
-                                    {review.buyer}{review.date ? ` · ${review.date}` : ""}{review.itemTitle ? ` · ${review.itemTitle.slice(0, 40)}` : ""}
-                                  </p>
-                                </button>
-                              );
-                            })}
+                          <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
+                            {fresh.map((review) => card(review, false))}
+                            {chosen.map((review) => card(review, true))}
                           </div>
+                        )}
+                        {ebayReviews !== null && fresh.length === 0 && chosen.length > 0 && ebayReviews.list.length > 0 && (
+                          <p className="mt-2 text-[12px] text-[var(--color-muted)]">Every review read from eBay is in the template. Re-read from eBay to look for newer ones.</p>
                         )}
                       </>
                     );
                   })()}
                 </div>
-                {template.reviews.length === 0 ? (
-                  <p className="px-6 py-5 text-[13px] text-[var(--color-muted)]">No reviews in the template yet. Pick from the ones above, or add one by hand.</p>
-                ) : (
-                  <div className="divide-y divide-[var(--color-line)]">
-                    {template.reviews.map((review, i) => (
-                      <div key={i} className="grid items-center gap-2 px-6 py-3 sm:grid-cols-[minmax(0,1fr)_140px_110px_32px]">
-                        <input className="input input-sm" placeholder="What they said" value={review.text} onChange={(e) => setT({ reviews: template.reviews.map((r, j) => (j === i ? { ...r, text: e.target.value } : r)) })} />
-                        <input className="input input-sm" placeholder="Buyer ID" value={review.buyer} onChange={(e) => setT({ reviews: template.reviews.map((r, j) => (j === i ? { ...r, buyer: e.target.value } : r)) })} />
-                        <input className="input input-sm" placeholder="Month Year" value={review.date} onChange={(e) => setT({ reviews: template.reviews.map((r, j) => (j === i ? { ...r, date: e.target.value } : r)) })} />
-                        <button type="button" onClick={() => setT({ reviews: template.reviews.filter((_, j) => j !== i) })} className="btn btn-danger-ghost btn-icon" aria-label="Remove review">
-                          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                            <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                          </svg>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
 
             </div>

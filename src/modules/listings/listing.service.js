@@ -369,6 +369,30 @@ async function updateDraft(id, userId, patch) {
     }
   }
 
+  // New options. On a single-axis listing that's one new variation; on a
+  // multi-axis one it's one per combination the copied option already has
+  // (a new colour gets every size the copied colour comes in).
+  for (const add of patch.addAxisValues || []) {
+    const variants = draft.variants || [];
+    if (variants.some((variant) => variant.aspects?.[add.axis]?.[0] === add.value)) {
+      throw new ListingError(`"${add.value}" is already an option on ${add.axis}.`, 400);
+    }
+    const source = variants.filter((variant) => variant.aspects?.[add.axis]?.[0] === (add.copyFrom ?? variants[0]?.aspects?.[add.axis]?.[0]));
+    if (!source.length) throw new ListingError(`Nothing to copy the new ${add.axis} option from.`, 400);
+    const created = source.map((variant) => ({
+      ...variant,
+      sku: undefined,
+      aspects: { ...variant.aspects, [add.axis]: [add.value] },
+    }));
+    draft.variants = [...variants, ...created];
+    if (draft.variesBy?.specifications) {
+      draft.variesBy = {
+        ...draft.variesBy,
+        specifications: draft.variesBy.specifications.map((spec) => (spec.name === add.axis ? { ...spec, values: [...spec.values, add.value] } : spec)),
+      };
+    }
+  }
+
   if (patch.variantSkusToRemove?.length) {
     const drop = new Set(patch.variantSkusToRemove);
     draft.variants = (draft.variants || []).filter((_, index) => !drop.has(String(index)));
