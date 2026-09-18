@@ -157,7 +157,8 @@ function PaletteRow({ name, accent, dark, active, onPick }: { name: string; acce
     <button
       type="button"
       onClick={onPick}
-      className={`flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors ${
+      title={`${accent.toUpperCase()} · ${dark.toUpperCase()}`}
+      className={`flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left transition-colors ${
         active ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)]" : "border-[var(--color-line)] hover:border-[var(--color-line-strong)] hover:bg-[var(--color-paper)]"
       }`}
     >
@@ -165,12 +166,7 @@ function PaletteRow({ name, accent, dark, active, onPick }: { name: string; acce
         <span className="h-7 w-7" style={{ background: dark }} />
         <span className="h-7 w-7" style={{ background: accent }} />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-[13px] font-medium text-[var(--color-ink)]">{name}</span>
-        <span className="block font-mono text-[11px] text-[var(--color-muted)]">
-          {accent.toUpperCase()} · {dark.toUpperCase()}
-        </span>
-      </span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[var(--color-ink)]">{name}</span>
       {active && (
         <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-[var(--color-primary)]">
           <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -430,7 +426,7 @@ export default function AccountSettingsPage() {
     const present = template.reviews.some((r) => r.text === review.text && r.buyer === review.buyer);
     if (present) {
       setT({ reviews: template.reviews.filter((r) => !(r.text === review.text && r.buyer === review.buyer)) });
-    } else if (template.reviews.length < 3) {
+    } else if (template.reviews.length < 5) {
       setT({ reviews: [...template.reviews, { stars: review.stars, text: review.text, buyer: review.buyer, date: review.date }] });
     }
   }
@@ -530,7 +526,7 @@ export default function AccountSettingsPage() {
       {connection.platform_key !== "ebay" ? (
         <Alert variant="info">Settings aren&apos;t available for {connection.platform_name} yet.</Alert>
       ) : (
-        <div className="max-w-3xl">
+        <div className={tab === "template" ? "max-w-6xl" : "max-w-3xl"}>
           <div className="mb-4 inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
             {tabs.map((t) => (
               <button
@@ -684,6 +680,7 @@ export default function AccountSettingsPage() {
           )}
 
           {tab === "template" && (
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">
             <div className="space-y-6">
               <div className="card overflow-hidden">
                 <SectionHead
@@ -723,7 +720,7 @@ export default function AccountSettingsPage() {
                       {paletteState === "loading" ? (
                         <div className="h-12 animate-pulse rounded-xl bg-[var(--color-paper)]" />
                       ) : logoPalettes.length ? (
-                        <div className="space-y-2">
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                           {logoPalettes.map((p) => (
                             <PaletteRow key={p.name} name={p.name} accent={p.accentColor} dark={p.darkColor} active={activePalette(p)} onPick={() => setT({ accentColor: p.accentColor, darkColor: p.darkColor })} />
                           ))}
@@ -734,7 +731,7 @@ export default function AccountSettingsPage() {
                     </div>
                     <div>
                       <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Classic pairs</p>
-                      <div className="grid gap-2 sm:grid-cols-2">
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {PRESET_PALETTES.map((p) => (
                           <PaletteRow key={p.name} name={p.name} accent={p.accentColor} dark={p.darkColor} active={activePalette(p)} onPick={() => setT({ accentColor: p.accentColor, darkColor: p.darkColor })} />
                         ))}
@@ -753,70 +750,6 @@ export default function AccountSettingsPage() {
                       </label>
                     </div>
                   </div>
-                </div>
-              </div>
-
-              <div className="card overflow-hidden">
-                <SectionHead
-                  title="Your template"
-                  blurb={
-                    template.customHtml
-                      ? "Your own layout, rendered over a sample product with this account's real listings."
-                      : "Liston's layout, rendered over a sample product with this account's real listings. Edit the code to make it your own."
-                  }
-                  action={
-                    <div className="flex flex-shrink-0 gap-2">
-                      {template.customHtml && (
-                        <button type="button" onClick={() => { setT({ customHtml: "" }); setEditingCode(false); setCodeDraft(null); }} className="btn btn-secondary btn-sm">
-                          Use built-in layout
-                        </button>
-                      )}
-                      <button type="button" onClick={() => (editingCode ? setEditingCode(false) : openCodeEditor())} className="btn btn-secondary btn-sm">
-                        {editingCode ? "Hide code" : "Edit code"}
-                      </button>
-                    </div>
-                  }
-                />
-                {editingCode && codeDraft !== null && (
-                  <div className="border-b border-[var(--color-line)] px-6 py-4">
-                    <textarea
-                      className="input min-h-[22rem] w-full font-mono text-[12px] leading-relaxed"
-                      spellCheck={false}
-                      value={codeDraft}
-                      onChange={(e) => setCodeDraft(e.target.value)}
-                    />
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-[12px] text-[var(--color-muted)]">
-                        Placeholders are filled per listing:{" "}
-                        {placeholders.map(([name, hint]) => (
-                          <code key={name} title={hint} className="mr-1 rounded bg-[var(--color-paper)] px-1 py-0.5 text-[11px]">
-                            {`{{${name}}}`}
-                          </code>
-                        ))}
-                      </p>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={() => setEditingCode(false)} className="btn btn-ghost btn-sm">
-                          Cancel
-                        </button>
-                        <button type="button" onClick={() => { setT({ customHtml: codeDraft }); setEditingCode(false); }} className="btn btn-primary btn-sm">
-                          Apply to preview
-                        </button>
-                      </div>
-                    </div>
-                    <p className="mt-2 text-[12px] text-[var(--color-muted)]">Applied code shows in the preview below; press Save template to keep it. eBay doesn&apos;t allow scripts or iframes.</p>
-                  </div>
-                )}
-                <div className="bg-[var(--color-paper)] p-3">
-                  {preview ? (
-                    <iframe
-                      title="Template preview"
-                      sandbox=""
-                      srcDoc={preview.html}
-                      className={`h-[36rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${preview.key !== templateKey ? "opacity-60" : ""}`}
-                    />
-                  ) : (
-                    <div className="h-[36rem] animate-pulse rounded-xl bg-[var(--color-line)]/60" />
-                  )}
                 </div>
               </div>
 
@@ -855,9 +788,9 @@ export default function AccountSettingsPage() {
               <div className="card overflow-hidden">
                 <SectionHead
                   title="Customer reviews"
-                  blurb="Up to three, taken from the feedback buyers left you on eBay. Left out when empty. Invented reviews get listings removed."
+                  blurb="Up to five, shown as a scrolling row. Taken from the feedback buyers left you on eBay. Left out when empty. Invented reviews get listings removed."
                   action={
-                    template.reviews.length < 3 ? (
+                    template.reviews.length < 5 ? (
                       <button type="button" onClick={() => setT({ reviews: [...template.reviews, { stars: 5, text: "", buyer: "", date: "" }] })} className="btn btn-secondary btn-sm flex-shrink-0">
                         Add review
                       </button>
@@ -883,7 +816,7 @@ export default function AccountSettingsPage() {
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
                       {ebayReviews.list.map((review) => {
                         const used = template.reviews.some((r) => r.text === review.text && r.buyer === review.buyer);
-                        const full = !used && template.reviews.length >= 3;
+                        const full = !used && template.reviews.length >= 5;
                         return (
                           <button
                             key={`${review.buyer}-${review.text.slice(0, 20)}`}
@@ -929,7 +862,81 @@ export default function AccountSettingsPage() {
               </div>
 
             </div>
+
+            {/* The live preview: the real template, half scale, kept in view
+                while the settings on the left change it. */}
+            <div className="xl:sticky xl:top-4 xl:self-start">
+              <div className="card overflow-hidden">
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div>
+                    <p className="text-[13px] font-bold text-[var(--color-ink)]">Live preview</p>
+                    <p className="text-[11.5px] text-[var(--color-muted)]">
+                      {template.customHtml ? "Your own layout" : "Liston's layout"} · {preview && preview.key !== templateKey ? "updating…" : "as buyers will see it"}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1.5">
+                    {template.customHtml && (
+                      <button type="button" onClick={() => { setT({ customHtml: "" }); setCodeDraft(null); }} className="btn btn-ghost btn-sm">
+                        Built-in
+                      </button>
+                    )}
+                    <button type="button" onClick={openCodeEditor} className="btn btn-secondary btn-sm">
+                      Edit code
+                    </button>
+                  </div>
+                </div>
+                <div className="relative overflow-hidden border-t border-[var(--color-line)] bg-[var(--color-paper)]" style={{ height: "calc(100vh - 210px)", minHeight: 480 }}>
+                  {preview ? (
+                    <iframe
+                      title="Template preview"
+                      sandbox=""
+                      srcDoc={preview.html}
+                      className={`absolute left-0 top-0 origin-top-left bg-white transition-opacity ${preview.key !== templateKey ? "opacity-70" : ""}`}
+                      style={{ width: "200%", height: "200%", transform: "scale(0.5)" }}
+                    />
+                  ) : (
+                    <div className="h-full animate-pulse bg-[var(--color-line)]/60" />
+                  )}
+                </div>
+              </div>
+            </div>
+            </div>
           )}
+        </div>
+      )}
+
+      {editingCode && codeDraft !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setEditingCode(false)}>
+          <div role="dialog" aria-modal="true" className="flex h-[85vh] w-full max-w-5xl flex-col rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-[var(--color-ink)]">Template code</h2>
+                <p className="text-[12px] text-[var(--color-muted)]">
+                  Placeholders are filled per listing:{" "}
+                  {placeholders.map(([name, hint]) => (
+                    <code key={name} title={hint} className="mr-1 rounded bg-[var(--color-paper)] px-1 py-0.5 text-[11px]">
+                      {`{{${name}}}`}
+                    </code>
+                  ))}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button type="button" onClick={() => setEditingCode(false)} className="btn btn-ghost btn-sm">
+                  Cancel
+                </button>
+                <button type="button" onClick={() => { setT({ customHtml: codeDraft }); setEditingCode(false); }} className="btn btn-primary btn-sm">
+                  Apply to preview
+                </button>
+              </div>
+            </div>
+            <textarea
+              className="input mt-3 min-h-0 flex-1 w-full resize-none font-mono text-[12px] leading-relaxed"
+              spellCheck={false}
+              value={codeDraft}
+              onChange={(e) => setCodeDraft(e.target.value)}
+            />
+            <p className="mt-2 text-[12px] text-[var(--color-muted)]">Applied code shows in the live preview; press Save template to keep it. eBay doesn&apos;t allow scripts or iframes.</p>
+          </div>
         </div>
       )}
     </AccountShell>

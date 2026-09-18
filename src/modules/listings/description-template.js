@@ -146,8 +146,11 @@ function styles(t) {
 .eb-policy{font-size:15px;line-height:1.8;color:#3D3D3D;margin:0}
 .eb-policy strong{color:${d}}
 .eb-policy-note{font-size:12px;color:#9090A0;margin:8px 0 0;line-height:1.6}
-.eb-fgrid{display:flex;gap:10px;flex-wrap:wrap}
-.eb-fcard{flex:1;min-width:140px;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:14px;border-top:3px solid ${a}}
+.eb-fgrid{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding:4px 2px 14px;scrollbar-width:thin;scrollbar-color:${a} #F0F0F0}
+.eb-fgrid::-webkit-scrollbar{height:8px}
+.eb-fgrid::-webkit-scrollbar-track{background:#F0F0F0;border-radius:8px}
+.eb-fgrid::-webkit-scrollbar-thumb{background:${a};border-radius:8px}
+.eb-fcard{flex:0 0 260px;width:260px;scroll-snap-align:start;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:14px;border-top:3px solid ${a}}
 .eb-fstars{color:${a};font-size:14px;letter-spacing:1px}
 .eb-ftext{font-size:12px;color:#3D3D3D;line-height:1.65;margin-top:8px;font-style:italic}
 .eb-fname{font-size:11px;font-weight:700;color:${d};margin-top:10px}
@@ -167,7 +170,7 @@ function styles(t) {
 .eb-footer p{font-size:13px;color:#7A7A9A;margin:0}
 .eb-footer strong{color:#fff}
 .eb-save{font-size:13px;color:${a};margin-top:5px;display:block;font-weight:700}
-@media(max-width:480px){.eb-header-badges{display:none}.eb-fcard{min-width:100%}.eb-rcard{flex-basis:150px;width:150px}.eb-rimg{height:150px}.eb-pname{font-size:20px}.eb-sec{padding:18px}}
+@media(max-width:480px){.eb-header-badges{display:none}.eb-fcard{flex-basis:220px;width:220px}.eb-rcard{flex-basis:150px;width:150px}.eb-rimg{height:150px}.eb-pname{font-size:20px}.eb-sec{padding:18px}}
 </style>`;
 }
 
@@ -213,10 +216,11 @@ function renderDescription({ template, marketplaceId, productName, description, 
   const descHtml = descriptionHtml !== undefined ? descriptionHtml : textToHtml(description);
   const conditionLabel = escapeHtml(String(condition).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 
-  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 3);
+  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 5);
   const reviewsHtml = reviews.length
     ? `<div class="eb-sec">
     <div class="eb-stitle">What Customers Say</div>
+    <p class="eb-rhint">Scroll to see more →</p>
     <div class="eb-fgrid">${reviews
       .map(
         (r) => `<div class="eb-fcard"><div class="eb-fstars">${'★'.repeat(Math.min(5, Math.max(1, Number(r.stars) || 5)))}</div><div class="eb-ftext">"${escapeHtml(r.text)}"</div><div class="eb-fname">${escapeHtml(r.buyer || 'eBay buyer')}</div><div class="eb-fdate">${escapeHtml(r.date || '')}${r.date ? ' · ' : ''}Verified Purchase</div></div>`
