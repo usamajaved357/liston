@@ -126,13 +126,15 @@ function createSwrCache({ freshMs, staleMs, fetcher, load, store, onUpdate }) {
   }
 
   // Replace the copy in place (and persist it), for changes whose outcome
-  // we already know — no eBay call needed to reflect them.
+  // we already know — no eBay call needed to reflect them. Returns false
+  // when there is no loaded copy to patch (the caller then marks it stale).
   function patch(key, update) {
     const entry = entries.get(key);
-    if (!entry || entry.value === undefined) return;
+    if (!entry || entry.value === undefined) return false;
     entry.value = update(entry.value);
     if (store) Promise.resolve(store(key, entry.value, entry.meta)).catch(() => {});
     if (onUpdate) onUpdate(key, entry.value);
+    return true;
   }
 
   function syncedAt(key) {

@@ -91,15 +91,24 @@ function accountDeletionNotification(req, res) {
 // affected parts of the account are re-read in the background, then pushed
 // to every open page. Which parts depends on the event: a listing event
 // touches the listings; a sale or payment/dispatch mark touches the orders
-// (and a sale also the listing's quantity).
+// (and a sale also the listing's quantity — but that is one item, so it is
+// patched from a single GetItem rather than re-reading every listing).
 const ORDER_EVENTS = new Set(['ItemSold', 'FixedPriceTransaction', 'ItemMarkedPaid', 'ItemMarkedShipped']);
-const LISTING_EVENTS = new Set(['ItemListed', 'ItemRevised', 'ItemClosed', 'ItemUnsold', 'ItemSold', 'FixedPriceTransaction']);
+const LISTING_EVENTS = new Set(['ItemListed', 'ItemRevised', 'ItemClosed', 'ItemUnsold']);
+const SALE_EVENTS = new Set(['ItemSold', 'FixedPriceTransaction']);
 
-function kindsFor(eventName) {
+// What a notification means for one account: which mirrors to re-read in
+// full, and whether one listing's quantity can be patched instead.
+function planFor(notification) {
+  const { eventName, itemId } = notification;
   const kinds = [];
   if (LISTING_EVENTS.has(eventName)) kinds.push('listings');
   if (ORDER_EVENTS.has(eventName)) kinds.push('orders');
-  return kinds.length ? kinds : ['listings', 'orders'];
+  const sale = SALE_EVENTS.has(eventName);
+  // A sale without an item id (unexpected) still has to reach the listing.
+  if (sale && !itemId) kinds.push('listings');
+  if (!kinds.length) kinds.push('listings', 'orders');
+  return { kinds, saleItemId: sale && itemId ? itemId : null };
 }
 
 async function platformNotification(req, res) {
@@ -117,13 +126,17 @@ async function platformNotification(req, res) {
 
   try {
     const rows = await connectionRepository.findIdsByEbayUsername(notification.recipientUserId);
-    const kinds = kindsFor(notification.eventName);
+    const { kinds, saleItemId } = planFor(notification);
     for (const row of rows) {
       connectionService
-        .withDecryptedCredentials(row.id, row.user_id, (credentials) => ebayService.syncAccount(credentials, row.id, kinds))
+        .withDecryptedCredentials(row.id, row.user_id, async (credentials) => {
+          const jobs = [ebayService.syncAccount(credentials, row.id, kinds)];
+          if (saleItemId) jobs.push(ebayService.applySale(credentials, row.id, saleItemId));
+          await Promise.all(jobs);
+        })
         .catch((err) => logger.warn('Re-read after eBay notification failed', { connectionId: row.id, error: err.message }));
     }
-    logger.info('eBay notification handled', { event: notification.eventName, accounts: rows.length, kinds });
+    logger.info('eBay notification handled', { event: notification.eventName, accounts: rows.length, kinds, saleItemId });
   } catch (err) {
     logger.error('eBay notification handling failed', { error: err.message });
   }
@@ -149,4 +162,4 @@ async function usage(req, res, next) {
   }
 }
 
-module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification, platformNotification, usage };
+module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification, platformNotification, usage, _planFor: planFor };

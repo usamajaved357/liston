@@ -998,6 +998,50 @@ async function syncAccount(credentials, connectionId, kinds = ['listings', 'orde
   return entry.running;
 }
 
+// A sale changes one listing's quantity; on a big account a full re-read
+// of the lists to learn that costs 15–20 calls. So a sale is reflected
+// with one GetItem for that item, patched into the mirrored copy and
+// announced to open pages. A listing that just sold out leaves the active
+// list; the count follows. Falls back to a stale mark (re-read on the next
+// look, no call now) when there is no loaded copy to patch.
+async function applySale(credentials, connectionId, itemId) {
+  const id = String(connectionId);
+  const key = listingsKey(id, 'active');
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const summary = await governor.withContext({ connectionId: id, priority: 'push' }, () =>
+    ebayTrading.getItemSummary(accessToken, String(itemId), { siteId })
+  );
+  const soldOut = summary.quantityAvailable === 0;
+  let found = false;
+  const patched = listingsCache.patch(key, (items) => {
+    const next = [];
+    for (const item of items) {
+      if (String(item.itemId) !== String(itemId)) {
+        next.push(item);
+        continue;
+      }
+      found = true;
+      if (soldOut) continue;
+      next.push({
+        ...item,
+        quantity: summary.quantity ?? item.quantity,
+        quantityAvailable: summary.quantityAvailable ?? item.quantityAvailable,
+        quantitySold: summary.quantitySold ?? item.quantitySold,
+      });
+    }
+    return next;
+  });
+  if (!patched || !found) {
+    // Nothing loaded, or an item we have not seen yet (listed since the
+    // last read): the next look at the page re-reads.
+    listingsCache.markStale(key);
+    activeCountCache.markStale(id);
+    return { patched: false, soldOut };
+  }
+  if (soldOut && !activeCountCache.patch(id, (count) => Math.max(0, count - 1))) activeCountCache.markStale(id);
+  return { patched: true, soldOut };
+}
+
 function ordersWithin(orders, start, end) {
   const s = start.getTime();
   const e = end.getTime();
@@ -1193,6 +1237,7 @@ module.exports = {
   refreshAccount,
   markAccountStale,
   syncAccount,
+  applySale,
   enableNotifications,
   listOrdersDetailed,
   getEarningsSummary,

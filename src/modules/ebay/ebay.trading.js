@@ -184,6 +184,7 @@ async function getItemSummary(accessToken, itemId, { siteId } = {}) {
     `<OutputSelector>Item.PictureDetails</OutputSelector>` +
     `<OutputSelector>Item.Quantity</OutputSelector>` +
     `<OutputSelector>Item.QuantityAvailable</OutputSelector>` +
+    `<OutputSelector>Item.SellingStatus.QuantitySold</OutputSelector>` +
     `<OutputSelector>Item.ListingDetails.ViewItemURL</OutputSelector>`;
   const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
   const item = res.Item || {};
@@ -193,6 +194,7 @@ async function getItemSummary(accessToken, itemId, { siteId } = {}) {
     imageUrl: pictures[0] || item.PictureDetails?.GalleryURL || null,
     quantity: item.Quantity !== undefined ? Number(item.Quantity) : null,
     quantityAvailable: item.QuantityAvailable !== undefined ? Number(item.QuantityAvailable) : null,
+    quantitySold: item.SellingStatus?.QuantitySold !== undefined ? Number(item.SellingStatus.QuantitySold) : null,
     viewItemUrl: item.ListingDetails?.ViewItemURL || null,
   };
 }

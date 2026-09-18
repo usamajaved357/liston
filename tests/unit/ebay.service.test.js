@@ -438,6 +438,75 @@ test('syncAccount re-reads only the requested kinds and coalesces a burst into o
   assert.ok(orderCalls.mock.calls.length <= 2, `expected at most 2 order reads, got ${orderCalls.mock.calls.length}`);
 });
 
+test('applySale patches one listing from a single GetItem instead of re-reading the lists', async () => {
+  const accountEvents = require('../../src/modules/ebay/account-events');
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  const saved = mock.method(mirror, 'saveSnapshot', async () => {});
+  const listReads = mock.method(ebayTrading, 'getActiveListings', async () => ({
+    items: [
+      { itemId: '1', title: 'a', quantity: 5, quantityAvailable: 5, quantitySold: 0 },
+      { itemId: '2', title: 'b', quantity: 1, quantityAvailable: 1, quantitySold: 0 },
+    ],
+    totalEntries: 2,
+    totalPages: 1,
+  }));
+  const itemReads = mock.method(ebayTrading, 'getItemSummary', async (token, itemId) =>
+    itemId === '1'
+      ? { itemId, quantity: 5, quantityAvailable: 4, quantitySold: 1, imageUrl: null }
+      : { itemId, quantity: 1, quantityAvailable: 0, quantitySold: 1, imageUrl: null }
+  );
+
+  const connectionId = 'test-conn-sale';
+  await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+  await ebayService.countActiveListings(freshCredentials(), connectionId);
+  const readsBefore = listReads.mock.calls.length;
+  const seen = [];
+  const unsubscribe = accountEvents.subscribe(connectionId, (event) => seen.push(event.kind));
+  try {
+    // One unit of a stocked item sold.
+    const first = await ebayService.applySale(freshCredentials(), connectionId, '1');
+    assert.deepStrictEqual(first, { patched: true, soldOut: false });
+    let page = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+    assert.deepStrictEqual(
+      page.items.map((l) => [l.itemId, l.quantityAvailable, l.quantitySold]),
+      [['1', 4, 1], ['2', 1, 0]]
+    );
+
+    // The last unit of another item sold: it leaves the active list, the count follows.
+    const second = await ebayService.applySale(freshCredentials(), connectionId, '2');
+    assert.deepStrictEqual(second, { patched: true, soldOut: true });
+    page = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+    assert.deepStrictEqual(page.items.map((l) => l.itemId), ['1']);
+    const count = await ebayService.countActiveListings(freshCredentials(), connectionId);
+    assert.strictEqual(count.totalEntries, 1);
+
+    assert.strictEqual(itemReads.mock.calls.length, 2, 'one GetItem per sale');
+    assert.strictEqual(listReads.mock.calls.length, readsBefore, 'the lists were never re-read');
+    assert.ok(seen.includes('listings') && seen.includes('activeCount'), 'open pages were told');
+    assert.ok(saved.mock.calls.length >= 3, 'the patched copies were persisted');
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('applySale for an item not in the loaded copy marks the lists stale rather than guessing', async () => {
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  const listReads = mock.method(ebayTrading, 'getActiveListings', async () => ({ items: [{ itemId: '9', title: 'z', quantity: 1, quantityAvailable: 1 }], totalEntries: 1, totalPages: 1 }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, quantity: 3, quantityAvailable: 2, quantitySold: 1 }));
+
+  const connectionId = 'test-conn-sale-unknown';
+  await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+  const before = listReads.mock.calls.length;
+  const result = await ebayService.applySale(freshCredentials(), connectionId, '404');
+  assert.deepStrictEqual(result, { patched: false, soldOut: false });
+  assert.strictEqual(listReads.mock.calls.length, before, 'no re-read at the moment of the sale');
+  // The next look at the page re-reads behind the served copy.
+  await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(listReads.mock.calls.length > before, 'stale copy was re-read on the next look');
+});
+
 test('a refreshed copy announces itself so open pages can update', async () => {
   const accountEvents = require('../../src/modules/ebay/account-events');
   mock.method(mirror, 'loadSnapshot', async () => null);
