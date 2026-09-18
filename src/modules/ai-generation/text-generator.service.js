@@ -87,6 +87,42 @@ const TITLE_RULE =
   `search for: product type, key feature, use, compatibility, size or pack count, colour if fixed. No filler ` +
   `words, no ALL CAPS, no "wow"/"L@@K", no seller name.\n`;
 
+// How the variation axis and its options should be named. With a
+// competitor that has variations, buyers already know that seller's
+// wording ("Colour: Midnight Black", "Size: UK 8"), so the axis takes the
+// competitor's name and each option is named the way they name the same
+// thing. Without one, eBay's own aspect names for the category (the ones it
+// allows variations on) are the vocabulary.
+function variationNamingGuidance({ competitor, aspectSchema }) {
+  const lines = [];
+  const competitorAxes = {};
+  for (const variant of competitor?.variants || []) {
+    for (const [axis, value] of Object.entries(variant.attributes || {})) {
+      competitorAxes[axis] = competitorAxes[axis] || new Set();
+      competitorAxes[axis].add(value);
+    }
+  }
+  const axisNames = Object.keys(competitorAxes);
+  if (axisNames.length) {
+    lines.push(
+      `NAMING THE VARIATIONS: the competitor's listing offers ${axisNames
+        .map((axis) => `"${axis}" (${[...competitorAxes[axis]].slice(0, 30).join(', ')})`)
+        .join(' and ')}. Use the competitor's axis name as varyingAspectName when it describes the same kind of ` +
+        `choice, and name each option the way the competitor names its equivalent (same wording, casing and ` +
+        `units). Options the competitor doesn't have get names in the same style.`
+    );
+  }
+  const variationAspects = (aspectSchema || []).filter((a) => a.variation).map((a) => a.name);
+  if (variationAspects.length) {
+    lines.push(
+      `varyingAspectName MUST be one of eBay's variation-enabled aspects for this category: ${variationAspects
+        .slice(0, 20)
+        .join(', ')}. Pick the one that matches the option (Colour for colours, Size for sizes, Model for device models).`
+    );
+  }
+  return lines.length ? `${lines.join('\n')}\n` : '';
+}
+
 function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema, categoryPath }) {
   const hasVariants = source.variants.length > 0;
   const schemaText = describeSchemaForPrompt(aspectSchema);
@@ -108,9 +144,10 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
     (hasVariants
       ? `The source product has these variant options for "${
           Object.keys(source.variants[0]?.attributes || {})[0] || 'Option'
-        }": ${source.variants.map((v) => Object.values(v.attributes)[0]).join(', ')}. ` +
+        }": ${[...new Set(source.variants.map((v) => Object.values(v.attributes)[0]))].join(', ')}. ` +
         `Draft ONE common title/description/shared aspects for the whole listing, choose which scraped ` +
         `attribute is the real variation axis, and provide a clean eBay aspect value for every listed option.\n` +
+        variationNamingGuidance({ competitor, aspectSchema }) +
         `CRITICAL: every option must map to a DIFFERENT value — eBay rejects a variation listing where two ` +
         `variants share the same value. If the options combine two things (e.g. "2PCS Warm White" is a pack ` +
         `size AND a colour), keep enough of both in the value to stay distinct, and name the axis accordingly.`

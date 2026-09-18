@@ -408,10 +408,67 @@ async function listActiveListings(credentials, opts) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
-async function getStoreProfile(credentials) {
+// The store's name, logo and feedback figures change rarely and cost two
+// rationed Trading calls, so they're mirrored for a day. Without this the
+// Settings page (and every description render) depended on a live call
+// that eBay's allowance could refuse, which is how one store's palette
+// suggestions ended up as the generic presets.
+const PROFILE_FRESH_MS = 24 * 60 * 60 * 1000;
+const storeProfileCache = createSwrCache({
+  freshMs: PROFILE_FRESH_MS,
+  staleMs: STALE_MS,
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => ({ value: await ebayTrading.getStoreProfile(ctx.accessToken, { siteId: ctx.siteId }), meta: null })),
+  load: (key) => mirror.loadSnapshot(key, 'store_profile'),
+  store: (key, value) => mirror.saveSnapshot(key, 'store_profile', value),
+});
+
+async function getStoreProfile(credentials, connectionId, { refresh = false } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  const profile = await ebayTrading.getStoreProfile(accessToken, { siteId });
+  if (!connectionId) {
+    const profile = await ebayTrading.getStoreProfile(accessToken, { siteId });
+    return { ...profile, credentialsChanged, credentials: refreshedCredentials };
+  }
+  const key = String(connectionId);
+  if (refresh) storeProfileCache.invalidate(key);
+  const profile = await storeProfileCache.get(key, { accessToken, siteId, connectionId: key, priority: 'user' });
   return { ...profile, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// The best of the seller's own feedback, for the description template:
+// positive, with something actually said, longest and most recent first.
+const MIN_REVIEW_LENGTH = 25;
+const feedbackCache = createSwrCache({
+  freshMs: PROFILE_FRESH_MS,
+  staleMs: STALE_MS,
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => {
+      const all = await ebayTrading.getSellerFeedback(ctx.accessToken, { siteId: ctx.siteId });
+      const best = all
+        .filter((f) => f.type === 'Positive' && f.text.length >= MIN_REVIEW_LENGTH && !/^(a+|great|good|thanks?|ok)[.!]*$/i.test(f.text))
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 40)
+        .sort((a, b) => b.text.length - a.text.length)
+        .slice(0, 5)
+        .map((f) => ({
+          stars: 5,
+          text: f.text.slice(0, 400),
+          buyer: f.buyer,
+          date: f.date ? new Date(f.date).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }) : '',
+          itemTitle: f.itemTitle,
+        }));
+      return { value: best, meta: { total: all.length } };
+    }),
+  load: (key) => mirror.loadSnapshot(key, 'feedback').then((row) => row && { ...row, value: row.value.reviews }),
+  store: (key, value, meta) => mirror.saveSnapshot(key, 'feedback', { reviews: value }, meta),
+});
+
+async function getBestReviews(credentials, connectionId, { refresh = false } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const key = String(connectionId);
+  if (refresh) feedbackCache.invalidate(key);
+  const reviews = await feedbackCache.get(key, { accessToken, siteId, connectionId: key, priority: 'user' });
+  return { reviews, credentialsChanged, credentials: refreshedCredentials };
 }
 
 async function listUnsoldListings(credentials, opts) {
@@ -1049,6 +1106,7 @@ module.exports = {
   listActiveListings,
   countActiveListings,
   getStoreProfile,
+  getBestReviews,
   listUnsoldListings,
   listOrders,
   getLiveItem,

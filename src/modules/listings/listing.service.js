@@ -332,6 +332,43 @@ async function updateDraft(id, userId, patch) {
     });
   }
 
+  // Renames come first: removals and everything after refer to the new
+  // names the editor shows. A value must stay unique on its axis (two
+  // variations with the same option is a rejected group).
+  for (const rename of patch.renameAxisValues || []) {
+    const clash = (draft.variants || []).some(
+      (variant) => variant.aspects?.[rename.axis]?.[0] === rename.to && variant.aspects?.[rename.axis]?.[0] !== rename.from
+    );
+    if (clash) throw new ListingError(`"${rename.to}" is already an option on ${rename.axis}.`, 400);
+    draft.variants = (draft.variants || []).map((variant) =>
+      variant.aspects?.[rename.axis]?.[0] === rename.from ? { ...variant, aspects: { ...variant.aspects, [rename.axis]: [rename.to] } } : variant
+    );
+    if (draft.variesBy?.specifications) {
+      draft.variesBy = {
+        ...draft.variesBy,
+        specifications: draft.variesBy.specifications.map((spec) =>
+          spec.name === rename.axis ? { ...spec, values: spec.values.map((v) => (v === rename.from ? rename.to : v)) } : spec
+        ),
+      };
+    }
+  }
+  for (const rename of patch.renameAxes || []) {
+    if (rename.from === rename.to) continue;
+    draft.variants = (draft.variants || []).map((variant) => {
+      if (!variant.aspects || !(rename.from in variant.aspects)) return variant;
+      const aspects = {};
+      for (const [name, values] of Object.entries(variant.aspects)) aspects[name === rename.from ? rename.to : name] = values;
+      return { ...variant, aspects };
+    });
+    if (draft.variesBy) {
+      draft.variesBy = {
+        ...draft.variesBy,
+        specifications: (draft.variesBy.specifications || []).map((spec) => (spec.name === rename.from ? { ...spec, name: rename.to } : spec)),
+        aspectsImageVariesBy: (draft.variesBy.aspectsImageVariesBy || []).map((name) => (name === rename.from ? rename.to : name)),
+      };
+    }
+  }
+
   if (patch.variantSkusToRemove?.length) {
     const drop = new Set(patch.variantSkusToRemove);
     draft.variants = (draft.variants || []).filter((_, index) => !drop.has(String(index)));
@@ -640,9 +677,24 @@ async function recommendedListings(credentials, connection, { exclude, count }) 
 async function renderDraftDescription(listing, userId) {
   const draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  return renderWithTemplate(listing.connection_id, userId, {
+    template: null,
+    productName: isVariation ? draft.commonTitle : draft.title,
+    description: isVariation ? draft.commonDescription : draft.description,
+    condition: (isVariation ? draft.variants[0]?.condition : draft.condition) || 'NEW',
+    exclude: listing.external_product_id,
+  });
+}
 
-  return connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials, connection) => {
-    let template = descriptionTemplate.templateWithDefaults(connection.settings?.template);
+// The Theme tab's preview: an unsaved template over a sample product.
+function renderTemplatePreview(connectionId, userId, template, sample) {
+  return renderWithTemplate(connectionId, userId, { template, ...sample, exclude: null });
+}
+
+async function renderWithTemplate(connectionId, userId, { template: override, productName, description, condition, exclude }) {
+  return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
+    const marketplaceId = connection.settings?.ebay?.marketplaceId;
+    let template = descriptionTemplate.templateWithDefaults(override || connection.settings?.template, marketplaceId);
 
     // Anything the seller hasn't filled in comes from the store itself —
     // eBay already holds the store's name, the logo they uploaded and the
@@ -650,7 +702,7 @@ async function renderDraftDescription(listing, userId) {
     // hole". Failure here just leaves the blanks blank.
     if (!template.storeName || !template.logoUrl || !template.feedbackPercent) {
       try {
-        const profile = await ebayService.getStoreProfile(credentials);
+        const profile = await ebayService.getStoreProfile(credentials, connection.id);
         template = {
           ...template,
           storeName: template.storeName || profile.storeName || connection.label,
@@ -662,17 +714,8 @@ async function renderDraftDescription(listing, userId) {
       }
     }
 
-    const recommended = await recommendedListings(credentials, connection, {
-      exclude: listing.external_product_id,
-      count: template.recommendedCount,
-    });
-    return descriptionTemplate.renderDescription({
-      template,
-      productName: isVariation ? draft.commonTitle : draft.title,
-      description: isVariation ? draft.commonDescription : draft.description,
-      recommended,
-      condition: draft.condition || draft.variants?.[0]?.condition || 'NEW',
-    });
+    const recommended = await recommendedListings(credentials, connection, { exclude, count: template.recommendedCount });
+    return descriptionTemplate.renderDescription({ template, marketplaceId, productName, description, recommended, condition });
   });
 }
 
@@ -995,6 +1038,7 @@ function withSkus(draft, connectionId) {
 
 module.exports = {
   renderDraftDescription,
+  renderTemplatePreview,
   uploadDraftImage,
   fetchDraftImage,
   ListingError,

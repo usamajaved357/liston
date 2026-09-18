@@ -111,14 +111,19 @@ function suggestPalettes(colors) {
   const primary = candidates[0];
   const secondary = candidates.find((c) => primary && Math.abs(c.h - primary.h) > 0.08 && Math.abs(c.h - primary.h) < 0.92);
   const logoDark = darks[0];
+  // A charcoal tinted with the logo's own hue, never the same grey for
+  // every store.
+  const tintedCharcoal = (c) => hslToHex(c.h, 0.3, 0.13);
+  const complement = (c) => hslToHex((c.h + 0.5) % 1, Math.max(c.s, 0.55), 0.48);
 
   if (primary) {
     push('From your logo', usableAccent(primary), primary.l < 0.32 ? primary.hex : logoDark ? logoDark.hex : deepOf(primary));
-    push('Logo colour on charcoal', usableAccent(primary), '#1E1E2E');
     if (secondary) push('Second logo colour', usableAccent(secondary), logoDark ? logoDark.hex : deepOf(secondary));
-    else push('Deep tone', usableAccent(primary), deepOf(primary));
+    push('Deep tone', usableAccent(primary), deepOf(primary));
+    push('Tinted charcoal', usableAccent(primary), tintedCharcoal(primary));
+    push('Contrast', complement(primary), primary.l < 0.32 ? primary.hex : deepOf(primary));
   }
-  return palettes.slice(0, 3);
+  return palettes.slice(0, 4);
 }
 
 async function palettesFromLogo(url) {

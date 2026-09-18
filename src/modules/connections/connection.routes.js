@@ -27,6 +27,9 @@ router.post('/:id/locations', requireAuth, requireOwner, connectionController.cr
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);
 router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
 router.get('/:id/template/palette', requireAuth, requireOwner, connectionController.logoPalette);
+router.get('/:id/template/source', requireAuth, requireOwner, connectionController.templateSource);
+router.post('/:id/template/preview', requireAuth, requireOwner, express.json({ limit: '1mb' }), connectionController.templatePreview);
+router.get('/:id/store-reviews', requireAuth, requireOwner, connectionController.storeReviews);
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
 // Category picker data. Anyone who can edit listings can browse categories.
 router.get('/:id/categories/search', requireAuth, requireFeature('listings'), connectionController.searchCategories);

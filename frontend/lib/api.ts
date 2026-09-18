@@ -280,6 +280,8 @@ export interface Marketplace {
   country: string;
   countryName: string;
   itemHost: string;
+  // The market's wording for the description template.
+  template?: { tagline: string; warehouse: string; carrier: string; region: string; postageWord: string };
 }
 
 export interface ConnectionPolicies {
@@ -454,6 +456,16 @@ export interface DescriptionTemplate {
   recommendedCount: number;
   responseTime: string;
   reviews: { stars: number; text: string; buyer: string; date: string }[];
+  // The seller's own HTML with {{placeholders}}; empty uses Liston's layout.
+  customHtml: string;
+}
+
+export interface StoreReview {
+  stars: number;
+  text: string;
+  buyer: string;
+  date: string;
+  itemTitle?: string;
 }
 
 export interface PricingSettings {
@@ -503,6 +515,8 @@ export interface DraftPatch {
   listingPolicies?: ListingPolicies;
   variants?: Record<string, { price?: OfferPrice; quantity?: number; imageUrls?: string[] }>;
   removeAxisValues?: { axis: string; value: string }[];
+  renameAxisValues?: { axis: string; from: string; to: string }[];
+  renameAxes?: { from: string; to: string }[];
   variantSkusToRemove?: string[];
   sku?: string;
   categoryId?: string;
@@ -715,6 +729,14 @@ export const api = {
       feedbackPercent: string | null;
     }>(`/api/connections/${id}/store-profile`),
   // Colour pairs suggested from the store logo (saved URL, or eBay's when blank).
+  // The built-in template as editable HTML with placeholders.
+  getTemplateSource: (id: string) => request<{ html: string; placeholders: [string, string][] }>(`/api/connections/${id}/template/source`),
+  // The template rendered over a sample product, before saving.
+  previewTemplate: (id: string, template: DescriptionTemplate) =>
+    request<{ html: string }>(`/api/connections/${id}/template/preview`, { method: "POST", body: JSON.stringify(template) }),
+  // The best five positive reviews buyers left on eBay.
+  getStoreReviews: (id: string, refresh = false) => request<{ reviews: StoreReview[]; unavailable?: string }>(`/api/connections/${id}/store-reviews${refresh ? "?refresh=1" : ""}`),
+
   getTemplatePalette: (id: string, logoUrl?: string) =>
     request<{ logoUrl: string; colors: string[]; palettes: { name: string; accentColor: string; darkColor: string }[] }>(
       `/api/connections/${id}/template/palette${logoUrl ? `?url=${encodeURIComponent(logoUrl)}` : ""}`

@@ -300,6 +300,25 @@ async function getStoreCategories(accessToken, { siteId } = {}) {
   return toArray(res?.Store?.CustomCategories?.CustomCategory).map(map);
 }
 
+// Feedback buyers left for this seller: the genuine reviews a description
+// template may quote. Positive comments only, most recent first.
+async function getSellerFeedback(accessToken, { siteId, entriesPerPage = 100 } = {}) {
+  const res = await tradingRequest(
+    accessToken,
+    'GetFeedback',
+    `<FeedbackType>FeedbackReceivedAsSeller</FeedbackType><DetailLevel>ReturnAll</DetailLevel>` +
+      `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>1</PageNumber></Pagination>`,
+    siteId
+  );
+  return toArray(res.FeedbackDetailArray?.FeedbackDetail).map((f) => ({
+    text: String(f.CommentText || '').trim(),
+    type: String(f.CommentType || ''),
+    buyer: f.CommentingUser ? String(f.CommentingUser) : '',
+    date: f.CommentTime ? String(f.CommentTime) : '',
+    itemTitle: f.ItemTitle ? String(f.ItemTitle) : '',
+  }));
+}
+
 // Subscribes the token's account to Platform Notifications (see
 // ebay.notifications.js for the events and the delivery URL).
 async function setNotificationPreferences(accessToken, bodyXml, { siteId } = {}) {
@@ -455,6 +474,7 @@ module.exports = {
   EbayTradingError,
   getUserProfile,
   getStoreCategories,
+  getSellerFeedback,
   setNotificationPreferences,
   CONDITION_IDS,
   getActiveListings,

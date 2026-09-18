@@ -741,3 +741,46 @@ test('updateDraft refuses a category that is not a final (leaf) category', async
   mock.method(ebayTaxonomy, 'getCategoryChildren', async () => [{ id: '11', name: 'Cup Holders', leaf: true, childCount: 0 }]);
   await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { categoryId: '10' }), /final category/);
 });
+
+test('updateDraft renames an option and an axis everywhere they appear', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      commonTitle: 't',
+      commonDescription: 'd',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: ['Color'], specifications: [{ name: 'Color', values: ['Blk', 'Red'] }] },
+      variants: [
+        { aspects: { Color: ['Blk'] }, imageUrls: ['https://i.ebayimg.com/b.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Color: ['Red'] }, imageUrls: ['https://i.ebayimg.com/r.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  const updateMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  await listingService.updateDraft('listing-1', USER_ID, {
+    renameAxisValues: [{ axis: 'Color', from: 'Blk', to: 'Black' }],
+    renameAxes: [{ from: 'Color', to: 'Colour' }],
+  });
+
+  const saved = updateMock.mock.calls[0].arguments[1];
+  assert.deepStrictEqual(saved.variants.map((v) => v.aspects), [{ Colour: ['Black'] }, { Colour: ['Red'] }]);
+  assert.deepStrictEqual(saved.variesBy.specifications, [{ name: 'Colour', values: ['Black', 'Red'] }]);
+  assert.deepStrictEqual(saved.variesBy.aspectsImageVariesBy, ['Colour']);
+});
+
+test('updateDraft refuses to rename an option onto one that already exists', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      imageUrls: [],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Colour', values: ['Black', 'Red'] }] },
+      variants: [
+        { aspects: { Colour: ['Black'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Colour: ['Red'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  await assert.rejects(
+    () => listingService.updateDraft('listing-1', USER_ID, { renameAxisValues: [{ axis: 'Colour', from: 'Red', to: 'Black' }] }),
+    /already an option/
+  );
+});

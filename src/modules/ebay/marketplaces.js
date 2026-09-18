@@ -40,7 +40,55 @@ function currencyFor(marketplaceId) {
 // What the frontend shows: enough to tag a connection and label prices.
 function summary(marketplaceId) {
   const m = byId(marketplaceId) || byId(DEFAULT_ID);
-  return { id: m.id, label: m.label, name: m.name, flag: m.flag, currency: m.currency, country: m.country, countryName: m.countryName, itemHost: m.itemHost };
+  const copy = templateCopy(m.id);
+  return {
+    id: m.id,
+    label: m.label,
+    name: m.name,
+    flag: m.flag,
+    currency: m.currency,
+    country: m.country,
+    countryName: m.countryName,
+    itemHost: m.itemHost,
+    // The market's wording for the description template, so the Settings
+    // page can show the right defaults before anything is saved.
+    template: { tagline: copy.tagline, warehouse: copy.warehouse, carrier: copy.carrier, region: copy.region, postageWord: copy.postageWord },
+  };
 }
 
-module.exports = { MARKETPLACES, DEFAULT_ID, byId, fromSite, fromCountry, siteIdFor, currencyFor, summary };
+// The wording a store's description template uses for its own market:
+// where it's based, who delivers, what postage is called. A US account must
+// never publish "UK Based · Royal Mail".
+const TEMPLATE_COPY = {
+  EBAY_GB: { region: 'UK', carrier: 'Royal Mail / Evri', postage: 'P&P', business: 'UK Business' },
+  EBAY_US: { region: 'US', carrier: 'USPS / UPS', postage: 'Shipping', business: 'US Business' },
+  EBAY_AU: { region: 'Australian', carrier: 'Australia Post / Aramex', postage: 'Shipping', business: 'Australian Business' },
+  EBAY_CA: { region: 'Canadian', carrier: 'Canada Post / UPS', postage: 'Shipping', business: 'Canadian Business' },
+  EBAY_DE: { region: 'German', carrier: 'DHL / Hermes', postage: 'Shipping', business: 'German Business' },
+  EBAY_FR: { region: 'French', carrier: 'Colissimo / Chronopost', postage: 'Shipping', business: 'French Business' },
+  EBAY_IT: { region: 'Italian', carrier: 'Poste Italiane / BRT', postage: 'Shipping', business: 'Italian Business' },
+  EBAY_ES: { region: 'Spanish', carrier: 'Correos / SEUR', postage: 'Shipping', business: 'Spanish Business' },
+  EBAY_IE: { region: 'Irish', carrier: 'An Post / DPD', postage: 'Shipping', business: 'Irish Business' },
+};
+
+function templateCopy(marketplaceId) {
+  const m = byId(marketplaceId) || byId(DEFAULT_ID);
+  const copy = TEMPLATE_COPY[m.id] || TEMPLATE_COPY[DEFAULT_ID];
+  return {
+    marketplaceId: m.id,
+    flag: m.flag,
+    countryName: m.countryName,
+    region: copy.region,
+    carrier: copy.carrier,
+    postageWord: copy.postage,
+    business: copy.business,
+    tagline: `Official ${copy.region} Store`,
+    warehouse: `From our ${copy.region} warehouse`,
+    based: `${copy.region} Based`,
+    stock: `${copy.region} Stock`,
+    orders: `All ${copy.region} orders`,
+    addresses: `All ${copy.region} addresses`,
+  };
+}
+
+module.exports = { MARKETPLACES, DEFAULT_ID, byId, fromSite, fromCountry, siteIdFor, currencyFor, summary, templateCopy };

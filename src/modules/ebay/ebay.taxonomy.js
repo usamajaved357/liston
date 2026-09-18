@@ -97,6 +97,9 @@ function summarizeAspects(aspects) {
       // FREE_TEXT means anything reasonable is allowed.
       selectionOnly: constraint.aspectMode === 'SELECTION',
       multiValue: constraint.itemToAspectCardinality === 'MULTI',
+      // Whether eBay lets this aspect be the thing buyers choose between
+      // (Colour, Size…) — the names a variation axis should use.
+      variation: Boolean(constraint.aspectEnabledForVariations),
       allowedValues: values.slice(0, MAX_VALUES_IN_PROMPT),
       hasMoreValues: values.length > MAX_VALUES_IN_PROMPT,
     };

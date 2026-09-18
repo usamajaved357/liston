@@ -5,6 +5,8 @@ const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
 const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const descriptionTemplate = require('../listings/description-template');
+const listingService = require('../listings/listing.service');
 const accountEvents = require('../ebay/account-events');
 
 const startEbayAuthSchema = z.object({
@@ -363,7 +365,68 @@ const updateTemplateSchema = z.object({
     .array(z.object({ stars: z.coerce.number().min(1).max(5).default(5), text: z.string().max(400), buyer: z.string().max(60).default(''), date: z.string().max(30).default('') }))
     .max(3)
     .default([]),
+  // The seller's own layout, or empty for Liston's. eBay's description
+  // limit is 500,000 characters; scripts and iframes are refused by eBay
+  // itself, but there's no reason to store them either.
+  customHtml: z
+    .string()
+    .max(200000, 'Template code is limited to 200,000 characters')
+    .refine((html) => !/<\s*(script|iframe|object|embed)\b/i.test(html), 'eBay does not allow scripts, iframes or embeds in descriptions')
+    .default(''),
 });
+
+const SAMPLE_PRODUCT = {
+  productName: 'Sample Product Title — This Is How Your Listing Will Look',
+  description:
+    'This is where the drafted description goes.\n\nFEATURES\n- Durable, well made and ready to ship\n- Exactly what buyers searched for\n- Packed with care\n\nSPECIFICATIONS\n- Colour: Black\n- Material: Steel',
+  condition: 'NEW',
+};
+
+// The built-in layout as editable HTML with {{placeholders}}.
+async function templateSource(req, res, next) {
+  try {
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+    const html = descriptionTemplate.renderTemplateSource({
+      template: connection.settings?.template || {},
+      marketplaceId: connection.settings?.ebay?.marketplaceId,
+    });
+    res.status(200).json({ html, placeholders: descriptionTemplate.PLACEHOLDERS });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Renders the template as it would publish, with a sample product and the
+// account's real live listings, for the Theme tab's preview. Takes the
+// unsaved template in the body so edits preview before Save.
+async function templatePreview(req, res, next) {
+  try {
+    const parsed = updateTemplateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+    const html = await listingService.renderTemplatePreview(req.params.id, req.ownerId, parsed.data, SAMPLE_PRODUCT);
+    res.status(200).json({ html });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// The best five positive reviews buyers left this seller on eBay.
+async function storeReviews(req, res, next) {
+  try {
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Reviews aren't available for ${connection.platform_name} yet`, 400);
+      }
+      return ebayService.getBestReviews(credentials, req.params.id, { refresh: req.query.refresh === '1' });
+    });
+    res.status(200).json({ reviews: result.reviews });
+  } catch (err) {
+    if (err.statusCode === 429) return res.status(200).json({ reviews: [], unavailable: err.message });
+    next(err);
+  }
+}
 
 // What eBay knows about this store — name, logo, feedback — so the
 // template can be filled from the source of truth instead of typed.
@@ -373,7 +436,7 @@ async function getStoreProfile(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Store profiles aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.getStoreProfile(credentials);
+      return ebayService.getStoreProfile(credentials, req.params.id, { refresh: req.query.refresh === '1' });
     });
     const { credentials, credentialsChanged, ...safe } = profile;
     res.status(200).json(safe);
@@ -389,7 +452,7 @@ async function logoPalette(req, res, next) {
     const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
     let logoUrl = url;
     if (!logoUrl) {
-      const profile = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) => ebayService.getStoreProfile(credentials));
+      const profile = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) => ebayService.getStoreProfile(credentials, req.params.id));
       logoUrl = profile.logoUrl || '';
     }
     if (!/^https?:\/\//i.test(logoUrl)) {
@@ -528,6 +591,9 @@ module.exports = {
   updateTemplate,
   logoPalette,
   getStoreProfile,
+  templateSource,
+  templatePreview,
+  storeReviews,
   refresh,
   events,
   searchCategories,

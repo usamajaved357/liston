@@ -237,3 +237,39 @@ test('refitContentForCategory drops the variation axes from the shared specifics
   assert.deepStrictEqual(result.aspects, { Type: ['Cup Holder'] });
   assert.strictEqual(result.title.length, 75);
 });
+
+test('generateListingContent tells the model to name variations the way the competitor does', async () => {
+  config.anthropicApiKey = 'test-key';
+  delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+  let prompt;
+  mock.method(messagesProto, 'create', async (args) => {
+    if (!prompt) prompt = args.messages[0].content;
+    return toolResultResponse({
+      commonTitle: 'x'.repeat(72),
+      commonDescription: 'd',
+      condition: 'NEW',
+      sharedAspects: {},
+      varyingAspectName: 'Colour',
+      variantAspectValues: { blk: 'Midnight Black' },
+    });
+  });
+
+  await textGenerator.generateListingContent({
+    competitor: {
+      title: 'Comp',
+      specifics: {},
+      categoryBreadcrumb: [],
+      variants: [{ attributes: { Colour: 'Midnight Black' } }, { attributes: { Colour: 'Arctic White' } }],
+    },
+    source: { title: 'Src', specifics: {}, categoryBreadcrumb: [], variants: [{ attributes: { Color: 'blk' } }, { attributes: { Color: 'wht' } }] },
+    costPrice: 1,
+    sellPrice: 2,
+    currency: 'GBP',
+    aspectSchema: [{ name: 'Colour', required: false, selectionOnly: false, multiValue: false, variation: true, allowedValues: [], hasMoreValues: false }],
+  });
+
+  assert.match(prompt, /competitor's listing offers "Colour" \(Midnight Black, Arctic White\)/);
+  assert.match(prompt, /MUST be one of eBay's variation-enabled aspects for this category: Colour/);
+});

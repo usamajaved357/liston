@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ConnectionPolicies, DescriptionTemplate, EbaySettings, LocationAddress, Policy, PricingSettings } from "@/lib/api";
+import { api, ApiError, ConnectionPolicies, DescriptionTemplate, EbaySettings, LocationAddress, Marketplace, Policy, PricingSettings, StoreReview } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { currencySymbol } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -41,7 +41,24 @@ const DEFAULT_TEMPLATE: DescriptionTemplate = {
   recommendedCount: 12,
   responseTime: "24 hours",
   reviews: [],
+  customHtml: "",
 };
+
+// The template's market-specific defaults (tagline, warehouse, carrier)
+// come from the account's own eBay site. A value saved before defaults were
+// per market that still reads as the UK default is treated as unset on a
+// non-UK account, matching the server.
+function templateForMarket(saved: Partial<DescriptionTemplate> | undefined, marketplace: Marketplace | null | undefined): DescriptionTemplate {
+  const m = marketplace?.template;
+  const local = m ? { tagline: m.tagline, dispatchNote: m.warehouse, carrier: m.carrier } : {};
+  const cleaned: Partial<DescriptionTemplate> = { ...(saved || {}) };
+  if (marketplace && marketplace.id !== "EBAY_GB") {
+    (["tagline", "dispatchNote", "carrier"] as const).forEach((key) => {
+      if (cleaned[key] === DEFAULT_TEMPLATE[key]) delete cleaned[key];
+    });
+  }
+  return { ...DEFAULT_TEMPLATE, ...local, ...cleaned };
+}
 
 // Curated pairs that always read well on eBay, shown under the ones taken
 // from the logo.
@@ -76,19 +93,6 @@ function SectionHead({ title, blurb, action }: { title: string; blurb: string; a
         <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">{blurb}</p>
       </div>
       {action}
-    </div>
-  );
-}
-
-function SaveBar({ saving, saved, error, onSave, disabled, label = "Save changes" }: { saving: boolean; saved: boolean; error: string | null; onSave: () => void; disabled?: boolean; label?: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 bg-[var(--color-paper)] px-6 py-3.5">
-      <span className={`text-[12.5px] ${error ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>
-        {error ? error : saved ? "Saved" : "Changes apply to every listing published from now on."}
-      </span>
-      <button type="button" onClick={onSave} disabled={saving || disabled} className="btn btn-primary btn-sm">
-        {saving ? "Saving…" : label}
-      </button>
     </div>
   );
 }
@@ -147,47 +151,6 @@ function previewPrice(cost: number, p: PricingSettings) {
 
 // A miniature of the template header, so a colour choice is seen before
 // it's saved.
-function TemplatePreview({ t }: { t: DescriptionTemplate }) {
-  return (
-    <div className="overflow-hidden rounded-xl border border-[var(--color-line)]">
-      <div className="flex items-center justify-between px-4 py-3" style={{ background: t.darkColor }}>
-        <div className="flex items-center gap-2.5">
-          {t.logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={t.logoUrl} alt="" className="h-7 w-7 rounded-md bg-white object-contain" />
-          ) : (
-            <span className="flex h-7 w-7 items-center justify-center rounded-md text-xs font-bold text-white" style={{ background: t.accentColor }}>
-              {(t.storeName || "S").slice(0, 1).toUpperCase()}
-            </span>
-          )}
-          <div>
-            <p className="text-[13px] font-bold leading-tight text-white">{t.storeName || "Your store"}</p>
-            <p className="text-[9.5px] uppercase tracking-wider text-white/70">{t.tagline || "Tagline"}</p>
-          </div>
-        </div>
-        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold text-white" style={{ background: t.accentColor }}>
-          {t.freePostage ? "Free P&P" : "Tracked P&P"}
-        </span>
-      </div>
-      <div className="flex gap-3 px-4 py-1.5 text-[9.5px] font-semibold uppercase tracking-wider text-white" style={{ background: t.accentColor }}>
-        <span>UK based</span>
-        <span>Fast dispatch</span>
-        {t.returnsDays > 0 && <span>{t.returnsDays}-day returns</span>}
-      </div>
-      <div className="bg-white px-4 py-3">
-        <p className="text-[13px] font-bold text-[#1C1C28]">Product name goes here</p>
-        <div className="mt-1.5 flex gap-1.5">
-          <span className="rounded-full px-2 py-0.5 text-[9.5px] font-semibold text-white" style={{ background: t.accentColor }}>
-            New
-          </span>
-          <span className="rounded-full border px-2 py-0.5 text-[9.5px] font-semibold" style={{ borderColor: t.accentColor, color: t.accentColor }}>
-            UK Stock
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function PaletteRow({ name, accent, dark, active, onPick }: { name: string; accent: string; dark: string; active: boolean; onPick: () => void }) {
   return (
@@ -262,6 +225,13 @@ export default function AccountSettingsPage() {
   const [fetchingProfile, setFetchingProfile] = useState(false);
   const [logoPalettes, setLogoPalettes] = useState<{ name: string; accentColor: string; darkColor: string }[]>([]);
   const [paletteState, setPaletteState] = useState<"idle" | "loading" | "none">("idle");
+  // The real rendered template over a sample product, kept in step with
+  // the unsaved edits; and the code editor for the seller's own layout.
+  const [preview, setPreview] = useState<{ html: string; key: string } | null>(null);
+  const [editingCode, setEditingCode] = useState(false);
+  const [codeDraft, setCodeDraft] = useState<string | null>(null);
+  const [placeholders, setPlaceholders] = useState<[string, string][]>([]);
+  const [ebayReviews, setEbayReviews] = useState<{ list: StoreReview[]; note: string | null } | null>(null);
 
   async function handleFillFromEbay() {
     if (!connection) return;
@@ -303,7 +273,7 @@ export default function AccountSettingsPage() {
       return;
     }
     setPricing({ ...DEFAULT_PRICING, ...(connection.marketplace ? { currency: connection.marketplace.currency } : {}), ...(connection.settings?.pricing || {}) });
-    setTemplate({ ...DEFAULT_TEMPLATE, storeName: connection.label, ...(connection.settings?.template || {}) });
+    setTemplate({ ...templateForMarket(connection.settings?.template, connection.marketplace), storeName: connection.settings?.template?.storeName || connection.label });
 
     api
       .getConnectionPolicies(connection.id)
@@ -399,6 +369,72 @@ export default function AccountSettingsPage() {
     }
   }
 
+  // Preview follows the unsaved template, debounced so typing doesn't
+  // render on every keystroke.
+  const templateKey = JSON.stringify(template);
+  useEffect(() => {
+    if (!connection || tab !== "template" || connection.platform_key !== "ebay") return;
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      api
+        .previewTemplate(connection.id, template)
+        .then((data) => {
+          if (!cancelled) setPreview({ html: data.html, key: templateKey });
+        })
+        .catch(() => {});
+    }, 600);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection, tab, templateKey]);
+
+  useEffect(() => {
+    if (!connection || tab !== "template" || ebayReviews !== null || connection.platform_key !== "ebay") return;
+    let cancelled = false;
+    api
+      .getStoreReviews(connection.id)
+      .then((data) => {
+        if (!cancelled) setEbayReviews({ list: data.reviews, note: data.unavailable || null });
+      })
+      .catch(() => {
+        if (!cancelled) setEbayReviews({ list: [], note: "Couldn't read your eBay feedback." });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, tab, ebayReviews]);
+
+  async function openCodeEditor() {
+    if (!connection) return;
+    if (template.customHtml) {
+      setCodeDraft(template.customHtml);
+    } else {
+      try {
+        const data = await api.getTemplateSource(connection.id);
+        setCodeDraft(data.html);
+        setPlaceholders(data.placeholders);
+      } catch {
+        setTemplateError("Couldn't load the template code.");
+        return;
+      }
+    }
+    if (!placeholders.length) {
+      api.getTemplateSource(connection.id).then((data) => setPlaceholders(data.placeholders)).catch(() => {});
+    }
+    setEditingCode(true);
+  }
+
+  function toggleEbayReview(review: StoreReview) {
+    const present = template.reviews.some((r) => r.text === review.text && r.buyer === review.buyer);
+    if (present) {
+      setT({ reviews: template.reviews.filter((r) => !(r.text === review.text && r.buyer === review.buyer)) });
+    } else if (template.reviews.length < 3) {
+      setT({ reviews: [...template.reviews, { stars: review.stars, text: review.text, buyer: review.buyer, date: review.date }] });
+    }
+  }
+
   async function handleSaveTemplate() {
     if (!connection) return;
     setSavingTemplate(true);
@@ -453,11 +489,41 @@ export default function AccountSettingsPage() {
       permissions={connection.permissions}
       user={user}
       header={
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Settings</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            {connection.label} · {connection.platform_name}
-          </p>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Settings</h1>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+              {connection.label} · {connection.platform_name}
+            </p>
+          </div>
+          {connection.platform_key === "ebay" && !loading && (
+            <div className="flex items-center gap-3">
+              {tab === "policies" && (
+                <>
+                  <span className={`text-[12.5px] ${error ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>{error || (saved ? "Saved" : "")}</span>
+                  <button type="button" onClick={handleSave} disabled={saving || !canSavePolicies} className="btn btn-primary btn-sm">
+                    {saving ? "Saving…" : "Save policies"}
+                  </button>
+                </>
+              )}
+              {tab === "pricing" && (
+                <>
+                  <span className={`text-[12.5px] ${pricingError ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>{pricingError || (pricingSaved ? "Saved" : "")}</span>
+                  <button type="button" onClick={handleSavePricing} disabled={savingPricing} className="btn btn-primary btn-sm">
+                    {savingPricing ? "Saving…" : "Save pricing"}
+                  </button>
+                </>
+              )}
+              {tab === "template" && (
+                <>
+                  <span className={`text-[12.5px] ${templateError ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>{templateError || (templateSaved ? "Saved" : "")}</span>
+                  <button type="button" onClick={handleSaveTemplate} disabled={savingTemplate} className="btn btn-primary btn-sm">
+                    {savingTemplate ? "Saving…" : "Save template"}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       }
     >
@@ -560,7 +626,6 @@ export default function AccountSettingsPage() {
                     </button>
                   )}
                 </Row>
-                <SaveBar saving={saving} saved={saved} error={error} onSave={handleSave} disabled={!canSavePolicies} label="Save policies" />
               </div>
             ))}
 
@@ -615,7 +680,6 @@ export default function AccountSettingsPage() {
                   })}
                 </div>
               </div>
-              <SaveBar saving={savingPricing} saved={pricingSaved} error={pricingError} onSave={handleSavePricing} label="Save pricing" />
             </div>
           )}
 
@@ -652,7 +716,7 @@ export default function AccountSettingsPage() {
 
               <div className="card overflow-hidden">
                 <SectionHead title="Colours" blurb="Accent for buttons and badges, header for the top bar. Pick a pair or set your own." />
-                <div className="grid gap-6 px-6 py-5 md:grid-cols-[minmax(0,1fr)_280px]">
+                <div className="px-6 py-5">
                   <div className="space-y-4">
                     <div>
                       <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Suggested from your logo</p>
@@ -689,10 +753,70 @@ export default function AccountSettingsPage() {
                       </label>
                     </div>
                   </div>
-                  <div>
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Preview</p>
-                    <TemplatePreview t={template} />
+                </div>
+              </div>
+
+              <div className="card overflow-hidden">
+                <SectionHead
+                  title="Your template"
+                  blurb={
+                    template.customHtml
+                      ? "Your own layout, rendered over a sample product with this account's real listings."
+                      : "Liston's layout, rendered over a sample product with this account's real listings. Edit the code to make it your own."
+                  }
+                  action={
+                    <div className="flex flex-shrink-0 gap-2">
+                      {template.customHtml && (
+                        <button type="button" onClick={() => { setT({ customHtml: "" }); setEditingCode(false); setCodeDraft(null); }} className="btn btn-secondary btn-sm">
+                          Use built-in layout
+                        </button>
+                      )}
+                      <button type="button" onClick={() => (editingCode ? setEditingCode(false) : openCodeEditor())} className="btn btn-secondary btn-sm">
+                        {editingCode ? "Hide code" : "Edit code"}
+                      </button>
+                    </div>
+                  }
+                />
+                {editingCode && codeDraft !== null && (
+                  <div className="border-b border-[var(--color-line)] px-6 py-4">
+                    <textarea
+                      className="input min-h-[22rem] w-full font-mono text-[12px] leading-relaxed"
+                      spellCheck={false}
+                      value={codeDraft}
+                      onChange={(e) => setCodeDraft(e.target.value)}
+                    />
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-[12px] text-[var(--color-muted)]">
+                        Placeholders are filled per listing:{" "}
+                        {placeholders.map(([name, hint]) => (
+                          <code key={name} title={hint} className="mr-1 rounded bg-[var(--color-paper)] px-1 py-0.5 text-[11px]">
+                            {`{{${name}}}`}
+                          </code>
+                        ))}
+                      </p>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={() => setEditingCode(false)} className="btn btn-ghost btn-sm">
+                          Cancel
+                        </button>
+                        <button type="button" onClick={() => { setT({ customHtml: codeDraft }); setEditingCode(false); }} className="btn btn-primary btn-sm">
+                          Apply to preview
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[12px] text-[var(--color-muted)]">Applied code shows in the preview below; press Save template to keep it. eBay doesn&apos;t allow scripts or iframes.</p>
                   </div>
+                )}
+                <div className="bg-[var(--color-paper)] p-3">
+                  {preview ? (
+                    <iframe
+                      title="Template preview"
+                      sandbox=""
+                      srcDoc={preview.html}
+                      className={`h-[36rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${preview.key !== templateKey ? "opacity-60" : ""}`}
+                    />
+                  ) : (
+                    <div className="h-[36rem] animate-pulse rounded-xl bg-[var(--color-line)]/60" />
+                  )}
                 </div>
               </div>
 
@@ -701,16 +825,16 @@ export default function AccountSettingsPage() {
                 <Row title="Dispatch" hint="How fast, and from where.">
                   <div className="grid gap-2 sm:grid-cols-2">
                     <input className="input input-sm" placeholder="1 to 2 business days" value={template.dispatchTime} onChange={(e) => setT({ dispatchTime: e.target.value })} />
-                    <input className="input input-sm" placeholder="From our UK warehouse" value={template.dispatchNote} onChange={(e) => setT({ dispatchNote: e.target.value })} />
+                    <input className="input input-sm" placeholder={connection.marketplace?.template?.warehouse || "From our UK warehouse"} value={template.dispatchNote} onChange={(e) => setT({ dispatchNote: e.target.value })} />
                   </div>
                 </Row>
                 <Row title="Delivery" hint="Carrier and typical delivery time.">
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <input className="input input-sm" placeholder="Royal Mail / Evri" value={template.carrier} onChange={(e) => setT({ carrier: e.target.value })} />
+                    <input className="input input-sm" placeholder={connection.marketplace?.template?.carrier || "Royal Mail / Evri"} value={template.carrier} onChange={(e) => setT({ carrier: e.target.value })} />
                     <input className="input input-sm" placeholder="2 to 4 business days" value={template.deliveryTime} onChange={(e) => setT({ deliveryTime: e.target.value })} />
                   </div>
                 </Row>
-                <Row title="Free P&P on UK orders" hint="Off shows a Tracked P&P badge instead.">
+                <Row title={`Free ${connection.marketplace?.template?.postageWord || "P&P"} on ${connection.marketplace?.template?.region || "UK"} orders`} hint={`Off shows a Tracked ${connection.marketplace?.template?.postageWord || "P&P"} badge instead.`}>
                   <Switch on={template.freePostage} onChange={(v) => setT({ freePostage: v })} label="Free postage" />
                 </Row>
                 <Row title="Returns window" hint="0 hides the returns section.">
@@ -731,7 +855,7 @@ export default function AccountSettingsPage() {
               <div className="card overflow-hidden">
                 <SectionHead
                   title="Customer reviews"
-                  blurb="Up to three, copied from your eBay feedback. Left out when empty. Invented reviews get listings removed."
+                  blurb="Up to three, taken from the feedback buyers left you on eBay. Left out when empty. Invented reviews get listings removed."
                   action={
                     template.reviews.length < 3 ? (
                       <button type="button" onClick={() => setT({ reviews: [...template.reviews, { stars: 5, text: "", buyer: "", date: "" }] })} className="btn btn-secondary btn-sm flex-shrink-0">
@@ -740,8 +864,52 @@ export default function AccountSettingsPage() {
                     ) : undefined
                   }
                 />
+                <div className="border-b border-[var(--color-line)] px-6 py-4">
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Best reviews on your eBay account</p>
+                    <button
+                      type="button"
+                      onClick={() => { setEbayReviews(null); api.getStoreReviews(connection.id, true).then((d) => setEbayReviews({ list: d.reviews, note: d.unavailable || null })).catch(() => setEbayReviews({ list: [], note: "Couldn't read your eBay feedback." })); }}
+                      className="text-[12px] font-semibold text-[var(--color-primary)] hover:underline"
+                    >
+                      Re-read from eBay
+                    </button>
+                  </div>
+                  {ebayReviews === null ? (
+                    <div className="mt-3 h-16 animate-pulse rounded-xl bg-[var(--color-paper)]" />
+                  ) : ebayReviews.list.length === 0 ? (
+                    <p className="mt-2 text-[13px] text-[var(--color-muted)]">{ebayReviews.note || "No written positive feedback found on this account yet."}</p>
+                  ) : (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {ebayReviews.list.map((review) => {
+                        const used = template.reviews.some((r) => r.text === review.text && r.buyer === review.buyer);
+                        const full = !used && template.reviews.length >= 3;
+                        return (
+                          <button
+                            key={`${review.buyer}-${review.text.slice(0, 20)}`}
+                            type="button"
+                            onClick={() => toggleEbayReview(review)}
+                            disabled={full}
+                            className={`rounded-2xl border px-4 py-3 text-left transition-colors ${
+                              used ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)]" : "border-[var(--color-line)] hover:border-[var(--color-primary)]"
+                            } disabled:opacity-50`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-[12px] tracking-wide text-amber-500">{"★".repeat(review.stars)}</span>
+                              <span className={`text-[11px] font-semibold ${used ? "text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`}>{used ? "In template" : "Use"}</span>
+                            </div>
+                            <p className="mt-1 text-[13px] leading-snug text-[var(--color-ink)]">&ldquo;{review.text}&rdquo;</p>
+                            <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
+                              {review.buyer}{review.date ? ` · ${review.date}` : ""}{review.itemTitle ? ` · ${review.itemTitle.slice(0, 40)}` : ""}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 {template.reviews.length === 0 ? (
-                  <p className="px-6 py-5 text-[13px] text-[var(--color-muted)]">No reviews added.</p>
+                  <p className="px-6 py-5 text-[13px] text-[var(--color-muted)]">No reviews in the template yet. Pick from the ones above, or add one by hand.</p>
                 ) : (
                   <div className="divide-y divide-[var(--color-line)]">
                     {template.reviews.map((review, i) => (
@@ -760,9 +928,6 @@ export default function AccountSettingsPage() {
                 )}
               </div>
 
-              <div className="card overflow-hidden">
-                <SaveBar saving={savingTemplate} saved={templateSaved} error={templateError} onSave={handleSaveTemplate} label="Save template" />
-              </div>
             </div>
           )}
         </div>

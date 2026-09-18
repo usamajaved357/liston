@@ -75,6 +75,7 @@ test('summarizeAspects condenses eBay metadata into the prompt/validation shape'
     required: true,
     selectionOnly: false,
     multiValue: false,
+    variation: false,
     allowedValues: [],
     hasMoreValues: false,
   });

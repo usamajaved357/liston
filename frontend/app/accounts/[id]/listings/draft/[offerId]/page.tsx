@@ -528,6 +528,122 @@ function GalleryGrid({
 // which is what sellers already know how to read.
 
 type AxisRemoval = { axis: string; value: string };
+type Renames = Record<string, Record<string, string>>; // axis -> original value -> new name
+
+// A label that turns into an input on click: how variation names and
+// option names are edited in place, without a form.
+function InlineName({
+  value,
+  onChange,
+  disabled,
+  className,
+  maxLength = 50,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+  className?: string;
+  maxLength?: number;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  if (editing && !disabled) {
+    return (
+      <input
+        autoFocus
+        className="h-6 min-w-[6rem] rounded-md border border-[var(--color-primary)] bg-[var(--color-panel)] px-1.5 text-[13px] text-[var(--color-ink)] focus:outline-none"
+        value={draft}
+        maxLength={maxLength}
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          if (draft.trim() && draft.trim() !== value) onChange(draft.trim());
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={disabled ? undefined : "Click to rename"}
+      onClick={() => {
+        setDraft(value);
+        setEditing(true);
+      }}
+      className={`group/name inline-flex items-center gap-1 rounded-md text-left ${disabled ? "" : "hover:bg-[var(--color-primary-soft)]"} ${className || ""}`}
+    >
+      <span>{value}</span>
+      {!disabled && (
+        <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 opacity-0 transition-opacity group-hover/name:opacity-70">
+          <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+// Choose a variation's photo from everything the draft already has (the
+// gallery and every other variation's photo), or upload a new one.
+function ImagePickerDialog({
+  title,
+  images,
+  current,
+  onPick,
+  onUpload,
+  onClose,
+}: {
+  title: string;
+  images: string[];
+  current: string | null;
+  onPick: (url: string) => void;
+  onUpload: (file: File) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-[var(--color-ink)]">{title}</h2>
+            <p className="text-xs text-[var(--color-muted)]">Pick one of the draft&apos;s photos, or upload a new one for this variation.</p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <FileButton label="Upload" onFiles={(f) => f[0] && onUpload(f[0])} className="btn btn-secondary btn-sm" />
+            <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+              Close
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 grid max-h-[60vh] grid-cols-3 gap-2 overflow-y-auto pr-1 sm:grid-cols-4 md:grid-cols-5">
+          {images.map((url, i) => (
+            <button
+              key={url}
+              type="button"
+              onClick={() => onPick(url)}
+              className={`relative aspect-square overflow-hidden rounded-xl border-2 bg-white transition-colors ${
+                url === current ? "border-[var(--color-primary)]" : "border-[var(--color-line)] hover:border-[var(--color-primary)]"
+              }`}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt="" className="h-full w-full object-contain" />
+              <span className="absolute left-1.5 top-1.5 rounded-full bg-black/60 px-1.5 text-[10px] font-semibold text-white">{i + 1}</span>
+              {url === current && <span className="absolute bottom-1.5 right-1.5 rounded-full bg-[var(--color-primary)] px-1.5 text-[10px] font-semibold text-white">Current</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function VariationsTable({
   variants,
@@ -553,8 +669,16 @@ function VariationsTable({
   splitting,
   splitDone,
   accountId,
+  valueRenames,
+  axisRenames,
+  onRenameValue,
+  onRenameAxis,
 }: {
   variants: VariationDraftVariant[];
+  valueRenames: Renames;
+  axisRenames: Record<string, string>;
+  onRenameValue: (axis: string, from: string, to: string) => void;
+  onRenameAxis: (from: string, to: string) => void;
   variationsSupported: boolean | null;
   onSplit?: (index: number) => void;
   splitting: number | null;
@@ -580,6 +704,13 @@ function VariationsTable({
 }) {
   const [bulkPrice, setBulkPrice] = useState("");
   const [bulkQty, setBulkQty] = useState("");
+  const [pickerFor, setPickerFor] = useState<number | null>(null);
+  // Names as the seller has renamed them (unsaved), falling back to the draft's.
+  const showAxis = (axis: string) => axisRenames[axis] || axis;
+  const showValue = (axis: string, value: string) => valueRenames[axis]?.[value] || value;
+  // Every photo the draft has, for the picker: gallery first, then each
+  // variation's own.
+  const allImages = [...new Set([...galleryImages, ...variants.flatMap((v) => v.imageUrls || []), ...Object.values(imageOverrides)])];
   // Which row's price working is open — the ROI figure is a button.
   // Rendered position: fixed, so the table's own scroll container can't
   // clip it.
@@ -652,7 +783,9 @@ function VariationsTable({
       <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {specifications.map((spec) => (
           <div key={spec.name} className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-paper)] px-3.5 py-3">
-            <p className={labelClass}>{spec.name}</p>
+            <div className={labelClass}>
+              <InlineName value={showAxis(spec.name)} onChange={(to) => onRenameAxis(spec.name, to)} disabled={disabled} maxLength={65} className="px-1 -ml-1" />
+            </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {spec.values.map((value) => {
                 const gone = axisRemoved(spec.name, value);
@@ -666,7 +799,11 @@ function VariationsTable({
                         : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)]"
                     }`}
                   >
-                    <span className={gone ? "line-through" : "font-medium"}>{value}</span>
+                    {gone ? (
+                      <span className="line-through">{showValue(spec.name, value)}</span>
+                    ) : (
+                      <InlineName value={showValue(spec.name, value)} onChange={(to) => onRenameValue(spec.name, value, to)} disabled={disabled} className="font-medium" />
+                    )}
                     <span className="rounded-full bg-[var(--color-paper)] px-1.5 text-[11px] font-semibold text-[var(--color-muted)]">{count}</span>
                     {!disabled && (
                       <button
@@ -698,7 +835,7 @@ function VariationsTable({
               <th className={`${cell} w-20`}>Photo</th>
               {axes.map((axis) => (
                 <th key={axis} className={cell}>
-                  {axis}
+                  {showAxis(axis)}
                 </th>
               ))}
               <th className={`${cell} w-36 text-center`}>Price ({currencySymbol(currency)})</th>
@@ -719,39 +856,34 @@ function VariationsTable({
                   className={`border-t border-[var(--color-line)] ${gone ? "bg-[var(--color-paper)]/60 text-[var(--color-muted)]" : "hover:bg-[var(--color-paper)]/40"}`}
                 >
                   <td className={cell}>
-                    <div className="group relative h-11 w-11">
+                    <button
+                      type="button"
+                      disabled={disabled || gone}
+                      onClick={() => setPickerFor(i)}
+                      title={disabled || gone ? undefined : "Change this variation's photo"}
+                      className="group relative block h-11 w-11 rounded-lg disabled:cursor-default"
+                    >
                       {image ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={image} alt="" className={`h-11 w-11 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
                       ) : (
-                        <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
+                        <span className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
                           none
-                        </div>
+                        </span>
                       )}
                       {!disabled && !gone && (
-                        <div className="absolute inset-0 hidden items-center justify-center gap-1 rounded-lg bg-black/55 group-hover:flex">
-                          <select
-                            aria-label="Choose photo from gallery"
-                            title="Pick from gallery"
-                            value={image && galleryImages.includes(image) ? image : ""}
-                            onChange={(e) => e.target.value && onImageChange(i, e.target.value)}
-                            className="h-6 w-6 cursor-pointer appearance-none rounded bg-white/90 text-center text-[11px] text-transparent"
-                          >
-                            <option value="">…</option>
-                            {galleryImages.map((url, gi) => (
-                              <option key={url} value={url} className="text-[var(--color-ink)]">
-                                Photo {gi + 1}{gi === 0 ? " (main)" : ""}
-                              </option>
-                            ))}
-                          </select>
-                          <FileButton label="↑" onFiles={(f) => onUploadImage(i, f[0])} className="flex h-6 w-6 items-center justify-center rounded bg-white/90 text-[11px] font-bold text-[var(--color-ink)]" title="Upload a photo for this variation" />
-                        </div>
+                        <span className="absolute inset-0 hidden items-center justify-center rounded-lg bg-black/55 text-white group-hover:flex">
+                          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                            <path d="M4 7h3l2-2h6l2 2h3v12H4V7z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                            <circle cx="12" cy="13" r="3.5" stroke="currentColor" strokeWidth="2" />
+                          </svg>
+                        </span>
                       )}
-                    </div>
+                    </button>
                   </td>
                   {axes.map((axis) => (
                     <td key={axis} className={`${cell} font-medium ${gone ? "line-through" : "text-[var(--color-ink)]"}`}>
-                      {v.aspects[axis]?.[0] ?? "—"}
+                      {v.aspects[axis]?.[0] !== undefined ? showValue(axis, v.aspects[axis][0]) : "—"}
                     </td>
                   ))}
                   <td className={`${cell} text-center`}>
@@ -863,6 +995,22 @@ function VariationsTable({
           </tbody>
         </table>
       </div>
+      {pickerFor !== null && variants[pickerFor] && (
+        <ImagePickerDialog
+          title={`Photo for ${axes.map((axis) => showValue(axis, variants[pickerFor].aspects[axis]?.[0] || "")).filter(Boolean).join(" · ") || `variation ${pickerFor + 1}`}`}
+          images={allImages}
+          current={imageOverrides[pickerFor] ?? variants[pickerFor].imageUrls[0] ?? null}
+          onPick={(url) => {
+            onImageChange(pickerFor, url);
+            setPickerFor(null);
+          }}
+          onUpload={(file) => {
+            onUploadImage(pickerFor, file);
+            setPickerFor(null);
+          }}
+          onClose={() => setPickerFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1149,6 +1297,9 @@ export default function DraftEditorPage() {
   const [selectedImage, setSelectedImage] = useState(0);
   const [removedRows, setRemovedRows] = useState<Set<number>>(new Set());
   const [removedAxisValues, setRemovedAxisValues] = useState<AxisRemoval[]>([]);
+  // Renamed option and attribute names, keyed by the draft's current names.
+  const [valueRenames, setValueRenames] = useState<Renames>({});
+  const [axisRenames, setAxisRenames] = useState<Record<string, string>>({});
   const [priceOverrides, setPriceOverrides] = useState<Record<number, string>>({});
   const [quantityOverrides, setQuantityOverrides] = useState<Record<number, string>>({});
   const [condition, setCondition] = useState("NEW");
@@ -1233,6 +1384,8 @@ export default function DraftEditorPage() {
     setSelectedImage(0);
     setRemovedRows(new Set());
     setRemovedAxisValues([]);
+    setValueRenames({});
+    setAxisRenames({});
     setPriceOverrides({});
     setQuantityOverrides({});
     setCondition((isVariationDraft(c) ? c.variants[0]?.condition : c.condition) || "NEW");
@@ -1339,11 +1492,13 @@ export default function DraftEditorPage() {
       Object.keys(priceOverrides).length > 0 ||
       Object.keys(quantityOverrides).length > 0 ||
       Object.keys(imageOverrides).length > 0 ||
+      Object.keys(valueRenames).length > 0 ||
+      Object.keys(axisRenames).length > 0 ||
       sku !== (content.sku || "") ||
       (secondaryCategoryId || null) !== (content.secondaryCategoryId || null) ||
       JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])
     );
-  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, sku, secondaryCategoryId, storeCategoryNames]);
+  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, valueRenames, axisRenames, sku, secondaryCategoryId, storeCategoryNames]);
 
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
@@ -1380,7 +1535,18 @@ export default function DraftEditorPage() {
     }
     if (Object.keys(variantChanges).length) patch.variants = variantChanges;
     if (removedRows.size) patch.variantSkusToRemove = [...removedRows].map(String);
-    if (removedAxisValues.length) patch.removeAxisValues = removedAxisValues;
+    // Renames are applied first on the server, so removals are expressed in
+    // the renamed names.
+    const renameAxisValues = Object.entries(valueRenames).flatMap(([axis, map]) => Object.entries(map).map(([from, to]) => ({ axis, from, to })));
+    const renameAxes = Object.entries(axisRenames).map(([from, to]) => ({ from, to }));
+    if (renameAxisValues.length) patch.renameAxisValues = renameAxisValues;
+    if (renameAxes.length) patch.renameAxes = renameAxes;
+    if (removedAxisValues.length) {
+      patch.removeAxisValues = removedAxisValues.map((r) => ({
+        axis: axisRenames[r.axis] || r.axis,
+        value: valueRenames[r.axis]?.[r.value] || r.value,
+      }));
+    }
     if (content && sku.trim() && sku.trim() !== (content.sku || "")) patch.sku = sku.trim();
     if (content && (secondaryCategoryId || null) !== (content.secondaryCategoryId || null)) patch.secondaryCategoryId = secondaryCategoryId;
     if (content && JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])) patch.storeCategoryNames = storeCategoryNames;
@@ -2113,6 +2279,10 @@ export default function DraftEditorPage() {
                 onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
                 onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
                 onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
+                valueRenames={valueRenames}
+                axisRenames={axisRenames}
+                onRenameValue={(axis, from, to) => setValueRenames((r) => ({ ...r, [axis]: { ...(r[axis] || {}), [from]: to } }))}
+                onRenameAxis={(from, to) => setAxisRenames((r) => ({ ...r, [from]: to }))}
                 variationsSupported={categoryInfo?.variationsSupported ?? null}
                 onSplit={editable ? handleSplit : undefined}
                 splitting={splitting}
