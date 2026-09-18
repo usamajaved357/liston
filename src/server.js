@@ -18,6 +18,13 @@ async function shutdown(signal) {
     logger.info('Shutdown complete');
     process.exit(0);
   });
+  // Long-lived streams (the live-update event streams pages keep open) never
+  // finish on their own, and server.close waits for them. End them now;
+  // browsers reconnect to the new process by themselves.
+  server.closeAllConnections();
+  // And never hang a deploy: whatever is still open after a few seconds is
+  // cut off.
+  setTimeout(() => process.exit(0), 5000).unref();
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));

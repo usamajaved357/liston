@@ -13,4 +13,8 @@ router.get('/oauth/callback', ebayController.oauthCallback);
 router.get('/account-deletion', ebayController.accountDeletionChallenge);
 router.post('/account-deletion', ebayController.accountDeletionNotification);
 
+// Public — eBay's Platform Notifications arrive here as SOAP XML. Verified
+// by signature when EBAY_DEV_ID is set; only ever triggers a re-read.
+router.post('/notifications', express.text({ type: '*/*', limit: '1mb' }), ebayController.platformNotification);
+
 module.exports = router;

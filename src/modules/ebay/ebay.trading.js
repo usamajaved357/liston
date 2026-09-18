@@ -218,11 +218,15 @@ const GET_ORDERS_FIELDS = [
 ];
 
 // createTimeFrom/createTimeTo are ISO 8601 strings; eBay caps this range at
-// 90 days per request.
-async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber = 1, entriesPerPage = 50, siteId } = {}) {
+// 90 days per request. Alternatively modTimeFrom/modTimeTo (≤30 days apart)
+// select orders CHANGED in the window, which is how a refresh picks up only
+// what moved since the last sync instead of re-reading 90 days.
+async function getOrders(accessToken, { createTimeFrom, createTimeTo, modTimeFrom, modTimeTo, pageNumber = 1, entriesPerPage = 50, siteId } = {}) {
+  const window = modTimeFrom
+    ? `<ModTimeFrom>${modTimeFrom}</ModTimeFrom><ModTimeTo>${modTimeTo}</ModTimeTo>`
+    : `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom><CreateTimeTo>${createTimeTo}</CreateTimeTo>`;
   const body =
-    `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom>` +
-    `<CreateTimeTo>${createTimeTo}</CreateTimeTo>` +
+    window +
     `<OrderStatus>All</OrderStatus>` +
     `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination>` +
     GET_ORDERS_FIELDS.map((f) => `<OutputSelector>${f}</OutputSelector>`).join('');
@@ -287,6 +291,12 @@ async function getStoreCategories(accessToken, { siteId } = {}) {
     children: toArray(node.ChildCategory).map(map),
   });
   return toArray(res?.Store?.CustomCategories?.CustomCategory).map(map);
+}
+
+// Subscribes the token's account to Platform Notifications (see
+// ebay.notifications.js for the events and the delivery URL).
+async function setNotificationPreferences(accessToken, bodyXml, { siteId } = {}) {
+  await tradingRequest(accessToken, 'SetNotificationPreferences', bodyXml, siteId);
 }
 
 // Trading's numeric condition ids <-> the Inventory API enum the drafts use.
@@ -438,6 +448,7 @@ module.exports = {
   EbayTradingError,
   getUserProfile,
   getStoreCategories,
+  setNotificationPreferences,
   CONDITION_IDS,
   getActiveListings,
   getUnsoldListings,

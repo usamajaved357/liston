@@ -19,8 +19,8 @@ async function getOverview(ownerId, viewer, { range = '7d' } = {}) {
       try {
         const result = await connectionService.withDecryptedCredentials(connection.id, ownerId, async (credentials) => {
           const [listings, earnings] = await Promise.all([
-            ebayService.countActiveListings(credentials, connection.id),
-            ebayService.getEarningsSummary(credentials, { connectionId: connection.id, range: effectiveRange }),
+            ebayService.countActiveListings(credentials, connection.id, { push: ebayService.pushEnabled(connection) }),
+            ebayService.getEarningsSummary(credentials, { connectionId: connection.id, range: effectiveRange, push: ebayService.pushEnabled(connection) }),
           ]);
           return {
             activeListings: listings.totalEntries || 0,

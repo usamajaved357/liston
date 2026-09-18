@@ -369,3 +369,88 @@ test('draftVariationListing puts shared aspects on the group and merged aspects 
   assert.strictEqual(group.description, '<p>html</p>', 'the group carries the branded HTML — it becomes the live description');
   assert.deepStrictEqual(items[0][1].product.aspects, { Type: ['Clothes Drying Rack'], Brand: ['Unbranded'], Colour: ['Silver'] });
 });
+
+// --- the mirror: incremental orders ------------------------------------------
+
+const mirror = require('../../src/modules/ebay/ebay-mirror.repository');
+
+test('a second orders read asks eBay only for orders modified since the last sync and merges them', async () => {
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'upsertOrders', async () => {});
+  mock.method(mirror, 'pruneOrdersBefore', async () => {});
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  mock.method(mirror, 'loadItemSummaries', async () => new Map());
+  mock.method(mirror, 'saveItemSummary', async () => {});
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+
+  const calls = [];
+  const original = makeOrder({ orderId: 'ORD-1', shippedTime: null });
+  const shipped = makeOrder({ orderId: 'ORD-1' }); // same order, now dispatched
+  const brandNew = makeOrder({ orderId: 'ORD-2', createdAt: new Date().toISOString(), paidTime: new Date().toISOString() });
+  mock.method(ebayTrading, 'getOrders', async (token, opts) => {
+    calls.push(opts);
+    if (opts.modTimeFrom) return { orders: [shipped, brandNew], totalEntries: 2, totalPages: 1 };
+    return { orders: [original], totalEntries: 1, totalPages: 1 };
+  });
+
+  const connectionId = 'test-conn-incremental';
+  const first = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId, range: '90d', status: 'all', search: '', page: 1, perPage: 25 });
+  assert.strictEqual(first.counts.awaiting_dispatch, 1);
+  assert.ok(calls[0].createTimeFrom, 'first read is a full 90-day window');
+
+  // Force the copy past its fresh window and read again: the refresh runs
+  // behind the (still served) copy, then the merged set is visible.
+  const svc = require('../../src/modules/ebay/ebay.service');
+  svc.markAccountStale(connectionId);
+  await ebayService.listOrdersDetailed(freshCredentials(), { connectionId, range: '90d', status: 'all', search: '', page: 1, perPage: 25 });
+  await new Promise((r) => setTimeout(r, 20));
+  const second = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId, range: '90d', status: 'all', search: '', page: 1, perPage: 25 });
+
+  const incremental = calls.find((c) => c.modTimeFrom);
+  assert.ok(incremental, 'refresh used a modified-since window');
+  assert.ok(!incremental.createTimeFrom);
+  assert.strictEqual(second.counts.all, 2);
+  assert.strictEqual(second.counts.awaiting_dispatch, 0);
+  assert.strictEqual(second.counts.dispatched, 2);
+});
+
+// --- targeted background sync ---------------------------------------------
+
+test('syncAccount re-reads only the requested kinds and coalesces a burst into one round', async () => {
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  mock.method(mirror, 'upsertOrders', async () => {});
+  mock.method(mirror, 'pruneOrdersBefore', async () => {});
+  const listingCalls = mock.method(ebayTrading, 'getActiveListings', async () => ({ items: [], totalEntries: 0, totalPages: 1 }));
+  mock.method(ebayTrading, 'getUnsoldListings', async () => ({ items: [], totalEntries: 0, totalPages: 1 }));
+  const orderCalls = mock.method(ebayTrading, 'getOrders', async () => ({ orders: [], totalEntries: 0, totalPages: 1 }));
+
+  const connectionId = 'test-conn-sync';
+  // Three notifications land at once: one sync runs, one more is queued.
+  await Promise.all([
+    ebayService.syncAccount(freshCredentials(), connectionId, ['orders']),
+    ebayService.syncAccount(freshCredentials(), connectionId, ['orders']),
+    ebayService.syncAccount(freshCredentials(), connectionId, ['orders']),
+  ]);
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(listingCalls.mock.calls.length, 0, 'an orders event never re-reads listings');
+  assert.ok(orderCalls.mock.calls.length <= 2, `expected at most 2 order reads, got ${orderCalls.mock.calls.length}`);
+});
+
+test('a refreshed copy announces itself so open pages can update', async () => {
+  const accountEvents = require('../../src/modules/ebay/account-events');
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  mock.method(ebayTrading, 'getActiveListings', async () => ({ items: [{ itemId: '1', title: 'x' }], totalEntries: 1, totalPages: 1 }));
+
+  const connectionId = 'test-conn-events';
+  const seen = [];
+  const unsubscribe = accountEvents.subscribe(connectionId, (event) => seen.push(event));
+  try {
+    await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+    assert.deepStrictEqual(seen.map((e) => [e.type, e.kind]), [['updated', 'listings']]);
+  } finally {
+    unsubscribe();
+  }
+});

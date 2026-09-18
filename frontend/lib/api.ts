@@ -622,10 +622,13 @@ export const api = {
   getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "") => {
     const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage) });
     if (search) params.set("q", search);
-    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number }>(
+    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number; syncedAt: string | null }>(
       `/api/connections/${id}/listings?${params.toString()}`
     );
   },
+
+  // Re-reads the account from eBay now (once a minute per account).
+  refreshConnection: (id: string) => request<{ syncedAt: string }>(`/api/connections/${id}/refresh`, { method: "POST" }),
 
   getConnectionOrders: (
     id: string,
@@ -643,6 +646,7 @@ export const api = {
       counts: OrderCounts;
       totalEntries: number;
       totalPages: number;
+      syncedAt: string | null;
       page: number;
       perPage: number;
     }>(`/api/connections/${id}/orders?${query.toString()}`);

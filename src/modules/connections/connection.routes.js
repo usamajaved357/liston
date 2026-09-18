@@ -17,6 +17,8 @@ router.delete('/:id', requireAuth, requireOwner, connectionController.remove);
 router.get('/:id/listings', requireAuth, requireFeature('listings'), connectionController.getListings);
 router.get('/:id/orders', requireAuth, requireFeature('orders'), connectionController.getOrders);
 router.get('/:id/earnings', requireAuth, requireFeature('orders'), connectionController.getEarnings);
+router.post('/:id/refresh', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.refresh);
+router.get('/:id/events', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.events);
 router.get('/:id/policies', requireAuth, requireOwner, connectionController.getPolicies);
 router.put('/:id/policies', requireAuth, requireOwner, connectionController.updatePolicies);
 router.post('/:id/locations', requireAuth, requireOwner, connectionController.createLocation);

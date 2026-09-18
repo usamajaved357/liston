@@ -817,7 +817,7 @@ async function publishLiveEdit(listing, userId) {
   await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
     ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload)
   );
-  ebayService.invalidateListings(listing.connection_id);
+  resyncListings(listing.connection_id, userId);
   // The edit is now live; the working copy has done its job.
   await listingRepository.deleteById(listing.id);
   return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true };
@@ -849,7 +849,17 @@ async function removeInactiveListing(connectionId, userId, itemId) {
   });
 
   await listingRepository.deleteByItemId(connectionId, itemId);
-  ebayService.invalidateListings(connectionId);
+  // Gone from the Inactive tab at once, no eBay round trip needed.
+  ebayService.removeListingFromMirror(connectionId, itemId);
+}
+
+// After something we published or revised: re-read the account's listings
+// from eBay in the background so every open Listings tab updates on its
+// own. Nothing waits on it, and a failure just means the next view refreshes.
+function resyncListings(connectionId, userId) {
+  connectionService
+    .withDecryptedCredentials(connectionId, userId, (credentials) => ebayService.syncAccount(credentials, connectionId, ['listings']))
+    .catch(() => ebayService.invalidateListings(connectionId));
 }
 
 async function publish(id, userId) {
@@ -933,7 +943,7 @@ async function publish(id, userId) {
       });
     }
 
-    ebayService.invalidateListings(listing.connection_id);
+    resyncListings(listing.connection_id, userId);
     return listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way

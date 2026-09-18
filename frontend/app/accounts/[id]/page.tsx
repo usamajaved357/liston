@@ -7,6 +7,7 @@ import { api, ApiError, EarningsRange, Money, OrderCounts, OrderStatusFilter } f
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
+import { useAccountEvents } from "@/lib/useAccountEvents";
 import { Alert } from "@/components/Alert";
 
 // The account dashboard: money in and orders for a chosen window, the live
@@ -175,6 +176,13 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
   const [counts, setCounts] = useState<OrderCounts | null>(null);
   const [countsError, setCountsError] = useState<string | null>(null);
 
+  // Live: a sale or a publish re-reads the account; the tiles follow.
+  const [liveKey, setLiveKey] = useState(0);
+  useAccountEvents(connectionId, () => {
+    setEarningsByRange({});
+    setLiveKey((k) => k + 1);
+  });
+
   useEffect(() => {
     let cancelled = false;
     api
@@ -184,7 +192,7 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [connectionId, range]);
+  }, [connectionId, range, liveKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,7 +205,7 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [connectionId]);
+  }, [connectionId, liveKey]);
 
   const rangeLabel = RANGES.find((r) => r.key === range)?.label.toLowerCase() || range;
   const base = `/accounts/${connectionId}`;

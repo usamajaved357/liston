@@ -5,6 +5,7 @@ const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
 const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const accountEvents = require('../ebay/account-events');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
@@ -103,6 +104,7 @@ async function getListings(req, res, next) {
         page,
         perPage,
         hiddenItemIds: status === 'inactive' ? connection.settings?.hiddenItemIds || [] : [],
+        push: ebayService.pushEnabled(connection),
       });
     });
 
@@ -113,6 +115,7 @@ async function getListings(req, res, next) {
       page: result.page,
       perPage: result.perPage,
       allCount: result.allCount,
+      syncedAt: result.syncedAt ? new Date(result.syncedAt).toISOString() : null,
     });
   } catch (err) {
     next(err);
@@ -131,7 +134,7 @@ async function getOrders(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage, push: ebayService.pushEnabled(connection) });
     });
 
     res.status(200).json({
@@ -141,10 +144,59 @@ async function getOrders(req, res, next) {
       totalPages: result.totalPages,
       page: result.page,
       perPage: result.perPage,
+      syncedAt: result.syncedAt ? new Date(result.syncedAt).toISOString() : null,
     });
   } catch (err) {
     next(err);
   }
+}
+
+// "I just changed something in Seller Hub": re-read the account from eBay
+// now. Once a minute per account, since every press spends Trading calls.
+async function refresh(req, res, next) {
+  try {
+    await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Refresh isn't available for ${connection.platform_name} yet`, 400);
+      }
+      return ebayService.refreshAccount(credentials, req.params.id);
+    });
+    res.status(200).json({ syncedAt: new Date().toISOString() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// A live stream of "this account's data changed" events (server-sent
+// events), one per open page. The page re-fetches what it shows when one
+// arrives, so a sale, a publish, or an edit in Seller Hub appears without
+// a reload. Heartbeats keep proxies from closing an idle stream.
+const SSE_HEARTBEAT_MS = 25 * 1000;
+
+async function events(req, res, next) {
+  try {
+    // Authorisation already ran (requireAuth + feature guard); just confirm
+    // the account exists for this owner.
+    await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+  } catch (err) {
+    return next(err);
+  }
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(`event: ready\ndata: {}\n\n`);
+
+  const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  const unsubscribe = accountEvents.subscribe(req.params.id, send);
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), SSE_HEARTBEAT_MS);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 }
 
 async function getEarnings(req, res, next) {
@@ -156,7 +208,7 @@ async function getEarnings(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Earnings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to });
+      return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to, push: ebayService.pushEnabled(connection) });
     });
 
     res.status(200).json({ earnings: result.earnings, orderCount: result.orderCount, truncated: result.truncated });
@@ -476,6 +528,8 @@ module.exports = {
   updateTemplate,
   logoPalette,
   getStoreProfile,
+  refresh,
+  events,
   searchCategories,
   categoryChildren,
   categoryDetail,
