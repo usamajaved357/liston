@@ -363,7 +363,7 @@ const updateTemplateSchema = z.object({
   responseTime: z.string().max(30).default('24 hours'),
   reviews: z
     .array(z.object({ stars: z.coerce.number().min(1).max(5).default(5), text: z.string().max(400), buyer: z.string().max(60).default(''), date: z.string().max(30).default('') }))
-    .max(5)
+    .max(10)
     .default([]),
   // The seller's own layout, or empty for Liston's. eBay's description
   // limit is 500,000 characters; scripts and iframes are refused by eBay

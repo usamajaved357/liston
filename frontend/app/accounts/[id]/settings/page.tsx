@@ -228,6 +228,9 @@ export default function AccountSettingsPage() {
   const [codeDraft, setCodeDraft] = useState<string | null>(null);
   const [placeholders, setPlaceholders] = useState<[string, string][]>([]);
   const [ebayReviews, setEbayReviews] = useState<{ list: StoreReview[]; note: string | null } | null>(null);
+  // Which slice of the pool is on show; "Show more" moves it along.
+  const [reviewPage, setReviewPage] = useState(0);
+  const REVIEWS_PER_PAGE = 6;
 
   async function handleFillFromEbay() {
     if (!connection) return;
@@ -426,7 +429,7 @@ export default function AccountSettingsPage() {
     const present = template.reviews.some((r) => r.text === review.text && r.buyer === review.buyer);
     if (present) {
       setT({ reviews: template.reviews.filter((r) => !(r.text === review.text && r.buyer === review.buyer)) });
-    } else if (template.reviews.length < 5) {
+    } else if (template.reviews.length < 10) {
       setT({ reviews: [...template.reviews, { stars: review.stars, text: review.text, buyer: review.buyer, date: review.date }] });
     }
   }
@@ -788,9 +791,9 @@ export default function AccountSettingsPage() {
               <div className="card overflow-hidden">
                 <SectionHead
                   title="Customer reviews"
-                  blurb="Up to five, shown as a scrolling row. Taken from the feedback buyers left you on eBay. Left out when empty. Invented reviews get listings removed."
+                  blurb="Up to ten, shown as a scrolling row. Taken from the feedback buyers left you on eBay. Left out when empty. Invented reviews get listings removed."
                   action={
-                    template.reviews.length < 5 ? (
+                    template.reviews.length < 10 ? (
                       <button type="button" onClick={() => setT({ reviews: [...template.reviews, { stars: 5, text: "", buyer: "", date: "" }] })} className="btn btn-secondary btn-sm flex-shrink-0">
                         Add review
                       </button>
@@ -798,48 +801,72 @@ export default function AccountSettingsPage() {
                   }
                 />
                 <div className="border-b border-[var(--color-line)] px-6 py-4">
-                  <div className="flex items-baseline justify-between">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Best reviews on your eBay account</p>
-                    <button
-                      type="button"
-                      onClick={() => { setEbayReviews(null); api.getStoreReviews(connection.id, true).then((d) => setEbayReviews({ list: d.reviews, note: d.unavailable || null })).catch(() => setEbayReviews({ list: [], note: "Couldn't read your eBay feedback." })); }}
-                      className="text-[12px] font-semibold text-[var(--color-primary)] hover:underline"
-                    >
-                      Re-read from eBay
-                    </button>
-                  </div>
-                  {ebayReviews === null ? (
-                    <div className="mt-3 h-16 animate-pulse rounded-xl bg-[var(--color-paper)]" />
-                  ) : ebayReviews.list.length === 0 ? (
-                    <p className="mt-2 text-[13px] text-[var(--color-muted)]">{ebayReviews.note || "No written positive feedback found on this account yet."}</p>
-                  ) : (
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                      {ebayReviews.list.map((review) => {
-                        const used = template.reviews.some((r) => r.text === review.text && r.buyer === review.buyer);
-                        const full = !used && template.reviews.length >= 5;
-                        return (
-                          <button
-                            key={`${review.buyer}-${review.text.slice(0, 20)}`}
-                            type="button"
-                            onClick={() => toggleEbayReview(review)}
-                            disabled={full}
-                            className={`rounded-2xl border px-4 py-3 text-left transition-colors ${
-                              used ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)]" : "border-[var(--color-line)] hover:border-[var(--color-primary)]"
-                            } disabled:opacity-50`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-[12px] tracking-wide text-amber-500">{"★".repeat(review.stars)}</span>
-                              <span className={`text-[11px] font-semibold ${used ? "text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`}>{used ? "In template" : "Use"}</span>
-                            </div>
-                            <p className="mt-1 text-[13px] leading-snug text-[var(--color-ink)]">&ldquo;{review.text}&rdquo;</p>
-                            <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
-                              {review.buyer}{review.date ? ` · ${review.date}` : ""}{review.itemTitle ? ` · ${review.itemTitle.slice(0, 40)}` : ""}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                  {(() => {
+                    const inTemplate = (r: StoreReview) => template.reviews.some((t) => t.text === r.text && t.buyer === r.buyer);
+                    const pool = (ebayReviews?.list || []).filter((r) => !inTemplate(r));
+                    const pages = Math.max(1, Math.ceil(pool.length / REVIEWS_PER_PAGE));
+                    const page = Math.min(reviewPage, pages - 1);
+                    const shown = pool.slice(page * REVIEWS_PER_PAGE, page * REVIEWS_PER_PAGE + REVIEWS_PER_PAGE);
+                    const reread = () => {
+                      setEbayReviews(null);
+                      setReviewPage(0);
+                      api
+                        .getStoreReviews(connection.id, true)
+                        .then((d) => setEbayReviews({ list: d.reviews, note: d.unavailable || null }))
+                        .catch(() => setEbayReviews({ list: [], note: "Couldn't read your eBay feedback." }));
+                    };
+                    return (
+                      <>
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                            Best reviews on your eBay account{pool.length ? ` · ${pool.length} available` : ""}
+                          </p>
+                          <div className="flex gap-3 text-[12px] font-semibold">
+                            {pool.length > REVIEWS_PER_PAGE && (
+                              <button type="button" onClick={() => setReviewPage((p) => (p + 1) % pages)} className="text-[var(--color-primary)] hover:underline">
+                                Show 6 more
+                              </button>
+                            )}
+                            <button type="button" onClick={reread} className="text-[var(--color-primary)] hover:underline">
+                              Re-read from eBay
+                            </button>
+                          </div>
+                        </div>
+                        {ebayReviews === null ? (
+                          <div className="mt-3 h-16 animate-pulse rounded-xl bg-[var(--color-paper)]" />
+                        ) : shown.length === 0 ? (
+                          <p className="mt-2 text-[13px] text-[var(--color-muted)]">
+                            {ebayReviews.note || (ebayReviews.list.length ? "Every review read from eBay is already in your template. Re-read from eBay to look for newer ones." : "No written positive feedback found on this account yet.")}
+                          </p>
+                        ) : (
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {shown.map((review) => {
+                              const full = template.reviews.length >= 10;
+                              return (
+                                <button
+                                  key={`${review.buyer}-${review.text.slice(0, 20)}`}
+                                  type="button"
+                                  onClick={() => toggleEbayReview(review)}
+                                  disabled={full}
+                                  title={full ? "The template holds ten reviews; remove one below to swap it" : "Add to the template"}
+                                  className="rounded-2xl border border-[var(--color-line)] px-4 py-3 text-left transition-colors hover:border-[var(--color-primary)] disabled:opacity-50"
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[12px] tracking-wide text-amber-500">{"★".repeat(review.stars)}</span>
+                                    <span className="text-[11px] font-semibold text-[var(--color-primary)]">+ Add</span>
+                                  </div>
+                                  <p className="mt-1 text-[13px] leading-snug text-[var(--color-ink)]">&ldquo;{review.text}&rdquo;</p>
+                                  <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
+                                    {review.buyer}{review.date ? ` · ${review.date}` : ""}{review.itemTitle ? ` · ${review.itemTitle.slice(0, 40)}` : ""}
+                                  </p>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 {template.reviews.length === 0 ? (
                   <p className="px-6 py-5 text-[13px] text-[var(--color-muted)]">No reviews in the template yet. Pick from the ones above, or add one by hand.</p>

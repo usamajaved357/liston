@@ -216,7 +216,7 @@ function renderDescription({ template, marketplaceId, productName, description, 
   const descHtml = descriptionHtml !== undefined ? descriptionHtml : textToHtml(description);
   const conditionLabel = escapeHtml(String(condition).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 
-  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 5);
+  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 10);
   const reviewsHtml = reviews.length
     ? `<div class="eb-sec">
     <div class="eb-stitle">What Customers Say</div>

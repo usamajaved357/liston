@@ -443,13 +443,21 @@ const feedbackCache = createSwrCache({
   staleMs: STALE_MS,
   fetcher: async (ctx, meta, current, { waiting } = {}) =>
     governed(ctx, ctx.connectionId, waiting, async () => {
-      const all = await ebayTrading.getSellerFeedback(ctx.accessToken, { siteId: ctx.siteId });
+      // Up to 200 most recent feedbacks in one call (eBay's page max);
+      // positive ones with something said, longest first. eBay feedback has
+      // no star per comment: "Positive" is the five-star equivalent.
+      const all = await ebayTrading.getSellerFeedback(ctx.accessToken, { siteId: ctx.siteId, entriesPerPage: 200 });
+      const seen = new Set();
       const best = all
         .filter((f) => f.type === 'Positive' && f.text.length >= MIN_REVIEW_LENGTH && !/^(a+|great|good|thanks?|ok)[.!]*$/i.test(f.text))
-        .sort((a, b) => new Date(b.date) - new Date(a.date))
-        .slice(0, 40)
-        .sort((a, b) => b.text.length - a.text.length)
-        .slice(0, 5)
+        .filter((f) => {
+          const key = f.text.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => b.text.length - a.text.length || new Date(b.date) - new Date(a.date))
+        .slice(0, 60)
         .map((f) => ({
           stars: 5,
           text: f.text.slice(0, 400),

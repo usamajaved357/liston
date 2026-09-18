@@ -583,7 +583,7 @@ function InlineName({
     >
       <span>{value}</span>
       {!disabled && (
-        <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 opacity-0 transition-opacity group-hover/name:opacity-70">
+        <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 opacity-40 transition-opacity group-hover/name:opacity-90">
           <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
         </svg>
       )}
@@ -777,6 +777,12 @@ function VariationsTable({
             ))}
           </ul>
         </div>
+      )}
+
+      {!disabled && (
+        <p className="mt-3 text-xs text-[var(--color-muted)]">
+          Click an attribute or option name to rename it. Click a photo in the table to choose or upload that variation&apos;s picture. Bin an option to drop every combination using it.
+        </p>
       )}
 
       {/* Attribute values — remove a whole colour or size at once */}
