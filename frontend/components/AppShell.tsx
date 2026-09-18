@@ -80,6 +80,19 @@ export function AppShell({ children, header, role, isAdmin }: AppShellProps) {
           )}
           {isAdmin && (
             <NavItem
+              href="/admin/usage"
+              active={pathname === "/admin/usage"}
+              label="eBay usage"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M4 19h16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M7 16V10M12 16V6M17 16v-3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
+          {isAdmin && (
+            <NavItem
               href="/admin/access"
               active={pathname === "/admin/access"}
               label="Access requests"

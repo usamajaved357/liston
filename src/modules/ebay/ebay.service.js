@@ -6,6 +6,7 @@ const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
 const ebayNotifications = require('./ebay.notifications');
 const accountEvents = require('./account-events');
+const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
 
 class EbayError extends Error {
@@ -371,6 +372,13 @@ const FRESH_WITH_PUSH = {
   activeCount: 24 * 60 * 60 * 1000,
 };
 const freshFor = (kind) => (ctx) => (ctx?.push ? FRESH_WITH_PUSH[kind] : FRESH[kind]);
+
+// Tags a cache read for the governor: a read someone is waiting on is
+// 'user'; a refresh behind a served copy is whatever the caller said (a
+// push-triggered sync) or plain 'background'.
+function governed(ctx, connectionId, waiting, fn) {
+  return governor.withContext({ connectionId: String(connectionId), priority: waiting ? 'user' : ctx?.priority || 'background' }, fn);
+}
 const STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // The one number the Overview needs per account. Mirrored, so a page of
@@ -378,10 +386,11 @@ const STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const activeCountCache = createSwrCache({
   freshMs: freshFor('activeCount'),
   staleMs: STALE_MS,
-  fetcher: async ({ accessToken, siteId }) => {
-    const result = await ebayTrading.getActiveListings(accessToken, { pageNumber: 1, entriesPerPage: 1, siteId });
-    return { value: result.totalEntries || 0, meta: null };
-  },
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => {
+      const result = await ebayTrading.getActiveListings(ctx.accessToken, { pageNumber: 1, entriesPerPage: 1, siteId: ctx.siteId });
+      return { value: result.totalEntries || 0, meta: null };
+    }),
   load: (key) => mirror.loadSnapshot(key, 'active_count').then((row) => row && { ...row, value: row.value.count }),
   store: (key, value) => mirror.saveSnapshot(key, 'active_count', { count: value }),
   onUpdate: (key) => accountEvents.emitUpdated(key, 'activeCount'),
@@ -389,7 +398,7 @@ const activeCountCache = createSwrCache({
 
 async function countActiveListings(credentials, connectionId, { push = false } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  const totalEntries = await activeCountCache.get(`${connectionId}`, { accessToken, siteId, push });
+  const totalEntries = await activeCountCache.get(`${connectionId}`, { accessToken, siteId, push, connectionId });
   return { totalEntries, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -630,7 +639,21 @@ async function fetchOrdersModifiedSince(accessToken, modTimeFrom, modTimeTo, sit
 const ordersCache = createSwrCache({
   freshMs: freshFor('orders'),
   staleMs: STALE_MS,
-  fetcher: async ({ accessToken, siteId, connectionId }, meta, current) => {
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, () => fetchOrdersIncrementally(ctx, meta, current)),
+  load: async (key) => {
+    const state = await mirror.loadSnapshot(key, 'orders');
+    if (!state) return null;
+    const orders = await mirror.loadOrders(key, ordersHorizon());
+    return { value: orders, meta: state.meta, syncedAt: state.syncedAt };
+  },
+  // Order rows are written by the fetcher itself; this keeps the sync point.
+  store: (key, value, meta) => mirror.saveSnapshot(key, 'orders', { count: value.length }, meta),
+  onUpdate: (key) => accountEvents.emitUpdated(key, 'orders'),
+});
+
+async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, meta, current) {
+  {
     const now = new Date();
     const horizon = ordersHorizon(now);
     const lastSyncAt = meta?.lastSyncAt ? new Date(meta.lastSyncAt) : null;
@@ -652,17 +675,8 @@ const ordersCache = createSwrCache({
     }
     await persist(() => mirror.pruneOrdersBefore(connectionId, horizon));
     return { value: orders, meta: { ...(meta || {}), lastSyncAt: now.toISOString() } };
-  },
-  load: async (key) => {
-    const state = await mirror.loadSnapshot(key, 'orders');
-    if (!state) return null;
-    const orders = await mirror.loadOrders(key, ordersHorizon());
-    return { value: orders, meta: state.meta, syncedAt: state.syncedAt };
-  },
-  // Order rows are written by the fetcher itself; this keeps the sync point.
-  store: (key, value, meta) => mirror.saveSnapshot(key, 'orders', { count: value.length }, meta),
-  onUpdate: (key) => accountEvents.emitUpdated(key, 'orders'),
-});
+  }
+}
 
 function getOrdersLast90Cached(connectionId, accessToken, siteId, push = false) {
   return ordersCache.get(connectionId, { accessToken, siteId, connectionId, push });
@@ -692,10 +706,11 @@ async function fetchAllListings(accessToken, status, expectedPages = 1, siteId =
 const listingsCache = createSwrCache({
   freshMs: freshFor('listings'),
   staleMs: STALE_MS,
-  fetcher: async ({ accessToken, status, siteId }, meta) => {
-    const { items, totalPages } = await fetchAllListings(accessToken, status, meta?.totalPages, siteId);
-    return { value: items, meta: { totalPages } };
-  },
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => {
+      const { items, totalPages } = await fetchAllListings(ctx.accessToken, ctx.status, meta?.totalPages, ctx.siteId);
+      return { value: items, meta: { totalPages } };
+    }),
   load: (key) => mirror.loadSnapshot(...splitListingsKey(key)).then((row) => row && { ...row, value: row.value.items }),
   store: (key, value, meta) => mirror.saveSnapshot(...splitListingsKey(key), { items: value }, meta),
   onUpdate: (key) => accountEvents.emitUpdated(splitListingsKey(key)[0], 'listings'),
@@ -715,7 +730,7 @@ function splitListingsKey(key) {
  */
 async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25, hiddenItemIds = [], push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  let all = await listingsCache.get(listingsKey(connectionId, status), { accessToken, status, siteId, push });
+  let all = await listingsCache.get(listingsKey(connectionId, status), { accessToken, status, siteId, push, connectionId });
   if (hiddenItemIds.length) {
     const hidden = new Set(hiddenItemIds.map(String));
     all = all.filter((item) => !hidden.has(item.itemId));
@@ -781,11 +796,12 @@ async function refreshAccount(credentials, connectionId, { wait = true } = {}) {
   ordersCache.invalidate(String(connectionId));
   activeCountCache.invalidate(String(connectionId));
 
+  const ctx = { accessToken, siteId, connectionId: String(connectionId), priority: 'user' };
   const work = Promise.all([
-    listingsCache.get(listingsKey(connectionId, 'active'), { accessToken, status: 'active', siteId }),
-    listingsCache.get(listingsKey(connectionId, 'inactive'), { accessToken, status: 'inactive', siteId }),
-    ordersCache.get(String(connectionId), { accessToken, siteId, connectionId: String(connectionId) }),
-    activeCountCache.get(String(connectionId), { accessToken, siteId }),
+    listingsCache.get(listingsKey(connectionId, 'active'), { ...ctx, status: 'active' }),
+    listingsCache.get(listingsKey(connectionId, 'inactive'), { ...ctx, status: 'inactive' }),
+    ordersCache.get(String(connectionId), ctx),
+    activeCountCache.get(String(connectionId), ctx),
   ]);
   if (wait) await work;
   else work.catch(() => {});
@@ -827,21 +843,25 @@ async function syncAccount(credentials, connectionId, kinds = ['listings', 'orde
   entry.running = (async () => {
     try {
       const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+      const ctx = { accessToken, siteId, connectionId: id, push: true, priority: 'push' };
       const jobs = [];
       if (kinds.includes('listings')) {
         for (const status of ['active', 'inactive']) {
           const key = listingsKey(id, status);
-          listingsCache.invalidate(key);
-          jobs.push(listingsCache.get(key, { accessToken, status, siteId, push: true }));
+          listingsCache.markStale(key);
+          jobs.push(listingsCache.get(key, { ...ctx, status }));
         }
-        activeCountCache.invalidate(id);
-        jobs.push(activeCountCache.get(id, { accessToken, siteId, push: true }));
+        activeCountCache.markStale(id);
+        jobs.push(activeCountCache.get(id, ctx));
       }
       if (kinds.includes('orders')) {
-        ordersCache.invalidate(id);
-        jobs.push(ordersCache.get(id, { accessToken, siteId, connectionId: id, push: true }));
+        ordersCache.markStale(id);
+        jobs.push(ordersCache.get(id, ctx));
       }
-      await Promise.all(jobs);
+      // markStale rather than invalidate: the copy keeps being served and
+      // the re-read runs behind it; a read the governor holds back (budget
+      // nearly spent) is simply retried by the next look at the page.
+      await Promise.all(jobs.map((job) => job.catch((err) => (err.code === 'EBAY_BUDGET' ? null : Promise.reject(err)))));
     } finally {
       const again = [...entry.again];
       pendingSync.delete(id);

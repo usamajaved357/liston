@@ -62,6 +62,24 @@ export interface Overview {
   }[];
 }
 
+export interface EbayUsage {
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAt: string | null;
+  exhausted: boolean;
+  lastSyncedWithEbay: string | null;
+  ceilings: { background: number; push: number; user: number };
+  paused: { background: boolean; push: boolean };
+  deferred: { background: number; push: number };
+  byCall: { name: string; count: number }[];
+  byAccount: { connectionId: string; label: string; count: number; push: boolean }[];
+  accountsTotal: number;
+  notificationsUrl: string | null;
+  inFlight: number;
+  waiting: number;
+}
+
 export interface AccessRequest {
   id: string;
   email: string;
@@ -541,6 +559,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password, ...extra }),
     }),
+
+  // Admin: today's use of the shared eBay allowance.
+  getEbayUsage: (sync = false) => request<EbayUsage>(`/api/ebay/usage${sync ? "?sync=1" : ""}`),
 
   listAccessRequests: () =>
     request<{ requests: AccessRequest[]; reviewed: AccessRequest[] }>("/api/auth/access/requests"),

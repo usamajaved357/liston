@@ -1,5 +1,6 @@
 const express = require('express');
 const ebayController = require('./ebay.controller');
+const { requireAuth, requireAdmin } = require('../../middleware/auth.middleware');
 
 const router = express.Router();
 
@@ -16,5 +17,8 @@ router.post('/account-deletion', ebayController.accountDeletionNotification);
 // Public — eBay's Platform Notifications arrive here as SOAP XML. Verified
 // by signature when EBAY_DEV_ID is set; only ever triggers a re-read.
 router.post('/notifications', express.text({ type: '*/*', limit: '1mb' }), ebayController.platformNotification);
+
+// Admin only: today's eBay API usage.
+router.get('/usage', requireAuth, requireAdmin, ebayController.usage);
 
 module.exports = router;

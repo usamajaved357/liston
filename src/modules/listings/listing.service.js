@@ -11,6 +11,7 @@ const imageOps = require('../ai-generation/image-pipeline/image.ops');
 const descriptionTemplate = require('./description-template');
 const ebayTaxonomy = require('../ebay/ebay.taxonomy');
 const textGenerator = require('../ai-generation/text-generator.service');
+const governor = require('../ebay/request-governor');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -149,7 +150,15 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
 // flow: scrapes both, drafts content + variations with AI, then reuses
 // createEbayDraft's existing policy-resolution/eBay-drafting/persist path
 // unchanged.
-async function generateEbayDraftFromUrls(
+// The seller is waiting on these, so every eBay call inside runs at
+// 'user' priority against the shared allowance, tagged with the account.
+function generateEbayDraftFromUrls(connectionId, userId, input) {
+  return governor.withContext({ connectionId: String(connectionId), priority: 'user' }, () =>
+    generateEbayDraftFromUrlsNow(connectionId, userId, input)
+  );
+}
+
+async function generateEbayDraftFromUrlsNow(
   connectionId,
   userId,
   { competitorUrl, sourceUrl, previewId, variantSelection }
@@ -492,7 +501,11 @@ async function acceptImageRevision(id, userId, { proposalId, replaces }) {
 // appears), set as a variant's photo, or appended to the gallery. The bytes
 // go up exactly as given — no resizing or padding — after eBay's own limits
 // are checked (≥500px, ≤12MB, a real image).
-async function uploadDraftImage(id, userId, { dataUrl, replaces, variantIndex }) {
+function uploadDraftImage(id, userId, input) {
+  return governor.withContext({ priority: 'user' }, () => uploadDraftImageNow(id, userId, input));
+}
+
+async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex }) {
   const listing = await loadEditableDraft(id, userId);
   const draft = { ...(listing.generated_data || {}) };
 
@@ -864,6 +877,13 @@ function resyncListings(connectionId, userId) {
 
 async function publish(id, userId) {
   const listing = await listingRepository.findByIdForUser(id, userId);
+  if (listing?.connection_id) {
+    return governor.withContext({ connectionId: String(listing.connection_id), priority: 'user' }, () => publishNow(listing, id, userId));
+  }
+  return publishNow(listing, id, userId);
+}
+
+async function publishNow(listing, id, userId) {
   if (!listing) {
     throw new ListingError('Listing not found', 404);
   }

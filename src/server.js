@@ -3,12 +3,15 @@ const config = require('./config');
 const logger = require('./utils/logger');
 const { pool } = require('./db/client');
 const aliexpressApi = require('./modules/sourcing/aliexpress/ds-api');
+const governor = require('./modules/ebay/request-governor');
 
 const app = createApp();
 
 const server = app.listen(config.port, () => {
   logger.info(`Server listening on port ${config.port} (${config.env})`);
   aliexpressApi.startTokenKeepAlive();
+  // Loads today's eBay usage and keeps it in step with eBay's own figure.
+  governor.start();
 });
 
 async function shutdown(signal) {

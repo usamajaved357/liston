@@ -5,6 +5,7 @@
 // inventory items it created itself. Auth reuses the same OAuth access token
 // via the X-EBAY-API-IAF-TOKEN header, which eBay accepts for this API too.
 const { XMLParser } = require('fast-xml-parser');
+const governor = require('./request-governor');
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
 
@@ -21,7 +22,13 @@ const COMPATIBILITY_LEVEL = '1193';
 
 // `siteId` is the Trading site the seller lives on (0 US, 3 UK ...): revises
 // and store reads fail or come back in the wrong currency on another site.
-async function tradingRequest(accessToken, callName, bodyXml, siteId = 0) {
+// Every call goes through the governor: budget check and flow control
+// first, one count against the allowance after.
+function tradingRequest(accessToken, callName, bodyXml, siteId = 0) {
+  return governor.run(callName, () => tradingRequestNow(accessToken, callName, bodyXml, siteId));
+}
+
+async function tradingRequestNow(accessToken, callName, bodyXml, siteId = 0) {
   const xml =
     `<?xml version="1.0" encoding="utf-8"?>\n` +
     `<${callName}Request xmlns="urn:ebay:apis:eBLBaseComponents">` +

@@ -4,6 +4,7 @@ const connectionService = require('../connections/connection.service');
 const ebayService = require('./ebay.service');
 const ebayNotifications = require('./ebay.notifications');
 const connectionRepository = require('../connections/connection.repository');
+const governor = require('./request-governor');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
@@ -128,4 +129,24 @@ async function platformNotification(req, res) {
   }
 }
 
-module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification, platformNotification };
+// Today's use of the shared eBay allowance, for the admin's usage page:
+// totals, what is paused, per call and per account (with labels).
+async function usage(req, res, next) {
+  try {
+    if (req.query.sync === '1') await governor.syncWithEbay();
+    const snap = governor.snapshot();
+    const accounts = await connectionRepository.findAllEbay();
+    const labels = new Map(accounts.map((a) => [String(a.id), a.label]));
+    const byAccount = Object.entries(snap.byAccount)
+      .map(([id, count]) => ({ connectionId: id, label: labels.get(id) || 'Removed account', count, push: Boolean(accounts.find((a) => String(a.id) === id)?.settings?.ebay?.notificationsEnabledAt) }))
+      .sort((a, b) => b.count - a.count);
+    const byCall = Object.entries(snap.byCall)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+    res.status(200).json({ ...snap, byAccount, byCall, accountsTotal: accounts.length, notificationsUrl: config.ebay.notificationsUrl || null });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification, platformNotification, usage };

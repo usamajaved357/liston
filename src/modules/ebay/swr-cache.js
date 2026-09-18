@@ -73,7 +73,10 @@ function createSwrCache({ freshMs, staleMs, fetcher, load, store, onUpdate }) {
     if (entry.value !== undefined && age < freshFor(ctx)) return entry.value;
 
     if (!entry.inflight) {
-      entry.inflight = Promise.resolve(fetcher(ctx, entry.meta, entry.value))
+      // `waiting` tells the fetcher whether someone is actually blocked on
+      // this read (no copy to show) or it's a refresh behind a served copy.
+      const waiting = entry.value === undefined || age >= staleMs;
+      entry.inflight = Promise.resolve(fetcher(ctx, entry.meta, entry.value, { waiting }))
         .then(({ value, meta }) => {
           Object.assign(entry, { fetchedAt: Date.now(), value, meta, inflight: null });
           if (store) Promise.resolve(store(key, value, meta)).catch(() => {});
