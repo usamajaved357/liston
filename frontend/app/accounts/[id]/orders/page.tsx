@@ -2,12 +2,14 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
-import { api, Order, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
+import { api, ApiError, Order, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { EbayStylePagination } from "@/components/EbayStylePagination";
+import { SyncStatus } from "@/components/SyncStatus";
+import { useAccountEvents } from "@/lib/useAccountEvents";
 
 const RANGE_LABELS: Record<OrderRange, string> = {
   "7d": "Last 7 days",
@@ -264,6 +266,10 @@ function AccountOrdersContent() {
   const [totalEntries, setTotalEntries] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!connection) return;
@@ -276,10 +282,31 @@ function AccountOrdersContent() {
         setCounts(data.counts);
         setTotalPages(data.totalPages);
         setTotalEntries(data.totalEntries);
+        setSyncedAt(data.syncedAt);
       })
       .catch(() => setError("Couldn't load orders from eBay. Try again."))
       .finally(() => setLoading(false));
-  }, [connection, range, status, search, page, perPage]);
+  }, [connection, range, status, search, page, perPage, reloadKey]);
+
+  useAccountEvents(connection?.id, (event) => {
+    if (event.kind === "orders") setReloadKey((k) => k + 1);
+  });
+
+  async function handleRefresh() {
+    if (!connection) return;
+    setRefreshing(true);
+    setRefreshNote(null);
+    try {
+      await api.refreshConnection(connection.id);
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      // The list stays; only the status line says why nothing was re-read.
+      setRefreshNote(err instanceof ApiError && err.status === 429 ? "Refreshed under a minute ago" : "Couldn't refresh from eBay");
+      setTimeout(() => setRefreshNote(null), 6000);
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   function changeRange(next: OrderRange) {
     setRange(next);
@@ -420,6 +447,9 @@ function AccountOrdersContent() {
             </button>
           </div>
         </form>
+        <div className="ml-auto">
+          <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
+        </div>
       </div>
 
       {search && (

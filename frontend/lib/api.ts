@@ -62,6 +62,24 @@ export interface Overview {
   }[];
 }
 
+export interface EbayUsage {
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAt: string | null;
+  exhausted: boolean;
+  lastSyncedWithEbay: string | null;
+  ceilings: { background: number; push: number; user: number };
+  paused: { background: boolean; push: boolean };
+  deferred: { background: number; push: number };
+  byCall: { name: string; count: number }[];
+  byAccount: { connectionId: string; label: string; count: number; push: boolean }[];
+  accountsTotal: number;
+  notificationsUrl: string | null;
+  inFlight: number;
+  waiting: number;
+}
+
 export interface AccessRequest {
   id: string;
   email: string;
@@ -262,6 +280,8 @@ export interface Marketplace {
   country: string;
   countryName: string;
   itemHost: string;
+  // The market's wording for the description template.
+  template?: { tagline: string; warehouse: string; carrier: string; region: string; postageWord: string };
 }
 
 export interface ConnectionPolicies {
@@ -286,6 +306,55 @@ export interface ListingPolicies {
   returnPolicyId: string;
 }
 
+// eBay's own guesses at the right leaf category for a product.
+export interface CategorySuggestion {
+  id: string;
+  name: string;
+  path: string[];
+}
+
+// One row of the category picker.
+export interface CategoryNode {
+  id: string;
+  name: string;
+  leaf: boolean;
+  childCount: number;
+  path?: string[];
+}
+
+// One item specific eBay lists for a category, filled or not.
+export interface AspectSchemaEntry {
+  name: string;
+  required: boolean;
+  recommended: boolean;
+  selectionOnly: boolean;
+  multiValue: boolean;
+  variation: boolean;
+  allowedValues: string[];
+  hasMoreValues: boolean;
+}
+
+export interface VariationFixes {
+  axes: string[];
+  allowedHere: string[];
+  categories: { id: string; name: string; path: string[]; axisNames: Record<string, string> }[];
+}
+
+export interface DraftCategoryInfo {
+  id: string;
+  path: string[] | { id: string; name: string }[];
+  variationsSupported: boolean | null;
+  aspects: AspectSchemaEntry[];
+  // Attribute names eBay accepts as variations in this category; null when unknown.
+  variationAspects?: string[] | null;
+}
+
+export interface StoreCategory {
+  id: string;
+  name: string;
+  children: StoreCategory[];
+}
+
 export interface SingleDraftContent {
   title: string;
   description: string;
@@ -295,6 +364,10 @@ export interface SingleDraftContent {
   quantity: number;
   categoryId: string;
   categoryPath?: string[];
+  categorySuggestions?: CategorySuggestion[];
+  secondaryCategoryId?: string | null;
+  storeCategoryNames?: string[];
+  sku?: string;
   price: OfferPrice;
   priceBreakdown?: PriceBreakdown;
   marketplaceId?: string;
@@ -328,6 +401,10 @@ export interface VariationDraftContent {
   variants: VariationDraftVariant[];
   categoryId: string;
   categoryPath?: string[];
+  categorySuggestions?: CategorySuggestion[];
+  secondaryCategoryId?: string | null;
+  storeCategoryNames?: string[];
+  sku?: string;
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
@@ -350,7 +427,9 @@ export interface DraftPreviewAxisValue {
 
 export interface DraftPreview {
   previewId: string;
-  competitor: { title: string; priceText: string | null; categoryPath: string[] };
+  competitor: { title: string; priceText: string | null; categoryPath: string[] } | null;
+  category: { id: string; path: string[] };
+  categorySuggestions: CategorySuggestion[];
   source: {
     title: string;
     priceText: string | null;
@@ -361,7 +440,7 @@ export interface DraftPreview {
 }
 
 export type GenerateDraftInput =
-  | { competitorUrl: string; sourceUrl: string }
+  | { competitorUrl?: string; sourceUrl: string }
   | { previewId: string; variantSelection?: Record<string, string[]> };
 
 // Listing settings — every sell price is derived from these plus the
@@ -385,6 +464,16 @@ export interface DescriptionTemplate {
   recommendedCount: number;
   responseTime: string;
   reviews: { stars: number; text: string; buyer: string; date: string }[];
+  // The seller's own HTML with {{placeholders}}; empty uses Liston's layout.
+  customHtml: string;
+}
+
+export interface StoreReview {
+  stars: number;
+  text: string;
+  buyer: string;
+  date: string;
+  itemTitle?: string;
 }
 
 export interface PricingSettings {
@@ -434,7 +523,14 @@ export interface DraftPatch {
   listingPolicies?: ListingPolicies;
   variants?: Record<string, { price?: OfferPrice; quantity?: number; imageUrls?: string[] }>;
   removeAxisValues?: { axis: string; value: string }[];
+  renameAxisValues?: { axis: string; from: string; to: string }[];
+  renameAxes?: { from: string; to: string }[];
+  addAxisValues?: { axis: string; value: string; copyFrom?: string }[];
   variantSkusToRemove?: string[];
+  sku?: string;
+  categoryId?: string;
+  secondaryCategoryId?: string | null;
+  storeCategoryNames?: string[];
 }
 
 export interface ImageCheck {
@@ -486,6 +582,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password, ...extra }),
     }),
+
+  // Admin: today's use of the shared eBay allowance.
+  getEbayUsage: (sync = false) => request<EbayUsage>(`/api/ebay/usage${sync ? "?sync=1" : ""}`),
 
   listAccessRequests: () =>
     request<{ requests: AccessRequest[]; reviewed: AccessRequest[] }>("/api/auth/access/requests"),
@@ -567,10 +666,13 @@ export const api = {
   getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "") => {
     const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage) });
     if (search) params.set("q", search);
-    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number }>(
+    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number; syncedAt: string | null }>(
       `/api/connections/${id}/listings?${params.toString()}`
     );
   },
+
+  // Re-reads the account from eBay now (once a minute per account).
+  refreshConnection: (id: string) => request<{ syncedAt: string }>(`/api/connections/${id}/refresh`, { method: "POST" }),
 
   getConnectionOrders: (
     id: string,
@@ -588,6 +690,7 @@ export const api = {
       counts: OrderCounts;
       totalEntries: number;
       totalPages: number;
+      syncedAt: string | null;
       page: number;
       perPage: number;
     }>(`/api/connections/${id}/orders?${query.toString()}`);
@@ -635,6 +738,14 @@ export const api = {
       feedbackPercent: string | null;
     }>(`/api/connections/${id}/store-profile`),
   // Colour pairs suggested from the store logo (saved URL, or eBay's when blank).
+  // The built-in template as editable HTML with placeholders.
+  getTemplateSource: (id: string) => request<{ html: string; placeholders: [string, string][] }>(`/api/connections/${id}/template/source`),
+  // The template rendered over a sample product, before saving.
+  previewTemplate: (id: string, template: DescriptionTemplate) =>
+    request<{ html: string }>(`/api/connections/${id}/template/preview`, { method: "POST", body: JSON.stringify(template) }),
+  // The best five positive reviews buyers left on eBay.
+  getStoreReviews: (id: string, refresh = false) => request<{ reviews: StoreReview[]; unavailable?: string }>(`/api/connections/${id}/store-reviews${refresh ? "?refresh=1" : ""}`),
+
   getTemplatePalette: (id: string, logoUrl?: string) =>
     request<{ logoUrl: string; colors: string[]; palettes: { name: string; accentColor: string; darkColor: string }[] }>(
       `/api/connections/${id}/template/palette${logoUrl ? `?url=${encodeURIComponent(logoUrl)}` : ""}`
@@ -647,7 +758,7 @@ export const api = {
     }),
   previewDraftDescription: (listingId: string) =>
     request<{ html: string }>(`/api/listings/${listingId}/description-preview`),
-  previewDraftListing: (connectionId: string, input: { competitorUrl: string; sourceUrl: string }) =>
+  previewDraftListing: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<DraftPreview>(`/api/connections/${connectionId}/listings/drafts/preview`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -671,7 +782,28 @@ export const api = {
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
 
   getDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; policies: ConnectionPolicies | null }>(`/api/listings/${listingId}`),
+    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null }>(`/api/listings/${listingId}`),
+
+  // Ways out when eBay refuses the draft's variation attribute in its category.
+  getVariationFixes: (listingId: string) => request<VariationFixes>(`/api/listings/${listingId}/variation-fixes`),
+  applyVariationFix: (listingId: string, fix: { categoryId: string; axisNames: Record<string, string> }) =>
+    request<{ listing: DraftListing; imageCheck: ImageCheck }>(`/api/listings/${listingId}/variation-fixes`, { method: "POST", body: JSON.stringify(fix) }),
+
+  // Lifts one variation out into a single-item draft of its own.
+  splitDraftVariant: (listingId: string, index: number) =>
+    request<{ listing: DraftListing }>(`/api/listings/${listingId}/variants/${index}/split`, { method: "POST" }),
+
+  // Category picker data, from eBay's tree for the account's marketplace.
+  searchCategories: (connectionId: string, q: string) =>
+    request<{ results: CategoryNode[] }>(`/api/connections/${connectionId}/categories/search?q=${encodeURIComponent(q)}`),
+  categoryChildren: (connectionId: string, parentId?: string) =>
+    request<{ children: CategoryNode[]; path: { id: string; name: string }[] }>(
+      `/api/connections/${connectionId}/categories/children${parentId ? `?parent=${encodeURIComponent(parentId)}` : ""}`
+    ),
+  getCategory: (connectionId: string, categoryId: string) =>
+    request<DraftCategoryInfo>(`/api/connections/${connectionId}/categories/${encodeURIComponent(categoryId)}`),
+  getStoreCategories: (connectionId: string) =>
+    request<{ categories: StoreCategory[]; unavailable?: string }>(`/api/connections/${connectionId}/store-categories`),
 
   publishDraftListing: (listingId: string) =>
     request<{ listing: DraftListing }>(`/api/listings/${listingId}/publish`, { method: "POST" }),

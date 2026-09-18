@@ -119,7 +119,7 @@ export default function DraftListingPage() {
     setPreview(null);
     startStatus(READ_MESSAGES, 4000);
     try {
-      const data = await api.previewDraftListing(params.id, { competitorUrl, sourceUrl });
+      const data = await api.previewDraftListing(params.id, { competitorUrl: competitorUrl.trim() || undefined, sourceUrl });
       setPreview(data);
       // Everything ticked to start with — the seller unticks what they
       // don't want, which is the faster direction for most products.
@@ -207,13 +207,15 @@ export default function DraftListingPage() {
           >
             <h2 className="text-base font-bold text-[var(--color-ink)]">Read the listings</h2>
             <p className="mt-1 text-sm text-[var(--color-muted)]">
-              Paste the competitor&apos;s eBay listing and your AliExpress source product. Both are read first, so you choose
-              exactly what to list before anything is generated.
+              Paste your AliExpress source product, and a competitor&apos;s eBay listing if you have one. Both are read first, so you
+              choose exactly what to list before anything is generated.
             </p>
 
             <div className="mt-5 grid gap-4 lg:grid-cols-2">
               <div>
-                <label className={labelClass}>Competitor · eBay listing</label>
+                <label className={labelClass}>
+                  Competitor · eBay listing <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>
+                </label>
                 <input
                   className={`${inputClass} mt-1.5`}
                   type="url"
@@ -221,9 +223,10 @@ export default function DraftListingPage() {
                   value={competitorUrl}
                   onChange={(e) => setCompetitorUrl(e.target.value)}
                   disabled={busy !== null}
-                  required
                 />
-                <p className="mt-1.5 text-xs text-[var(--color-muted)]">Sets the category, item specifics and the price to beat.</p>
+                <p className="mt-1.5 text-xs text-[var(--color-muted)]">
+                  Sets the category, item specifics and the price to beat. Leave it empty and eBay suggests the category from the source.
+                </p>
               </div>
               <div>
                 <label className={labelClass}>Source · AliExpress product</label>
@@ -265,21 +268,30 @@ export default function DraftListingPage() {
               {/* Left: what was read */}
               <div className="space-y-4">
                 <div className="card p-5">
-                  <p className={labelClass}>Competitor on eBay</p>
-                  <p className="mt-1.5 text-sm font-semibold leading-snug text-[var(--color-ink)]">{preview.competitor.title}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <span className="chip chip-primary">
-                      {prettyPriceText(preview.competitor.priceText) || "price not read"}
-                    </span>
-                  </div>
-                  {preview.competitor.categoryPath.length > 0 && (
+                  {preview.competitor ? (
+                    <>
+                      <p className={labelClass}>Competitor on eBay</p>
+                      <p className="mt-1.5 text-sm font-semibold leading-snug text-[var(--color-ink)]">{preview.competitor.title}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span className="chip chip-primary">{prettyPriceText(preview.competitor.priceText) || "price not read"}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className={labelClass}>No competitor</p>
+                      <p className="mt-1.5 text-sm text-[var(--color-muted)]">
+                        The category below is eBay&apos;s suggestion for this product. You can change it in the editor.
+                      </p>
+                    </>
+                  )}
+                  {preview.category.path.length > 0 && (
                     <div className="mt-3">
                       <p className={labelClass}>eBay category</p>
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1.5">
-                        {preview.competitor.categoryPath.map((segment, i) => (
+                        {preview.category.path.map((segment, i) => (
                           <span key={`${segment}-${i}`} className="flex items-center gap-1.5">
                             {i > 0 && <span className="text-[var(--color-line-strong)]">›</span>}
-                            <span className={`chip ${i === preview.competitor.categoryPath.length - 1 ? "chip-primary" : ""}`}>{segment}</span>
+                            <span className={`chip ${i === preview.category.path.length - 1 ? "chip-primary" : ""}`}>{segment}</span>
                           </span>
                         ))}
                       </div>

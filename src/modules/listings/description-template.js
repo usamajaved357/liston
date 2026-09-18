@@ -9,6 +9,10 @@
 // from that account's live listings at render time. Two sellers on the same
 // Liston install get two different descriptions from the same draft.
 
+const marketplaces = require('../ebay/marketplaces');
+
+// Tagline, warehouse note and carrier default to the account's own market
+// (see templateWithDefaults); the values here are the UK ones.
 const DEFAULT_TEMPLATE = {
   storeName: '',
   tagline: 'Official UK Store',
@@ -28,10 +32,22 @@ const DEFAULT_TEMPLATE = {
   // removed; the section is simply omitted when there are none.
   reviews: [],
   responseTime: '24 hours',
+  // The seller's own HTML for the whole description, with {{placeholders}}
+  // (see PLACEHOLDERS). Empty means Liston's built-in layout.
+  customHtml: '',
 };
 
-function templateWithDefaults(template = {}) {
-  return { ...DEFAULT_TEMPLATE, ...template };
+// Market-specific defaults win over the UK ones, and an explicitly saved
+// value wins over both. A UK-default value saved on a US account (from
+// before defaults were per market) is treated as unset.
+function templateWithDefaults(template = {}, marketplaceId) {
+  const copy = marketplaces.templateCopy(marketplaceId);
+  const local = { tagline: copy.tagline, dispatchNote: copy.warehouse, carrier: copy.carrier };
+  const cleaned = { ...template };
+  for (const key of Object.keys(local)) {
+    if (cleaned[key] === DEFAULT_TEMPLATE[key] && marketplaceId && marketplaceId !== marketplaces.DEFAULT_ID) delete cleaned[key];
+  }
+  return { ...DEFAULT_TEMPLATE, ...local, ...cleaned };
 }
 
 function escapeHtml(value) {
@@ -130,8 +146,11 @@ function styles(t) {
 .eb-policy{font-size:15px;line-height:1.8;color:#3D3D3D;margin:0}
 .eb-policy strong{color:${d}}
 .eb-policy-note{font-size:12px;color:#9090A0;margin:8px 0 0;line-height:1.6}
-.eb-fgrid{display:flex;gap:10px;flex-wrap:wrap}
-.eb-fcard{flex:1;min-width:140px;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:14px;border-top:3px solid ${a}}
+.eb-fgrid{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;padding:4px 2px 14px;scrollbar-width:thin;scrollbar-color:${a} #F0F0F0}
+.eb-fgrid::-webkit-scrollbar{height:8px}
+.eb-fgrid::-webkit-scrollbar-track{background:#F0F0F0;border-radius:8px}
+.eb-fgrid::-webkit-scrollbar-thumb{background:${a};border-radius:8px}
+.eb-fcard{flex:0 0 260px;width:260px;scroll-snap-align:start;background:#F7F7FA;border:1px solid #E8E8E8;border-radius:10px;padding:14px;border-top:3px solid ${a}}
 .eb-fstars{color:${a};font-size:14px;letter-spacing:1px}
 .eb-ftext{font-size:12px;color:#3D3D3D;line-height:1.65;margin-top:8px;font-style:italic}
 .eb-fname{font-size:11px;font-weight:700;color:${d};margin-top:10px}
@@ -151,7 +170,7 @@ function styles(t) {
 .eb-footer p{font-size:13px;color:#7A7A9A;margin:0}
 .eb-footer strong{color:#fff}
 .eb-save{font-size:13px;color:${a};margin-top:5px;display:block;font-weight:700}
-@media(max-width:480px){.eb-header-badges{display:none}.eb-fcard{min-width:100%}.eb-rcard{flex-basis:150px;width:150px}.eb-rimg{height:150px}.eb-pname{font-size:20px}.eb-sec{padding:18px}}
+@media(max-width:480px){.eb-header-badges{display:none}.eb-fcard{flex-basis:220px;width:220px}.eb-rcard{flex-basis:150px;width:150px}.eb-rimg{height:150px}.eb-pname{font-size:20px}.eb-sec{padding:18px}}
 </style>`;
 }
 
@@ -163,19 +182,96 @@ function styles(t) {
  *                     live listings, fetched by the caller
  * @param condition    'NEW' etc.
  */
-function renderDescription({ template, productName, description, recommended = [], condition = 'NEW' }) {
-  const t = templateWithDefaults(template);
+// The values a seller's own template HTML can use, and what each becomes.
+const PLACEHOLDERS = [
+  ['productName', 'The listing title'],
+  ['description', 'The description as HTML paragraphs'],
+  ['storeName', 'Store name'],
+  ['tagline', 'The line under the store name'],
+  ['logoUrl', 'Logo image URL'],
+  ['feedback', 'e.g. "99.8% Positive", empty when unknown'],
+  ['accentColor', 'Accent colour hex'],
+  ['darkColor', 'Header colour hex'],
+  ['condition', 'e.g. New'],
+  ['dispatchTime', 'Dispatch time'],
+  ['deliveryTime', 'Delivery time'],
+  ['carrier', 'Carrier'],
+  ['returnsDays', 'Returns period in days'],
+  ['recommended', 'The "More from our store" cards as HTML'],
+  ['reviews', 'The reviews section as HTML'],
+];
+
+function fillPlaceholders(html, values) {
+  return String(html).replace(/\{\{\s*([a-zA-Z]+)\s*\}\}/g, (match, key) => (key in values ? String(values[key]) : match));
+}
+
+function renderDescription({ template, marketplaceId, productName, description, descriptionHtml, recommended = [], condition = 'NEW' }) {
+  const t = templateWithDefaults(template, marketplaceId);
+  const copy = marketplaces.templateCopy(marketplaceId);
   const storeName = escapeHtml(t.storeName || 'Our Store');
   const feedback = t.feedbackPercent ? `${escapeHtml(String(t.feedbackPercent).replace('%', ''))}% Positive` : null;
-  const postage = t.freePostage ? 'Free P&amp;P' : 'Tracked P&amp;P';
+  const postageWord = escapeHtml(copy.postageWord);
+  const postage = t.freePostage ? `Free ${postageWord}` : `Tracked ${postageWord}`;
   const returns = Number(t.returnsDays) > 0 ? `${Number(t.returnsDays)}-Day Returns` : null;
+  const descHtml = descriptionHtml !== undefined ? descriptionHtml : textToHtml(description);
+  const conditionLabel = escapeHtml(String(condition).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+
+  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 10);
+  const reviewsHtml = reviews.length
+    ? `<div class="eb-sec">
+    <div class="eb-stitle">What Customers Say</div>
+    <p class="eb-rhint">Scroll to see more →</p>
+    <div class="eb-fgrid">${reviews
+      .map(
+        (r) => `<div class="eb-fcard"><div class="eb-fstars">${'★'.repeat(Math.min(5, Math.max(1, Number(r.stars) || 5)))}</div><div class="eb-ftext">"${escapeHtml(r.text)}"</div><div class="eb-fname">${escapeHtml(r.buyer || 'eBay buyer')}</div><div class="eb-fdate">${escapeHtml(r.date || '')}${r.date ? ' · ' : ''}Verified Purchase</div></div>`
+      )
+      .join('')}</div>
+  </div>`
+    : '';
+  const recommendedHtml = recommended.length
+    ? `<div class="eb-sec">
+    <div class="eb-stitle">Best Sellers From Our Store</div>
+    <p class="eb-rhint">Scroll to see more →</p>
+    <div class="eb-rgrid">${recommended
+      .slice(0, Number(t.recommendedCount) || 12)
+      .map(
+        (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard">${
+          item.imageUrl ? `<img class="eb-rimg" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : '<div class="eb-rimg"></div>'
+        }<div class="eb-rinfo"><div class="eb-rname">${escapeHtml(item.name)}</div>${
+          item.price ? `<span class="eb-rfrom">${item.sold > 1 ? `${escapeHtml(String(item.sold))} sold` : 'From'}</span><div class="eb-rprice">${escapeHtml(item.price)}</div>` : ''
+        }</div></a>`
+      )
+      .join('')}</div>
+  </div>`
+    : '';
+
+  // The seller's own layout, if they wrote one.
+  if (t.customHtml && t.customHtml.trim()) {
+    return fillPlaceholders(t.customHtml, {
+      productName: escapeHtml(productName),
+      description: descHtml,
+      storeName,
+      tagline: escapeHtml(t.tagline),
+      logoUrl: escapeHtml(t.logoUrl || ''),
+      feedback: feedback || '',
+      accentColor: escapeHtml(t.accentColor),
+      darkColor: escapeHtml(t.darkColor),
+      condition: conditionLabel,
+      dispatchTime: escapeHtml(t.dispatchTime),
+      deliveryTime: escapeHtml(t.deliveryTime),
+      carrier: escapeHtml(t.carrier),
+      returnsDays: String(Number(t.returnsDays) || 0),
+      recommended: recommendedHtml,
+      reviews: reviewsHtml,
+    });
+  }
 
   const logo = t.logoUrl
     ? `<img src="${escapeHtml(t.logoUrl)}" alt="${storeName}" />`
     : `<div class="eb-logo-fallback">${escapeHtml((t.storeName || 'S').slice(0, 1).toUpperCase())}</div>`;
 
   const barItems = [
-    '🇬🇧 UK Based',
+    `${copy.flag} ${escapeHtml(copy.based)}`,
     '⚡ Fast Dispatch',
     `📦 ${postage}`,
     returns ? `↩ ${returns}` : null,
@@ -183,14 +279,12 @@ function renderDescription({ template, productName, description, recommended = [
   ].filter(Boolean);
 
   const trust = [
-    ['🇬🇧', 'UK Based', 'Local dispatch'],
+    [copy.flag, escapeHtml(copy.based), 'Local dispatch'],
     ['⚡', 'Fast Dispatch', escapeHtml(t.dispatchTime)],
     returns ? ['↩', returns, 'Hassle-free'] : null,
-    ['📦', postage, 'All UK orders'],
+    ['📦', postage, escapeHtml(copy.orders)],
     feedback ? ['⭐', feedback, 'Verified feedback'] : null,
   ].filter(Boolean);
-
-  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 3);
 
   return `${styles(t)}
 <div class="eb">
@@ -214,15 +308,15 @@ function renderDescription({ template, productName, description, recommended = [
   <div class="eb-hero">
     <div class="eb-pname">${escapeHtml(productName)}</div>
     <div class="eb-pill-row">
-      <span class="eb-pill">${escapeHtml(String(condition).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).replace('New', 'New'))}</span>
-      <span class="eb-pill outline">UK Stock</span>
+      <span class="eb-pill">${conditionLabel}</span>
+      <span class="eb-pill outline">${escapeHtml(copy.stock)}</span>
       <span class="eb-pill outline">${postage}</span>
     </div>
   </div>
 
   <div class="eb-sec">
     <div class="eb-stitle">Description</div>
-    <div class="eb-desc">${textToHtml(description)}</div>
+    <div class="eb-desc">${descHtml}</div>
   </div>
 
   <div class="eb-trust">${trust
@@ -235,7 +329,7 @@ function renderDescription({ template, productName, description, recommended = [
       <div class="eb-ditem"><div class="eb-dlbl">Dispatch</div><div class="eb-dval">${escapeHtml(t.dispatchTime)}</div><div class="eb-dnote">${escapeHtml(t.dispatchNote)}</div></div>
       <div class="eb-ditem"><div class="eb-dlbl">Carrier</div><div class="eb-dval">${escapeHtml(t.carrier)}</div><div class="eb-dnote">Tracked service</div></div>
       <div class="eb-ditem"><div class="eb-dlbl">Delivery</div><div class="eb-dval">${escapeHtml(t.deliveryTime)}</div><div class="eb-dnote">After dispatch</div></div>
-      <div class="eb-ditem"><div class="eb-dlbl">Postage</div><div class="eb-dval">${postage}</div><div class="eb-dnote">All UK addresses</div></div>
+      <div class="eb-ditem"><div class="eb-dlbl">Postage</div><div class="eb-dval">${postage}</div><div class="eb-dnote">${escapeHtml(copy.addresses)}</div></div>
     </div>
   </div>
 
@@ -249,44 +343,34 @@ function renderDescription({ template, productName, description, recommended = [
       : ''
   }
 
-  ${
-    reviews.length
-      ? `<div class="eb-sec">
-    <div class="eb-stitle">What Customers Say</div>
-    <div class="eb-fgrid">${reviews
-      .map(
-        (r) => `<div class="eb-fcard"><div class="eb-fstars">${'★'.repeat(Math.min(5, Math.max(1, Number(r.stars) || 5)))}</div><div class="eb-ftext">"${escapeHtml(r.text)}"</div><div class="eb-fname">${escapeHtml(r.buyer || 'eBay buyer')}</div><div class="eb-fdate">${escapeHtml(r.date || '')}${r.date ? ' · ' : ''}Verified Purchase</div></div>`
-      )
-      .join('')}</div>
-  </div>`
-      : ''
-  }
+  ${reviewsHtml}
 
-  ${
-    recommended.length
-      ? `<div class="eb-sec">
-    <div class="eb-stitle">More From Our Store</div>
-    <p class="eb-rhint">Scroll to see more →</p>
-    <div class="eb-rgrid">${recommended
-      .slice(0, Number(t.recommendedCount) || 12)
-      .map(
-        (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard">${
-          item.imageUrl ? `<img class="eb-rimg" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : '<div class="eb-rimg"></div>'
-        }<div class="eb-rinfo"><div class="eb-rname">${escapeHtml(item.name)}</div>${
-          item.price ? `<span class="eb-rfrom">From</span><div class="eb-rprice">${escapeHtml(item.price)}</div>` : ''
-        }</div></a>`
-      )
-      .join('')}</div>
-  </div>`
-      : ''
-  }
+  ${recommendedHtml}
 
   <div class="eb-footer">
-    <p>© <strong>${storeName}</strong> &nbsp;·&nbsp; UK Business &nbsp;·&nbsp; All items sold new &amp; unused</p>
+    <p>© <strong>${storeName}</strong> &nbsp;·&nbsp; ${escapeHtml(copy.business)} &nbsp;·&nbsp; All items sold new &amp; unused</p>
     <p style="margin-top:4px;">Questions? <strong>Message us on eBay</strong>. We respond within ${escapeHtml(t.responseTime)}.</p>
     <span class="eb-save">⭐ Love ${storeName}? Click "Save seller" to never miss a new listing or deal</span>
   </div>
 </div>`;
 }
 
-module.exports = { renderDescription, textToHtml, templateWithDefaults, DEFAULT_TEMPLATE };
+// The built-in layout as editable source: the same HTML, with the values
+// that change per listing left as {{placeholders}}. What the seller sees
+// when they press "Edit code", and what they start from.
+function renderTemplateSource({ template, marketplaceId }) {
+  const t = { ...templateWithDefaults(template, marketplaceId), customHtml: '' };
+  return renderDescription({
+    template: t,
+    marketplaceId,
+    productName: '{{productName}}',
+    descriptionHtml: '{{description}}',
+    recommended: [{ url: '#', imageUrl: '', name: 'RECOMMENDED_PLACEHOLDER', price: '' }],
+    condition: '{{condition}}',
+  })
+    .replace(/<div class="eb-sec">\s*<div class="eb-stitle">More From Our Store<\/div>[\s\S]*?<\/div>\s*<\/div>/, '{{recommended}}')
+    // The condition label is title-cased on the way through.
+    .replace(/\{\{Condition\}\}/g, '{{condition}}');
+}
+
+module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS };

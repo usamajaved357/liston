@@ -9,6 +9,8 @@ import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { SyncStatus } from "@/components/SyncStatus";
+import { useAccountEvents } from "@/lib/useAccountEvents";
 
 type Tab = ListingStatusFilter | "draft";
 const PAGE_SIZES: { key: number | "all"; label: string }[] = [
@@ -274,6 +276,11 @@ export default function AccountListingsPage() {
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState<number | "all">(25);
   const [items, setItems] = useState<Listing[]>([]);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  // Bumped after a manual refresh so the load effect runs again.
+  const [reloadKey, setReloadKey] = useState(0);
   const [drafts, setDrafts] = useState<DraftListing[]>([]);
   const [totalPages, setTotalPages] = useState(1);
   const [totalEntries, setTotalEntries] = useState(0);
@@ -317,6 +324,7 @@ export default function AccountListingsPage() {
             setItems(data.items);
             setTotalPages(data.totalPages);
             setTotalEntries(data.totalEntries);
+            setSyncedAt(data.syncedAt);
             setCounts((c) => ({ ...c, [filter]: data.allCount }));
             setError(null);
             setLoading(false);
@@ -327,7 +335,28 @@ export default function AccountListingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [connection, filter, page, perPage, debounced]);
+  }, [connection, filter, page, perPage, debounced, reloadKey]);
+
+  // eBay (or one of our own publishes) changed this account: show it now.
+  useAccountEvents(connection?.id, (event) => {
+    if (event.kind === "listings" && filter !== "draft") setReloadKey((k) => k + 1);
+  });
+
+  async function handleRefresh() {
+    if (!connection) return;
+    setRefreshing(true);
+    setRefreshNote(null);
+    try {
+      await api.refreshConnection(connection.id);
+      setReloadKey((k) => k + 1);
+    } catch (err) {
+      // The list stays; only the status line says why nothing was re-read.
+      setRefreshNote(err instanceof ApiError && err.status === 429 ? "Refreshed under a minute ago" : "Couldn't refresh from eBay");
+      setTimeout(() => setRefreshNote(null), 6000);
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   function changeFilter(next: Tab) {
     if (next === filter) return;
@@ -444,6 +473,7 @@ export default function AccountListingsPage() {
           ))}
         </div>
         <div className="flex items-center gap-2">
+          {filter !== "draft" && <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />}
           {filter === "draft" && (
             <Link href={`/accounts/${connection.id}/listings/new`} className="btn btn-primary btn-sm">
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">

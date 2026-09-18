@@ -5,6 +5,7 @@
 // inventory items it created itself. Auth reuses the same OAuth access token
 // via the X-EBAY-API-IAF-TOKEN header, which eBay accepts for this API too.
 const { XMLParser } = require('fast-xml-parser');
+const governor = require('./request-governor');
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
 
@@ -21,7 +22,13 @@ const COMPATIBILITY_LEVEL = '1193';
 
 // `siteId` is the Trading site the seller lives on (0 US, 3 UK ...): revises
 // and store reads fail or come back in the wrong currency on another site.
-async function tradingRequest(accessToken, callName, bodyXml, siteId = 0) {
+// Every call goes through the governor: budget check and flow control
+// first, one count against the allowance after.
+function tradingRequest(accessToken, callName, bodyXml, siteId = 0) {
+  return governor.run(callName, () => tradingRequestNow(accessToken, callName, bodyXml, siteId));
+}
+
+async function tradingRequestNow(accessToken, callName, bodyXml, siteId = 0) {
   const xml =
     `<?xml version="1.0" encoding="utf-8"?>\n` +
     `<${callName}Request xmlns="urn:ebay:apis:eBLBaseComponents">` +
@@ -218,11 +225,15 @@ const GET_ORDERS_FIELDS = [
 ];
 
 // createTimeFrom/createTimeTo are ISO 8601 strings; eBay caps this range at
-// 90 days per request.
-async function getOrders(accessToken, { createTimeFrom, createTimeTo, pageNumber = 1, entriesPerPage = 50, siteId } = {}) {
+// 90 days per request. Alternatively modTimeFrom/modTimeTo (≤30 days apart)
+// select orders CHANGED in the window, which is how a refresh picks up only
+// what moved since the last sync instead of re-reading 90 days.
+async function getOrders(accessToken, { createTimeFrom, createTimeTo, modTimeFrom, modTimeTo, pageNumber = 1, entriesPerPage = 50, siteId } = {}) {
+  const window = modTimeFrom
+    ? `<ModTimeFrom>${modTimeFrom}</ModTimeFrom><ModTimeTo>${modTimeTo}</ModTimeTo>`
+    : `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom><CreateTimeTo>${createTimeTo}</CreateTimeTo>`;
   const body =
-    `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom>` +
-    `<CreateTimeTo>${createTimeTo}</CreateTimeTo>` +
+    window +
     `<OrderStatus>All</OrderStatus>` +
     `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination>` +
     GET_ORDERS_FIELDS.map((f) => `<OutputSelector>${f}</OutputSelector>`).join('');
@@ -270,6 +281,48 @@ async function reviseDescription(accessToken, itemId, descriptionHtml, { siteId 
     siteId
   );
   return { itemId: String(body.ItemID || itemId) };
+}
+
+// The seller's Shop categories (only sellers with an eBay Shop subscription
+// have any): the custom departments a listing can be filed under, two levels
+// deep. Returned as a tree of { id, name, children }.
+async function getStoreCategories(accessToken, { siteId } = {}) {
+  const res = await tradingRequest(accessToken, 'GetStore', '<CategoryStructureOnly>true</CategoryStructureOnly>', siteId).catch((err) => {
+    // "not a store subscriber" is a plain no, not a failure.
+    if (err.statusCode === 429) throw err;
+    return null;
+  });
+  const map = (node) => ({
+    id: String(node.CategoryID),
+    name: String(node.Name),
+    children: toArray(node.ChildCategory).map(map),
+  });
+  return toArray(res?.Store?.CustomCategories?.CustomCategory).map(map);
+}
+
+// Feedback buyers left for this seller: the genuine reviews a description
+// template may quote. Positive comments only, most recent first.
+async function getSellerFeedback(accessToken, { siteId, entriesPerPage = 100 } = {}) {
+  const res = await tradingRequest(
+    accessToken,
+    'GetFeedback',
+    `<FeedbackType>FeedbackReceivedAsSeller</FeedbackType><DetailLevel>ReturnAll</DetailLevel>` +
+      `<Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>1</PageNumber></Pagination>`,
+    siteId
+  );
+  return toArray(res.FeedbackDetailArray?.FeedbackDetail).map((f) => ({
+    text: String(f.CommentText || '').trim(),
+    type: String(f.CommentType || ''),
+    buyer: f.CommentingUser ? String(f.CommentingUser) : '',
+    date: f.CommentTime ? String(f.CommentTime) : '',
+    itemTitle: f.ItemTitle ? String(f.ItemTitle) : '',
+  }));
+}
+
+// Subscribes the token's account to Platform Notifications (see
+// ebay.notifications.js for the events and the delivery URL).
+async function setNotificationPreferences(accessToken, bodyXml, { siteId } = {}) {
+  await tradingRequest(accessToken, 'SetNotificationPreferences', bodyXml, siteId);
 }
 
 // Trading's numeric condition ids <-> the Inventory API enum the drafts use.
@@ -420,6 +473,9 @@ async function getUserProfile(accessToken) {
 module.exports = {
   EbayTradingError,
   getUserProfile,
+  getStoreCategories,
+  getSellerFeedback,
+  setNotificationPreferences,
   CONDITION_IDS,
   getActiveListings,
   getUnsoldListings,

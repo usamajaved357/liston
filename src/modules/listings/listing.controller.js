@@ -5,11 +5,17 @@ const listingService = require('./listing.service');
 // (title/description/price/category typed in by the user) — that's exactly
 // what eBay's own listing tools already do, so it added nothing. Liston's
 // value is doing this from two URLs with AI, not re-implementing eBay's form.
+// The competitor is optional: without one the category comes from eBay's
+// own suggestions and the seller confirms it in the editor.
 const urlsSchema = z.object({
-  competitorUrl: z
-    .string()
-    .url('Enter a valid eBay listing URL')
-    .refine((u) => /ebay\./.test(u), "That doesn't look like an eBay listing URL"),
+  competitorUrl: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z
+      .string()
+      .url('Enter a valid eBay listing URL')
+      .refine((u) => /ebay\./.test(u), "That doesn't look like an eBay listing URL")
+      .optional()
+  ),
   sourceUrl: z
     .string()
     .url('Enter a valid AliExpress listing URL')
@@ -91,8 +97,8 @@ async function removeInactive(req, res, next) {
 
 async function getOne(req, res, next) {
   try {
-    const { listing, policies } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
-    res.status(200).json({ listing, policies });
+    const { listing, policies, category } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
+    res.status(200).json({ listing, policies, category });
   } catch (err) {
     next(err);
   }
@@ -156,7 +162,22 @@ const updateDraftSchema = z
       )
       .optional(),
     removeAxisValues: z.array(z.object({ axis: z.string().min(1), value: z.string().min(1) })).optional(),
+    // "6 Slot, Clear" → "Clear, 6 slots": the option's name as buyers see it.
+    renameAxisValues: z.array(z.object({ axis: z.string().min(1), from: z.string().min(1), to: z.string().trim().min(1).max(50) })).optional(),
+    // "Color" → "Colour": the attribute the buyer picks from.
+    renameAxes: z.array(z.object({ from: z.string().min(1), to: z.string().trim().min(1).max(65) })).optional(),
+    // A new option on an existing attribute ("20" on Unit Quantity): its
+    // variations are copied from an existing option's (price, quantity,
+    // photo) so the seller edits from something rather than nothing.
+    addAxisValues: z.array(z.object({ axis: z.string().min(1), value: z.string().trim().min(1).max(50), copyFrom: z.string().min(1).optional() })).optional(),
     variantSkusToRemove: z.array(z.string()).optional(),
+    // eBay's custom label: up to 50 characters, no whitespace at the ends.
+    sku: z.string().trim().min(1).max(50, 'SKUs are limited to 50 characters').optional(),
+    // Changing the primary category refits title/specifics/description (see
+    // the service); the second category and Shop categories are plain fields.
+    categoryId: z.string().regex(/^\d+$/).optional(),
+    secondaryCategoryId: z.string().regex(/^\d+$/).nullable().optional(),
+    storeCategoryNames: z.array(z.string().min(1).max(200)).max(2, 'eBay allows at most two Shop categories').optional(),
   })
   .refine((patch) => Object.keys(patch).length > 0, 'Nothing to update');
 
@@ -251,6 +272,38 @@ async function downloadImage(req, res, next) {
   }
 }
 
+async function variationFixes(req, res, next) {
+  try {
+    res.status(200).json(await listingService.variationFixes(req.params.listingId, req.ownerId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const applyFixSchema = z.object({ categoryId: z.string().regex(/^\d+$/), axisNames: z.record(z.string().min(1).max(65)).default({}) });
+
+async function applyVariationFix(req, res, next) {
+  try {
+    const parsed = applyFixSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    const result = await listingService.applyVariationFix(req.params.listingId, req.ownerId, parsed.data);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function splitVariant(req, res, next) {
+  try {
+    const index = Number(req.params.index);
+    if (!Number.isInteger(index) || index < 0) return res.status(400).json({ error: 'Which variation?' });
+    const listing = await listingService.splitVariant(req.params.listingId, req.ownerId, index);
+    res.status(201).json({ listing });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function remove(req, res, next) {
   try {
     await listingService.removeDraft(req.params.listingId, req.ownerId);
@@ -260,4 +313,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, getOne, descriptionPreview, update, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };

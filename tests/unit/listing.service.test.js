@@ -593,3 +593,264 @@ test('removeInactiveListing clears Liston records, deletes eBay inventory object
   assert.deepStrictEqual(settings.mock.calls[0].arguments[2], { hiddenItemIds: ['1', '407000000009'] });
   assert.deepStrictEqual(delRows.mock.calls[0].arguments, [CONNECTION_ID, '407000000009']);
 });
+
+// --- category, SKU and splitting -------------------------------------------
+
+const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+test('publish uses the seller’s own SKU as-is, and numbers variations from it', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      sku: 'Liston-777',
+      commonTitle: 'Widget',
+      commonDescription: 'd',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      categoryId: '11',
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Colour', values: ['Red', 'Blue'] }] },
+      variants: [
+        { aspects: { Colour: ['Red'] }, imageUrls: ['https://i.ebayimg.com/r.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Colour: ['Blue'] }, imageUrls: ['https://i.ebayimg.com/b.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => null);
+  mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  const draftMock = mock.method(ebayService, 'draftVariationListing', async (credentials, input) => {
+    assert.strictEqual(input.groupKey, 'Liston-777');
+    assert.deepStrictEqual(input.variants.map((v) => v.sku), ['Liston-777-1', 'Liston-777-2']);
+    return { groupKey: input.groupKey };
+  });
+  mock.method(ebayService, 'publishGroup', async () => ({ externalProductId: 'ebay-1' }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await listingService.publish('listing-1', USER_ID);
+  assert.strictEqual(draftMock.mock.calls.length, 1);
+});
+
+test('publish refuses a variation draft whose category does not allow variations, before touching eBay', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      categoryId: '9886',
+      categoryPath: ['Vehicle Parts & Accessories', 'Other Car Parts & Accessories'],
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Colour', values: ['Red', 'Blue'] }] },
+      variants: [
+        { aspects: { Colour: ['Red'] }, imageUrls: ['https://i.ebayimg.com/r.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Colour: ['Blue'] }, imageUrls: ['https://i.ebayimg.com/b.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => false);
+  const draftMock = mock.method(ebayService, 'draftVariationListing', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), /doesn't allow multi-variation listings in "Other Car Parts & Accessories"/);
+  assert.strictEqual(draftMock.mock.calls.length, 0);
+});
+
+test('splitVariant lifts one variation into a single-item draft with the shared and own specifics', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft(
+      {
+        marketplaceId: 'EBAY_GB',
+        sku: 'Liston-777',
+        commonTitle: 'Coin Dispenser Holder Organiser with Spring',
+        commonDescription: 'shared desc',
+        imageUrls: ['https://i.ebayimg.com/main.jpg'],
+        categoryId: '9886',
+        categoryPath: ['Vehicle Parts & Accessories', 'Other Car Parts & Accessories'],
+        listingPolicies: { fulfillmentPolicyId: 'f1', paymentPolicyId: 'p1', returnPolicyId: 'r1' },
+        merchantLocationKey: 'main',
+        variesBy: { aspects: { Type: ['Coin Holder'] }, aspectsImageVariesBy: ['Colour'], specifications: [{ name: 'Colour', values: ['Black', 'Silver'] }] },
+        variants: [
+          { aspects: { Colour: ['Black'] }, imageUrls: ['https://i.ebayimg.com/black.jpg'], price: { value: '12.99', currency: 'GBP' }, quantity: 3 },
+          { aspects: { Colour: ['Silver'] }, imageUrls: ['https://i.ebayimg.com/silver.jpg'], price: { value: '13.99', currency: 'GBP' }, quantity: 1 },
+        ],
+      },
+      { source_data: { source: { title: 's' } } }
+    )
+  );
+  const createMock = mock.method(listingRepository, 'createDraft', async (row) => ({ id: 'new-1', ...row }));
+
+  const created = await listingService.splitVariant('listing-1', USER_ID, 1);
+
+  const data = createMock.mock.calls[0].arguments[0].generatedData;
+  assert.strictEqual(created.id, 'new-1');
+  assert.strictEqual(data.title, 'Coin Dispenser Holder Organiser with Spring Silver');
+  assert.deepStrictEqual(data.aspects, { Type: ['Coin Holder'], Colour: ['Silver'] });
+  assert.deepStrictEqual(data.imageUrls, ['https://i.ebayimg.com/silver.jpg', 'https://i.ebayimg.com/main.jpg']);
+  assert.deepStrictEqual(data.price, { value: '13.99', currency: 'GBP' });
+  assert.strictEqual(data.quantity, 1);
+  assert.strictEqual(data.sku, 'Liston-777-2');
+  assert.strictEqual(data.variants, undefined);
+  assert.strictEqual(data.splitFromListingId, 'listing-1');
+});
+
+test('splitVariant refuses an index that is not on the draft', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => pendingDraft({ variants: [] }));
+  await assert.rejects(() => listingService.splitVariant('listing-1', USER_ID, 4), /no longer on the draft/);
+});
+
+test('updateDraft with a new category refits title, description and specifics, keeping origin', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft(
+      {
+        marketplaceId: 'EBAY_GB',
+        title: 'Old title',
+        description: 'Old desc',
+        aspects: { Type: ['Coin Holder'], 'Country/Region of Manufacture': ['United Kingdom'] },
+        categoryId: '9886',
+        categoryPath: ['Vehicle Parts & Accessories', 'Other Car Parts & Accessories'],
+        imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      },
+      { error_message: 'Last publish failed: category does not support variations', source_data: { source: { title: 'src' } } }
+    )
+  );
+  mock.method(ebayTaxonomy, 'getCategoryPath', async () => [{ id: '131090', name: 'Vehicle Parts & Accessories' }, { id: '63691', name: 'Cup Holders' }]);
+  mock.method(ebayTaxonomy, 'getCategoryChildren', async () => []);
+  mock.method(ebayTaxonomy, 'getAspectSchema', async () => null);
+  const refitMock = mock.method(textGenerator, 'refitContentForCategory', async ({ categoryPath }) => {
+    assert.deepStrictEqual(categoryPath, ['Vehicle Parts & Accessories', 'Cup Holders']);
+    return { title: 'New title for cup holders', description: 'New desc', aspects: { Type: ['Cup Holder'] }, warnings: [] };
+  });
+  const updateMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data, error_message: 'stale' }));
+  const statusMock = mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, generated_data: updateMock.mock.calls[0].arguments[1], ...extra }));
+
+  const { listing } = await listingService.updateDraft('listing-1', USER_ID, { categoryId: '63691' });
+
+  assert.strictEqual(refitMock.mock.calls.length, 1);
+  const saved = updateMock.mock.calls[0].arguments[1];
+  assert.strictEqual(saved.categoryId, '63691');
+  assert.deepStrictEqual(saved.categoryPath, ['Vehicle Parts & Accessories', 'Cup Holders']);
+  assert.strictEqual(saved.title, 'New title for cup holders');
+  assert.deepStrictEqual(saved.aspects, { Type: ['Cup Holder'], 'Country/Region of Manufacture': ['United Kingdom'] });
+  assert.match(saved.warnings[0], /^Category changed to/);
+  // The recorded publish failure was about the old category.
+  assert.strictEqual(statusMock.mock.calls[0].arguments[2].errorMessage, null);
+  assert.strictEqual(listing.errorMessage, null);
+});
+
+test('updateDraft refuses a category that is not a final (leaf) category', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => pendingDraft({ categoryId: '1', title: 't', description: 'd', imageUrls: [] }));
+  mock.method(ebayTaxonomy, 'getCategoryPath', async () => [{ id: '10', name: 'Vehicle Parts' }]);
+  mock.method(ebayTaxonomy, 'getCategoryChildren', async () => [{ id: '11', name: 'Cup Holders', leaf: true, childCount: 0 }]);
+  await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { categoryId: '10' }), /final category/);
+});
+
+test('updateDraft renames an option and an axis everywhere they appear', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      commonTitle: 't',
+      commonDescription: 'd',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: ['Color'], specifications: [{ name: 'Color', values: ['Blk', 'Red'] }] },
+      variants: [
+        { aspects: { Color: ['Blk'] }, imageUrls: ['https://i.ebayimg.com/b.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Color: ['Red'] }, imageUrls: ['https://i.ebayimg.com/r.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  const updateMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  await listingService.updateDraft('listing-1', USER_ID, {
+    renameAxisValues: [{ axis: 'Color', from: 'Blk', to: 'Black' }],
+    renameAxes: [{ from: 'Color', to: 'Colour' }],
+  });
+
+  const saved = updateMock.mock.calls[0].arguments[1];
+  assert.deepStrictEqual(saved.variants.map((v) => v.aspects), [{ Colour: ['Black'] }, { Colour: ['Red'] }]);
+  assert.deepStrictEqual(saved.variesBy.specifications, [{ name: 'Colour', values: ['Black', 'Red'] }]);
+  assert.deepStrictEqual(saved.variesBy.aspectsImageVariesBy, ['Colour']);
+});
+
+test('updateDraft refuses to rename an option onto one that already exists', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      imageUrls: [],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Colour', values: ['Black', 'Red'] }] },
+      variants: [
+        { aspects: { Colour: ['Black'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Colour: ['Red'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  await assert.rejects(
+    () => listingService.updateDraft('listing-1', USER_ID, { renameAxisValues: [{ axis: 'Colour', from: 'Red', to: 'Black' }] }),
+    /already an option/
+  );
+});
+
+test('updateDraft adds an option by copying the variations of an existing one', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      commonTitle: 't',
+      commonDescription: 'd',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Unit Quantity', values: ['1', '2'] }] },
+      variants: [
+        { aspects: { 'Unit Quantity': ['1'] }, imageUrls: ['https://i.ebayimg.com/1.jpg'], price: { value: '6.99', currency: 'GBP' }, quantity: 3 },
+        { aspects: { 'Unit Quantity': ['2'] }, imageUrls: ['https://i.ebayimg.com/2.jpg'], price: { value: '9.99', currency: 'GBP' }, quantity: 3 },
+      ],
+    })
+  );
+  const updateMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  await listingService.updateDraft('listing-1', USER_ID, { addAxisValues: [{ axis: 'Unit Quantity', value: '5', copyFrom: '2' }] });
+
+  const saved = updateMock.mock.calls[0].arguments[1];
+  assert.strictEqual(saved.variants.length, 3);
+  assert.deepStrictEqual(saved.variants[2].aspects, { 'Unit Quantity': ['5'] });
+  assert.strictEqual(saved.variants[2].price.value, '9.99');
+  assert.deepStrictEqual(saved.variants[2].imageUrls, ['https://i.ebayimg.com/2.jpg']);
+  assert.deepStrictEqual(saved.variesBy.specifications[0].values, ['1', '2', '5']);
+
+  await assert.rejects(
+    () => listingService.updateDraft('listing-1', USER_ID, { addAxisValues: [{ axis: 'Unit Quantity', value: '2' }] }),
+    /already an option/
+  );
+});
+
+test('publish refuses a variation attribute eBay does not allow in the category, naming the allowed ones', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      categoryId: '11844',
+      categoryPath: ["Men's Shavers"],
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Unit Quantity', values: ['1', '2'] }] },
+      variants: [
+        { aspects: { 'Unit Quantity': ['1'] }, imageUrls: ['https://i.ebayimg.com/1.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { 'Unit Quantity': ['2'] }, imageUrls: ['https://i.ebayimg.com/2.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [
+    { name: 'Colour', variation: true },
+    { name: 'Unit Quantity', variation: false },
+  ]);
+  const draftMock = mock.method(ebayService, 'draftVariationListing', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), /doesn't allow "Unit Quantity" as a variation attribute.*Colour/);
+  assert.strictEqual(draftMock.mock.calls.length, 0);
+});
+
+test('updateDraft refuses to rename an axis to a name eBay does not allow as a variation', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      categoryId: '11844',
+      imageUrls: [],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Unit Quantity', values: ['1'] }] },
+      variants: [{ aspects: { 'Unit Quantity': ['1'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 }],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [{ name: 'Colour', variation: true }, { name: 'Pack Size', variation: false }]);
+  await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Unit Quantity', to: 'Pack Size' }] }), /accepts: Colour/);
+});

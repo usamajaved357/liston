@@ -141,6 +141,15 @@ const config = {
     // used as one of the three inputs to the challenge-response hash, so it
     // must match byte-for-byte (no trailing slash mismatch, etc).
     deletionEndpointUrl: process.env.EBAY_DELETION_ENDPOINT_URL || null,
+    // Platform Notifications: eBay POSTs to this URL when a listing or order
+    // on a subscribed account changes, so Liston refreshes that account
+    // instead of polling. Set to the public HTTPS URL of
+    // /api/ebay/notifications, then run scripts/enable-ebay-notifications.js.
+    notificationsUrl: process.env.EBAY_NOTIFICATIONS_URL || null,
+    // The keyset's Dev ID (Developer Portal). With it, each notification's
+    // signature is verified; without it, notifications are accepted on shape
+    // alone (they can only ever trigger a re-read, never a change).
+    devId: process.env.EBAY_DEV_ID || null,
   },
 
   google: {

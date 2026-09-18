@@ -55,6 +55,24 @@ async function findByIdForUser(id, userId) {
   return result.rows[0] || null;
 }
 
+// eBay's notifications name the seller, not the connection. Each eBay
+// connection records its username in settings once it's known.
+async function findIdsByEbayUsername(username) {
+  const result = await query(`SELECT id, user_id FROM connections WHERE settings->'ebay'->>'username' = $1`, [username]);
+  return result.rows;
+}
+
+// All eBay connections, for one-off maintenance (e.g. subscribing every
+// account to notifications). Credentials come back encrypted.
+async function findAllEbay() {
+  const result = await query(
+    `SELECT c.id, c.user_id, c.label, c.settings
+     FROM connections c JOIN platforms p ON p.id = c.destination_platform_id
+     WHERE p.key = 'ebay'`
+  );
+  return result.rows;
+}
+
 async function create({ userId, destinationPlatformId, label, credentials }) {
   const result = await query(
     `INSERT INTO connections (user_id, destination_platform_id, label, credentials)
@@ -89,6 +107,8 @@ async function deleteByIdForUser(id, userId) {
 }
 
 module.exports = {
+  findIdsByEbayUsername,
+  findAllEbay,
   countByUser,
   getMaxConnectionsForUser,
   findPlatformByKey,

@@ -1,4 +1,7 @@
 const crypto = require('crypto');
+const governor = require('../../ebay/request-governor');
+const { query } = require('../../../db/client');
+const config = require('../../../config');
 const { XMLParser } = require('fast-xml-parser');
 const logger = require('../../../utils/logger');
 
@@ -45,9 +48,35 @@ function siteIdFor(marketplaceId) {
 }
 
 // Identical bytes always produce the same eBay URL, so re-publishing a draft
-// (or two variants sharing a photo) doesn't re-upload. Process-local: a
-// restart costs re-uploads, which is wasted work but never wrong.
+// (or two variants sharing a photo) doesn't re-upload. In memory first,
+// then the ebay_image_uploads table, so a restart or a second instance
+// doesn't repeat uploads either — each one is a Trading call.
 const uploadCache = new Map();
+
+// Tests upload the same fixture bytes with different expectations; the
+// durable cache would carry one test's answer into the next.
+const PERSIST = config.env !== 'test';
+
+async function findUploaded(hash) {
+  if (uploadCache.has(hash)) return uploadCache.get(hash);
+  if (!PERSIST) return null;
+  try {
+    const { rows } = await query('SELECT url FROM ebay_image_uploads WHERE content_hash = $1', [hash]);
+    if (rows[0]) uploadCache.set(hash, rows[0].url);
+    return rows[0]?.url || null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberUploaded(hash, url) {
+  uploadCache.set(hash, url);
+  if (!PERSIST) return;
+  query(
+    `INSERT INTO ebay_image_uploads (content_hash, url) VALUES ($1, $2) ON CONFLICT (content_hash) DO UPDATE SET url = EXCLUDED.url`,
+    [hash, url]
+  ).catch(() => {});
+}
 
 function hashOf(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -82,12 +111,12 @@ function buildMultipartBody(buffer, boundary, pictureName) {
  */
 async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureName = 'Liston listing image' } = {}) {
   const hash = hashOf(buffer);
-  const cached = uploadCache.get(hash);
+  const cached = await findUploaded(hash);
   if (cached) return cached;
 
   const boundary = `----ListonEPS${crypto.randomBytes(12).toString('hex')}`;
 
-  const res = await fetch(TRADING_API_URL, {
+  const res = await governor.run('UploadSiteHostedPictures', () => fetch(TRADING_API_URL, {
     method: 'POST',
     headers: {
       'X-EBAY-API-SITEID': siteIdFor(marketplaceId),
@@ -98,7 +127,7 @@ async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureN
     },
     body: buildMultipartBody(buffer, boundary, pictureName),
     signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
-  });
+  }));
 
   const text = await res.text();
   const parsed = parser.parse(text);
@@ -113,7 +142,7 @@ async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureN
   const fullUrl = body.SiteHostedPictureDetails?.FullURL;
   if (!fullUrl) throw new Error('eBay accepted the picture but returned no URL');
 
-  uploadCache.set(hash, fullUrl);
+  rememberUploaded(hash, fullUrl);
   return fullUrl;
 }
 

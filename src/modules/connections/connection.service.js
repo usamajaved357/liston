@@ -164,7 +164,12 @@ async function ensureMarketplace(id, userId, ebayService) {
   const detected = await ebayService.detectMarketplace(connection.credentials);
   if (detected.credentialsChanged) await updateConnectionCredentials(id, detected.credentials);
   const settings = await updateConnectionSettings(id, userId, {
-    ebay: { ...(connection.settings?.ebay || {}), marketplaceId: detected.marketplaceId },
+    ebay: {
+      ...(connection.settings?.ebay || {}),
+      marketplaceId: detected.marketplaceId,
+      // Recorded when GetUser answered: eBay's notifications name the seller.
+      ...(detected.profile?.username ? { username: detected.profile.username } : {}),
+    },
     pricing: { ...(connection.settings?.pricing || {}), currency: connection.settings?.pricing?.currency || marketplaces.currencyFor(detected.marketplaceId) },
   });
   return { ...connection, settings, credentials: { ...connection.credentials, marketplaceId: detected.marketplaceId } };

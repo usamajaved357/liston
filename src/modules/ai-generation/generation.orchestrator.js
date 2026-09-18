@@ -134,7 +134,7 @@ function resolvePricing({ source, competitor, pricing }) {
     );
   }
 
-  if (competitorPrice === null) {
+  if (competitor && competitorPrice === null) {
     warnings.push(
       `Couldn't read the competitor's price, so everything is priced at your ${settings.targetRoiPercent}% target ` +
         `return. If they sell for more than that, you may be leaving margin on the table.`
@@ -196,11 +196,39 @@ function applyOrigin(aspects = {}, countryOfOrigin) {
   return { ...cleaned, [ORIGIN_ASPECT]: [countryOfOrigin] };
 }
 
+// The allowed aspect whose meaning is closest to what the supplier's axis
+// describes: colours go to Colour, sizes to Size, device models to Model or
+// Compatible Model. Null when nothing fits (a pack size in a category with
+// no quantity-like aspect), which is reported rather than guessed.
+const AXIS_SYNONYMS = [
+  [/colou?r|shade/i, /^colou?r$/i],
+  [/size|dimension/i, /size/i],
+  [/model|compatib|device|phone/i, /model/i],
+  [/style|design|pattern/i, /style|pattern/i],
+  [/pack|quantity|qty|pcs|count|bundle/i, /\b(pack|packs|quantity|bundle|multipack)\b|\bnumber of (items|pieces|units|pcs)\b|\bset size\b/i],
+  [/type|kind|variant/i, /^type$/i],
+  [/material|fabric/i, /material/i],
+  [/length/i, /length/i],
+  [/capacity|storage|volume/i, /capacity|storage|volume/i],
+];
+
+function closestVariationAspect(axisName, allowed) {
+  for (const [axisPattern, allowedPattern] of AXIS_SYNONYMS) {
+    if (!axisPattern.test(axisName)) continue;
+    const match = allowed.find((name) => allowedPattern.test(name));
+    if (match) return match;
+  }
+  return null;
+}
+
 // STEP ONE of drafting: read both listings and nothing else. No AI, no
 // images, no cost — just enough for the seller to see what the supplier
 // offers and choose which variations to actually list. Nobody lists all 162
 // combinations of a phone case, and generating photography for variations
 // that get deleted afterwards is money and minutes thrown away.
+// The competitor is optional. Without one the category comes from eBay's
+// own suggestions for the supplier's title, and the seller confirms or
+// changes it in the editor.
 async function readSources({ competitorUrl, sourceUrl, marketplaceId = 'EBAY_GB' }) {
   // Supplier prices are asked for in the marketplace's own currency and
   // shipping country, so a US account is costed in USD shipped to the US.
@@ -213,12 +241,12 @@ async function readSources({ competitorUrl, sourceUrl, marketplaceId = 'EBAY_GB'
   // surface as an unhandled rejection and take the process down.
   sourcePromise.catch(() => {});
 
-  const competitor = await ebaySource.fetchListing(competitorUrl, marketplaceId);
+  const competitor = competitorUrl ? await ebaySource.fetchListing(competitorUrl, marketplaceId) : null;
 
   // The AI never invents this — eBay category IDs aren't guessable from a
   // title/breadcrumb, and a wrong one gets the offer rejected (or silently
   // mis-categorized). Browse returns the competitor's real leaf category id.
-  if (!competitor.categoryId) {
+  if (competitor && !competitor.categoryId) {
     throw new ScrapingError(
       "Couldn't determine the competitor listing's eBay category — try a different competitor URL.",
       { source: 'ebay' }
@@ -226,7 +254,32 @@ async function readSources({ competitorUrl, sourceUrl, marketplaceId = 'EBAY_GB'
   }
 
   const source = await sourcePromise;
-  return { competitor, source };
+
+  // eBay's own category suggestions for this product, always. With a
+  // competitor they're offered as alternatives in the editor; without one the
+  // first becomes the draft's category.
+  const categorySuggestions = await ebayTaxonomy.suggestCategories(marketplaceId, source.title).catch(() => []);
+  if (!competitor && !categorySuggestions.length) {
+    throw new ScrapingError(
+      "eBay couldn't suggest a category for this product. Add a competitor listing URL, or try a different source.",
+      { source: 'ebay' }
+    );
+  }
+
+  return { competitor, source, categorySuggestions };
+}
+
+// The category a draft starts in: the competitor's real one, else eBay's best
+// suggestion. Both come with a readable path.
+async function resolveCategory({ competitor, categorySuggestions, marketplaceId }) {
+  if (competitor?.categoryId) {
+    const path = competitor.categoryBreadcrumb?.length
+      ? competitor.categoryBreadcrumb
+      : (await ebayTaxonomy.getCategoryPath(marketplaceId, competitor.categoryId).catch(() => [])).map((p) => p.name);
+    return { categoryId: String(competitor.categoryId), categoryPath: path };
+  }
+  const [best] = categorySuggestions || [];
+  return { categoryId: best.id, categoryPath: best.path };
 }
 
 // Keeps only the variations whose value on EVERY axis was selected. A
@@ -261,6 +314,7 @@ async function generateDraftInput({
   // is still valid for callers that don't need a selection step.
   competitor: competitorIn,
   source: sourceIn,
+  categorySuggestions: categorySuggestionsIn,
   variantSelection,
   // The connection's Listing settings (target ROI, ads/processing fees, fixed
   // fee, shipping). Prices are DERIVED from the supplier's own cost and these
@@ -275,8 +329,10 @@ async function generateDraftInput({
   accessToken,
 }) {
   const read =
-    competitorIn && sourceIn ? { competitor: competitorIn, source: sourceIn } : await readSources({ competitorUrl, sourceUrl, marketplaceId });
+    sourceIn ? { competitor: competitorIn || null, source: sourceIn, categorySuggestions: categorySuggestionsIn || [] } : await readSources({ competitorUrl, sourceUrl, marketplaceId });
   const competitor = read.competitor;
+  const categorySuggestions = read.categorySuggestions || [];
+  const category = await resolveCategory({ competitor, categorySuggestions, marketplaceId });
   // Selection first, cap second: the seller sees every option the supplier
   // offers, and only what survives their choice is subject to the listing
   // size limit.
@@ -307,7 +363,7 @@ async function generateDraftInput({
   // which are required, which accept only listed values. The model drafts
   // against that real schema instead of guessing, and its answer is validated
   // against it before the user ever sees the draft.
-  const aspectSchema = await ebayTaxonomy.getAspectSchema(marketplaceId, competitor.categoryId);
+  const aspectSchema = await ebayTaxonomy.getAspectSchema(marketplaceId, category.categoryId);
 
   // Costs and prices are worked out before drafting so the model can be told
   // the real numbers, and so a pricing problem (wrong currency, unreadable
@@ -321,6 +377,7 @@ async function generateDraftInput({
     sellPrice: priced.productPrice.sellPrice,
     currency: priced.currency,
     aspectSchema,
+    categoryPath: category.categoryPath,
   });
 
   const hasVariants = source.variants.length > 0;
@@ -336,7 +393,7 @@ async function generateDraftInput({
     sourceImageUrls: source.imageUrls,
     accessToken,
     marketplaceId,
-    categoryId: competitor.categoryId,
+    categoryId: category.categoryId,
   });
 
   // Surfaced on the review page so the seller sees what the automated steps
@@ -352,8 +409,9 @@ async function generateDraftInput({
         aspects: content.aspects,
         condition: content.condition,
         quantity: 1,
-        categoryId: competitor.categoryId,
-        categoryPath: competitor.categoryBreadcrumb || [],
+        categoryId: category.categoryId,
+        categoryPath: category.categoryPath,
+        categorySuggestions,
         price: { value: String(priced.productPrice.sellPrice), currency: priced.currency },
         // The full working — cost, each fee, profit and realised ROI — so the
         // review page can show WHY the price is what it is instead of a bare
@@ -384,6 +442,31 @@ async function generateDraftInput({
     ...axis,
     ebayName: index === 0 ? content.varyingAspectName || axis.name : axis.name,
   }));
+
+  // eBay only lets certain aspects vary in each category ("Unit Quantity" is
+  // not one of them for shavers, and the publish is refused). When the
+  // schema is known, every axis name must be on that list: a near match is
+  // substituted, otherwise the draft carries a warning and the editor offers
+  // the allowed names.
+  const allowedAxes = (aspectSchema || []).filter((a) => a.variation).map((a) => a.name);
+  if (allowedAxes.length) {
+    for (const axis of axes) {
+      if (allowedAxes.some((name) => name.toLowerCase() === axis.ebayName.toLowerCase())) {
+        axis.ebayName = allowedAxes.find((name) => name.toLowerCase() === axis.ebayName.toLowerCase());
+        continue;
+      }
+      const substitute = closestVariationAspect(axis.ebayName, allowedAxes);
+      if (substitute) {
+        warnings.push(`eBay doesn't allow "${axis.ebayName}" as a variation in this category, so the options are listed under "${substitute}".`);
+        axis.ebayName = substitute;
+      } else {
+        warnings.push(
+          `eBay doesn't allow "${axis.ebayName}" as a variation in this category. Rename the attribute to one eBay accepts here ` +
+            `(${allowedAxes.slice(0, 6).join(', ')}${allowedAxes.length > 6 ? '…' : ''}), change the category, or list the options separately.`
+        );
+      }
+    }
+  }
   const primaryAxis = axes[0];
   const cleanedPrimary = cleanPrimaryAxisValues(source.variants, primaryAxis, content);
 
@@ -485,8 +568,9 @@ async function generateDraftInput({
         })),
       },
       variants,
-      categoryId: competitor.categoryId,
-      categoryPath: competitor.categoryBreadcrumb || [],
+      categoryId: category.categoryId,
+      categoryPath: category.categoryPath,
+      categorySuggestions,
       merchantLocationKey,
     },
     warnings,
@@ -495,4 +579,4 @@ async function generateDraftInput({
   };
 }
 
-module.exports = { generateDraftInput, readSources, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };
+module.exports = { generateDraftInput, readSources, resolveCategory, closestVariationAspect, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };

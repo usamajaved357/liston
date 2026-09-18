@@ -38,14 +38,14 @@ test('renderDescription lists the account’s own live listings and nothing else
     description: 'd',
     recommended: [{ url: 'https://www.ebay.co.uk/itm/1', imageUrl: 'https://i/a.jpg', name: 'Other', price: '£4.99' }],
   });
-  assert.ok(html.includes('More From Our Store'));
+  assert.ok(html.includes('Best Sellers From Our Store'));
   assert.ok(html.includes('https://www.ebay.co.uk/itm/1'));
   assert.ok(html.includes('£4.99'));
 });
 
 test('renderDescription omits the carousel when there is nothing to recommend', () => {
   const html = renderDescription({ template: base, productName: 'P', description: 'd', recommended: [] });
-  assert.ok(!html.includes('More From Our Store'));
+  assert.ok(!html.includes('Best Sellers From Our Store'));
 });
 
 test('renderDescription hides the feedback badge rather than guessing a number', () => {

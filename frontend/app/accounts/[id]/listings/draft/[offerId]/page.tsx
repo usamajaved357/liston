@@ -5,7 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import {
   api,
   ApiError,
+  AspectSchemaEntry,
   ConnectionPolicies,
+  DraftCategoryInfo,
   DraftContent,
   DraftListing,
   DraftPatch,
@@ -14,11 +16,13 @@ import {
   PriceBreakdown,
   TextProposal,
   VariationDraftVariant,
+  VariationFixes,
   isVariationDraft,
 } from "@/lib/api";
 import { Alert } from "@/components/Alert";
 import { EditorHeader } from "@/components/EditorHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { CategoryPicker, CategorySelection } from "@/components/CategoryPicker";
 import { currencySymbol, formatPrice } from "@/lib/format";
 
 // The draft editor. A draft lives only in Liston until Publish, so every
@@ -525,6 +529,138 @@ function GalleryGrid({
 // which is what sellers already know how to read.
 
 type AxisRemoval = { axis: string; value: string };
+type Renames = Record<string, Record<string, string>>; // axis -> original value -> new name
+
+// A label that turns into an input on click: how variation names and
+// option names are edited in place, without a form.
+function InlineName({
+  value,
+  onChange,
+  disabled,
+  className,
+  maxLength = 50,
+  suggestions,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+  className?: string;
+  maxLength?: number;
+  // Offered while editing (eBay's allowed attribute names, say).
+  suggestions?: string[];
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const listId = suggestions?.length ? `inline-name-${value.replace(/\W+/g, "-")}` : undefined;
+  if (editing && !disabled) {
+    return (
+      <>
+      {listId && (
+        <datalist id={listId}>
+          {suggestions!.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+      )}
+      <input
+        list={listId}
+        autoFocus
+        className="h-6 min-w-[6rem] rounded-md border border-[var(--color-primary)] bg-[var(--color-panel)] px-1.5 text-[13px] text-[var(--color-ink)] focus:outline-none"
+        value={draft}
+        maxLength={maxLength}
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          if (draft.trim() && draft.trim() !== value) onChange(draft.trim());
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Escape") {
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+      />
+      </>
+    );
+  }
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={disabled ? undefined : "Click to rename"}
+      onClick={() => {
+        setDraft(value);
+        setEditing(true);
+      }}
+      className={`group/name inline-flex items-center gap-1 rounded-md text-left ${disabled ? "" : "hover:bg-[var(--color-primary-soft)]"} ${className || ""}`}
+    >
+      <span>{value}</span>
+      {!disabled && (
+        <span className="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-paper)] text-[var(--color-muted)] group-hover/name:bg-[var(--color-primary)] group-hover/name:text-white" aria-hidden>
+          <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3">
+            <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+          </svg>
+        </span>
+      )}
+    </button>
+  );
+}
+
+// Choose a variation's photo from everything the draft already has (the
+// gallery and every other variation's photo), or upload a new one.
+function ImagePickerDialog({
+  title,
+  images,
+  current,
+  onPick,
+  onUpload,
+  onClose,
+}: {
+  title: string;
+  images: string[];
+  current: string | null;
+  onPick: (url: string) => void;
+  onUpload: (file: File) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-bold text-[var(--color-ink)]">{title}</h2>
+            <p className="text-xs text-[var(--color-muted)]">Pick one of the draft&apos;s photos, or upload a new one for this variation.</p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <FileButton label="Upload" onFiles={(f) => f[0] && onUpload(f[0])} className="btn btn-secondary btn-sm" />
+            <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+              Close
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 grid max-h-[60vh] grid-cols-3 gap-2 overflow-y-auto pr-1 sm:grid-cols-4 md:grid-cols-5">
+          {images.map((url, i) => (
+            <button
+              key={url}
+              type="button"
+              onClick={() => onPick(url)}
+              className={`relative aspect-square overflow-hidden rounded-xl border-2 bg-white transition-colors ${
+                url === current ? "border-[var(--color-primary)]" : "border-[var(--color-line)] hover:border-[var(--color-primary)]"
+              }`}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={url} alt="" className="h-full w-full object-contain" />
+              <span className="absolute left-1.5 top-1.5 rounded-full bg-black/60 px-1.5 text-[10px] font-semibold text-white">{i + 1}</span>
+              {url === current && <span className="absolute bottom-1.5 right-1.5 rounded-full bg-[var(--color-primary)] px-1.5 text-[10px] font-semibold text-white">Current</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function VariationsTable({
   variants,
@@ -545,8 +681,44 @@ function VariationsTable({
   onUploadImage,
   onApplyAll,
   disabled,
+  variationsSupported,
+  onSplit,
+  splitting,
+  splitDone,
+  accountId,
+  valueRenames,
+  axisRenames,
+  onRenameValue,
+  onRenameAxis,
+  addedValues,
+  onAddValue,
+  onUndoAddValue,
+  allowedAxes,
+  fixes,
+  onApplyFix,
+  applyingFix,
+  onSplitAll,
 }: {
   variants: VariationDraftVariant[];
+  // Attribute names eBay accepts as variations in this category; null if unknown.
+  allowedAxes: string[] | null;
+  fixes: VariationFixes | null;
+  onApplyFix?: (fix: VariationFixes["categories"][number]) => void;
+  applyingFix: boolean;
+  onSplitAll?: () => void;
+  // Options added since the last save (they exist only once saved).
+  addedValues: { axis: string; value: string; copyFrom: string }[];
+  onAddValue: (axis: string, value: string, copyFrom: string) => void;
+  onUndoAddValue: (axis: string, value: string) => void;
+  valueRenames: Renames;
+  axisRenames: Record<string, string>;
+  onRenameValue: (axis: string, from: string, to: string) => void;
+  onRenameAxis: (from: string, to: string) => void;
+  variationsSupported: boolean | null;
+  onSplit?: (index: number) => void;
+  splitting: number | null;
+  splitDone: { id: string; title: string }[];
+  accountId: string;
   specifications: { name: string; values: string[] }[];
   galleryImages: string[];
   removedIndexes: Set<number>;
@@ -567,6 +739,16 @@ function VariationsTable({
 }) {
   const [bulkPrice, setBulkPrice] = useState("");
   const [bulkQty, setBulkQty] = useState("");
+  const [pickerFor, setPickerFor] = useState<number | null>(null);
+  const [adding, setAdding] = useState<{ axis: string; value: string } | null>(null);
+  // Names as the seller has renamed them (unsaved), falling back to the draft's.
+  const showAxis = (axis: string) => axisRenames[axis] || axis;
+  const axisAllowed = (axis: string) => !allowedAxes || !allowedAxes.length || allowedAxes.some((a) => a.toLowerCase() === showAxis(axis).toLowerCase());
+  const disallowedAxes = specifications.map((s) => s.name).filter((axis) => !axisAllowed(axis));
+  const showValue = (axis: string, value: string) => valueRenames[axis]?.[value] || value;
+  // Every photo the draft has, for the picker: gallery first, then each
+  // variation's own.
+  const allImages = [...new Set([...galleryImages, ...variants.flatMap((v) => v.imageUrls || []), ...Object.values(imageOverrides)])];
   // Which row's price working is open — the ROI figure is a button.
   // Rendered position: fixed, so the table's own scroll container can't
   // clip it.
@@ -609,11 +791,129 @@ function VariationsTable({
         )}
       </div>
 
+      {variationsSupported === false && (
+        <div className="mt-3 rounded-2xl border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-4 py-3 text-sm text-[var(--color-ink)]">
+          <p>
+            <strong>eBay doesn&apos;t allow variations in this category.</strong> Publishing this as one listing will be refused. Either
+            change the category, or use <em>List separately</em> on each variation you want to sell: each becomes its own single-item
+            draft with the shared title, photos and specifics plus that option&apos;s own.
+          </p>
+        </div>
+      )}
+      {disallowedAxes.length > 0 && (
+        <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--color-warning)]/40">
+          <div className="flex items-start gap-3 bg-[var(--color-warning-soft)] px-4 py-3">
+            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-warning)] text-white">
+              <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5">
+                <path d="M12 8v5M12 16.5h.01" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+              </svg>
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-[var(--color-ink)]">
+                eBay won&apos;t accept &ldquo;{disallowedAxes.map(showAxis).join("”, “")}&rdquo; as the thing buyers choose in this category
+              </p>
+              <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">
+                Each eBay category has its own list of attributes a listing may vary by. Pick one of the ways out below; publishing is blocked until then.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-4 bg-[var(--color-panel)] px-4 py-4 md:grid-cols-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Switch category</p>
+              {fixes === null ? (
+                <div className="mt-2 h-9 animate-pulse rounded-xl bg-[var(--color-paper)]" />
+              ) : fixes.categories.length === 0 ? (
+                <p className="mt-2 text-[12.5px] text-[var(--color-muted)]">
+                  None of eBay&apos;s suggested categories for this product allow a variation like this one. You can still change the category by hand from the details panel.
+                </p>
+              ) : (
+                <div className="mt-2 space-y-1.5">
+                  {fixes.categories.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={disabled || applyingFix}
+                      onClick={() => onApplyFix?.(c)}
+                      className="w-full rounded-xl border border-[var(--color-line)] px-3 py-2 text-left transition-colors hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-soft)] disabled:opacity-50"
+                    >
+                      <span className="block text-[13px] font-semibold text-[var(--color-ink)]">{applyingFix ? "Switching…" : `Switch to ${c.name}`}</span>
+                      <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{c.path.join(" › ")}</span>
+                      <span className="block text-[11.5px] text-[var(--color-muted)]">
+                        Options become &ldquo;{Object.values(c.axisNames).join("”, “")}&rdquo; · title and specifics refitted
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Rename the attribute</p>
+              <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">Keep the category; call the options one of these instead:</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {(allowedAxes || []).map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => disallowedAxes.forEach((axis) => onRenameAxis(axis, name))}
+                    className="rounded-full border border-[var(--color-line)] px-2.5 py-1 text-[12px] font-medium text-[var(--color-ink)] transition-colors hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">List separately</p>
+              <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">
+                Publish each option as its own listing (the usual way for multipacks). Use the buttons on each row, or all at once:
+              </p>
+              {onSplitAll && (
+                <button type="button" disabled={disabled || splitting !== null} onClick={onSplitAll} className="btn btn-accent btn-sm mt-2">
+                  {splitting !== null ? "Creating…" : `List all ${remaining} separately`}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {splitDone.length > 0 && (
+        <div className="mt-3 rounded-2xl border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
+          <p className="font-semibold text-[var(--color-ink)]">
+            {splitDone.length} separate draft{splitDone.length === 1 ? "" : "s"} created
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {splitDone.map((d) => (
+              <li key={d.id}>
+                <a href={`/accounts/${accountId}/listings/draft/${d.id}`} className="text-[var(--color-primary)] hover:underline">
+                  {d.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {!disabled && (
+        <p className="mt-3 text-xs text-[var(--color-muted)]">
+          Click an attribute or option name to rename it, or press &ldquo;+ Add option&rdquo; to add one (it copies the first option&apos;s price, quantity and photo; edit them after saving). Click a photo in the table to change it. Bin an option to drop it.
+        </p>
+      )}
+
       {/* Attribute values — remove a whole colour or size at once */}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {specifications.map((spec) => (
           <div key={spec.name} className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-paper)] px-3.5 py-3">
-            <p className={labelClass}>{spec.name}</p>
+            <div className={labelClass}>
+              <InlineName
+                value={showAxis(spec.name)}
+                onChange={(to) => onRenameAxis(spec.name, to)}
+                disabled={disabled}
+                maxLength={65}
+                suggestions={allowedAxes || undefined}
+                className={`px-1 -ml-1 ${axisAllowed(spec.name) ? "" : "text-[var(--color-danger)]"}`}
+              />
+            </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {spec.values.map((value) => {
                 const gone = axisRemoved(spec.name, value);
@@ -627,7 +927,11 @@ function VariationsTable({
                         : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)]"
                     }`}
                   >
-                    <span className={gone ? "line-through" : "font-medium"}>{value}</span>
+                    {gone ? (
+                      <span className="line-through">{showValue(spec.name, value)}</span>
+                    ) : (
+                      <InlineName value={showValue(spec.name, value)} onChange={(to) => onRenameValue(spec.name, value, to)} disabled={disabled} className="font-medium" />
+                    )}
                     <span className="rounded-full bg-[var(--color-paper)] px-1.5 text-[11px] font-semibold text-[var(--color-muted)]">{count}</span>
                     {!disabled && (
                       <button
@@ -647,6 +951,57 @@ function VariationsTable({
                   </span>
                 );
               })}
+              {addedValues
+                .filter((a) => a.axis === spec.name)
+                .map((a) => (
+                  <span key={`new-${a.value}`} className="inline-flex h-8 items-center gap-2 rounded-full border border-dashed border-[var(--color-primary)] bg-[var(--color-primary-soft)] pl-3 pr-1 text-[13px] text-[var(--color-ink)]">
+                    <span className="font-medium">{a.value}</span>
+                    <span className="text-[11px] font-semibold text-[var(--color-primary)]">new</span>
+                    {!disabled && (
+                      <button type="button" aria-label={`Undo adding ${a.value}`} title="Undo" onClick={() => onUndoAddValue(spec.name, a.value)} className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)]">
+                        {Icon.close}
+                      </button>
+                    )}
+                  </span>
+                ))}
+              {!disabled &&
+                (adding?.axis === spec.name ? (
+                  <form
+                    className="inline-flex h-8 items-center gap-1"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const value = adding.value.trim();
+                      const taken = spec.values.some((v) => showValue(spec.name, v).toLowerCase() === value.toLowerCase()) || addedValues.some((a) => a.axis === spec.name && a.value.toLowerCase() === value.toLowerCase());
+                      if (!value || taken) return;
+                      onAddValue(spec.name, value, spec.values[0]);
+                      setAdding(null);
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      className="h-8 w-32 rounded-full border border-[var(--color-primary)] bg-[var(--color-panel)] px-3 text-[13px] focus:outline-none"
+                      placeholder={`New ${showAxis(spec.name).toLowerCase()}`}
+                      value={adding.value}
+                      maxLength={50}
+                      onChange={(e) => setAdding({ axis: spec.name, value: e.target.value })}
+                      onKeyDown={(e) => e.key === "Escape" && setAdding(null)}
+                    />
+                    <button type="submit" className="btn btn-primary btn-sm !h-8">
+                      Add
+                    </button>
+                    <button type="button" onClick={() => setAdding(null)} className="btn btn-ghost btn-sm !h-8">
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setAdding({ axis: spec.name, value: "" })}
+                    className="inline-flex h-8 items-center gap-1 rounded-full border border-dashed border-[var(--color-line-strong)] px-3 text-[13px] font-medium text-[var(--color-muted)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+                  >
+                    + Add option
+                  </button>
+                ))}
             </div>
           </div>
         ))}
@@ -659,13 +1014,13 @@ function VariationsTable({
               <th className={`${cell} w-20`}>Photo</th>
               {axes.map((axis) => (
                 <th key={axis} className={cell}>
-                  {axis}
+                  {showAxis(axis)}
                 </th>
               ))}
               <th className={`${cell} w-36 text-center`}>Price ({currencySymbol(currency)})</th>
               <th className={`${cell} w-24 text-center`}>Qty</th>
               <th className={`${cell} w-24 text-center`}>ROI</th>
-              <th className={`${cell} w-14`} />
+              <th className={`${cell} ${onSplit ? "w-44" : "w-14"}`} />
             </tr>
           </thead>
           <tbody>
@@ -680,39 +1035,34 @@ function VariationsTable({
                   className={`border-t border-[var(--color-line)] ${gone ? "bg-[var(--color-paper)]/60 text-[var(--color-muted)]" : "hover:bg-[var(--color-paper)]/40"}`}
                 >
                   <td className={cell}>
-                    <div className="group relative h-11 w-11">
+                    <button
+                      type="button"
+                      disabled={disabled || gone}
+                      onClick={() => setPickerFor(i)}
+                      title={disabled || gone ? undefined : "Change this variation's photo"}
+                      className="group relative block h-11 w-11 rounded-lg disabled:cursor-default"
+                    >
                       {image ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={image} alt="" className={`h-11 w-11 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
                       ) : (
-                        <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
+                        <span className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
                           none
-                        </div>
+                        </span>
                       )}
                       {!disabled && !gone && (
-                        <div className="absolute inset-0 hidden items-center justify-center gap-1 rounded-lg bg-black/55 group-hover:flex">
-                          <select
-                            aria-label="Choose photo from gallery"
-                            title="Pick from gallery"
-                            value={image && galleryImages.includes(image) ? image : ""}
-                            onChange={(e) => e.target.value && onImageChange(i, e.target.value)}
-                            className="h-6 w-6 cursor-pointer appearance-none rounded bg-white/90 text-center text-[11px] text-transparent"
-                          >
-                            <option value="">…</option>
-                            {galleryImages.map((url, gi) => (
-                              <option key={url} value={url} className="text-[var(--color-ink)]">
-                                Photo {gi + 1}{gi === 0 ? " (main)" : ""}
-                              </option>
-                            ))}
-                          </select>
-                          <FileButton label="↑" onFiles={(f) => onUploadImage(i, f[0])} className="flex h-6 w-6 items-center justify-center rounded bg-white/90 text-[11px] font-bold text-[var(--color-ink)]" title="Upload a photo for this variation" />
-                        </div>
+                        <span className="absolute inset-0 hidden items-center justify-center rounded-lg bg-black/55 text-white group-hover:flex">
+                          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                            <path d="M4 7h3l2-2h6l2 2h3v12H4V7z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+                            <circle cx="12" cy="13" r="3.5" stroke="currentColor" strokeWidth="2" />
+                          </svg>
+                        </span>
                       )}
-                    </div>
+                    </button>
                   </td>
                   {axes.map((axis) => (
                     <td key={axis} className={`${cell} font-medium ${gone ? "line-through" : "text-[var(--color-ink)]"}`}>
-                      {v.aspects[axis]?.[0] ?? "—"}
+                      {v.aspects[axis]?.[0] !== undefined ? showValue(axis, v.aspects[axis][0]) : "—"}
                     </td>
                   ))}
                   <td className={`${cell} text-center`}>
@@ -796,6 +1146,17 @@ function VariationsTable({
                     )}
                   </td>
                   <td className={`${cell} text-center`}>
+                    {!disabled && onSplit && !gone && (
+                      <button
+                        type="button"
+                        onClick={() => onSplit(i)}
+                        disabled={splitting !== null}
+                        title="Create a separate single-item draft for this variation"
+                        className={`btn btn-sm mr-1 !h-7 !px-2.5 !text-[12px] ${variationsSupported === false ? "btn-accent" : "btn-secondary"}`}
+                      >
+                        {splitting === i ? "Creating…" : "List separately"}
+                      </button>
+                    )}
                     {!disabled &&
                       (rowRemovedDirectly ? (
                         <button type="button" onClick={() => onRestoreRow(i)} title="Restore this variation" aria-label="Restore this variation" className="btn btn-secondary btn-icon text-[var(--color-accent)]">
@@ -813,6 +1174,22 @@ function VariationsTable({
           </tbody>
         </table>
       </div>
+      {pickerFor !== null && variants[pickerFor] && (
+        <ImagePickerDialog
+          title={`Photo for ${axes.map((axis) => showValue(axis, variants[pickerFor].aspects[axis]?.[0] || "")).filter(Boolean).join(" · ") || `variation ${pickerFor + 1}`}`}
+          images={allImages}
+          current={imageOverrides[pickerFor] ?? variants[pickerFor].imageUrls[0] ?? null}
+          onPick={(url) => {
+            onImageChange(pickerFor, url);
+            setPickerFor(null);
+          }}
+          onUpload={(file) => {
+            onUploadImage(pickerFor, file);
+            setPickerFor(null);
+          }}
+          onClose={() => setPickerFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1058,6 +1435,25 @@ function PublishedDialog({ listing, onClose }: { listing: DraftListing; onClose:
 
 // --- Page ------------------------------------------------------------------
 
+// Every item specific eBay lists for the category appears as a row, filled
+// or not, so the seller sees what's required and what else could help.
+// Required ones sit first, then filled, then recommended, then the rest.
+function withSchemaRows(rows: { name: string; value: string }[], info: DraftCategoryInfo | null) {
+  if (!info?.aspects?.length) return rows;
+  const byName = new Map(info.aspects.map((a) => [a.name.toLowerCase(), a]));
+  const have = new Set(rows.map((r) => r.name.trim().toLowerCase()));
+  const missing = info.aspects.filter((a) => !have.has(a.name.toLowerCase())).map((a) => ({ name: a.name, value: "" }));
+  const merged = [...rows, ...missing];
+  const rank = (r: { name: string; value: string }) => {
+    const entry = byName.get(r.name.trim().toLowerCase());
+    if (entry?.required) return 0;
+    if (r.value.trim()) return 1;
+    if (entry?.recommended) return 2;
+    return 3;
+  };
+  return merged.map((r, i) => ({ r, i })).sort((a, b) => rank(a.r) - rank(b.r) || a.i - b.i).map((x) => x.r);
+}
+
 export default function DraftEditorPage() {
   const params = useParams<{ id: string; offerId: string }>();
   const router = useRouter();
@@ -1080,6 +1476,10 @@ export default function DraftEditorPage() {
   const [selectedImage, setSelectedImage] = useState(0);
   const [removedRows, setRemovedRows] = useState<Set<number>>(new Set());
   const [removedAxisValues, setRemovedAxisValues] = useState<AxisRemoval[]>([]);
+  // Renamed option and attribute names, keyed by the draft's current names.
+  const [valueRenames, setValueRenames] = useState<Renames>({});
+  const [axisRenames, setAxisRenames] = useState<Record<string, string>>({});
+  const [addedValues, setAddedValues] = useState<{ axis: string; value: string; copyFrom: string }[]>([]);
   const [priceOverrides, setPriceOverrides] = useState<Record<number, string>>({});
   const [quantityOverrides, setQuantityOverrides] = useState<Record<number, string>>({});
   const [condition, setCondition] = useState("NEW");
@@ -1092,6 +1492,21 @@ export default function DraftEditorPage() {
   });
   const [showNotes, setShowNotes] = useState(false);
   const [imageOverrides, setImageOverrides] = useState<Record<number, string>>({});
+  // eBay's custom label, the second item category and Shop categories are
+  // plain fields saved with everything else. The primary category is not:
+  // changing it refits the whole draft, so it's applied on its own at once.
+  const [sku, setSku] = useState("");
+  const [secondaryCategoryId, setSecondaryCategoryId] = useState<string | null>(null);
+  const [secondaryCategoryPath, setSecondaryCategoryPath] = useState<string[]>([]);
+  const [storeCategoryNames, setStoreCategoryNames] = useState<string[]>([]);
+  const [categoryInfo, setCategoryInfo] = useState<DraftCategoryInfo | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [refitting, setRefitting] = useState(false);
+  const [showOptionalSpecifics, setShowOptionalSpecifics] = useState(false);
+  const [splitting, setSplitting] = useState<number | null>(null);
+  const [splitDone, setSplitDone] = useState<{ id: string; title: string }[]>([]);
+  const [fixes, setFixes] = useState<VariationFixes | null>(null);
+  const [applyingFix, setApplyingFix] = useState(false);
   const [imageCheck, setImageCheck] = useState<ImageCheck | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -1120,17 +1535,40 @@ export default function DraftEditorPage() {
   // the changes to eBay. No draft is kept either way.
   const isLiveEdit = Boolean(listing?.edit_of_item_id);
 
+  // The category schema in force, for resetFrom to merge unfilled rows in.
+  // A ref, kept in step wherever categoryInfo is set, so a save (which also
+  // resets) keeps the same rows without the callback depending on state.
+  const categoryInfoRef = useRef<DraftCategoryInfo | null>(null);
+
+  // Reads the second category's readable path once per draft load.
+  const loadSecondaryPath = useCallback(
+    (categoryId: string | null | undefined) => {
+      if (!categoryId) {
+        setSecondaryCategoryPath([]);
+        return;
+      }
+      api
+        .getCategory(params.id, categoryId)
+        .then((info) => setSecondaryCategoryPath(info.path.map((p) => (typeof p === "string" ? p : p.name))))
+        .catch(() => setSecondaryCategoryPath([`Category ${categoryId}`]));
+    },
+    [params.id]
+  );
+
   const resetFrom = useCallback((row: DraftListing) => {
     const c = row.generated_data as DraftContent;
     setTitle(isVariationDraft(c) ? c.commonTitle : c.title);
     setDescription(isVariationDraft(c) ? c.commonDescription : c.description);
     setEditingDescription(false);
     const aspects = isVariationDraft(c) ? c.variesBy.aspects : c.aspects;
-    setSpecifics(Object.entries(aspects || {}).map(([name, values]) => ({ name, value: values.join(", ") })));
+    setSpecifics(withSchemaRows(Object.entries(aspects || {}).map(([name, values]) => ({ name, value: values.join(", ") })), categoryInfoRef.current));
     setImages(c.imageUrls || []);
     setSelectedImage(0);
     setRemovedRows(new Set());
     setRemovedAxisValues([]);
+    setValueRenames({});
+    setAxisRenames({});
+    setAddedValues([]);
     setPriceOverrides({});
     setQuantityOverrides({});
     setCondition((isVariationDraft(c) ? c.variants[0]?.condition : c.condition) || "NEW");
@@ -1142,6 +1580,9 @@ export default function DraftEditorPage() {
       returnPolicyId: c.listingPolicies?.returnPolicyId || "",
     });
     setImageOverrides({});
+    setSku(c.sku || "");
+    setSecondaryCategoryId(c.secondaryCategoryId || null);
+    setStoreCategoryNames(c.storeCategoryNames || []);
   }, []);
 
   // The branded eBay render of the description. Rebuilt whenever the stored
@@ -1165,12 +1606,24 @@ export default function DraftEditorPage() {
       .then((data) => {
         setListing(data.listing);
         setPolicies(data.policies);
+        categoryInfoRef.current = data.category;
+        setCategoryInfo(data.category);
         resetFrom(data.listing);
+        loadSecondaryPath((data.listing.generated_data as DraftContent).secondaryCategoryId);
         loadDescriptionPreview(data.listing.id);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load this draft."))
       .finally(() => setLoading(false));
-  }, [params.offerId, resetFrom, loadDescriptionPreview]);
+  }, [params.offerId, resetFrom, loadDescriptionPreview, loadSecondaryPath]);
+
+  // Every item specific eBay lists for the category appears as a row, filled
+  // or not, so the seller sees what's required and what else could help.
+  // Required ones sit first; unfilled optional ones are tucked behind a toggle.
+  const schemaByName = useMemo(() => {
+    const map = new Map<string, AspectSchemaEntry>();
+    for (const entry of categoryInfo?.aspects || []) map.set(entry.name.toLowerCase(), entry);
+    return map;
+  }, [categoryInfo]);
 
   const originalAspects = useMemo(
     () => (variation ? variation.variesBy.aspects : single?.aspects) || {},
@@ -1194,7 +1647,10 @@ export default function DraftEditorPage() {
     }
     return out;
   }, [specifics, originalAspects]);
-  const aspectsChanged = JSON.stringify(editedAspects) !== JSON.stringify(originalAspects);
+  // Order-insensitive: schema rows are sorted for display (required first),
+  // which must not read as an edit.
+  const stableAspects = (a: Record<string, string[]>) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]]));
+  const aspectsChanged = stableAspects(editedAspects) !== stableAspects(originalAspects);
 
   const policiesChanged =
     !!content?.listingPolicies &&
@@ -1218,9 +1674,15 @@ export default function DraftEditorPage() {
       removedAxisValues.length > 0 ||
       Object.keys(priceOverrides).length > 0 ||
       Object.keys(quantityOverrides).length > 0 ||
-      Object.keys(imageOverrides).length > 0
+      Object.keys(imageOverrides).length > 0 ||
+      Object.keys(valueRenames).length > 0 ||
+      Object.keys(axisRenames).length > 0 ||
+      addedValues.length > 0 ||
+      sku !== (content.sku || "") ||
+      (secondaryCategoryId || null) !== (content.secondaryCategoryId || null) ||
+      JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])
     );
-  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides]);
+  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, valueRenames, axisRenames, addedValues, sku, secondaryCategoryId, storeCategoryNames]);
 
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
@@ -1257,8 +1719,130 @@ export default function DraftEditorPage() {
     }
     if (Object.keys(variantChanges).length) patch.variants = variantChanges;
     if (removedRows.size) patch.variantSkusToRemove = [...removedRows].map(String);
-    if (removedAxisValues.length) patch.removeAxisValues = removedAxisValues;
+    // Renames are applied first on the server, so removals are expressed in
+    // the renamed names.
+    const renameAxisValues = Object.entries(valueRenames).flatMap(([axis, map]) => Object.entries(map).map(([from, to]) => ({ axis, from, to })));
+    const renameAxes = Object.entries(axisRenames).map(([from, to]) => ({ from, to }));
+    if (renameAxisValues.length) patch.renameAxisValues = renameAxisValues;
+    if (renameAxes.length) patch.renameAxes = renameAxes;
+    // Added options refer to renamed names too (renames apply first).
+    if (addedValues.length) {
+      patch.addAxisValues = addedValues.map((a) => ({
+        axis: axisRenames[a.axis] || a.axis,
+        value: a.value,
+        copyFrom: valueRenames[a.axis]?.[a.copyFrom] || a.copyFrom,
+      }));
+    }
+    if (removedAxisValues.length) {
+      patch.removeAxisValues = removedAxisValues.map((r) => ({
+        axis: axisRenames[r.axis] || r.axis,
+        value: valueRenames[r.axis]?.[r.value] || r.value,
+      }));
+    }
+    if (content && sku.trim() && sku.trim() !== (content.sku || "")) patch.sku = sku.trim();
+    if (content && (secondaryCategoryId || null) !== (content.secondaryCategoryId || null)) patch.secondaryCategoryId = secondaryCategoryId;
+    if (content && JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])) patch.storeCategoryNames = storeCategoryNames;
     return patch;
+  }
+
+  // The primary category is applied immediately: the server refits title,
+  // specifics and description to it, which is a change the seller should see
+  // right away rather than at the next Save. Pending edits are saved first so
+  // nothing typed is lost under the refit.
+  async function applyCategory(next: CategorySelection) {
+    if (!listing || !content) return;
+    setPickerOpen(false);
+    setSecondaryCategoryId(next.secondaryCategoryId);
+    setSecondaryCategoryPath(next.secondaryCategoryPath);
+    setStoreCategoryNames(next.storeCategoryNames);
+    if (next.categoryId === content.categoryId) return;
+
+    setRefitting(true);
+    setError(null);
+    try {
+      const pending = buildPatch();
+      delete pending.aspects; // the refit replaces specifics wholesale
+      if (Object.keys(pending).length) await api.updateDraftListing(listing.id, pending);
+      const data = await api.updateDraftListing(listing.id, { categoryId: next.categoryId });
+      const detail = await api.getDraftListing(listing.id);
+      setListing(detail.listing);
+      categoryInfoRef.current = detail.category;
+      setCategoryInfo(detail.category);
+      setImageCheck(data.imageCheck);
+      resetFrom(detail.listing);
+      loadDescriptionPreview(detail.listing.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't change the category. Try again.");
+    } finally {
+      setRefitting(false);
+    }
+  }
+
+  // When the category refuses the variation attribute, ask the server for
+  // the ways out (categories to switch to, names accepted here).
+  const needsFixes = Boolean(
+    variation &&
+      categoryInfo?.variationAspects?.length &&
+      variation.variesBy.specifications.some((spec) => !categoryInfo.variationAspects!.some((a) => a.toLowerCase() === spec.name.toLowerCase()))
+  );
+  const fixesFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!listing || !needsFixes) return;
+    const key = `${listing.id}:${content?.categoryId}`;
+    if (fixesFor.current === key) return;
+    fixesFor.current = key;
+    api
+      .getVariationFixes(listing.id)
+      .then(setFixes)
+      .catch(() => setFixes({ axes: [], allowedHere: [], categories: [] }));
+  }, [listing, needsFixes, content?.categoryId]);
+
+  async function handleApplyFix(fix: VariationFixes["categories"][number]) {
+    if (!listing) return;
+    setApplyingFix(true);
+    setError(null);
+    try {
+      const pending = buildPatch();
+      delete pending.aspects;
+      if (Object.keys(pending).length) await api.updateDraftListing(listing.id, pending);
+      const data = await api.applyVariationFix(listing.id, { categoryId: fix.id, axisNames: fix.axisNames });
+      const detail = await api.getDraftListing(listing.id);
+      setListing(detail.listing);
+      categoryInfoRef.current = detail.category;
+      setCategoryInfo(detail.category);
+      setImageCheck(data.imageCheck);
+      setFixes(null);
+      resetFrom(detail.listing);
+      loadDescriptionPreview(detail.listing.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't switch the category. Try again.");
+    } finally {
+      setApplyingFix(false);
+    }
+  }
+
+  async function handleSplitAll() {
+    if (!listing || !variation) return;
+    for (let i = 0; i < variation.variants.length; i += 1) {
+      if (removedRows.has(i)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await handleSplit(i);
+    }
+  }
+
+  async function handleSplit(index: number) {
+    if (!listing) return;
+    setSplitting(index);
+    setError(null);
+    try {
+      const { listing: created } = await api.splitDraftVariant(listing.id, index);
+      const c = created.generated_data as DraftContent;
+      setSplitDone((list) => [...list, { id: created.id, title: isVariationDraft(c) ? c.commonTitle : c.title }]);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't create a listing for that variation.");
+    } finally {
+      setSplitting(null);
+    }
   }
 
   async function handleSave() {
@@ -1458,7 +2042,7 @@ export default function DraftEditorPage() {
     );
   }
 
-  const busy = saving || publishing || deleting || aiBusy;
+  const busy = saving || publishing || deleting || aiBusy || refitting || splitting !== null || applyingFix;
   const canPublish = editable && !dirty && !busy;
   const conditionLabel = CONDITIONS.find((c) => c.value === condition)?.label || condition;
   const notes = content.warnings || [];
@@ -1632,11 +2216,79 @@ export default function DraftEditorPage() {
 
                 <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   <div className="sm:col-span-3">
-                    <p className={labelClass}>Category</p>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className={labelClass}>Category</p>
+                      {editable && (
+                        <button type="button" onClick={() => setPickerOpen(true)} disabled={busy} className={smallButton}>
+                          {refitting ? "Refitting…" : "Change"}
+                        </button>
+                      )}
+                    </div>
                     <p className="mt-1.5 text-sm text-[var(--color-ink)]">
                       {content.categoryPath?.length ? content.categoryPath.join(" › ") : `Category ${content.categoryId}`}
                     </p>
-                    {content.categoryPath?.length ? <p className="text-xs text-[var(--color-muted)]">eBay category {content.categoryId}</p> : null}
+                    <p className="text-xs text-[var(--color-muted)]">
+                      eBay category {content.categoryId}
+                      {secondaryCategoryId ? ` · also in ${secondaryCategoryPath.join(" › ") || secondaryCategoryId}` : ""}
+                      {storeCategoryNames.length ? ` · Shop: ${storeCategoryNames.map((n) => n.replace(/^\//, "").replace(/\//g, " › ")).join(", ")}` : ""}
+                    </p>
+                    {refitting && (
+                      <p className="mt-2 text-xs font-semibold text-[var(--color-primary)]">
+                        Refitting the title, item specifics and description to the new category…
+                      </p>
+                    )}
+                    {variation && categoryInfo?.variationsSupported === false && (
+                      <div className="mt-2 rounded-xl border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-3 py-2 text-xs text-[var(--color-ink)]">
+                        <p>
+                          eBay doesn&apos;t allow multi-variation listings in this category. Change the category, or list each variation
+                          separately from the variations table below.
+                        </p>
+                      </div>
+                    )}
+                    {editable && (content.categorySuggestions || []).some((sg) => sg.id !== content.categoryId) && (
+                      <div className="mt-2">
+                        <p className="text-xs text-[var(--color-muted)]">eBay also suggests:</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {(content.categorySuggestions || [])
+                            .filter((sg) => sg.id !== content.categoryId)
+                            .slice(0, 3)
+                            .map((sg) => (
+                              <button
+                                key={sg.id}
+                                type="button"
+                                disabled={busy}
+                                title={sg.path.join(" › ")}
+                                onClick={() =>
+                                  applyCategory({
+                                    categoryId: sg.id,
+                                    categoryPath: sg.path,
+                                    secondaryCategoryId,
+                                    secondaryCategoryPath,
+                                    storeCategoryNames,
+                                  })
+                                }
+                                className="chip hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] disabled:opacity-50"
+                              >
+                                {sg.name}
+                              </button>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="sm:col-span-3">
+                    <label className={labelClass}>SKU (custom label)</label>
+                    <input
+                      className={`${inputClass} mt-1.5 font-mono text-[13px]`}
+                      value={sku}
+                      maxLength={50}
+                      placeholder="e.g. Liston-1005006"
+                      onChange={(e) => setSku(e.target.value)}
+                      disabled={!editable || busy}
+                    />
+                    {variation && sku.trim() && (
+                      <p className="mt-1 text-xs text-[var(--color-muted)]">Variations publish as {sku.trim()}-1, {sku.trim()}-2, …</p>
+                    )}
                   </div>
                   <div>
                     <label className={labelClass}>Condition</label>
@@ -1730,7 +2382,7 @@ export default function DraftEditorPage() {
               <div className={cardClass}>
                 <div className="flex items-baseline justify-between">
                   <h3 className={cardTitleClass}>
-                    Item specifics <span className="font-medium text-[var(--color-muted)]">· {specifics.length}</span>
+                    Item specifics <span className="font-medium text-[var(--color-muted)]">· {specifics.filter((r) => r.value.trim()).length}</span>
                   </h3>
                   {editable && (
                     <button type="button" onClick={() => setSpecifics((rows) => [...rows, { name: "", value: "" }])} disabled={busy} className="btn btn-secondary btn-sm">
@@ -1742,7 +2394,13 @@ export default function DraftEditorPage() {
                   <p className="mt-3 text-sm text-[var(--color-muted)]">No item specifics yet.</p>
                 ) : (
                   <div className="mt-3 grid gap-x-6 md:grid-cols-2">
-                    {specifics.map((row, i) => (
+                    {specifics.map((row, i) => {
+                      const entry = schemaByName.get(row.name.trim().toLowerCase());
+                      const unfilled = !row.value.trim();
+                      const optionalHidden = unfilled && !entry?.required && !showOptionalSpecifics;
+                      if (optionalHidden) return null;
+                      const listId = entry?.allowedValues.length ? `aspect-values-${i}` : undefined;
+                      return (
                       <div key={i} className="flex items-center gap-1 border-b border-[var(--color-line)] py-0.5 text-[13px]">
                         <input
                           className="h-7 w-[42%] min-w-0 rounded-full border border-transparent bg-transparent px-2 text-[var(--color-muted)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
@@ -1751,13 +2409,26 @@ export default function DraftEditorPage() {
                           onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
                           disabled={!editable || busy}
                         />
+                        {entry?.required && unfilled && (
+                          <span className="shrink-0 rounded-full bg-[var(--color-danger-soft)] px-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-danger)]">
+                            Required
+                          </span>
+                        )}
                         <input
-                          className="h-7 min-w-0 flex-1 rounded-full border border-transparent bg-transparent px-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
+                          className={`h-7 min-w-0 flex-1 rounded-full border border-transparent bg-transparent px-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100 ${unfilled ? "placeholder:italic" : ""}`}
                           value={row.value}
-                          placeholder="Value"
+                          list={listId}
+                          placeholder={entry ? (entry.required ? "Required by eBay" : "Optional") : "Value"}
                           onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
                           disabled={!editable || busy}
                         />
+                        {listId && (
+                          <datalist id={listId}>
+                            {entry!.allowedValues.map((v) => (
+                              <option key={v} value={v} />
+                            ))}
+                          </datalist>
+                        )}
                         {editable && (
                           <button
                             type="button"
@@ -1770,9 +2441,19 @@ export default function DraftEditorPage() {
                           </button>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
+                {(() => {
+                  const hiddenCount = specifics.filter((r) => !r.value.trim() && !schemaByName.get(r.name.trim().toLowerCase())?.required).length;
+                  if (!hiddenCount && !showOptionalSpecifics) return null;
+                  return (
+                    <button type="button" onClick={() => setShowOptionalSpecifics((v) => !v)} className="mt-3 text-xs font-semibold text-[var(--color-primary)] hover:underline">
+                      {showOptionalSpecifics ? "Hide empty optional specifics" : `Show ${hiddenCount} more optional specific${hiddenCount === 1 ? "" : "s"} eBay lists for this category`}
+                    </button>
+                  );
+                })()}
               </div>
 
               {/* Description */}
@@ -1842,6 +2523,23 @@ export default function DraftEditorPage() {
                 onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
                 onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
                 onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
+                valueRenames={valueRenames}
+                axisRenames={axisRenames}
+                onRenameValue={(axis, from, to) => setValueRenames((r) => ({ ...r, [axis]: { ...(r[axis] || {}), [from]: to } }))}
+                onRenameAxis={(from, to) => setAxisRenames((r) => ({ ...r, [from]: to }))}
+                addedValues={addedValues}
+                onAddValue={(axis, value, copyFrom) => setAddedValues((list) => [...list, { axis, value, copyFrom }])}
+                onUndoAddValue={(axis, value) => setAddedValues((list) => list.filter((a) => !(a.axis === axis && a.value === value)))}
+                allowedAxes={categoryInfo?.variationAspects ?? null}
+                fixes={fixes}
+                onApplyFix={editable ? handleApplyFix : undefined}
+                applyingFix={applyingFix}
+                onSplitAll={editable ? handleSplitAll : undefined}
+                variationsSupported={categoryInfo?.variationsSupported ?? null}
+                onSplit={editable ? handleSplit : undefined}
+                splitting={splitting}
+                splitDone={splitDone}
+                accountId={params.id}
                 onApplyAll={applyToAllVariants}
                 disabled={!editable || busy}
               />
@@ -1893,6 +2591,21 @@ export default function DraftEditorPage() {
 
       {published && <PublishedDialog listing={published} onClose={() => router.push(`/accounts/${params.id}/listings`)} />}
 
+      {listing && content && pickerOpen && (
+        <CategoryPicker
+          connectionId={params.id}
+          value={{
+            categoryId: content.categoryId,
+            categoryPath: content.categoryPath || [],
+            secondaryCategoryId,
+            secondaryCategoryPath,
+            storeCategoryNames,
+          }}
+          suggestions={content.categorySuggestions || []}
+          onApply={applyCategory}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       <ConfirmDialog
         open={confirmPublish}
         title={isLiveEdit ? "Publish these changes?" : "Publish this listing?"}

@@ -17,6 +17,8 @@ router.delete('/:id', requireAuth, requireOwner, connectionController.remove);
 router.get('/:id/listings', requireAuth, requireFeature('listings'), connectionController.getListings);
 router.get('/:id/orders', requireAuth, requireFeature('orders'), connectionController.getOrders);
 router.get('/:id/earnings', requireAuth, requireFeature('orders'), connectionController.getEarnings);
+router.post('/:id/refresh', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.refresh);
+router.get('/:id/events', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.events);
 router.get('/:id/policies', requireAuth, requireOwner, connectionController.getPolicies);
 router.put('/:id/policies', requireAuth, requireOwner, connectionController.updatePolicies);
 router.post('/:id/locations', requireAuth, requireOwner, connectionController.createLocation);
@@ -25,7 +27,15 @@ router.post('/:id/locations', requireAuth, requireOwner, connectionController.cr
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);
 router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
 router.get('/:id/template/palette', requireAuth, requireOwner, connectionController.logoPalette);
+router.get('/:id/template/source', requireAuth, requireOwner, connectionController.templateSource);
+router.post('/:id/template/preview', requireAuth, requireOwner, express.json({ limit: '1mb' }), connectionController.templatePreview);
+router.get('/:id/store-reviews', requireAuth, requireOwner, connectionController.storeReviews);
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
+// Category picker data. Anyone who can edit listings can browse categories.
+router.get('/:id/categories/search', requireAuth, requireFeature('listings'), connectionController.searchCategories);
+router.get('/:id/categories/children', requireAuth, requireFeature('listings'), connectionController.categoryChildren);
+router.get('/:id/categories/:categoryId', requireAuth, requireFeature('listings'), connectionController.categoryDetail);
+router.get('/:id/store-categories', requireAuth, requireFeature('listings'), connectionController.storeCategories);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
 router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
 router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingController.removeInactive);

@@ -2,6 +2,9 @@ const crypto = require('crypto');
 const ebayOauth = require('./ebay.oauth');
 const connectionService = require('../connections/connection.service');
 const ebayService = require('./ebay.service');
+const ebayNotifications = require('./ebay.notifications');
+const connectionRepository = require('../connections/connection.repository');
+const governor = require('./request-governor');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
@@ -83,4 +86,67 @@ function accountDeletionNotification(req, res) {
   return res.status(200).json({});
 }
 
-module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification };
+// eBay Platform Notifications: something changed on a subscribed account.
+// eBay gets its 200 straight away (it retries on anything else) and the
+// affected parts of the account are re-read in the background, then pushed
+// to every open page. Which parts depends on the event: a listing event
+// touches the listings; a sale or payment/dispatch mark touches the orders
+// (and a sale also the listing's quantity).
+const ORDER_EVENTS = new Set(['ItemSold', 'FixedPriceTransaction', 'ItemMarkedPaid', 'ItemMarkedShipped']);
+const LISTING_EVENTS = new Set(['ItemListed', 'ItemRevised', 'ItemClosed', 'ItemUnsold', 'ItemSold', 'FixedPriceTransaction']);
+
+function kindsFor(eventName) {
+  const kinds = [];
+  if (LISTING_EVENTS.has(eventName)) kinds.push('listings');
+  if (ORDER_EVENTS.has(eventName)) kinds.push('orders');
+  return kinds.length ? kinds : ['listings', 'orders'];
+}
+
+async function platformNotification(req, res) {
+  const xml = typeof req.body === 'string' ? req.body : '';
+  const notification = ebayNotifications.parseNotification(xml);
+  if (!notification || !notification.recipientUserId) {
+    logger.warn('eBay notification could not be read');
+    return res.status(200).send('');
+  }
+  if (!ebayNotifications.verify(notification)) {
+    logger.warn('eBay notification failed signature check', { event: notification.eventName });
+    return res.status(200).send('');
+  }
+  res.status(200).send('');
+
+  try {
+    const rows = await connectionRepository.findIdsByEbayUsername(notification.recipientUserId);
+    const kinds = kindsFor(notification.eventName);
+    for (const row of rows) {
+      connectionService
+        .withDecryptedCredentials(row.id, row.user_id, (credentials) => ebayService.syncAccount(credentials, row.id, kinds))
+        .catch((err) => logger.warn('Re-read after eBay notification failed', { connectionId: row.id, error: err.message }));
+    }
+    logger.info('eBay notification handled', { event: notification.eventName, accounts: rows.length, kinds });
+  } catch (err) {
+    logger.error('eBay notification handling failed', { error: err.message });
+  }
+}
+
+// Today's use of the shared eBay allowance, for the admin's usage page:
+// totals, what is paused, per call and per account (with labels).
+async function usage(req, res, next) {
+  try {
+    if (req.query.sync === '1') await governor.syncWithEbay();
+    const snap = governor.snapshot();
+    const accounts = await connectionRepository.findAllEbay();
+    const labels = new Map(accounts.map((a) => [String(a.id), a.label]));
+    const byAccount = Object.entries(snap.byAccount)
+      .map(([id, count]) => ({ connectionId: id, label: labels.get(id) || 'Removed account', count, push: Boolean(accounts.find((a) => String(a.id) === id)?.settings?.ebay?.notificationsEnabledAt) }))
+      .sort((a, b) => b.count - a.count);
+    const byCall = Object.entries(snap.byCall)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+    res.status(200).json({ ...snap, byAccount, byCall, accountsTotal: accounts.length, notificationsUrl: config.ebay.notificationsUrl || null });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification, platformNotification, usage };

@@ -2,6 +2,11 @@ const ebayClient = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 const ebayTrading = require('./ebay.trading');
 const { createSwrCache } = require('./swr-cache');
+const mirror = require('./ebay-mirror.repository');
+const logger = require('../../utils/logger');
+const ebayNotifications = require('./ebay.notifications');
+const accountEvents = require('./account-events');
+const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
 
 class EbayError extends Error {
@@ -25,11 +30,23 @@ function sleep(ms) {
 // giving up, rather than failing the whole draft over a timing race.
 const SKU_PROPAGATION_DELAY_PATTERN = /could not be found|is not available in the system/i;
 
+// A seller-chosen SKU stays the same across publish attempts, so a retry
+// after a failure finds the offer the failed attempt already created.
+const OFFER_EXISTS_PATTERN = /offer (entity )?already exists|already has an offer/i;
+
 async function createOfferWithRetry(accessToken, offerInput, attempts = 4, delayMs = 2000) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       return await ebayClient.createOffer(accessToken, offerInput);
     } catch (err) {
+      if (OFFER_EXISTS_PATTERN.test(err.message)) {
+        const existing = await ebayClient.getOffersBySku(accessToken, offerInput.sku, offerInput.marketplaceId);
+        const offer = (existing.offers || []).find((o) => o.marketplaceId === offerInput.marketplaceId) || existing.offers?.[0];
+        if (offer?.offerId) {
+          await ebayClient.updateOffer(accessToken, offer.offerId, offerInput);
+          return { offerId: offer.offerId };
+        }
+      }
       const isPropagationDelay = SKU_PROPAGATION_DELAY_PATTERN.test(err.message);
       if (!isPropagationDelay || attempt === attempts) throw err;
       await sleep(delayMs * attempt);
@@ -113,13 +130,17 @@ function buildInventoryItem({ title, description, imageUrls, aspects, condition,
   };
 }
 
-function buildOffer({ sku, marketplaceId, categoryId, description, listingDescription, price, merchantLocationKey, quantity, listingPolicies }) {
+function buildOffer({ sku, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, description, listingDescription, price, merchantLocationKey, quantity, listingPolicies }) {
   return {
     sku,
     marketplaceId: marketplaceId || 'EBAY_GB',
     format: 'FIXED_PRICE',
     availableQuantity: quantity,
     categoryId,
+    // eBay allows a second item category (fees may apply) and up to two Shop
+    // categories, given as "/Department/Sub" paths of the seller's own Shop.
+    ...(secondaryCategoryId ? { secondaryCategoryId } : {}),
+    ...(storeCategoryNames?.length ? { storeCategoryNames } : {}),
     listingDescription: listingDescription || description,
     pricingSummary: { price },
     merchantLocationKey,
@@ -220,7 +241,7 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, merchantLocationKey, locationInput, listingPolicies }) {
+async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, merchantLocationKey, locationInput, listingPolicies }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   ensureListingPolicies(listingPolicies);
@@ -252,6 +273,8 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         sku: variant.sku,
         marketplaceId,
         categoryId,
+        secondaryCategoryId,
+        storeCategoryNames,
         description: commonDescription,
         listingDescription: commonListingDescription,
         price: variant.price,
@@ -327,20 +350,55 @@ async function withdrawDraft(credentials, offerId) {
 
 // Active + ended listings read from the seller's real eBay catalog (Trading
 // API) — this sees everything on the account, not just what Liston created.
-// The one number the Overview needs per account, cached so a page of
-// stat tiles costs one eBay call per account per five minutes, not per view.
+// How long a copy is served without asking eBay again (`fresh`), and how
+// long it keeps being served while a refresh runs behind it (`stale`). With
+// the mirror on disk, a copy is always worth showing; only an account that
+// has never been read makes anyone wait.
+//
+// An account subscribed to eBay's push notifications (see
+// ebay.notifications.js) is told about every change, so it is polled far
+// less: the long windows are only a safety net for a missed notification.
+const FRESH = {
+  listings: 30 * 60 * 1000,
+  orders: 10 * 60 * 1000,
+  activeCount: 60 * 60 * 1000,
+};
+// eBay's push arrives within seconds of a change and triggers the re-read
+// itself (see syncAccount), so a subscribed account is not polled at all:
+// the daily read is only insurance against a notification eBay dropped.
+const FRESH_WITH_PUSH = {
+  listings: 24 * 60 * 60 * 1000,
+  orders: 24 * 60 * 60 * 1000,
+  activeCount: 24 * 60 * 60 * 1000,
+};
+const freshFor = (kind) => (ctx) => (ctx?.push ? FRESH_WITH_PUSH[kind] : FRESH[kind]);
+
+// Tags a cache read for the governor: a read someone is waiting on is
+// 'user'; a refresh behind a served copy is whatever the caller said (a
+// push-triggered sync) or plain 'background'.
+function governed(ctx, connectionId, waiting, fn) {
+  return governor.withContext({ connectionId: String(connectionId), priority: waiting ? 'user' : ctx?.priority || 'background' }, fn);
+}
+const STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+// The one number the Overview needs per account. Mirrored, so a page of
+// stat tiles costs no eBay calls unless a copy is over an hour old.
 const activeCountCache = createSwrCache({
-  freshMs: 5 * 60 * 1000,
-  staleMs: 2 * 60 * 60 * 1000,
-  fetcher: async ({ accessToken, siteId }) => {
-    const result = await ebayTrading.getActiveListings(accessToken, { pageNumber: 1, entriesPerPage: 1, siteId });
-    return { value: result.totalEntries || 0, meta: null };
-  },
+  freshMs: freshFor('activeCount'),
+  staleMs: STALE_MS,
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => {
+      const result = await ebayTrading.getActiveListings(ctx.accessToken, { pageNumber: 1, entriesPerPage: 1, siteId: ctx.siteId });
+      return { value: result.totalEntries || 0, meta: null };
+    }),
+  load: (key) => mirror.loadSnapshot(key, 'active_count').then((row) => row && { ...row, value: row.value.count }),
+  store: (key, value) => mirror.saveSnapshot(key, 'active_count', { count: value }),
+  onUpdate: (key) => accountEvents.emitUpdated(key, 'activeCount'),
 });
 
-async function countActiveListings(credentials, connectionId) {
+async function countActiveListings(credentials, connectionId, { push = false } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  const totalEntries = await activeCountCache.get(`${connectionId}`, { accessToken, siteId });
+  const totalEntries = await activeCountCache.get(`${connectionId}`, { accessToken, siteId, push, connectionId });
   return { totalEntries, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -350,10 +408,75 @@ async function listActiveListings(credentials, opts) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
-async function getStoreProfile(credentials) {
+// The store's name, logo and feedback figures change rarely and cost two
+// rationed Trading calls, so they're mirrored for a day. Without this the
+// Settings page (and every description render) depended on a live call
+// that eBay's allowance could refuse, which is how one store's palette
+// suggestions ended up as the generic presets.
+const PROFILE_FRESH_MS = 24 * 60 * 60 * 1000;
+const storeProfileCache = createSwrCache({
+  freshMs: PROFILE_FRESH_MS,
+  staleMs: STALE_MS,
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => ({ value: await ebayTrading.getStoreProfile(ctx.accessToken, { siteId: ctx.siteId }), meta: null })),
+  load: (key) => mirror.loadSnapshot(key, 'store_profile'),
+  store: (key, value) => mirror.saveSnapshot(key, 'store_profile', value),
+});
+
+async function getStoreProfile(credentials, connectionId, { refresh = false } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  const profile = await ebayTrading.getStoreProfile(accessToken, { siteId });
+  if (!connectionId) {
+    const profile = await ebayTrading.getStoreProfile(accessToken, { siteId });
+    return { ...profile, credentialsChanged, credentials: refreshedCredentials };
+  }
+  const key = String(connectionId);
+  if (refresh) storeProfileCache.invalidate(key);
+  const profile = await storeProfileCache.get(key, { accessToken, siteId, connectionId: key, priority: 'user' });
   return { ...profile, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// The best of the seller's own feedback, for the description template:
+// positive, with something actually said, longest and most recent first.
+const MIN_REVIEW_LENGTH = 25;
+const feedbackCache = createSwrCache({
+  freshMs: PROFILE_FRESH_MS,
+  staleMs: STALE_MS,
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => {
+      // Up to 200 most recent feedbacks in one call (eBay's page max);
+      // positive ones with something said, longest first. eBay feedback has
+      // no star per comment: "Positive" is the five-star equivalent.
+      const all = await ebayTrading.getSellerFeedback(ctx.accessToken, { siteId: ctx.siteId, entriesPerPage: 200 });
+      const seen = new Set();
+      const best = all
+        .filter((f) => f.type === 'Positive' && f.text.length >= MIN_REVIEW_LENGTH && !/^(a+|great|good|thanks?|ok)[.!]*$/i.test(f.text))
+        .filter((f) => {
+          const key = f.text.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => b.text.length - a.text.length || new Date(b.date) - new Date(a.date))
+        .slice(0, 60)
+        .map((f) => ({
+          stars: 5,
+          text: f.text.slice(0, 400),
+          buyer: f.buyer,
+          date: f.date ? new Date(f.date).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }) : '',
+          itemTitle: f.itemTitle,
+        }));
+      return { value: best, meta: { total: all.length } };
+    }),
+  load: (key) => mirror.loadSnapshot(key, 'feedback').then((row) => row && { ...row, value: row.value.reviews }),
+  store: (key, value, meta) => mirror.saveSnapshot(key, 'feedback', { reviews: value }, meta),
+});
+
+async function getBestReviews(credentials, connectionId, { refresh = false } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const key = String(connectionId);
+  if (refresh) feedbackCache.invalidate(key);
+  const reviews = await feedbackCache.get(key, { accessToken, siteId, connectionId: key, priority: 'user' });
+  return { reviews, credentialsChanged, credentials: refreshedCredentials };
 }
 
 async function listUnsoldListings(credentials, opts) {
@@ -376,6 +499,14 @@ async function deleteInventoryObjects(credentials, { offerId, groupKey, skus = [
 // Which eBay site this seller is on (from their registration), plus the
 // address eBay holds for them. Used once to set a connection's marketplace
 // and to offer a ready-made shipping location.
+// The seller's Shop categories, for filing a listing under their own
+// departments. Sellers without an eBay Shop simply have none.
+async function getStoreCategories(credentials) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const categories = await ebayTrading.getStoreCategories(accessToken, { siteId });
+  return { categories, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function detectMarketplace(credentials) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
@@ -538,23 +669,86 @@ async function fetchAllOrdersInWindow(accessToken, createTimeFrom, createTimeTo,
 // anything older). So that set is fetched once per connection and every
 // range, status tab, search and earnings figure is derived from it in
 // memory. See swr-cache.js for how it stays warm.
+//
+// Incremental after the first read: eBay is asked only for orders MODIFIED
+// since the last sync (a few minutes' worth, usually one page or none),
+// which are merged into the mirrored set. A full 90-day read happens only
+// when there is no usable sync point.
+const MAX_MOD_WINDOW_DAYS = 30; // eBay's cap on a ModTimeFrom/ModTimeTo span
+const SYNC_OVERLAP_MS = 5 * 60 * 1000; // re-read a little before the last sync: eBay's clocks and ours differ
+
+// The mirror is a copy: if writing it fails, the page still gets its data
+// from eBay; the failure is logged, not surfaced.
+async function persist(write) {
+  try {
+    await write();
+  } catch (err) {
+    logger.warn('Could not write to the eBay mirror', { error: err.message });
+  }
+}
+
+function ordersHorizon(now = new Date()) {
+  return new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
+}
+
+async function fetchOrdersModifiedSince(accessToken, modTimeFrom, modTimeTo, siteId) {
+  const opts = { modTimeFrom, modTimeTo, entriesPerPage: MAX_ORDER_PAGE_SIZE, siteId };
+  const first = await ebayTrading.getOrders(accessToken, { ...opts, pageNumber: 1 });
+  if (first.totalPages <= 1) return first.orders;
+  const rest = await Promise.all(
+    Array.from({ length: first.totalPages - 1 }, (_, i) => ebayTrading.getOrders(accessToken, { ...opts, pageNumber: i + 2 }))
+  );
+  return first.orders.concat(...rest.map((r) => r.orders));
+}
+
 const ordersCache = createSwrCache({
-  freshMs: 5 * 60 * 1000,
-  staleMs: 2 * 60 * 60 * 1000,
-  fetcher: async ({ accessToken, siteId }, meta) => {
-    const now = new Date();
-    const start = new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
-    const { orders, totalPages } = await fetchAllOrdersInWindow(accessToken, start.toISOString(), now.toISOString(), meta?.totalPages, siteId);
-    return { value: orders, meta: { totalPages } };
+  freshMs: freshFor('orders'),
+  staleMs: STALE_MS,
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, () => fetchOrdersIncrementally(ctx, meta, current)),
+  load: async (key) => {
+    const state = await mirror.loadSnapshot(key, 'orders');
+    if (!state) return null;
+    const orders = await mirror.loadOrders(key, ordersHorizon());
+    return { value: orders, meta: state.meta, syncedAt: state.syncedAt };
   },
+  // Order rows are written by the fetcher itself; this keeps the sync point.
+  store: (key, value, meta) => mirror.saveSnapshot(key, 'orders', { count: value.length }, meta),
+  onUpdate: (key) => accountEvents.emitUpdated(key, 'orders'),
 });
 
-function getOrdersLast90Cached(connectionId, accessToken, siteId) {
-  return ordersCache.get(connectionId, { accessToken, siteId });
+async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, meta, current) {
+  {
+    const now = new Date();
+    const horizon = ordersHorizon(now);
+    const lastSyncAt = meta?.lastSyncAt ? new Date(meta.lastSyncAt) : null;
+    const canIncrement = Array.isArray(current) && lastSyncAt && now - lastSyncAt < MAX_MOD_WINDOW_DAYS * DAY_MS - DAY_MS;
+
+    let orders;
+    if (canIncrement) {
+      const from = new Date(lastSyncAt.getTime() - SYNC_OVERLAP_MS);
+      const changed = await fetchOrdersModifiedSince(accessToken, from.toISOString(), now.toISOString(), siteId);
+      const byId = new Map(current.map((o) => [o.orderId, o]));
+      for (const order of changed) byId.set(order.orderId, order);
+      orders = [...byId.values()].filter((o) => new Date(o.createdAt) >= horizon);
+      if (changed.length) await persist(() => mirror.upsertOrders(connectionId, changed));
+    } else {
+      const result = await fetchAllOrdersInWindow(accessToken, horizon.toISOString(), now.toISOString(), meta?.totalPages, siteId);
+      orders = result.orders;
+      await persist(() => mirror.upsertOrders(connectionId, orders));
+      meta = { ...(meta || {}), totalPages: result.totalPages };
+    }
+    await persist(() => mirror.pruneOrdersBefore(connectionId, horizon));
+    return { value: orders, meta: { ...(meta || {}), lastSyncAt: now.toISOString() } };
+  }
+}
+
+function getOrdersLast90Cached(connectionId, accessToken, siteId, push = false) {
+  return ordersCache.get(connectionId, { accessToken, siteId, connectionId, push });
 }
 
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
-const ITEM_SUMMARY_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // a listing's photo and URL hardly ever change
+const ITEM_SUMMARY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a listing's photo and URL hardly ever change
 
 // The listings tab works the same way: the whole active (or unsold) set is
 // pulled once, so paging, page size and search never go back to eBay.
@@ -575,21 +769,33 @@ async function fetchAllListings(accessToken, status, expectedPages = 1, siteId =
 }
 
 const listingsCache = createSwrCache({
-  freshMs: 5 * 60 * 1000,
-  staleMs: 2 * 60 * 60 * 1000,
-  fetcher: async ({ accessToken, status, siteId }, meta) => {
-    const { items, totalPages } = await fetchAllListings(accessToken, status, meta?.totalPages, siteId);
-    return { value: items, meta: { totalPages } };
-  },
+  freshMs: freshFor('listings'),
+  staleMs: STALE_MS,
+  fetcher: async (ctx, meta, current, { waiting } = {}) =>
+    governed(ctx, ctx.connectionId, waiting, async () => {
+      const { items, totalPages } = await fetchAllListings(ctx.accessToken, ctx.status, meta?.totalPages, ctx.siteId);
+      return { value: items, meta: { totalPages } };
+    }),
+  load: (key) => mirror.loadSnapshot(...splitListingsKey(key)).then((row) => row && { ...row, value: row.value.items }),
+  store: (key, value, meta) => mirror.saveSnapshot(...splitListingsKey(key), { items: value }, meta),
+  onUpdate: (key) => accountEvents.emitUpdated(splitListingsKey(key)[0], 'listings'),
 });
+
+// Cache keys double as snapshot ids: "<connectionId>:listings:active" is
+// snapshot kind "listings:active" of that connection.
+const listingsKey = (connectionId, status) => `${connectionId}:listings:${status}`;
+function splitListingsKey(key) {
+  const at = key.indexOf(':');
+  return [key.slice(0, at), key.slice(at + 1)];
+}
 
 /**
  * Listings for the Listings tab: the cached full set, searched and paged in
  * memory. `perPage` of 0 means everything on one page.
  */
-async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25, hiddenItemIds = [] }) {
+async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25, hiddenItemIds = [], push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  let all = await listingsCache.get(`${connectionId}:${status}`, { accessToken, status, siteId });
+  let all = await listingsCache.get(listingsKey(connectionId, status), { accessToken, status, siteId, push, connectionId });
   if (hiddenItemIds.length) {
     const hidden = new Set(hiddenItemIds.map(String));
     all = all.filter((item) => !hidden.has(item.itemId));
@@ -609,14 +815,187 @@ async function listListingsDetailed(credentials, { connectionId, status = 'activ
   const safePage = Math.min(Math.max(1, page), totalPages);
   const items = filtered.slice((safePage - 1) * size, safePage * size);
 
-  return { items, totalEntries, totalPages, page: safePage, perPage: size, allCount: all.length, credentialsChanged, credentials: refreshedCredentials };
+  return {
+    items,
+    totalEntries,
+    totalPages,
+    page: safePage,
+    perPage: size,
+    allCount: all.length,
+    syncedAt: listingsCache.syncedAt(listingsKey(connectionId, status)),
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
 }
 
-// A publish or withdraw changes the live set; drop the copy so the next
-// look at the tab is accurate rather than up to two minutes behind.
+// The account's best sellers, for the "More from our store" row in every
+// description: ranked by units sold in the last 90 days (from the mirrored
+// orders), then by the listing's lifetime sold count, then by recency. Reads
+// only the mirror, so rendering a description never spends an eBay call.
+//
+// Every listing gets its own mix: the row is drawn from a pool of the top
+// sellers, shuffled with the listing as the seed, so two listings show
+// different best sellers while one listing always renders the same row.
+function seededShuffle(list, seed) {
+  let h = 2166136261;
+  for (const ch of String(seed || '')) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    h = (Math.imul(h, 1664525) + 1013904223) >>> 0;
+    const j = h % (i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+async function bestSellingListings(credentials, connectionId, { exclude, count = 12, push = false, seed = null } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const [items, orders] = await Promise.all([
+    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }),
+    getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
+  ]);
+
+  const soldRecently = new Map();
+  for (const order of orders || []) {
+    if (order.cancelStatus && order.cancelStatus !== 'NotApplicable') continue;
+    for (const line of order.lineItems || []) {
+      if (!line.itemId) continue;
+      soldRecently.set(line.itemId, (soldRecently.get(line.itemId) || 0) + (Number(line.quantityPurchased) || 1));
+    }
+  }
+
+  const ranked = (items || [])
+    .filter((item) => item.viewItemUrl && item.itemId !== String(exclude || ''))
+    .map((item) => ({ item, recent: soldRecently.get(item.itemId) || 0, lifetime: Number(item.quantitySold) || 0 }))
+    .sort((a, b) => b.recent - a.recent || b.lifetime - a.lifetime || String(b.item.itemId).localeCompare(String(a.item.itemId)));
+  // The pool is three rows' worth of the best sellers (at least 24); each
+  // listing shows `count` of them in its own order.
+  const pool = ranked.slice(0, Math.max(count * 3, 24));
+  const chosen = (seed ? seededShuffle(pool, seed) : pool).slice(0, count);
+  const rows = chosen.map(({ item, recent, lifetime }) => ({
+      url: item.viewItemUrl,
+      imageUrl: item.imageUrl,
+      name: item.title,
+      price: item.price ? formatMoneyFor(item.price) : null,
+      sold: recent || lifetime || 0,
+    }));
+
+  return { items: rows, credentialsChanged, credentials: refreshedCredentials };
+}
+
+const CURRENCY_SYMBOLS = { GBP: '£', USD: '$', EUR: '€', AUD: 'A$', CAD: 'C$' };
+function formatMoneyFor(price) {
+  const symbol = CURRENCY_SYMBOLS[price.currency] || `${price.currency || ''} `;
+  return `${symbol}${Number(price.amount).toFixed(2)}`;
+}
+
+// Something we did changed the live set (a publish, a revision, an ended
+// item removed). The copy keeps being shown, and refreshes behind the next
+// look, so nobody waits on eBay for a change they already know about.
 function invalidateListings(connectionId) {
-  listingsCache.invalidate(`${connectionId}:active`);
-  listingsCache.invalidate(`${connectionId}:inactive`);
+  listingsCache.markStale(listingsKey(connectionId, 'active'));
+  listingsCache.markStale(listingsKey(connectionId, 'inactive'));
+  activeCountCache.markStale(String(connectionId));
+}
+
+// An ended item the seller removed for good: gone from the copy at once.
+function removeListingFromMirror(connectionId, itemId) {
+  listingsCache.patch(listingsKey(connectionId, 'inactive'), (items) => items.filter((item) => item.itemId !== String(itemId)));
+}
+
+// eBay told us (or the seller asked): bring everything for this account up
+// to date now. `wait` makes the caller sit through it; otherwise the copies
+// are marked stale and refresh behind the next look.
+const REFRESH_MIN_INTERVAL_MS = 60 * 1000;
+const lastManualRefresh = new Map();
+
+async function refreshAccount(credentials, connectionId, { wait = true } = {}) {
+  const now = Date.now();
+  if (now - (lastManualRefresh.get(connectionId) || 0) < REFRESH_MIN_INTERVAL_MS) {
+    throw new EbayError('This account was refreshed less than a minute ago. Give eBay a moment.', 429);
+  }
+  lastManualRefresh.set(connectionId, now);
+
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const keys = [listingsKey(connectionId, 'active'), listingsKey(connectionId, 'inactive')];
+  for (const key of keys) listingsCache.invalidate(key);
+  ordersCache.invalidate(String(connectionId));
+  activeCountCache.invalidate(String(connectionId));
+
+  const ctx = { accessToken, siteId, connectionId: String(connectionId), priority: 'user' };
+  const work = Promise.all([
+    listingsCache.get(listingsKey(connectionId, 'active'), { ...ctx, status: 'active' }),
+    listingsCache.get(listingsKey(connectionId, 'inactive'), { ...ctx, status: 'inactive' }),
+    ordersCache.get(String(connectionId), ctx),
+    activeCountCache.get(String(connectionId), ctx),
+  ]);
+  if (wait) await work;
+  else work.catch(() => {});
+  return { credentialsChanged, credentials: refreshedCredentials };
+}
+
+// Subscribes the account to eBay's push notifications and returns the
+// eBay username they'll arrive under. One GetUser per account, once.
+async function enableNotifications(credentials, applicationUrl) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  await ebayTrading.setNotificationPreferences(accessToken, ebayNotifications.subscriptionXml(applicationUrl), { siteId });
+  const profile = await ebayTrading.getUserProfile(accessToken);
+  return { username: profile.username, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// Marks an account's copies stale without reading anything.
+function markAccountStale(connectionId) {
+  invalidateListings(connectionId);
+  ordersCache.markStale(String(connectionId));
+}
+
+// Re-reads just the parts of an account that changed, right now, in the
+// background — what a push notification (or one of our own publishes)
+// triggers. Calls for the same account are coalesced: while one re-read is
+// running, further requests queue at most one more, so a burst of
+// notifications (a sale marks the order AND revises the listing's quantity)
+// costs one round of calls, not one per event.
+const pendingSync = new Map(); // connectionId -> { running: Promise, again: Set<kind> }
+
+async function syncAccount(credentials, connectionId, kinds = ['listings', 'orders']) {
+  const id = String(connectionId);
+  const state = pendingSync.get(id);
+  if (state?.running) {
+    for (const kind of kinds) state.again.add(kind);
+    return state.running;
+  }
+  const entry = { running: null, again: new Set() };
+  pendingSync.set(id, entry);
+  entry.running = (async () => {
+    try {
+      const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+      const ctx = { accessToken, siteId, connectionId: id, push: true, priority: 'push' };
+      const jobs = [];
+      if (kinds.includes('listings')) {
+        for (const status of ['active', 'inactive']) {
+          const key = listingsKey(id, status);
+          listingsCache.markStale(key);
+          jobs.push(listingsCache.get(key, { ...ctx, status }));
+        }
+        activeCountCache.markStale(id);
+        jobs.push(activeCountCache.get(id, ctx));
+      }
+      if (kinds.includes('orders')) {
+        ordersCache.markStale(id);
+        jobs.push(ordersCache.get(id, ctx));
+      }
+      // markStale rather than invalidate: the copy keeps being served and
+      // the re-read runs behind it; a read the governor holds back (budget
+      // nearly spent) is simply retried by the next look at the page.
+      await Promise.all(jobs.map((job) => job.catch((err) => (err.code === 'EBAY_BUDGET' ? null : Promise.reject(err)))));
+    } finally {
+      const again = [...entry.again];
+      pendingSync.delete(id);
+      if (again.length) syncAccount(credentials, connectionId, again).catch(() => {});
+    }
+  })();
+  return entry.running;
 }
 
 function ordersWithin(orders, start, end) {
@@ -628,14 +1007,38 @@ function ordersWithin(orders, start, end) {
   });
 }
 
-async function getItemSummaryCached(accessToken, itemId, siteId) {
-  const cached = itemSummaryCache.get(itemId);
-  if (cached && Date.now() - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) {
-    return cached.summary;
+// Memory first, then the mirror table, then eBay — and an eBay read is
+// written back so it is never repeated for that item on any server.
+async function getItemSummariesCached(accessToken, itemIds, siteId) {
+  const now = Date.now();
+  const out = new Map();
+  const missing = [];
+  for (const itemId of itemIds) {
+    const cached = itemSummaryCache.get(itemId);
+    if (cached && now - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) out.set(itemId, cached.summary);
+    else missing.push(itemId);
   }
-  const summary = await ebayTrading.getItemSummary(accessToken, itemId, { siteId }).catch(() => null);
-  if (summary) itemSummaryCache.set(itemId, { fetchedAt: Date.now(), summary });
-  return summary;
+  if (missing.length) {
+    const persisted = await mirror.loadItemSummaries(missing).catch(() => new Map());
+    for (const itemId of [...missing]) {
+      const row = persisted.get(itemId);
+      if (row && now - row.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) {
+        itemSummaryCache.set(itemId, row);
+        out.set(itemId, row.summary);
+        missing.splice(missing.indexOf(itemId), 1);
+      }
+    }
+  }
+  await Promise.all(
+    missing.map(async (itemId) => {
+      const summary = await ebayTrading.getItemSummary(accessToken, itemId, { siteId }).catch(() => null);
+      if (!summary) return;
+      itemSummaryCache.set(itemId, { fetchedAt: now, summary });
+      out.set(itemId, summary);
+      mirror.saveItemSummary(itemId, summary).catch(() => {});
+    })
+  );
+  return out;
 }
 
 // Classifies an order the way eBay's Seller Hub visually groups them —
@@ -659,10 +1062,10 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
  * picture + live quantity from GetItem, so we're not fetching images for
  * orders the page never shows.
  */
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25 }) {
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25, push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
-  const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId), start, end);
+  const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
 
   const tagged = rawOrders.map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order) }));
 
@@ -689,8 +1092,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   const pageOrders = filtered.slice((page - 1) * perPage, page * perPage);
 
   const uniqueItemIds = [...new Set(pageOrders.flatMap((o) => o.lineItems.map((li) => li.itemId).filter(Boolean)))];
-  const summaries = await Promise.all(uniqueItemIds.map((itemId) => getItemSummaryCached(accessToken, itemId, siteId)));
-  const summaryByItemId = new Map(summaries.filter(Boolean).map((s) => [s.itemId, s]));
+  const summaryByItemId = await getItemSummariesCached(accessToken, uniqueItemIds, siteId);
 
   const enrichedOrders = pageOrders.map((order) => ({
     ...order,
@@ -712,6 +1114,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
     totalPages,
     page,
     perPage,
+    syncedAt: ordersCache.syncedAt(String(connectionId)),
     credentialsChanged,
     credentials: refreshedCredentials,
   };
@@ -723,13 +1126,13 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
 // is, honestly, "as far back as eBay lets us look": the last 90 days. The
 // `truncated` flag lets the frontend say so instead of implying a true
 // lifetime total.
-async function getEarningsSummary(credentials, { connectionId, range, from, to }) {
+async function getEarningsSummary(credentials, { connectionId, range, from, to, push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
 
   const effectiveRange = range === 'all_time' ? '90d' : range;
   const [start, end] = resolveRangeWindow(effectiveRange, from, to);
   const orders = connectionId
-    ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId), start, end)
+    ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end)
     : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString(), 1, siteId)).orders;
 
   let amount = 0;
@@ -750,7 +1153,14 @@ async function getEarningsSummary(credentials, { connectionId, range, from, to }
   };
 }
 
+// Whether an account gets eBay's push notifications (set by
+// scripts/enable-ebay-notifications.js).
+function pushEnabled(connection) {
+  return Boolean(connection?.settings?.ebay?.notificationsEnabledAt);
+}
+
 module.exports = {
+  pushEnabled,
   EbayError,
   ensureValidAccessToken,
   createOfferWithRetry,
@@ -766,16 +1176,24 @@ module.exports = {
   listActiveListings,
   countActiveListings,
   getStoreProfile,
+  getBestReviews,
   listUnsoldListings,
+  bestSellingListings,
   listOrders,
   getLiveItem,
   detectMarketplace,
+  getStoreCategories,
   createMerchantLocation,
   deleteInventoryObjects,
   reviseLiveListing,
   conditionIdFor,
   listListingsDetailed,
   invalidateListings,
+  removeListingFromMirror,
+  refreshAccount,
+  markAccountStale,
+  syncAccount,
+  enableNotifications,
   listOrdersDetailed,
   getEarningsSummary,
   resolveRangeWindow,

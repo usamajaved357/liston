@@ -4,6 +4,10 @@ const ebayOauth = require('../ebay/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
+const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const descriptionTemplate = require('../listings/description-template');
+const listingService = require('../listings/listing.service');
+const accountEvents = require('../ebay/account-events');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
@@ -102,6 +106,7 @@ async function getListings(req, res, next) {
         page,
         perPage,
         hiddenItemIds: status === 'inactive' ? connection.settings?.hiddenItemIds || [] : [],
+        push: ebayService.pushEnabled(connection),
       });
     });
 
@@ -112,6 +117,7 @@ async function getListings(req, res, next) {
       page: result.page,
       perPage: result.perPage,
       allCount: result.allCount,
+      syncedAt: result.syncedAt ? new Date(result.syncedAt).toISOString() : null,
     });
   } catch (err) {
     next(err);
@@ -130,7 +136,7 @@ async function getOrders(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage, push: ebayService.pushEnabled(connection) });
     });
 
     res.status(200).json({
@@ -140,10 +146,59 @@ async function getOrders(req, res, next) {
       totalPages: result.totalPages,
       page: result.page,
       perPage: result.perPage,
+      syncedAt: result.syncedAt ? new Date(result.syncedAt).toISOString() : null,
     });
   } catch (err) {
     next(err);
   }
+}
+
+// "I just changed something in Seller Hub": re-read the account from eBay
+// now. Once a minute per account, since every press spends Trading calls.
+async function refresh(req, res, next) {
+  try {
+    await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Refresh isn't available for ${connection.platform_name} yet`, 400);
+      }
+      return ebayService.refreshAccount(credentials, req.params.id);
+    });
+    res.status(200).json({ syncedAt: new Date().toISOString() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// A live stream of "this account's data changed" events (server-sent
+// events), one per open page. The page re-fetches what it shows when one
+// arrives, so a sale, a publish, or an edit in Seller Hub appears without
+// a reload. Heartbeats keep proxies from closing an idle stream.
+const SSE_HEARTBEAT_MS = 25 * 1000;
+
+async function events(req, res, next) {
+  try {
+    // Authorisation already ran (requireAuth + feature guard); just confirm
+    // the account exists for this owner.
+    await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+  } catch (err) {
+    return next(err);
+  }
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(`event: ready\ndata: {}\n\n`);
+
+  const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  const unsubscribe = accountEvents.subscribe(req.params.id, send);
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), SSE_HEARTBEAT_MS);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 }
 
 async function getEarnings(req, res, next) {
@@ -155,7 +210,7 @@ async function getEarnings(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Earnings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to });
+      return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to, push: ebayService.pushEnabled(connection) });
     });
 
     res.status(200).json({ earnings: result.earnings, orderCount: result.orderCount, truncated: result.truncated });
@@ -308,9 +363,70 @@ const updateTemplateSchema = z.object({
   responseTime: z.string().max(30).default('24 hours'),
   reviews: z
     .array(z.object({ stars: z.coerce.number().min(1).max(5).default(5), text: z.string().max(400), buyer: z.string().max(60).default(''), date: z.string().max(30).default('') }))
-    .max(3)
+    .max(10)
     .default([]),
+  // The seller's own layout, or empty for Liston's. eBay's description
+  // limit is 500,000 characters; scripts and iframes are refused by eBay
+  // itself, but there's no reason to store them either.
+  customHtml: z
+    .string()
+    .max(200000, 'Template code is limited to 200,000 characters')
+    .refine((html) => !/<\s*(script|iframe|object|embed)\b/i.test(html), 'eBay does not allow scripts, iframes or embeds in descriptions')
+    .default(''),
 });
+
+const SAMPLE_PRODUCT = {
+  productName: 'Sample Product Title — This Is How Your Listing Will Look',
+  description:
+    'This is where the drafted description goes.\n\nFEATURES\n- Durable, well made and ready to ship\n- Exactly what buyers searched for\n- Packed with care\n\nSPECIFICATIONS\n- Colour: Black\n- Material: Steel',
+  condition: 'NEW',
+};
+
+// The built-in layout as editable HTML with {{placeholders}}.
+async function templateSource(req, res, next) {
+  try {
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+    const html = descriptionTemplate.renderTemplateSource({
+      template: connection.settings?.template || {},
+      marketplaceId: connection.settings?.ebay?.marketplaceId,
+    });
+    res.status(200).json({ html, placeholders: descriptionTemplate.PLACEHOLDERS });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Renders the template as it would publish, with a sample product and the
+// account's real live listings, for the Theme tab's preview. Takes the
+// unsaved template in the body so edits preview before Save.
+async function templatePreview(req, res, next) {
+  try {
+    const parsed = updateTemplateSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.errors[0].message });
+    }
+    const html = await listingService.renderTemplatePreview(req.params.id, req.ownerId, parsed.data, SAMPLE_PRODUCT);
+    res.status(200).json({ html });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// The best five positive reviews buyers left this seller on eBay.
+async function storeReviews(req, res, next) {
+  try {
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
+      if (connection.platform_key !== 'ebay') {
+        throw new connectionService.ConnectionError(`Reviews aren't available for ${connection.platform_name} yet`, 400);
+      }
+      return ebayService.getBestReviews(credentials, req.params.id, { refresh: req.query.refresh === '1' });
+    });
+    res.status(200).json({ reviews: result.reviews });
+  } catch (err) {
+    if (err.statusCode === 429) return res.status(200).json({ reviews: [], unavailable: err.message });
+    next(err);
+  }
+}
 
 // What eBay knows about this store — name, logo, feedback — so the
 // template can be filled from the source of truth instead of typed.
@@ -320,7 +436,7 @@ async function getStoreProfile(req, res, next) {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Store profiles aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.getStoreProfile(credentials);
+      return ebayService.getStoreProfile(credentials, req.params.id, { refresh: req.query.refresh === '1' });
     });
     const { credentials, credentialsChanged, ...safe } = profile;
     res.status(200).json(safe);
@@ -336,7 +452,7 @@ async function logoPalette(req, res, next) {
     const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
     let logoUrl = url;
     if (!logoUrl) {
-      const profile = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) => ebayService.getStoreProfile(credentials));
+      const profile = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) => ebayService.getStoreProfile(credentials, req.params.id));
       logoUrl = profile.logoUrl || '';
     }
     if (!/^https?:\/\//i.test(logoUrl)) {
@@ -387,6 +503,78 @@ async function updatePricing(req, res, next) {
   }
 }
 
+// ---- Categories, for the listing editor's picker ----
+// All read from eBay's own tree for the account's marketplace, so the picker
+// offers exactly the categories this seller can list in.
+async function marketplaceOf(req) {
+  const ensured = await connectionService.ensureMarketplace(req.params.id, req.ownerId, ebayService);
+  return ensured.settings?.ebay?.marketplaceId || marketplaces.DEFAULT_ID;
+}
+
+async function searchCategories(req, res, next) {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (q.length < 2) return res.status(200).json({ results: [] });
+    const marketplaceId = await marketplaceOf(req);
+    res.status(200).json({ results: await ebayTaxonomy.searchCategories(marketplaceId, q) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function categoryChildren(req, res, next) {
+  try {
+    const marketplaceId = await marketplaceOf(req);
+    const parent = typeof req.query.parent === 'string' && req.query.parent ? req.query.parent : null;
+    const [children, path] = await Promise.all([
+      ebayTaxonomy.getCategoryChildren(marketplaceId, parent),
+      parent ? ebayTaxonomy.getCategoryPath(marketplaceId, parent) : [],
+    ]);
+    res.status(200).json({ children, path });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function categoryDetail(req, res, next) {
+  try {
+    const marketplaceId = await marketplaceOf(req);
+    const categoryId = String(req.params.categoryId);
+    const [path, variationsSupported, aspects] = await Promise.all([
+      ebayTaxonomy.getCategoryPath(marketplaceId, categoryId),
+      ebayTaxonomy.getVariationsSupported(marketplaceId, categoryId),
+      ebayTaxonomy.getEditorAspectSchema(marketplaceId, categoryId),
+    ]);
+    if (!path.length) return res.status(404).json({ error: 'That category is not in eBay\'s tree for this marketplace.' });
+    res.status(200).json({ id: categoryId, path, variationsSupported, aspects: aspects || [] });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// Per connection, briefly: the Trading call behind it is rationed.
+const storeCategoryCache = new Map();
+const STORE_CATEGORY_TTL_MS = 60 * 60 * 1000;
+
+async function storeCategories(req, res, next) {
+  try {
+    const cached = storeCategoryCache.get(req.params.id);
+    if (cached && cached.expiresAt > Date.now()) return res.status(200).json({ categories: cached.categories });
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+    if (connection.platform_key !== 'ebay') return res.status(200).json({ categories: [] });
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
+      ebayService.getStoreCategories(credentials)
+    );
+    storeCategoryCache.set(req.params.id, { categories: result.categories, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
+    res.status(200).json({ categories: result.categories });
+  } catch (err) {
+    // A rationed Trading call shouldn't break the editor: no Shop categories
+    // is a valid state, and the notice says why.
+    if (err.statusCode === 429) return res.status(200).json({ categories: [], unavailable: err.message });
+    next(err);
+  }
+}
+
 module.exports = {
   list,
   listPlatforms,
@@ -403,4 +591,13 @@ module.exports = {
   updateTemplate,
   logoPalette,
   getStoreProfile,
+  templateSource,
+  templatePreview,
+  storeReviews,
+  refresh,
+  events,
+  searchCategories,
+  categoryChildren,
+  categoryDetail,
+  storeCategories,
 };
