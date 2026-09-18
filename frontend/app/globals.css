@@ -63,9 +63,22 @@ body {
   }
 }
 
-:focus-visible {
+/* Keyboard focus ring for buttons and links only. Text fields show focus
+   with their own border (below): an offset ring around a bordered field
+   reads as a gap between two boxes. This rule is unlayered, so it would
+   otherwise beat the layered .input utility's outline: none. */
+:focus-visible:not(input):not(textarea):not(select) {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+input:focus,
+textarea:focus,
+select:focus,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
 }
 
 /* ---------------------------------------------------------------------------

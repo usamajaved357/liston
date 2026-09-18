@@ -539,12 +539,51 @@ export interface ImageCheck {
   warnings: string[];
 }
 
+// What the AI may change on a draft: everything on the editor except the
+// photos. Variations are addressed by index, options by their current name.
+export interface RevisionChanges {
+  title?: string;
+  commonTitle?: string;
+  description?: string;
+  commonDescription?: string;
+  aspects?: Record<string, string[]>;
+  removeAspects?: string[];
+  condition?: string;
+  price?: OfferPrice;
+  quantity?: number;
+  sku?: string;
+  variants?: { index: number; price?: OfferPrice; quantity?: number }[];
+  allVariants?: { price?: OfferPrice; quantity?: number };
+  renameAxes?: { from: string; to: string }[];
+  renameAxisValues?: { axis: string; from: string; to: string }[];
+  removeAxisValues?: { axis: string; value: string }[];
+  addAxisValues?: { axis: string; value: string; copyFrom?: string }[];
+  removeVariants?: number[];
+  listingPolicies?: Partial<ListingPolicies>;
+  storeCategoryNames?: string[];
+}
+
+// The editor's state as the AI sees it (unsaved edits included).
+export interface RevisionCurrentState {
+  title: string;
+  description: string;
+  aspects: Record<string, string[]>;
+  condition: string;
+  sku: string;
+  currency: string;
+  price?: string;
+  quantity?: number;
+  specifications: { name: string; values: string[] }[];
+  variants: { index: number; options: string; price: string; quantity: number }[];
+  policies?: { postage?: string; payment?: string; returns?: string };
+  storeCategoryNames: string[];
+  storeCategories?: string[];
+}
+
 export interface TextProposal {
-  changes: Partial<Pick<SingleDraftContent, "title" | "description" | "aspects">> & {
-    commonTitle?: string;
-    commonDescription?: string;
-  };
+  changes: RevisionChanges;
   summary: string;
+  cannotDo?: boolean;
 }
 
 export interface ImageProposal {
@@ -818,10 +857,10 @@ export const api = {
   deleteDraftListing: (listingId: string) => request<void>(`/api/listings/${listingId}`, { method: "DELETE" }),
 
   // AI revisions PROPOSE; nothing changes until the seller accepts.
-  reviseDraftText: (listingId: string, instruction: string) =>
+  reviseDraftText: (listingId: string, instruction: string, current?: RevisionCurrentState) =>
     request<TextProposal>(`/api/listings/${listingId}/revise`, {
       method: "POST",
-      body: JSON.stringify({ instruction }),
+      body: JSON.stringify({ instruction, current }),
     }),
   reviseDraftImage: (listingId: string, imageUrl: string, instruction: string) =>
     request<ImageProposal>(`/api/listings/${listingId}/images/revise`, {

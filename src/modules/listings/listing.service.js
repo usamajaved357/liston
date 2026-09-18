@@ -534,9 +534,29 @@ async function updateDraft(id, userId, patch) {
 // AI revisions are PROPOSALS — they read the draft but never write it. The
 // seller accepts by sending the change back through updateDraft, which is
 // the same path a hand edit takes.
-async function proposeTextRevision(id, userId, instruction) {
+async function proposeTextRevision(id, userId, instruction, current = null) {
   const listing = await loadEditableDraft(id, userId);
-  return revisionService.reviseText({ draft: listing.generated_data || {}, instruction });
+  const draft = listing.generated_data || {};
+  // What the model may pick from: the account's policies and Shop
+  // categories by name, and the specifics eBay requires here.
+  const [policies, category] = await Promise.all([
+    draft.listingPolicies
+      ? connectionService
+          .withDecryptedCredentials(listing.connection_id, userId, (credentials) => ebayService.getBusinessPolicies(credentials))
+          .catch(() => null)
+      : null,
+    categoryInfoFor(draft).catch(() => null),
+  ]);
+  const options = {
+    policies: policies && {
+      postage: (policies.fulfillmentPolicies || []).map((p) => ({ id: p.fulfillmentPolicyId, name: p.name })),
+      payment: (policies.paymentPolicies || []).map((p) => ({ id: p.paymentPolicyId, name: p.name })),
+      returns: (policies.returnPolicies || []).map((p) => ({ id: p.returnPolicyId, name: p.name })),
+    },
+    requiredAspects: (category?.aspects || []).filter((a) => a.required).map((a) => a.name),
+    storeCategories: current?.storeCategories || [],
+  };
+  return revisionService.reviseText({ draft, instruction, current, options });
 }
 
 async function proposeImageRevision(id, userId, { imageUrl, instruction }) {

@@ -195,7 +195,26 @@ async function update(req, res, next) {
   }
 }
 
-const reviseTextSchema = z.object({ instruction: z.string().min(3, 'Tell me what to change').max(500) });
+// `current` is the editor's state, unsaved edits included, so the model
+// works from what the seller sees rather than what was last saved.
+const currentStateSchema = z
+  .object({
+    title: z.string().max(200),
+    description: z.string().max(20000),
+    aspects: z.record(z.array(z.string())),
+    condition: z.string(),
+    sku: z.string().max(50),
+    currency: z.string().max(3),
+    price: z.string().max(20),
+    quantity: z.number().int().min(0),
+    specifications: z.array(z.object({ name: z.string(), values: z.array(z.string()) })),
+    variants: z.array(z.object({ index: z.number().int().min(0), options: z.string(), price: z.string().max(20), quantity: z.number().int().min(0) })).max(500),
+    policies: z.object({ postage: z.string(), payment: z.string(), returns: z.string() }).partial(),
+    storeCategoryNames: z.array(z.string()).max(2),
+    storeCategories: z.array(z.string()).max(200),
+  })
+  .partial();
+const reviseTextSchema = z.object({ instruction: z.string().min(3, 'Tell me what to change').max(500), current: currentStateSchema.optional() });
 const reviseImageSchema = z.object({
   imageUrl: z.string().url(),
   instruction: z.string().min(3, 'Tell me what to change').max(500),
@@ -209,7 +228,7 @@ async function reviseText(req, res, next) {
     const parsed = reviseTextSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
 
-    const proposal = await listingService.proposeTextRevision(req.params.listingId, req.ownerId, parsed.data.instruction);
+    const proposal = await listingService.proposeTextRevision(req.params.listingId, req.ownerId, parsed.data.instruction, parsed.data.current || null);
     res.status(200).json(proposal);
   } catch (err) {
     next(err);
