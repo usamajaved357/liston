@@ -1,7 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../../config');
 const { AiGenerationError } = require('./ai-generation.errors');
-const { validateAspects, describeSchemaForPrompt } = require('./aspect-validator');
+const { validateAspects, describeSchemaForPrompt, prepareAspectsForEbay } = require('./aspect-validator');
 
 const MODEL = config.aiModel;
 
@@ -251,7 +251,16 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   // aspect, or several values where eBay takes one. Correct that here rather
   // than letting eBay reject the publish after the user has approved it.
   const aspectKey = hasVariants ? 'sharedAspects' : 'aspects';
-  const { aspects, warnings } = validateAspects(content[aspectKey], aspectSchema);
+  const validated = validateAspects(content[aspectKey], aspectSchema);
+  const warnings = validated.warnings;
+  // Shared specifics never repeat a variation attribute, and a required
+  // identifier the product doesn't have carries eBay's "Does Not Apply" —
+  // both are publish rejections otherwise.
+  const axisNames = hasVariants ? [content.varyingAspectName, ...Object.keys(source.variants[0]?.attributes || {})].filter(Boolean) : [];
+  const { aspects, missing: unfilled } = prepareAspectsForEbay(validated.aspects, aspectSchema, axisNames);
+  if (unfilled.length) {
+    warnings.push(`eBay requires ${unfilled.join(', ')} in this category and the draft has no value yet — fill ${unfilled.length === 1 ? 'it' : 'them'} in item specifics before publishing.`);
+  }
 
   // Parity check against the competitor: anything they filled that we
   // didn't is a filter buyers can use to find them and not us.
@@ -353,9 +362,14 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
     throw new AiGenerationError('The AI drafting model returned an unexpected response. Try again.');
   }
   const content = toolUse.input;
-  const { aspects: validated, warnings } = validateAspects(content.aspects, aspectSchema);
-  // The varying specifics live on each variation, never on the listing.
-  for (const axis of variationAxes) delete validated[axis];
+  const checked = validateAspects(content.aspects, aspectSchema);
+  const { warnings } = checked;
+  // The varying specifics live on each variation, never on the listing; a
+  // required identifier with no value gets eBay's "Does Not Apply".
+  const { aspects: validated, missing } = prepareAspectsForEbay(checked.aspects, aspectSchema, variationAxes);
+  if (missing.length) {
+    warnings.push(`eBay requires ${missing.join(', ')} in this category and the draft has no value yet — fill ${missing.length === 1 ? 'it' : 'them'} in item specifics before publishing.`);
+  }
   const finalTitle = await ensureTitleLength(anthropic, trimTitle(content.title), source ? summarizeListing(source) : null);
   return { title: finalTitle, description: content.description, aspects: validated, warnings };
 }

@@ -5,6 +5,7 @@ const ebayService = require('../ebay/ebay.service');
 const marketplaces = require('../ebay/marketplaces');
 const orchestrator = require('../ai-generation/generation.orchestrator');
 const imageGates = require('../ai-generation/image-pipeline/gates');
+const { prepareAspectsForEbay } = require('../ai-generation/aspect-validator');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
@@ -955,7 +956,16 @@ async function publishLiveEdit(listing, userId) {
   if (!imageCheck.ok) throw new ListingError(imageCheck.errors.join(' '), 400);
 
   const html = await renderDraftDescription(listing, userId);
-  const specifics = isVariation ? draft.variesBy?.aspects : draft.aspects;
+  // Same readiness rules as a new publish (no axis in the shared set,
+  // identifiers marked "Does Not Apply").
+  const readied = await readyAspectsForPublish(draft);
+  if (readied.missing.length) {
+    throw new ListingError(
+      `eBay requires ${readied.missing.join(', ')} for this category. Fill ${readied.missing.length === 1 ? 'it' : 'them'} in item specifics, then publish again.`,
+      400
+    );
+  }
+  const specifics = isVariation ? readied.draft.variesBy?.aspects : readied.draft.aspects;
   const payload = {
     title: isVariation ? draft.commonTitle : draft.title,
     descriptionHtml: html,
@@ -1085,6 +1095,20 @@ async function publishNow(listing, id, userId) {
       );
     }
   }
+  // The item specifics eBay will actually accept: no variation attribute
+  // repeated in the shared set, identifiers the product lacks marked "Does
+  // Not Apply", and anything still required but empty named here rather
+  // than in eBay's rejection after the build. Applied to the copy sent, not
+  // the stored draft, so older drafts get it too.
+  const readied = await readyAspectsForPublish(draft);
+  if (readied.missing.length) {
+    throw new ListingError(
+      `eBay requires ${readied.missing.join(', ')} for this category. Fill ${readied.missing.length === 1 ? 'it' : 'them'} in item specifics, then publish again.`,
+      400
+    );
+  }
+  const readyDraft = readied.draft;
+
   // Drafts created before drafts went local already have their eBay objects;
   // anything newer is built here, now.
   const alreadyOnEbay = Boolean(listing.platform_offer_id || listing.platform_group_key);
@@ -1105,7 +1129,7 @@ async function publishNow(listing, id, userId) {
       // stays as the inventory item's (4,000-char) description.
       const html = await renderDraftDescription(listing, userId);
       const branded = {
-        ...draft,
+        ...readyDraft,
         ...(Array.isArray(draft.variants) && draft.variants.length ? { commonListingDescription: html } : { listingDescription: html }),
       };
       const built = withSkus(branded, listing.connection_id);
@@ -1138,6 +1162,21 @@ async function publishNow(listing, id, userId) {
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
     throw err;
   }
+}
+
+// Item specifics as eBay accepts them (see prepareAspectsForEbay), on a
+// copy of the draft. Without a schema (Taxonomy down) only the axis rule
+// applies; a missing required aspect then surfaces from eBay as before.
+async function readyAspectsForPublish(draft) {
+  const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const axes = isVariation ? (draft.variesBy?.specifications || []).map((s) => s.name) : [];
+  const schema = draft.categoryId
+    ? await ebayTaxonomy.getEditorAspectSchema(draft.marketplaceId || 'EBAY_GB', draft.categoryId).catch(() => null)
+    : null;
+  const current = isVariation ? draft.variesBy?.aspects : draft.aspects;
+  const { aspects, missing } = prepareAspectsForEbay(current, schema, axes);
+  const readyDraft = isVariation ? { ...draft, variesBy: { ...draft.variesBy, aspects } } : { ...draft, aspects };
+  return { draft: readyDraft, missing };
 }
 
 // Assigns the SKUs (and group key) a publish needs, without mutating the

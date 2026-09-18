@@ -108,3 +108,41 @@ test('matchAllowedValue is case and whitespace insensitive', () => {
   assert.strictEqual(matchAllowedValue(' BLACK ', ['White', 'Black']), 'Black');
   assert.strictEqual(matchAllowedValue('green', ['White', 'Black']), null);
 });
+
+// --- readiness for eBay ------------------------------------------------------
+
+const { prepareAspectsForEbay } = require('../../src/modules/ai-generation/aspect-validator');
+
+test('prepareAspectsForEbay drops a variation attribute from the shared specifics', () => {
+  const schema = [{ name: 'Colour', required: true, variation: true }, { name: 'Brand', required: true }];
+  const { aspects, removedAxes, missing } = prepareAspectsForEbay({ Colour: ['Black'], colour: ['Red'], Brand: ['Acme'] }, schema, ['Colour']);
+  assert.deepStrictEqual(aspects, { Brand: ['Acme'] });
+  assert.deepStrictEqual(removedAxes, ['Colour', 'colour']);
+  assert.deepStrictEqual(missing, [], 'an axis satisfies its own required aspect');
+});
+
+test('prepareAspectsForEbay fills a missing required identifier with eBay\'s "Does Not Apply", nothing else', () => {
+  const schema = [
+    { name: 'Manufacturer Part Number', required: true },
+    { name: 'UPC', required: true },
+    { name: 'Brand', required: true },
+    { name: 'Material', required: false },
+  ];
+  const { aspects, filled, missing } = prepareAspectsForEbay({ Material: ['Steel'] }, schema, []);
+  assert.deepStrictEqual(aspects, { Material: ['Steel'], 'Manufacturer Part Number': ['Does Not Apply'], UPC: ['Does not apply'] });
+  assert.deepStrictEqual(filled, ['Manufacturer Part Number', 'UPC']);
+  assert.deepStrictEqual(missing, ['Brand'], 'a required non-identifier is reported, never invented');
+});
+
+test('prepareAspectsForEbay keeps a seller-entered identifier and tidies empty values', () => {
+  const schema = [{ name: 'Manufacturer Part Number', required: true }];
+  const { aspects, filled } = prepareAspectsForEbay({ 'Manufacturer Part Number': ['AB-123'], Notes: [''] }, schema, []);
+  assert.deepStrictEqual(aspects, { 'Manufacturer Part Number': ['AB-123'] });
+  assert.deepStrictEqual(filled, []);
+});
+
+test('prepareAspectsForEbay without a schema still applies the axis rule', () => {
+  const { aspects, missing } = prepareAspectsForEbay({ Size: ['M'], Brand: ['Acme'] }, null, ['Size']);
+  assert.deepStrictEqual(aspects, { Brand: ['Acme'] });
+  assert.deepStrictEqual(missing, []);
+});
