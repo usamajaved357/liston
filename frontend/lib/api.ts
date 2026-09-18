@@ -427,14 +427,21 @@ export interface DraftPreviewAxisValue {
 
 export interface DraftPreview {
   previewId: string;
-  competitor: { title: string; priceText: string | null; categoryPath: string[] } | null;
+  competitor: { title: string; priceText: string | null; categoryPath: string[]; axes: { name: string; values: string[] }[] } | null;
   category: { id: string; path: string[] };
   categorySuggestions: CategorySuggestion[];
   source: {
     title: string;
     priceText: string | null;
     imageUrls: string[];
-    axes: { name: string; hasImages: boolean; values: DraftPreviewAxisValue[] }[];
+    // The variation axes as the draft will have them: `name` is the
+    // supplier's, `ebayName` what the listing will call it, `via` how that
+    // was decided (exact | competitor | synonym | source | unresolved).
+    axes: { name: string; ebayName: string; via: string; hasImages: boolean; values: DraftPreviewAxisValue[] }[];
+    // Supplier options with a single value: a property of the product, not a choice.
+    fixed: { name: string; value: string }[];
+    allowedAxes: string[];
+    warnings: string[];
     totalCombinations: number;
   };
 }

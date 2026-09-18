@@ -122,10 +122,18 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
   previews.set(previewId, { competitor, source, categorySuggestions, userId, connectionId, competitorUrl, sourceUrl, expiresAt: Date.now() + PREVIEW_TTL_MS });
   const category = await orchestrator.resolveCategory({ competitor, categorySuggestions, marketplaceId });
 
+  // The variations as the draft will shape them (see planVariationAxes):
+  // only axes with a real choice, under the names eBay and the competitor
+  // use in this category; single-option axes are shown as fixed. The seller
+  // chooses from exactly what will be drafted.
+  const allowedAxes = ((await ebayTaxonomy.getAspectSchema(marketplaceId, category.categoryId)) || []).filter((a) => a.variation).map((a) => a.name);
+  const plan = orchestrator.planVariationAxes({ source, competitor, allowedAxes });
   // Per option, a thumbnail where the supplier has one, so a colour can be
   // chosen by eye rather than by name.
-  const axes = (source.variantAxes || []).map((axis) => ({
+  const axes = plan.axes.map((axis) => ({
     name: axis.name,
+    ebayName: axis.ebayName,
+    via: axis.via,
     hasImages: axis.hasImages,
     values: axis.values.map((value) => ({
       value,
@@ -133,10 +141,18 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
       combinations: (source.variants || []).filter((v) => v.attributes[axis.name] === value).length,
     })),
   }));
+  const competitorAxes = Object.entries(
+    (competitor?.variants || []).reduce((acc, v) => {
+      for (const [axis, value] of Object.entries(v.attributes || {})) (acc[axis] = acc[axis] || new Set()).add(value);
+      return acc;
+    }, {})
+  ).map(([name, values]) => ({ name, values: [...values] }));
 
   return {
     previewId,
-    competitor: competitor ? { title: competitor.title, priceText: competitor.priceText, categoryPath: competitor.categoryBreadcrumb } : null,
+    competitor: competitor
+      ? { title: competitor.title, priceText: competitor.priceText, categoryPath: competitor.categoryBreadcrumb, axes: competitorAxes }
+      : null,
     category: { id: category.categoryId, path: category.categoryPath },
     categorySuggestions,
     source: {
@@ -144,6 +160,9 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
       priceText: source.priceText,
       imageUrls: source.imageUrls || [],
       axes,
+      fixed: Object.entries(plan.fixed).map(([name, value]) => ({ name, value })),
+      allowedAxes,
+      warnings: plan.warnings,
       totalCombinations: (source.variants || []).length,
     },
   };

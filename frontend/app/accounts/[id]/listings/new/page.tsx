@@ -329,22 +329,41 @@ export default function DraftListingPage() {
                 <h2 className="text-base font-bold text-[var(--color-ink)]">Choose what to list</h2>
                 <p className="mt-1 text-sm text-[var(--color-muted)]">Untick anything you don&apos;t want to sell. Everything ticked is drafted.</p>
 
+                {preview.competitor?.axes?.length ? (
+                  <p className="mt-2 text-xs text-[var(--color-muted)]">
+                    The competitor varies by {preview.competitor.axes.map((a) => `${a.name} (${a.values.slice(0, 6).join(", ")}${a.values.length > 6 ? "…" : ""})`).join(" and ")};
+                    the draft follows that shape where eBay allows it in this category.
+                  </p>
+                ) : null}
+                {preview.source.axes.some((a) => a.via === "unresolved") && (
+                  <div className="notice notice-warning mt-3">
+                    <span className="flex-1">
+                      eBay doesn&apos;t allow {preview.source.axes.filter((a) => a.via === "unresolved").map((a) => `"${a.name}"`).join(", ")} as a variation in this category
+                      {preview.source.allowedAxes.length ? ` (it accepts ${preview.source.allowedAxes.slice(0, 5).join(", ")})` : ""}. The draft will still be created; rename the attribute, change the category or list the options separately in the editor.
+                    </span>
+                  </div>
+                )}
+
                 {preview.source.axes.length === 0 ? (
                   <p className="mt-4 text-sm text-[var(--color-muted)]">
-                    This product has no variations, so it will be drafted as a single listing.
+                    {preview.source.fixed.length
+                      ? "The supplier's options have one choice each, so this will be drafted as a single listing with them as item specifics."
+                      : "This product has no variations, so it will be drafted as a single listing."}
                   </p>
                 ) : (
                   <div className="mt-5 space-y-6">
                     {preview.source.axes.map((axis) => {
                       const chosen = selection[axis.name] || new Set<string>();
                       const allValues = axis.values.map((v) => v.value);
+                      const renamed = axis.ebayName.toLowerCase() !== axis.name.toLowerCase();
                       return (
                         <div key={axis.name}>
                           <div className="flex items-baseline justify-between">
                             <p className="text-sm font-bold text-[var(--color-ink)]">
-                              {axis.name}{" "}
+                              {axis.ebayName}{" "}
                               <span className="font-normal text-[var(--color-muted)]">
                                 · {chosen.size} of {axis.values.length}
+                                {renamed && <span className="ml-1.5 text-xs">(supplier calls it &ldquo;{axis.name}&rdquo;{axis.via === "competitor" ? "; named as the competitor does" : ""})</span>}
                               </span>
                             </p>
                             <div className="flex gap-1">
@@ -406,6 +425,19 @@ export default function DraftListingPage() {
                   </div>
                 )}
 
+                {preview.source.fixed.length > 0 && (
+                  <div className="mt-6 rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]/60 px-4 py-3">
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Same on every variation</p>
+                    <p className="mt-0.5 text-xs text-[var(--color-muted)]">One option only, so not something a buyer chooses — it goes into the item specifics instead.</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {preview.source.fixed.map((f) => (
+                        <span key={f.name} className="chip">
+                          <span className="text-[var(--color-muted)]">{f.name}:</span>&nbsp;{f.value}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </section>
           )}

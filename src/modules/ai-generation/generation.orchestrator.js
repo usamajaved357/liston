@@ -7,6 +7,7 @@ const imagePipeline = require('./image-pipeline');
 const { ScrapingError } = require('../scraping/scraping.errors');
 const pricingService = require('../pricing/pricing.service');
 const marketplaces = require('../ebay/marketplaces');
+const { planVariationAxes, closestVariationAspect } = require('./variation-plan');
 const priceParser = require('../pricing/price-parser');
 const { PricingError } = require('../pricing/pricing.service');
 
@@ -29,17 +30,6 @@ const { PricingError } = require('../pricing/pricing.service');
 // supplier's own labels whenever the tidied set would collide (see below).
 // Multi-axis products index by that axis's value rather than by position,
 // because the same colour repeats across every model in the matrix.
-// A source that predates `variantAxes` (or any caller passing plain variants)
-// still has the axis names sitting on the attributes themselves.
-function deriveAxesFromVariants(variants) {
-  const names = [...new Set(variants.flatMap((variant) => Object.keys(variant.attributes || {})))];
-  return names.map((name) => ({
-    name,
-    values: [...new Set(variants.map((variant) => variant.attributes[name]).filter(Boolean))],
-    hasImages: variants.some((variant) => Boolean(variant.imageUrl)),
-  }));
-}
-
 function cleanPrimaryAxisValues(variants, primaryAxis, content) {
   const labels = variants.map((variant) => variant.attributes[primaryAxis.name]);
   const distinctLabels = [...new Set(labels)];
@@ -196,31 +186,6 @@ function applyOrigin(aspects = {}, countryOfOrigin) {
   return { ...cleaned, [ORIGIN_ASPECT]: [countryOfOrigin] };
 }
 
-// The allowed aspect whose meaning is closest to what the supplier's axis
-// describes: colours go to Colour, sizes to Size, device models to Model or
-// Compatible Model. Null when nothing fits (a pack size in a category with
-// no quantity-like aspect), which is reported rather than guessed.
-const AXIS_SYNONYMS = [
-  [/colou?r|shade/i, /^colou?r$/i],
-  [/size|dimension/i, /size/i],
-  [/model|compatib|device|phone/i, /model/i],
-  [/style|design|pattern/i, /style|pattern/i],
-  [/pack|quantity|qty|pcs|count|bundle/i, /\b(pack|packs|quantity|bundle|multipack)\b|\bnumber of (items|pieces|units|pcs)\b|\bset size\b/i],
-  [/type|kind|variant/i, /^type$/i],
-  [/material|fabric/i, /material/i],
-  [/length/i, /length/i],
-  [/capacity|storage|volume/i, /capacity|storage|volume/i],
-];
-
-function closestVariationAspect(axisName, allowed) {
-  for (const [axisPattern, allowedPattern] of AXIS_SYNONYMS) {
-    if (!axisPattern.test(axisName)) continue;
-    const match = allowed.find((name) => allowedPattern.test(name));
-    if (match) return match;
-  }
-  return null;
-}
-
 // STEP ONE of drafting: read both listings and nothing else. No AI, no
 // images, no cost — just enough for the seller to see what the supplier
 // offers and choose which variations to actually list. Nobody lists all 162
@@ -342,12 +307,25 @@ async function generateDraftInput({
     throw new ScrapingError('None of the variations you selected exist on the supplier listing.', { source: 'aliexpress' });
   }
 
-  // Exactly one combination chosen is not a variation listing — it's a
-  // plain listing of that combination. Built as a one-variant group, its
-  // colour and model sat on the variant instead of the listing, so eBay's
-  // required "Colour" came up empty (confirmed on a real draft). Fold the
-  // chosen attributes into the item specifics and draft it as a single SKU.
-  if (source.variants.length === 1) {
+  // eBay publishes the exact item specifics it expects for this category —
+  // which are required, which accept only listed values. The model drafts
+  // against that real schema instead of guessing, and its answer is validated
+  // against it before the user ever sees the draft.
+  const aspectSchema = await ebayTaxonomy.getAspectSchema(marketplaceId, category.categoryId);
+
+  // The shape of the variations: which supplier axes are real choices, and
+  // what eBay (and the competitor) call them. Decided here, once, the same
+  // way the "choose what to list" step showed it. Single-option axes are a
+  // property of the product, so they go into the item specifics.
+  const plan = planVariationAxes({ source, competitor, allowedAxes: (aspectSchema || []).filter((a) => a.variation).map((a) => a.name) });
+
+  // No axis with a real choice left (one combination chosen, or every axis
+  // single-option) is not a variation listing — it's a plain listing of that
+  // combination. Built as a one-variant group, its colour and model sat on
+  // the variant instead of the listing, so eBay's required "Colour" came up
+  // empty (confirmed on a real draft). Fold the attributes into the item
+  // specifics and draft it as a single SKU.
+  if (source.variants.length && !plan.axes.length) {
     const [only] = source.variants;
     source = {
       ...source,
@@ -357,13 +335,9 @@ async function generateDraftInput({
       variants: [],
       variantAxes: [],
     };
+  } else if (Object.keys(plan.fixed).length) {
+    source = { ...source, specifics: { ...(source.specifics || {}), ...plan.fixed } };
   }
-
-  // eBay publishes the exact item specifics it expects for this category —
-  // which are required, which accept only listed values. The model drafts
-  // against that real schema instead of guessing, and its answer is validated
-  // against it before the user ever sees the draft.
-  const aspectSchema = await ebayTaxonomy.getAspectSchema(marketplaceId, category.categoryId);
 
   // Costs and prices are worked out before drafting so the model can be told
   // the real numbers, and so a pricing problem (wrong currency, unreadable
@@ -425,48 +399,19 @@ async function generateDraftInput({
     };
   }
 
-  // The supplier's axes, cleaned for eBay. The model tidies the FIRST axis's
-  // labels (it's the one that tends to be messy — "1PC Warm White"); later
-  // axes like Model or Size come through already clean, so they're used
-  // verbatim rather than risking the model rewriting "iPhone 15 Pro" into
-  // something eBay won't match.
-  // Two different names per axis, and conflating them silently emptied every
-  // variant's aspects: `name` is the SUPPLIER's key on the scraped attributes
-  // ("Color"), while `ebayName` is what the listing should call it
-  // ("Colour"). Only the primary axis gets renamed by the model; later axes
-  // keep the supplier's own naming, which is already listing-appropriate.
-  const sourceAxes = source.variantAxes?.length
-    ? source.variantAxes
-    : deriveAxesFromVariants(source.variants);
-  const axes = sourceAxes.map((axis, index) => ({
-    ...axis,
-    ebayName: index === 0 ? content.varyingAspectName || axis.name : axis.name,
-  }));
-
-  // eBay only lets certain aspects vary in each category ("Unit Quantity" is
-  // not one of them for shavers, and the publish is refused). When the
-  // schema is known, every axis name must be on that list: a near match is
-  // substituted, otherwise the draft carries a warning and the editor offers
-  // the allowed names.
-  const allowedAxes = (aspectSchema || []).filter((a) => a.variation).map((a) => a.name);
-  if (allowedAxes.length) {
-    for (const axis of axes) {
-      if (allowedAxes.some((name) => name.toLowerCase() === axis.ebayName.toLowerCase())) {
-        axis.ebayName = allowedAxes.find((name) => name.toLowerCase() === axis.ebayName.toLowerCase());
-        continue;
-      }
-      const substitute = closestVariationAspect(axis.ebayName, allowedAxes);
-      if (substitute) {
-        warnings.push(`eBay doesn't allow "${axis.ebayName}" as a variation in this category, so the options are listed under "${substitute}".`);
-        axis.ebayName = substitute;
-      } else {
-        warnings.push(
-          `eBay doesn't allow "${axis.ebayName}" as a variation in this category. Rename the attribute to one eBay accepts here ` +
-            `(${allowedAxes.slice(0, 6).join(', ')}${allowedAxes.length > 6 ? '…' : ''}), change the category, or list the options separately.`
-        );
-      }
-    }
-  }
+  // The supplier's axes as the plan shaped them: `name` is the supplier's
+  // key on each variant's attributes ("Cable Length"), `ebayName` what the
+  // listing calls it ("Endoscope Length"). The model tidies the FIRST axis's
+  // option labels (the messy one — "1PC Warm White"); later axes come
+  // through as the supplier wrote them.
+  const axes = plan.axes.map((axis) => ({ ...axis }));
+  warnings.push(...plan.warnings);
+  // With no category schema and no competitor to follow, the model's choice
+  // of name for the first axis ("Colour" for "Color") is the best available.
+  // Only when it plainly names the same kind of choice, though: "Colour"
+  // for "Color", never "Colour" for "Model".
+  const aiName = content.varyingAspectName;
+  if (aiName && axes[0]?.via === 'source' && closestVariationAspect(axes[0].name, [aiName])) axes[0].ebayName = aiName;
   const primaryAxis = axes[0];
   const cleanedPrimary = cleanPrimaryAxisValues(source.variants, primaryAxis, content);
 
@@ -579,4 +524,4 @@ async function generateDraftInput({
   };
 }
 
-module.exports = { generateDraftInput, readSources, resolveCategory, closestVariationAspect, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };
+module.exports = { generateDraftInput, readSources, resolveCategory, closestVariationAspect, planVariationAxes, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };

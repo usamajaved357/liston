@@ -451,7 +451,10 @@ test('generateDraftInput uses pre-read listings and drafts only the chosen varia
   assert.strictEqual(fetchListing.mock.calls.length, 0);
   assert.strictEqual(fetchProduct.mock.calls.length, 0);
   assert.strictEqual(draftInput.variants.length, 2);
-  assert.ok(draftInput.variants.every((v) => v.aspects.Colour[0] === 'Black'));
+  // Only Black was kept, so colour is no longer a choice: it becomes a
+  // property of the product, and the variations differ by model alone.
+  assert.ok(draftInput.variants.every((v) => v.aspects.Colour === undefined && v.aspects.Model?.length === 1));
+  assert.deepStrictEqual(draftInput.variesBy.specifications.map((s) => s.name), ['Model']);
   // One distinct photo among the kept variants → one image build, not four.
   assert.strictEqual(variantImage.mock.calls.length, 1);
 });
