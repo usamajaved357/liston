@@ -914,7 +914,7 @@ export default function AccountSettingsPage() {
 
             {/* The live preview: the real template, half scale, kept in view
                 while the settings on the left change it. */}
-            <div className="xl:sticky xl:top-4 xl:self-start">
+            <div className="xl:sticky xl:top-0 xl:self-start">
               <div className="card overflow-hidden">
                 <div className="flex items-center justify-between gap-3 px-4 py-3">
                   <div>
