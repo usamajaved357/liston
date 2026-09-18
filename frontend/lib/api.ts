@@ -334,11 +334,19 @@ export interface AspectSchemaEntry {
   hasMoreValues: boolean;
 }
 
+export interface VariationFixes {
+  axes: string[];
+  allowedHere: string[];
+  categories: { id: string; name: string; path: string[]; axisNames: Record<string, string> }[];
+}
+
 export interface DraftCategoryInfo {
   id: string;
   path: string[] | { id: string; name: string }[];
   variationsSupported: boolean | null;
   aspects: AspectSchemaEntry[];
+  // Attribute names eBay accepts as variations in this category; null when unknown.
+  variationAspects?: string[] | null;
 }
 
 export interface StoreCategory {
@@ -775,6 +783,11 @@ export const api = {
 
   getDraftListing: (listingId: string) =>
     request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null }>(`/api/listings/${listingId}`),
+
+  // Ways out when eBay refuses the draft's variation attribute in its category.
+  getVariationFixes: (listingId: string) => request<VariationFixes>(`/api/listings/${listingId}/variation-fixes`),
+  applyVariationFix: (listingId: string, fix: { categoryId: string; axisNames: Record<string, string> }) =>
+    request<{ listing: DraftListing; imageCheck: ImageCheck }>(`/api/listings/${listingId}/variation-fixes`, { method: "POST", body: JSON.stringify(fix) }),
 
   // Lifts one variation out into a single-item draft of its own.
   splitDraftVariant: (listingId: string, index: number) =>

@@ -553,3 +553,11 @@ test('readSources refuses a no-competitor draft when eBay has no category sugges
   mock.method(ebayTaxonomy, 'suggestCategories', async () => []);
   await assert.rejects(() => orchestrator.readSources({ sourceUrl: 'https://aliexpress.com/item/1.html' }), ScrapingError);
 });
+
+test('closestVariationAspect maps a supplier axis onto the aspect eBay allows, or nothing', () => {
+  const allowed = ['Colour', 'Size', 'Compatible Model', 'MPN'];
+  assert.strictEqual(orchestrator.closestVariationAspect('Color', allowed), 'Colour');
+  assert.strictEqual(orchestrator.closestVariationAspect('Shoe Size', allowed), 'Size');
+  assert.strictEqual(orchestrator.closestVariationAspect('Phone Model', allowed), 'Compatible Model');
+  assert.strictEqual(orchestrator.closestVariationAspect('Unit Quantity', allowed), null);
+});

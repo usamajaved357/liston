@@ -32,6 +32,8 @@ const editGuard = [requireAuth, requireFeature('listings', { resolveConnectionId
 
 router.get('/:listingId/description-preview', ...editGuard, listingController.descriptionPreview);
 router.post('/:listingId/variants/:index/split', ...editGuard, listingController.splitVariant);
+router.get('/:listingId/variation-fixes', ...editGuard, listingController.variationFixes);
+router.post('/:listingId/variation-fixes', ...editGuard, listingController.applyVariationFix);
 router.post('/:listingId/revise', ...editGuard, listingController.reviseText);
 router.post('/:listingId/images/revise', ...editGuard, listingController.reviseImage);
 router.post('/:listingId/images/accept', ...editGuard, listingController.acceptImage);

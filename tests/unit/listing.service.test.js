@@ -616,6 +616,7 @@ test('publish uses the seller’s own SKU as-is, and numbers variations from it'
     })
   );
   mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => null);
   mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
   const draftMock = mock.method(ebayService, 'draftVariationListing', async (credentials, input) => {
@@ -813,4 +814,43 @@ test('updateDraft adds an option by copying the variations of an existing one', 
     () => listingService.updateDraft('listing-1', USER_ID, { addAxisValues: [{ axis: 'Unit Quantity', value: '2' }] }),
     /already an option/
   );
+});
+
+test('publish refuses a variation attribute eBay does not allow in the category, naming the allowed ones', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      categoryId: '11844',
+      categoryPath: ["Men's Shavers"],
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Unit Quantity', values: ['1', '2'] }] },
+      variants: [
+        { aspects: { 'Unit Quantity': ['1'] }, imageUrls: ['https://i.ebayimg.com/1.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { 'Unit Quantity': ['2'] }, imageUrls: ['https://i.ebayimg.com/2.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [
+    { name: 'Colour', variation: true },
+    { name: 'Unit Quantity', variation: false },
+  ]);
+  const draftMock = mock.method(ebayService, 'draftVariationListing', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), /doesn't allow "Unit Quantity" as a variation attribute.*Colour/);
+  assert.strictEqual(draftMock.mock.calls.length, 0);
+});
+
+test('updateDraft refuses to rename an axis to a name eBay does not allow as a variation', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      categoryId: '11844',
+      imageUrls: [],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Unit Quantity', values: ['1'] }] },
+      variants: [{ aspects: { 'Unit Quantity': ['1'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 }],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [{ name: 'Colour', variation: true }, { name: 'Pack Size', variation: false }]);
+  await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Unit Quantity', to: 'Pack Size' }] }), /accepts: Colour/);
 });

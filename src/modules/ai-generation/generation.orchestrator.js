@@ -196,6 +196,31 @@ function applyOrigin(aspects = {}, countryOfOrigin) {
   return { ...cleaned, [ORIGIN_ASPECT]: [countryOfOrigin] };
 }
 
+// The allowed aspect whose meaning is closest to what the supplier's axis
+// describes: colours go to Colour, sizes to Size, device models to Model or
+// Compatible Model. Null when nothing fits (a pack size in a category with
+// no quantity-like aspect), which is reported rather than guessed.
+const AXIS_SYNONYMS = [
+  [/colou?r|shade/i, /^colou?r$/i],
+  [/size|dimension/i, /size/i],
+  [/model|compatib|device|phone/i, /model/i],
+  [/style|design|pattern/i, /style|pattern/i],
+  [/pack|quantity|qty|pcs|count|bundle/i, /\b(pack|packs|quantity|bundle|multipack)\b|\bnumber of (items|pieces|units|pcs)\b|\bset size\b/i],
+  [/type|kind|variant/i, /^type$/i],
+  [/material|fabric/i, /material/i],
+  [/length/i, /length/i],
+  [/capacity|storage|volume/i, /capacity|storage|volume/i],
+];
+
+function closestVariationAspect(axisName, allowed) {
+  for (const [axisPattern, allowedPattern] of AXIS_SYNONYMS) {
+    if (!axisPattern.test(axisName)) continue;
+    const match = allowed.find((name) => allowedPattern.test(name));
+    if (match) return match;
+  }
+  return null;
+}
+
 // STEP ONE of drafting: read both listings and nothing else. No AI, no
 // images, no cost — just enough for the seller to see what the supplier
 // offers and choose which variations to actually list. Nobody lists all 162
@@ -417,6 +442,31 @@ async function generateDraftInput({
     ...axis,
     ebayName: index === 0 ? content.varyingAspectName || axis.name : axis.name,
   }));
+
+  // eBay only lets certain aspects vary in each category ("Unit Quantity" is
+  // not one of them for shavers, and the publish is refused). When the
+  // schema is known, every axis name must be on that list: a near match is
+  // substituted, otherwise the draft carries a warning and the editor offers
+  // the allowed names.
+  const allowedAxes = (aspectSchema || []).filter((a) => a.variation).map((a) => a.name);
+  if (allowedAxes.length) {
+    for (const axis of axes) {
+      if (allowedAxes.some((name) => name.toLowerCase() === axis.ebayName.toLowerCase())) {
+        axis.ebayName = allowedAxes.find((name) => name.toLowerCase() === axis.ebayName.toLowerCase());
+        continue;
+      }
+      const substitute = closestVariationAspect(axis.ebayName, allowedAxes);
+      if (substitute) {
+        warnings.push(`eBay doesn't allow "${axis.ebayName}" as a variation in this category, so the options are listed under "${substitute}".`);
+        axis.ebayName = substitute;
+      } else {
+        warnings.push(
+          `eBay doesn't allow "${axis.ebayName}" as a variation in this category. Rename the attribute to one eBay accepts here ` +
+            `(${allowedAxes.slice(0, 6).join(', ')}${allowedAxes.length > 6 ? '…' : ''}), change the category, or list the options separately.`
+        );
+      }
+    }
+  }
   const primaryAxis = axes[0];
   const cleanedPrimary = cleanPrimaryAxisValues(source.variants, primaryAxis, content);
 
@@ -529,4 +579,4 @@ async function generateDraftInput({
   };
 }
 
-module.exports = { generateDraftInput, readSources, resolveCategory, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };
+module.exports = { generateDraftInput, readSources, resolveCategory, closestVariationAspect, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };

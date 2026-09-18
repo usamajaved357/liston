@@ -16,6 +16,7 @@ import {
   PriceBreakdown,
   TextProposal,
   VariationDraftVariant,
+  VariationFixes,
   isVariationDraft,
 } from "@/lib/api";
 import { Alert } from "@/components/Alert";
@@ -538,18 +539,31 @@ function InlineName({
   disabled,
   className,
   maxLength = 50,
+  suggestions,
 }: {
   value: string;
   onChange: (next: string) => void;
   disabled?: boolean;
   className?: string;
   maxLength?: number;
+  // Offered while editing (eBay's allowed attribute names, say).
+  suggestions?: string[];
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const listId = suggestions?.length ? `inline-name-${value.replace(/\W+/g, "-")}` : undefined;
   if (editing && !disabled) {
     return (
+      <>
+      {listId && (
+        <datalist id={listId}>
+          {suggestions!.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+      )}
       <input
+        list={listId}
         autoFocus
         className="h-6 min-w-[6rem] rounded-md border border-[var(--color-primary)] bg-[var(--color-panel)] px-1.5 text-[13px] text-[var(--color-ink)] focus:outline-none"
         value={draft}
@@ -568,6 +582,7 @@ function InlineName({
           }
         }}
       />
+      </>
     );
   }
   return (
@@ -678,8 +693,19 @@ function VariationsTable({
   addedValues,
   onAddValue,
   onUndoAddValue,
+  allowedAxes,
+  fixes,
+  onApplyFix,
+  applyingFix,
+  onSplitAll,
 }: {
   variants: VariationDraftVariant[];
+  // Attribute names eBay accepts as variations in this category; null if unknown.
+  allowedAxes: string[] | null;
+  fixes: VariationFixes | null;
+  onApplyFix?: (fix: VariationFixes["categories"][number]) => void;
+  applyingFix: boolean;
+  onSplitAll?: () => void;
   // Options added since the last save (they exist only once saved).
   addedValues: { axis: string; value: string; copyFrom: string }[];
   onAddValue: (axis: string, value: string, copyFrom: string) => void;
@@ -717,6 +743,8 @@ function VariationsTable({
   const [adding, setAdding] = useState<{ axis: string; value: string } | null>(null);
   // Names as the seller has renamed them (unsaved), falling back to the draft's.
   const showAxis = (axis: string) => axisRenames[axis] || axis;
+  const axisAllowed = (axis: string) => !allowedAxes || !allowedAxes.length || allowedAxes.some((a) => a.toLowerCase() === showAxis(axis).toLowerCase());
+  const disallowedAxes = specifications.map((s) => s.name).filter((axis) => !axisAllowed(axis));
   const showValue = (axis: string, value: string) => valueRenames[axis]?.[value] || value;
   // Every photo the draft has, for the picker: gallery first, then each
   // variation's own.
@@ -772,6 +800,83 @@ function VariationsTable({
           </p>
         </div>
       )}
+      {disallowedAxes.length > 0 && (
+        <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--color-warning)]/40">
+          <div className="flex items-start gap-3 bg-[var(--color-warning-soft)] px-4 py-3">
+            <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-warning)] text-white">
+              <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5">
+                <path d="M12 8v5M12 16.5h.01" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+              </svg>
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-[var(--color-ink)]">
+                eBay won&apos;t accept &ldquo;{disallowedAxes.map(showAxis).join("”, “")}&rdquo; as the thing buyers choose in this category
+              </p>
+              <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">
+                Each eBay category has its own list of attributes a listing may vary by. Pick one of the ways out below; publishing is blocked until then.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-4 bg-[var(--color-panel)] px-4 py-4 md:grid-cols-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Switch category</p>
+              {fixes === null ? (
+                <div className="mt-2 h-9 animate-pulse rounded-xl bg-[var(--color-paper)]" />
+              ) : fixes.categories.length === 0 ? (
+                <p className="mt-2 text-[12.5px] text-[var(--color-muted)]">
+                  None of eBay&apos;s suggested categories for this product allow a variation like this one. You can still change the category by hand from the details panel.
+                </p>
+              ) : (
+                <div className="mt-2 space-y-1.5">
+                  {fixes.categories.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      disabled={disabled || applyingFix}
+                      onClick={() => onApplyFix?.(c)}
+                      className="w-full rounded-xl border border-[var(--color-line)] px-3 py-2 text-left transition-colors hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-soft)] disabled:opacity-50"
+                    >
+                      <span className="block text-[13px] font-semibold text-[var(--color-ink)]">{applyingFix ? "Switching…" : `Switch to ${c.name}`}</span>
+                      <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{c.path.join(" › ")}</span>
+                      <span className="block text-[11.5px] text-[var(--color-muted)]">
+                        Options become &ldquo;{Object.values(c.axisNames).join("”, “")}&rdquo; · title and specifics refitted
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Rename the attribute</p>
+              <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">Keep the category; call the options one of these instead:</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {(allowedAxes || []).map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => disallowedAxes.forEach((axis) => onRenameAxis(axis, name))}
+                    className="rounded-full border border-[var(--color-line)] px-2.5 py-1 text-[12px] font-medium text-[var(--color-ink)] transition-colors hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">List separately</p>
+              <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">
+                Publish each option as its own listing (the usual way for multipacks). Use the buttons on each row, or all at once:
+              </p>
+              {onSplitAll && (
+                <button type="button" disabled={disabled || splitting !== null} onClick={onSplitAll} className="btn btn-accent btn-sm mt-2">
+                  {splitting !== null ? "Creating…" : `List all ${remaining} separately`}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {splitDone.length > 0 && (
         <div className="mt-3 rounded-2xl border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
           <p className="font-semibold text-[var(--color-ink)]">
@@ -800,7 +905,14 @@ function VariationsTable({
         {specifications.map((spec) => (
           <div key={spec.name} className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-paper)] px-3.5 py-3">
             <div className={labelClass}>
-              <InlineName value={showAxis(spec.name)} onChange={(to) => onRenameAxis(spec.name, to)} disabled={disabled} maxLength={65} className="px-1 -ml-1" />
+              <InlineName
+                value={showAxis(spec.name)}
+                onChange={(to) => onRenameAxis(spec.name, to)}
+                disabled={disabled}
+                maxLength={65}
+                suggestions={allowedAxes || undefined}
+                className={`px-1 -ml-1 ${axisAllowed(spec.name) ? "" : "text-[var(--color-danger)]"}`}
+              />
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {spec.values.map((value) => {
@@ -1393,6 +1505,8 @@ export default function DraftEditorPage() {
   const [showOptionalSpecifics, setShowOptionalSpecifics] = useState(false);
   const [splitting, setSplitting] = useState<number | null>(null);
   const [splitDone, setSplitDone] = useState<{ id: string; title: string }[]>([]);
+  const [fixes, setFixes] = useState<VariationFixes | null>(null);
+  const [applyingFix, setApplyingFix] = useState(false);
   const [imageCheck, setImageCheck] = useState<ImageCheck | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -1664,6 +1778,58 @@ export default function DraftEditorPage() {
     }
   }
 
+  // When the category refuses the variation attribute, ask the server for
+  // the ways out (categories to switch to, names accepted here).
+  const needsFixes = Boolean(
+    variation &&
+      categoryInfo?.variationAspects?.length &&
+      variation.variesBy.specifications.some((spec) => !categoryInfo.variationAspects!.some((a) => a.toLowerCase() === spec.name.toLowerCase()))
+  );
+  const fixesFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!listing || !needsFixes) return;
+    const key = `${listing.id}:${content?.categoryId}`;
+    if (fixesFor.current === key) return;
+    fixesFor.current = key;
+    api
+      .getVariationFixes(listing.id)
+      .then(setFixes)
+      .catch(() => setFixes({ axes: [], allowedHere: [], categories: [] }));
+  }, [listing, needsFixes, content?.categoryId]);
+
+  async function handleApplyFix(fix: VariationFixes["categories"][number]) {
+    if (!listing) return;
+    setApplyingFix(true);
+    setError(null);
+    try {
+      const pending = buildPatch();
+      delete pending.aspects;
+      if (Object.keys(pending).length) await api.updateDraftListing(listing.id, pending);
+      const data = await api.applyVariationFix(listing.id, { categoryId: fix.id, axisNames: fix.axisNames });
+      const detail = await api.getDraftListing(listing.id);
+      setListing(detail.listing);
+      categoryInfoRef.current = detail.category;
+      setCategoryInfo(detail.category);
+      setImageCheck(data.imageCheck);
+      setFixes(null);
+      resetFrom(detail.listing);
+      loadDescriptionPreview(detail.listing.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't switch the category. Try again.");
+    } finally {
+      setApplyingFix(false);
+    }
+  }
+
+  async function handleSplitAll() {
+    if (!listing || !variation) return;
+    for (let i = 0; i < variation.variants.length; i += 1) {
+      if (removedRows.has(i)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await handleSplit(i);
+    }
+  }
+
   async function handleSplit(index: number) {
     if (!listing) return;
     setSplitting(index);
@@ -1876,7 +2042,7 @@ export default function DraftEditorPage() {
     );
   }
 
-  const busy = saving || publishing || deleting || aiBusy || refitting || splitting !== null;
+  const busy = saving || publishing || deleting || aiBusy || refitting || splitting !== null || applyingFix;
   const canPublish = editable && !dirty && !busy;
   const conditionLabel = CONDITIONS.find((c) => c.value === condition)?.label || condition;
   const notes = content.warnings || [];
@@ -2364,6 +2530,11 @@ export default function DraftEditorPage() {
                 addedValues={addedValues}
                 onAddValue={(axis, value, copyFrom) => setAddedValues((list) => [...list, { axis, value, copyFrom }])}
                 onUndoAddValue={(axis, value) => setAddedValues((list) => list.filter((a) => !(a.axis === axis && a.value === value)))}
+                allowedAxes={categoryInfo?.variationAspects ?? null}
+                fixes={fixes}
+                onApplyFix={editable ? handleApplyFix : undefined}
+                applyingFix={applyingFix}
+                onSplitAll={editable ? handleSplitAll : undefined}
                 variationsSupported={categoryInfo?.variationsSupported ?? null}
                 onSplit={editable ? handleSplit : undefined}
                 splitting={splitting}

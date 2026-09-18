@@ -272,6 +272,27 @@ async function downloadImage(req, res, next) {
   }
 }
 
+async function variationFixes(req, res, next) {
+  try {
+    res.status(200).json(await listingService.variationFixes(req.params.listingId, req.ownerId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const applyFixSchema = z.object({ categoryId: z.string().regex(/^\d+$/), axisNames: z.record(z.string().min(1).max(65)).default({}) });
+
+async function applyVariationFix(req, res, next) {
+  try {
+    const parsed = applyFixSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    const result = await listingService.applyVariationFix(req.params.listingId, req.ownerId, parsed.data);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function splitVariant(req, res, next) {
   try {
     const index = Number(req.params.index);
@@ -292,4 +313,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, getOne, descriptionPreview, update, splitVariant, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };

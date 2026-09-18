@@ -269,7 +269,27 @@ async function categoryInfoFor(draft) {
     ebayTaxonomy.getVariationsSupported(marketplaceId, draft.categoryId),
     ebayTaxonomy.getEditorAspectSchema(marketplaceId, draft.categoryId),
   ]);
-  return { id: String(draft.categoryId), path: draft.categoryPath || [], variationsSupported, aspects: aspects || [] };
+  return {
+    id: String(draft.categoryId),
+    path: draft.categoryPath || [],
+    variationsSupported,
+    aspects: aspects || [],
+    // The attribute names eBay accepts as variations here (null when unknown).
+    variationAspects: aspects ? aspects.filter((a) => a.variation).map((a) => a.name) : null,
+  };
+}
+
+// The variation attributes eBay refuses in this category, with what it
+// accepts instead. Empty when fine or unknown.
+async function disallowedVariationAxes(draft) {
+  const specs = draft.variesBy?.specifications || [];
+  if (!specs.length || !draft.categoryId) return { bad: [], allowed: [] };
+  const aspects = await ebayTaxonomy.getEditorAspectSchema(draft.marketplaceId || 'EBAY_GB', draft.categoryId);
+  if (!aspects) return { bad: [], allowed: [] };
+  const allowed = aspects.filter((a) => a.variation).map((a) => a.name);
+  if (!allowed.length) return { bad: [], allowed: [] };
+  const ok = new Set(allowed.map((n) => n.toLowerCase()));
+  return { bad: specs.map((s) => s.name).filter((name) => !ok.has(name.toLowerCase())), allowed };
 }
 
 // Only a draft can be edited. Once a listing is live, eBay owns it — editing
@@ -354,6 +374,11 @@ async function updateDraft(id, userId, patch) {
   }
   for (const rename of patch.renameAxes || []) {
     if (rename.from === rename.to) continue;
+    // Only names eBay accepts as variations in this category, when known.
+    const { allowed } = await disallowedVariationAxes({ ...draft, variesBy: { specifications: [{ name: rename.to }] } });
+    if (allowed.length && !allowed.some((name) => name.toLowerCase() === rename.to.toLowerCase())) {
+      throw new ListingError(`eBay doesn't allow "${rename.to}" as a variation attribute in this category. It accepts: ${allowed.join(', ')}.`, 400);
+    }
     draft.variants = (draft.variants || []).map((variant) => {
       if (!variant.aspects || !(rename.from in variant.aspects)) return variant;
       const aspects = {};
@@ -617,6 +642,71 @@ async function fetchDraftImage(id, userId, url) {
   const meta = await imageOps.describe(buffer).catch(() => ({ format: 'jpeg' }));
   const ext = meta.format === 'jpeg' ? 'jpg' : meta.format || 'jpg';
   return { buffer, contentType: `image/${meta.format || 'jpeg'}`, extension: ext };
+}
+
+// When eBay refuses the draft's variation attribute in its category, the
+// ways out, ready to click: categories eBay itself suggests for this product
+// where variations are allowed AND an attribute like ours is accepted (with
+// the name to use there), and the attribute names accepted where we are.
+async function variationFixes(id, userId) {
+  const listing = await loadEditableDraft(id, userId);
+  const draft = listing.generated_data || {};
+  const marketplaceId = draft.marketplaceId || 'EBAY_GB';
+  const specs = draft.variesBy?.specifications || [];
+  if (!specs.length) return { axes: [], allowedHere: [], categories: [] };
+
+  const { bad, allowed } = await disallowedVariationAxes(draft);
+  if (!bad.length) return { axes: [], allowedHere: allowed, categories: [] };
+
+  // Candidates: what the draft already carries plus a fresh ask for the
+  // title, minus the category we're in.
+  const title = draft.commonTitle || draft.title || '';
+  const fresh = await ebayTaxonomy.suggestCategories(marketplaceId, title, 8).catch(() => []);
+  const seen = new Set([String(draft.categoryId)]);
+  const candidates = [...(draft.categorySuggestions || []), ...fresh].filter((c) => {
+    if (seen.has(String(c.id))) return false;
+    seen.add(String(c.id));
+    return true;
+  });
+
+  const categories = [];
+  for (const candidate of candidates.slice(0, 8)) {
+    const [supported, aspects] = await Promise.all([
+      ebayTaxonomy.getVariationsSupported(marketplaceId, candidate.id),
+      ebayTaxonomy.getEditorAspectSchema(marketplaceId, candidate.id),
+    ]);
+    if (supported === false || !aspects) continue;
+    const allowedThere = aspects.filter((a) => a.variation).map((a) => a.name);
+    // Every refused attribute must have a home there: an exact name, or the
+    // closest allowed one.
+    const mapping = {};
+    let fits = true;
+    for (const axis of bad) {
+      const exact = allowedThere.find((n) => n.toLowerCase() === axis.toLowerCase());
+      const close = exact || orchestrator.closestVariationAspect(axis, allowedThere);
+      if (!close) {
+        fits = false;
+        break;
+      }
+      mapping[axis] = close;
+    }
+    if (fits) categories.push({ id: String(candidate.id), name: candidate.name, path: candidate.path, axisNames: mapping });
+    if (categories.length >= 3) break;
+  }
+
+  return { axes: bad, allowedHere: allowed, categories };
+}
+
+// Moves the draft to one of those categories and renames the refused
+// attribute(s) to what that category accepts, as one action.
+async function applyVariationFix(id, userId, { categoryId, axisNames }) {
+  await updateDraft(id, userId, { categoryId: String(categoryId) });
+  const renames = Object.entries(axisNames || {})
+    .filter(([from, to]) => from !== to)
+    .map(([from, to]) => ({ from, to }));
+  if (renames.length) return updateDraft(id, userId, { renameAxes: renames });
+  const listing = await listingRepository.findByIdForUser(id, userId);
+  return { listing, imageCheck: imageGates.checkDraftImages(listing.generated_data || {}) };
 }
 
 // Lifts one variation out of a variation draft into a plain single-item
@@ -985,6 +1075,14 @@ async function publishNow(listing, id, userId) {
         400
       );
     }
+    const { bad, allowed } = await disallowedVariationAxes(draft);
+    if (bad.length) {
+      throw new ListingError(
+        `eBay doesn't allow "${bad.join('", "')}" as a variation attribute in this category. Rename it to one eBay accepts ` +
+          `(${allowed.join(', ')}), change the category, or list the options separately.`,
+        400
+      );
+    }
   }
   // Drafts created before drafts went local already have their eBay objects;
   // anything newer is built here, now.
@@ -1073,6 +1171,8 @@ module.exports = {
   getDraftDetail,
   previewDescription,
   updateDraft,
+  variationFixes,
+  applyVariationFix,
   splitVariant,
   removeDraft,
   proposeTextRevision,
