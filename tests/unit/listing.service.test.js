@@ -141,6 +141,11 @@ test('generateEbayDraftFromUrls records a SKU base, forwards sourceData, and cre
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
   mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
   mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1', status: 'drafted' }));
+  // The seller's Shop departments: the draft is filed under the one that fits.
+  mock.method(ebayService, 'getStoreCategoriesCached', async () => ({
+    categories: [{ id: '1', name: 'New In', children: [] }, { id: '2', name: 'Widgets', children: [] }],
+    unavailable: null,
+  }));
   const createDraftMock = mock.method(listingRepository, 'createDraft', async (row) => ({ id: 'listing-1', ...row }));
 
   await listingService.generateEbayDraftFromUrls(CONNECTION_ID, USER_ID, {
@@ -156,6 +161,7 @@ test('generateEbayDraftFromUrls records a SKU base, forwards sourceData, and cre
   // publish, so a draft edited over days isn't holding SKUs against eBay's
   // eventually-consistent index.
   assert.strictEqual(call.generatedData.skuBase, 'AE1234567890');
+  assert.deepStrictEqual(call.generatedData.storeCategoryNames, ['/Widgets'], 'filed under the matching Shop department');
   assert.strictEqual(call.platformOfferId, null);
   // costPrice is no longer part of sourceData — the cost comes from the
   // supplier's own price at draft time, and the derived price plus its full
@@ -632,6 +638,72 @@ test('publish uses the seller’s own SKU as-is, and numbers variations from it'
   assert.strictEqual(draftMock.mock.calls.length, 1);
 });
 
+test('publish sends eBay-ready specifics: no axis in the shared set, identifiers marked Does Not Apply', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      commonTitle: 'Widget',
+      commonDescription: 'd',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      categoryId: '11',
+      // The seller (or a refit) put Colour in item specifics too — eBay
+      // rejects the group when a variation attribute is repeated there.
+      variesBy: { aspects: { Brand: ['Acme'], Colour: ['Red'] }, aspectsImageVariesBy: [], specifications: [{ name: 'Colour', values: ['Red', 'Blue'] }] },
+      variants: [
+        { aspects: { Colour: ['Red'] }, imageUrls: ['https://i.ebayimg.com/r.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Colour: ['Blue'] }, imageUrls: ['https://i.ebayimg.com/b.jpg'], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [
+    { name: 'Colour', required: true, variation: true },
+    { name: 'Brand', required: true, variation: false },
+    { name: 'Manufacturer Part Number', required: true, variation: false },
+  ]);
+  mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  let sent;
+  mock.method(ebayService, 'draftVariationListing', async (credentials, input) => {
+    sent = input;
+    return { groupKey: input.groupKey };
+  });
+  mock.method(ebayService, 'publishGroup', async () => ({ externalProductId: 'ebay-1' }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  const statusMock = mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await listingService.publish('listing-1', USER_ID);
+  assert.deepStrictEqual(sent.variesBy.aspects, { Brand: ['Acme'], 'Manufacturer Part Number': ['Does Not Apply'] });
+  assert.deepStrictEqual(sent.variants.map((v) => v.aspects), [{ Colour: ['Red'] }, { Colour: ['Blue'] }]);
+  assert.strictEqual(statusMock.mock.calls[0].arguments[1], 'published');
+});
+
+test('publish names a required specific that is still empty instead of letting eBay reject the build', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      title: 'Widget',
+      description: 'd',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      categoryId: '11',
+      aspects: { Material: ['Steel'] },
+      price: { value: '9', currency: 'GBP' },
+      quantity: 1,
+    })
+  );
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [
+    { name: 'Brand', required: true },
+    { name: 'Type', required: true },
+    { name: 'Material', required: false },
+  ]);
+  const draftMock = mock.method(ebayService, 'draftListing', async () => ({}));
+  const statusMock = mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), /eBay requires Brand, Type for this category/);
+  assert.strictEqual(draftMock.mock.calls.length, 0, 'nothing was built on eBay');
+  assert.strictEqual(statusMock.mock.calls.length, 0, 'the draft was not touched');
+});
+
 test('publish refuses a variation draft whose category does not allow variations, before touching eBay', async () => {
   mock.method(listingRepository, 'findByIdForUser', async () =>
     pendingDraft({
@@ -853,4 +925,19 @@ test('updateDraft refuses to rename an axis to a name eBay does not allow as a v
   );
   mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [{ name: 'Colour', variation: true }, { name: 'Pack Size', variation: false }]);
   await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Unit Quantity', to: 'Pack Size' }] }), /accepts: Colour/);
+});
+
+// --- ending a live listing ----------------------------------------------------
+
+test('endLiveListing ends the item on eBay and drops any working copy opened to edit it', async () => {
+  const end = mock.method(ebayService, 'endLiveListing', async (credentials, connectionId, itemId) => ({ itemId, endTime: '2026-09-19T01:00:00.000Z', warnings: [] }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(listingRepository, 'findLiveEdit', async () => ({ id: 'copy-1' }));
+  const del = mock.method(listingRepository, 'deleteById', async () => {});
+
+  const result = await listingService.endLiveListing(CONNECTION_ID, USER_ID, '407000000009');
+
+  assert.deepStrictEqual(end.mock.calls[0].arguments.slice(1), [CONNECTION_ID, '407000000009']);
+  assert.deepStrictEqual(del.mock.calls[0].arguments, ['copy-1']);
+  assert.deepStrictEqual(result, { itemId: '407000000009', endTime: '2026-09-19T01:00:00.000Z', warnings: [] });
 });

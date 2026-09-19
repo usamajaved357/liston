@@ -35,6 +35,7 @@
   --shadow-pop: 0 12px 32px -12px rgba(15, 23, 42, 0.25);
   --radius-card: 16px;
   --radius-control: 999px; /* capsule buttons and inputs */
+  --page-gutter: 28px; /* space between the sidebar/window edge and page content, both sides */
   --radius-field: 14px; /* multi-line fields */
 
   --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
@@ -63,9 +64,22 @@ body {
   }
 }
 
-:focus-visible {
+/* Keyboard focus ring for buttons and links only. Text fields show focus
+   with their own border (below): an offset ring around a bordered field
+   reads as a gap between two boxes. This rule is unlayered, so it would
+   otherwise beat the layered .input utility's outline: none. */
+:focus-visible:not(input):not(textarea):not(select) {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+input:focus,
+textarea:focus,
+select:focus,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
 }
 
 /* ---------------------------------------------------------------------------
@@ -156,6 +170,34 @@ body {
     cursor: not-allowed;
   }
 }
+/* A page's heading row lines up with the sidebar's logo row: both start
+   16px from the top and the logo row is 30px tall, so the title (and any
+   control beside it) is centred on that same 30px line, with the subtitle
+   beneath. Shells wrap their `header` slot in this. Plain CSS rather than
+   @utility: it styles descendants, which utilities can't. */
+@layer components {
+  .page-header {
+    padding: 16px var(--page-gutter) 20px;
+  }
+  .page-header h1 {
+    display: flex;
+    align-items: center;
+    min-height: 30px;
+  }
+  /* Fixed to the logo line's height so a taller control (the account
+     menu's avatar) overhangs it evenly and still centres on the line. */
+  .page-header-controls {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    flex-shrink: 0;
+    gap: 8px;
+  }
+  .page-header-controls .btn-sm {
+    height: 30px;
+  }
+}
+
 @utility btn-sm {
   height: 32px;
   padding: 0 14px;

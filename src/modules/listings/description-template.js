@@ -13,12 +13,28 @@ const marketplaces = require('../ebay/marketplaces');
 
 // Tagline, warehouse note and carrier default to the account's own market
 // (see templateWithDefaults); the values here are the UK ones.
+// Typefaces a seller can pick for their template. eBay strips external
+// stylesheets from a description, so every option is a stack of fonts
+// buyers already have: it renders the same on eBay as in the preview.
+const FONTS = [
+  { id: 'modern', name: 'Modern Sans', stack: "Nunito,'Segoe UI',Helvetica,Arial,sans-serif" },
+  { id: 'classic', name: 'Classic Sans', stack: "'Helvetica Neue',Helvetica,Arial,sans-serif" },
+  { id: 'humanist', name: 'Humanist', stack: "Verdana,Tahoma,'Segoe UI',sans-serif" },
+  { id: 'geometric', name: 'Geometric', stack: "'Trebuchet MS','Gill Sans','Century Gothic',sans-serif" },
+  { id: 'rounded', name: 'Rounded', stack: "'Avenir Next Rounded','Arial Rounded MT Bold','Nunito',sans-serif" },
+  { id: 'system', name: 'System', stack: "system-ui,-apple-system,'Segoe UI',Roboto,sans-serif" },
+  { id: 'serif', name: 'Classic Serif', stack: "Georgia,'Times New Roman',Times,serif" },
+  { id: 'elegant', name: 'Elegant Serif', stack: "'Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif" },
+];
+const fontStack = (id) => (FONTS.find((f) => f.id === id) || FONTS[0]).stack;
+
 const DEFAULT_TEMPLATE = {
   storeName: '',
   tagline: 'Official UK Store',
   logoUrl: '',
   accentColor: '#FF6B2B',
   darkColor: '#1E1E2E',
+  fontFamily: 'modern',
   feedbackPercent: '',
   dispatchTime: '1–2 Business Days',
   dispatchNote: 'From our UK warehouse',
@@ -105,7 +121,7 @@ function styles(t) {
   const a = t.accentColor;
   const d = t.darkColor;
   return `<style>
-.eb{max-width:1400px;width:100%;margin:0 auto;font-family:Nunito,'Segoe UI',Helvetica,Arial,sans-serif;color:#1C1C1C;background:#fff;border:1px solid #E0E0E0;overflow-x:hidden}
+.eb{max-width:1400px;width:100%;margin:0 auto;font-family:${fontStack(t.fontFamily)};color:#1C1C1C;background:#fff;border:1px solid #E0E0E0;overflow-x:hidden}
 .eb *{box-sizing:border-box}
 .eb-header{background:${d};padding:0;overflow:hidden}
 .eb-header-top{padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -192,6 +208,7 @@ const PLACEHOLDERS = [
   ['feedback', 'e.g. "99.8% Positive", empty when unknown'],
   ['accentColor', 'Accent colour hex'],
   ['darkColor', 'Header colour hex'],
+  ['fontFamily', 'The chosen font stack, for a CSS font-family'],
   ['condition', 'e.g. New'],
   ['dispatchTime', 'Dispatch time'],
   ['deliveryTime', 'Delivery time'],
@@ -256,6 +273,7 @@ function renderDescription({ template, marketplaceId, productName, description, 
       feedback: feedback || '',
       accentColor: escapeHtml(t.accentColor),
       darkColor: escapeHtml(t.darkColor),
+      fontFamily: escapeHtml(fontStack(t.fontFamily)),
       condition: conditionLabel,
       dispatchTime: escapeHtml(t.dispatchTime),
       deliveryTime: escapeHtml(t.deliveryTime),
@@ -373,4 +391,4 @@ function renderTemplateSource({ template, marketplaceId }) {
     .replace(/\{\{Condition\}\}/g, '{{condition}}');
 }
 
-module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS };
+module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };

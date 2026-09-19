@@ -14,6 +14,8 @@ import {
   ImageCheck,
   ImageProposal,
   PriceBreakdown,
+  RevisionCurrentState,
+  StoreCategory,
   TextProposal,
   VariationDraftVariant,
   VariationFixes,
@@ -22,7 +24,8 @@ import {
 import { Alert } from "@/components/Alert";
 import { EditorHeader } from "@/components/EditorHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { CategoryPicker, CategorySelection } from "@/components/CategoryPicker";
+import { CategoryPicker, CategorySelection, ShopCategoryPicker, shopCategoryLabel } from "@/components/CategoryPicker";
+import { RichTextEditor, markersToHtml } from "@/components/RichTextEditor";
 import { currencySymbol, formatPrice } from "@/lib/format";
 
 // The draft editor. A draft lives only in Liston until Publish, so every
@@ -38,8 +41,8 @@ import { currencySymbol, formatPrice } from "@/lib/format";
 
 const inputClass = "input";
 const labelClass = "label";
-const cardClass = "card p-5";
-const cardTitleClass = "text-[15px] font-bold text-[var(--color-ink)]";
+const cardClass = "card p-4";
+const cardTitleClass = "text-[14px] font-bold text-[var(--color-ink)]";
 const smallButton = "btn btn-secondary btn-sm";
 const TITLE_MAX = 80;
 
@@ -86,6 +89,10 @@ const Icon = {
     </svg>
   ),
 };
+
+function flattenStorePaths(categories: StoreCategory[], prefix = ""): string[] {
+  return categories.flatMap((c) => [`${prefix}/${c.name}`, ...flattenStorePaths(c.children || [], `${prefix}/${c.name}`)]);
+}
 
 const CONDITIONS = [
   { value: "NEW", label: "New" },
@@ -171,153 +178,6 @@ function policyName(
 // The toolbar wraps the current selection in the textarea with those markers,
 // so what's stored stays safe text and the AI can still rewrite it.
 
-const TEXT_COLOURS = ["#e11d48", "#d97706", "#059669", "#2563eb", "#7c3aed", "#0f172a"];
-
-// Each marker kind knows how to detect itself around (or inside) a selection,
-// so a second click toggles it off and a different colour/size REPLACES the
-// current one rather than nesting another wrapper.
-const MARKERS = {
-  bold: { open: /\*\*$/, close: /^\*\*/, inner: /^\*\*([\s\S]*)\*\*$/ },
-  highlight: { open: /==$/, close: /^==/, inner: /^==([\s\S]*)==$/ },
-  color: { open: /\[color=#[0-9a-fA-F]{6}\]$/, close: /^\[\/color\]/, inner: /^\[color=#[0-9a-fA-F]{6}\]([\s\S]*)\[\/color\]$/ },
-  size: { open: /\[size=(?:sm|lg|xl)\]$/, close: /^\[\/size\]/, inner: /^\[size=(?:sm|lg|xl)\]([\s\S]*)\[\/size\]$/ },
-} as const;
-type MarkerKind = keyof typeof MARKERS;
-
-function applyMarker(value: string, start: number, end: number, kind: MarkerKind, open: string, close: string, toggle: boolean) {
-  const m = MARKERS[kind];
-  let before = value.slice(0, start);
-  let selected = value.slice(start, end);
-  let after = value.slice(end);
-
-  // Already wrapped: either the wrapper sits just outside the selection, or
-  // the selection includes it. Strip it first.
-  let wasWrapped = false;
-  const outsideOpen = before.match(m.open);
-  const outsideClose = after.match(m.close);
-  if (outsideOpen && outsideClose) {
-    before = before.slice(0, before.length - outsideOpen[0].length);
-    after = after.slice(outsideClose[0].length);
-    wasWrapped = true;
-  } else {
-    const inside = selected.match(m.inner);
-    if (inside) {
-      selected = inside[1];
-      wasWrapped = true;
-    }
-  }
-  if (!selected) selected = "text";
-  // Toggle kinds (bold, highlight) come off on a second click; replace kinds
-  // (colour, size) swap to the new value.
-  const wrapNow = !(toggle && wasWrapped);
-  const next = before + (wrapNow ? open : "") + selected + (wrapNow ? close : "") + after;
-  const selStart = before.length + (wrapNow ? open.length : 0);
-  return { next, selStart, selEnd: selStart + selected.length };
-}
-
-function FormatToolbar({
-  textarea,
-  value,
-  onChange,
-  disabled,
-}: {
-  textarea: React.RefObject<HTMLTextAreaElement | null>;
-  value: string;
-  onChange: (next: string) => void;
-  disabled: boolean;
-}) {
-  const [showColours, setShowColours] = useState(false);
-
-  function apply(kind: MarkerKind, open: string, close: string, toggle: boolean) {
-    const el = textarea.current;
-    if (!el) return;
-    const { next, selStart, selEnd } = applyMarker(value, el.selectionStart, el.selectionEnd, kind, open, close, toggle);
-    onChange(next);
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(selStart, selEnd);
-    });
-  }
-
-  const tool =
-    "flex h-8 min-w-8 items-center justify-center px-2 text-[var(--color-ink)] transition-colors hover:bg-[var(--color-paper)] disabled:opacity-40";
-  const divider = <span className="mx-0.5 h-5 w-px bg-[var(--color-line)]" />;
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-3">
-      <div className="inline-flex items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-        <button type="button" disabled={disabled} title="Bold (click again to remove)" aria-label="Bold" onClick={() => apply("bold", "**", "**", true)} className={`${tool} rounded-full font-extrabold`}>
-          B
-        </button>
-        <button type="button" disabled={disabled} title="Highlight (click again to remove)" aria-label="Highlight" onClick={() => apply("highlight", "==", "==", true)} className={`${tool} rounded-full`}>
-          <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]">
-            <rect x="3" y="18.5" width="18" height="3" rx="1.5" fill="#fde047" />
-            <path d="M14.5 4.5l5 5-8 8H6.5v-5l8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="#fef3c7" />
-            <path d="M12 7l5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-        </button>
-        {divider}
-        <button type="button" disabled={disabled} title="Normal size" aria-label="Normal size" onClick={() => apply("size", "", "", true)} className={`${tool} rounded-full text-[12px] font-semibold`}>
-          T
-        </button>
-        <button type="button" disabled={disabled} title="Large" aria-label="Large text" onClick={() => apply("size", "[size=lg]", "[/size]", false)} className={`${tool} rounded-full text-[15px] font-semibold`}>
-          T
-        </button>
-        <button type="button" disabled={disabled} title="Extra large" aria-label="Extra large text" onClick={() => apply("size", "[size=xl]", "[/size]", false)} className={`${tool} rounded-full text-[18px] font-bold`}>
-          T
-        </button>
-        {divider}
-        <div className="relative">
-          <button type="button" disabled={disabled} title="Text colour" aria-label="Text colour" onClick={() => setShowColours((v) => !v)} className={`${tool} gap-1 rounded-full`}>
-            <span className="flex flex-col items-center leading-none">
-              <span className="text-[13px] font-bold">A</span>
-              <span className="mt-0.5 h-[3px] w-4 rounded-sm bg-gradient-to-r from-[#e11d48] via-[#059669] to-[#2563eb]" />
-            </span>
-            <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 text-[var(--color-muted)]">
-              <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-          {showColours && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowColours(false)} aria-hidden />
-              <div className="absolute left-0 top-full z-50 mt-2 flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5" style={{ boxShadow: "var(--shadow-pop)" }}>
-                {TEXT_COLOURS.map((hex) => (
-                  <button
-                    key={hex}
-                    type="button"
-                    aria-label={`Colour ${hex}`}
-                    title={hex}
-                    onClick={() => {
-                      apply("color", `[color=${hex}]`, "[/color]", false);
-                      setShowColours(false);
-                    }}
-                    className="h-6 w-6 rounded-full ring-2 ring-white transition-transform hover:scale-110"
-                    style={{ background: hex, boxShadow: "0 0 0 1px var(--color-line)" }}
-                  />
-                ))}
-                <span className="mx-0.5 h-5 w-px bg-[var(--color-line)]" />
-                <button
-                  type="button"
-                  title="Remove colour"
-                  aria-label="Remove colour"
-                  onClick={() => {
-                    apply("color", "", "", true);
-                    setShowColours(false);
-                  }}
-                  className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
-                >
-                  {Icon.close}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-      <span className="text-xs text-[var(--color-muted)]">Select text, then apply. Click again to remove. Shows in the preview after saving.</span>
-    </div>
-  );
-}
-
 // --- Gallery ----------------------------------------------------------------
 //
 // Every image at once, not a carousel: the seller is deciding what to keep,
@@ -367,9 +227,7 @@ function GalleryGrid({
   onDelete,
   onUpload,
   onReplace,
-  onDownload,
   onDownloadAll,
-  onEditWithAi,
   uploading,
   disabled,
 }: {
@@ -380,9 +238,7 @@ function GalleryGrid({
   onDelete: (index: number) => void;
   onUpload: (files: File[]) => void;
   onReplace: (index: number, file: File) => void;
-  onDownload: (index: number) => void;
   onDownloadAll: () => void;
-  onEditWithAi: (index: number) => void;
   uploading: boolean;
   disabled: boolean;
 }) {
@@ -404,7 +260,8 @@ function GalleryGrid({
     <div className={cardClass}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className={cardTitleClass}>
-          Photos <span className="font-medium text-[var(--color-muted)]">· {count} of 24</span>
+          Photos <span className="font-medium text-[var(--color-muted)]">· {count}</span>
+          <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]" title="eBay allows up to 24 photos per listing">(max 24)</span>
         </h3>
         <div className="flex items-center gap-1.5">
           <FileButton
@@ -432,12 +289,14 @@ function GalleryGrid({
       ) : (
         <>
           {/* Selected image, large */}
-          <div className="relative mt-4 aspect-square rounded-xl border border-[var(--color-line)] bg-white">
+          <div className="relative mt-3 aspect-square rounded-xl border border-[var(--color-line)] bg-white">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={current} alt="" className="h-full w-full rounded-xl object-contain" />
             {selected === 0 && (
-              <span className="chip chip-primary absolute left-3 top-3">
-                Main photo
+              <span title="Main photo" className="absolute left-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-sm">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
+                  <path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8L12 3.5z" />
+                </svg>
               </span>
             )}
             <span className="absolute right-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-white">
@@ -449,7 +308,7 @@ function GalleryGrid({
                   type="button"
                   onClick={() => onSelect((selected - 1 + count) % count)}
                   aria-label="Previous photo"
-                  className="absolute -left-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white text-[var(--color-ink)] shadow-md transition-colors hover:border-[var(--color-line-strong)]"
+                  className="absolute left-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white text-[var(--color-ink)] shadow-md transition-colors hover:border-[var(--color-line-strong)]"
                 >
                   <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
                     <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -459,7 +318,7 @@ function GalleryGrid({
                   type="button"
                   onClick={() => onSelect((selected + 1) % count)}
                   aria-label="Next photo"
-                  className="absolute -right-4 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white text-[var(--color-ink)] shadow-md transition-colors hover:border-[var(--color-line-strong)]"
+                  className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white text-[var(--color-ink)] shadow-md transition-colors hover:border-[var(--color-line-strong)]"
                 >
                   <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
                     <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -469,33 +328,35 @@ function GalleryGrid({
             )}
           </div>
 
-          {/* Actions for the selected image — icons only, labels on hover */}
-          <div className="mt-3 flex items-center gap-1.5">
-            <button type="button" onClick={() => onSetMain(selected)} disabled={disabled || selected === 0} title="Set as main photo" aria-label="Set as main photo" className="btn btn-secondary btn-icon">
-              {Icon.star}
-            </button>
-            <FileButton label={Icon.swap} disabled={disabled || uploading} onFiles={(f) => onReplace(selected, f[0])} className="btn btn-secondary btn-icon" title="Replace this photo" />
-            <button type="button" onClick={() => onDownload(selected)} title="Download this photo" aria-label="Download this photo" className="btn btn-secondary btn-icon">
-              {Icon.download}
-            </button>
-            <button type="button" onClick={() => onEditWithAi(selected)} disabled={disabled} title="Add text or a badge" aria-label="Add text or a badge" className="btn btn-secondary btn-icon">
-              {Icon.text}
-            </button>
-            <span className="ml-auto text-xs text-[var(--color-muted)]">Photo {selected + 1}</span>
+          {/* One action here: which photo leads. Everything else lives on
+              the thumbnails (remove) and in the AI box (badges). */}
+          <div className="mt-2 flex items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() => onDelete(selected)}
-              disabled={disabled || count === 1}
-              title={count === 1 ? "A listing needs at least one photo" : "Remove this photo"}
-              aria-label="Remove this photo"
-              className="btn btn-danger-ghost btn-icon"
+              onClick={() => onSetMain(selected)}
+              disabled={disabled || selected === 0}
+              className="btn !h-7 !px-3 !text-[12px] bg-[var(--color-primary-soft)] font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white disabled:opacity-100 disabled:hover:bg-[var(--color-primary-soft)] disabled:hover:text-[var(--color-primary)]"
             >
-              {Icon.trash}
+              {selected === 0 ? "Main photo" : "Set as main"}
             </button>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-[var(--color-muted)]">Photo {selected + 1}</span>
+              <FileButton label={Icon.swap} disabled={disabled || uploading} onFiles={(f) => onReplace(selected, f[0])} className="btn btn-secondary btn-icon !h-7 !w-7" title="Replace this photo" />
+              <button
+                type="button"
+                onClick={() => onDelete(selected)}
+                disabled={disabled || count === 1}
+                title={count === 1 ? "A listing needs at least one photo" : "Remove this photo"}
+                aria-label="Remove this photo"
+                className="btn btn-danger-ghost btn-icon !h-7 !w-7"
+              >
+                {Icon.trash}
+              </button>
+            </div>
           </div>
 
           {/* Every image */}
-          <div className="mt-4 grid grid-cols-4 gap-2 sm:grid-cols-5">
+          <div className="mt-2.5 grid grid-cols-5 gap-1.5 sm:grid-cols-6">
             {images.map((url, i) => (
               <button
                 key={`${url}-${i}`}
@@ -509,8 +370,10 @@ function GalleryGrid({
                 <img src={url} alt="" className="h-full w-full object-contain" />
                 <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-bold text-white">{i + 1}</span>
                 {i === 0 && (
-                  <span className="absolute left-0 right-0 top-0 bg-[var(--color-primary)] py-0.5 text-center text-[9px] font-bold uppercase tracking-wide text-white">
-                    Main
+                  <span title="Main photo" className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-sm">
+                    <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor">
+                      <path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8L12 3.5z" />
+                    </svg>
                   </span>
                 )}
               </button>
@@ -745,6 +608,10 @@ function VariationsTable({
   const showAxis = (axis: string) => axisRenames[axis] || axis;
   const axisAllowed = (axis: string) => !allowedAxes || !allowedAxes.length || allowedAxes.some((a) => a.toLowerCase() === showAxis(axis).toLowerCase());
   const disallowedAxes = specifications.map((s) => s.name).filter((axis) => !axisAllowed(axis));
+  // Listing options one by one is a way OUT of a category that refuses this
+  // variation (or variations at all); offered only then, with the warning
+  // above the table that explains it.
+  const splitOffered = Boolean(onSplit) && (variationsSupported === false || disallowedAxes.length > 0);
   const showValue = (axis: string, value: string) => valueRenames[axis]?.[value] || value;
   // Every photo the draft has, for the picker: gallery first, then each
   // variation's own.
@@ -759,8 +626,8 @@ function VariationsTable({
   const axes = specifications.map((s) => s.name);
   const remaining = variants.filter((v, i) => !isRowGone(v, i)).length;
   const currency = variants[0]?.price.currency || "GBP";
-  const cell = "px-3 py-1.5 align-middle";
-  const numInput = "input input-sm text-center";
+  const cell = "px-2.5 py-1 align-middle";
+  const numInput = "input input-sm !h-7 text-center text-[12.5px]";
 
   return (
     <div className={cardClass}>
@@ -772,18 +639,18 @@ function VariationsTable({
           </span>
         </h3>
         {!disabled && (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-[var(--color-muted)]">Apply to all:</span>
-            <div className="flex items-center gap-1">
-              <span className="text-[var(--color-muted)]">{currencySymbol(currency)}</span>
-              <input type="number" step="0.01" min="0" placeholder="price" value={bulkPrice} onChange={(e) => setBulkPrice(e.target.value)} className={`${numInput} w-24`} />
-              <button type="button" disabled={!bulkPrice} onClick={() => { onApplyAll("price", bulkPrice); setBulkPrice(""); }} className={smallButton}>
+          <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">
+            <span className="text-[var(--color-muted)]">All rows:</span>
+            <div className="flex items-center overflow-hidden rounded-full border border-[var(--color-line)]">
+              <span className="pl-2.5 text-[var(--color-muted)]">{currencySymbol(currency)}</span>
+              <input type="number" step="0.01" min="0" placeholder="price" value={bulkPrice} onChange={(e) => setBulkPrice(e.target.value)} className="h-7 w-16 bg-transparent px-1.5 text-[12.5px] focus:outline-none" />
+              <button type="button" disabled={!bulkPrice} onClick={() => { onApplyAll("price", bulkPrice); setBulkPrice(""); }} className="h-7 border-l border-[var(--color-line)] px-2.5 font-semibold text-[var(--color-primary)] disabled:opacity-40">
                 Set
               </button>
             </div>
-            <div className="flex items-center gap-1">
-              <input type="number" step="1" min="0" placeholder="qty" value={bulkQty} onChange={(e) => setBulkQty(e.target.value)} className={`${numInput} w-20`} />
-              <button type="button" disabled={!bulkQty} onClick={() => { onApplyAll("quantity", bulkQty); setBulkQty(""); }} className={smallButton}>
+            <div className="flex items-center overflow-hidden rounded-full border border-[var(--color-line)]">
+              <input type="number" step="1" min="0" placeholder="qty" value={bulkQty} onChange={(e) => setBulkQty(e.target.value)} className="h-7 w-14 bg-transparent px-2.5 text-[12.5px] focus:outline-none" />
+              <button type="button" disabled={!bulkQty} onClick={() => { onApplyAll("quantity", bulkQty); setBulkQty(""); }} className="h-7 border-l border-[var(--color-line)] px-2.5 font-semibold text-[var(--color-primary)] disabled:opacity-40">
                 Set
               </button>
             </div>
@@ -894,17 +761,11 @@ function VariationsTable({
         </div>
       )}
 
-      {!disabled && (
-        <p className="mt-3 text-xs text-[var(--color-muted)]">
-          Click an attribute or option name to rename it, or press &ldquo;+ Add option&rdquo; to add one (it copies the first option&apos;s price, quantity and photo; edit them after saving). Click a photo in the table to change it. Bin an option to drop it.
-        </p>
-      )}
-
-      {/* Attribute values — remove a whole colour or size at once */}
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {/* Attribute values — rename in place, remove a whole colour or size at once */}
+      <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
         {specifications.map((spec) => (
-          <div key={spec.name} className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-paper)] px-3.5 py-3">
-            <div className={labelClass}>
+          <div key={spec.name} className="rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]/70 px-3 py-2">
+            <div className={`${labelClass} flex items-center justify-between`}>
               <InlineName
                 value={showAxis(spec.name)}
                 onChange={(to) => onRenameAxis(spec.name, to)}
@@ -913,15 +774,16 @@ function VariationsTable({
                 suggestions={allowedAxes || undefined}
                 className={`px-1 -ml-1 ${axisAllowed(spec.name) ? "" : "text-[var(--color-danger)]"}`}
               />
+              {!disabled && <span className="text-[10px] font-medium normal-case tracking-normal text-[var(--color-muted)]">click a name to rename</span>}
             </div>
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className="mt-1.5 flex flex-wrap gap-1">
               {spec.values.map((value) => {
                 const gone = axisRemoved(spec.name, value);
                 const count = variants.filter((v) => v.aspects[spec.name]?.[0] === value).length;
                 return (
                   <span
                     key={value}
-                    className={`inline-flex h-8 items-center gap-2 rounded-full border pl-3 pr-1 text-[13px] ${
+                    className={`inline-flex h-7 items-center gap-1.5 rounded-full border pl-2.5 pr-0.5 text-[12.5px] ${
                       gone
                         ? "border-dashed border-[var(--color-line)] text-[var(--color-muted)]"
                         : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)]"
@@ -932,14 +794,18 @@ function VariationsTable({
                     ) : (
                       <InlineName value={showValue(spec.name, value)} onChange={(to) => onRenameValue(spec.name, value, to)} disabled={disabled} className="font-medium" />
                     )}
-                    <span className="rounded-full bg-[var(--color-paper)] px-1.5 text-[11px] font-semibold text-[var(--color-muted)]">{count}</span>
+                    {specifications.length > 1 && (
+                      <span title={`${count} variation${count === 1 ? "" : "s"} use this`} className="rounded-full bg-[var(--color-paper)] px-1.5 text-[10.5px] font-semibold text-[var(--color-muted)]">
+                        {count}
+                      </span>
+                    )}
                     {!disabled && (
                       <button
                         type="button"
                         aria-label={gone ? `Restore ${value}` : `Remove ${value}`}
-                        title={gone ? "Restore" : `Remove all ${count} combination${count === 1 ? "" : "s"}`}
+                        title={gone ? "Restore" : specifications.length > 1 ? `Remove all ${count} combination${count === 1 ? "" : "s"}` : "Remove this option"}
                         onClick={() => (gone ? onRestoreAxisValue({ axis: spec.name, value }) : onRemoveAxisValue({ axis: spec.name, value }))}
-                        className={`flex h-6 w-6 items-center justify-center rounded-full transition-colors ${
+                        className={`flex h-5.5 w-5.5 items-center justify-center rounded-full transition-colors ${
                           gone
                             ? "text-[var(--color-accent)] hover:bg-[var(--color-accent-soft)]"
                             : "text-[var(--color-muted)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)]"
@@ -954,7 +820,7 @@ function VariationsTable({
               {addedValues
                 .filter((a) => a.axis === spec.name)
                 .map((a) => (
-                  <span key={`new-${a.value}`} className="inline-flex h-8 items-center gap-2 rounded-full border border-dashed border-[var(--color-primary)] bg-[var(--color-primary-soft)] pl-3 pr-1 text-[13px] text-[var(--color-ink)]">
+                  <span key={`new-${a.value}`} className="inline-flex h-7 items-center gap-1.5 rounded-full border border-dashed border-[var(--color-primary)] bg-[var(--color-primary-soft)] pl-2.5 pr-0.5 text-[12.5px] text-[var(--color-ink)]">
                     <span className="font-medium">{a.value}</span>
                     <span className="text-[11px] font-semibold text-[var(--color-primary)]">new</span>
                     {!disabled && (
@@ -967,7 +833,7 @@ function VariationsTable({
               {!disabled &&
                 (adding?.axis === spec.name ? (
                   <form
-                    className="inline-flex h-8 items-center gap-1"
+                    className="inline-flex h-7 items-center gap-1"
                     onSubmit={(e) => {
                       e.preventDefault();
                       const value = adding.value.trim();
@@ -979,17 +845,17 @@ function VariationsTable({
                   >
                     <input
                       autoFocus
-                      className="h-8 w-32 rounded-full border border-[var(--color-primary)] bg-[var(--color-panel)] px-3 text-[13px] focus:outline-none"
+                      className="h-7 w-28 rounded-full border border-[var(--color-primary)] bg-[var(--color-panel)] px-2.5 text-[12.5px] focus:outline-none"
                       placeholder={`New ${showAxis(spec.name).toLowerCase()}`}
                       value={adding.value}
                       maxLength={50}
                       onChange={(e) => setAdding({ axis: spec.name, value: e.target.value })}
                       onKeyDown={(e) => e.key === "Escape" && setAdding(null)}
                     />
-                    <button type="submit" className="btn btn-primary btn-sm !h-8">
+                    <button type="submit" className="btn btn-primary btn-sm !h-7">
                       Add
                     </button>
-                    <button type="button" onClick={() => setAdding(null)} className="btn btn-ghost btn-sm !h-8">
+                    <button type="button" onClick={() => setAdding(null)} className="btn btn-ghost btn-sm !h-7">
                       Cancel
                     </button>
                   </form>
@@ -997,7 +863,7 @@ function VariationsTable({
                   <button
                     type="button"
                     onClick={() => setAdding({ axis: spec.name, value: "" })}
-                    className="inline-flex h-8 items-center gap-1 rounded-full border border-dashed border-[var(--color-line-strong)] px-3 text-[13px] font-medium text-[var(--color-muted)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+                    className="inline-flex h-7 items-center gap-1 rounded-full border border-dashed border-[var(--color-line-strong)] px-2.5 text-[12px] font-medium text-[var(--color-muted)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
                   >
                     + Add option
                   </button>
@@ -1007,20 +873,20 @@ function VariationsTable({
         ))}
       </div>
 
-      <div className="mt-3 overflow-x-auto rounded-2xl border border-[var(--color-line)]">
-        <table className="w-full min-w-[720px] border-collapse text-[13px]">
+      <div className="mt-2.5 overflow-x-auto rounded-xl border border-[var(--color-line)]">
+        <table className="w-full min-w-[640px] border-collapse text-[12.5px]">
           <thead className="bg-[var(--color-paper)] text-left">
-            <tr className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-muted)]">
-              <th className={`${cell} w-20`}>Photo</th>
+            <tr className="text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-muted)]">
+              <th className={`${cell} w-14`}>Photo</th>
               {axes.map((axis) => (
                 <th key={axis} className={cell}>
                   {showAxis(axis)}
                 </th>
               ))}
-              <th className={`${cell} w-36 text-center`}>Price ({currencySymbol(currency)})</th>
-              <th className={`${cell} w-24 text-center`}>Qty</th>
-              <th className={`${cell} w-24 text-center`}>ROI</th>
-              <th className={`${cell} ${onSplit ? "w-44" : "w-14"}`} />
+              <th className={`${cell} w-28 text-center`}>Price ({currencySymbol(currency)})</th>
+              <th className={`${cell} w-20 text-center`}>Qty</th>
+              <th className={`${cell} w-20 text-center`}>ROI</th>
+              <th className={`${cell} ${splitOffered ? "w-40" : "w-12"}`} />
             </tr>
           </thead>
           <tbody>
@@ -1040,13 +906,13 @@ function VariationsTable({
                       disabled={disabled || gone}
                       onClick={() => setPickerFor(i)}
                       title={disabled || gone ? undefined : "Change this variation's photo"}
-                      className="group relative block h-11 w-11 rounded-lg disabled:cursor-default"
+                      className="group relative block h-9 w-9 rounded-lg disabled:cursor-default"
                     >
                       {image ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={image} alt="" className={`h-11 w-11 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
+                        <img src={image} alt="" className={`h-9 w-9 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
                       ) : (
-                        <span className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">
                           none
                         </span>
                       )}
@@ -1108,7 +974,7 @@ function VariationsTable({
                           }}
                           title="How this price was worked out"
                           aria-expanded={openBreakdown?.index === i}
-                          className={`inline-flex h-7 items-center gap-1 rounded-full border px-2.5 transition-colors ${
+                          className={`inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11.5px] transition-colors ${
                             roi.roiPercent >= roi.targetRoiPercent
                               ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-400"
                               : "border-[#fecdd3] bg-[var(--color-danger-soft)] text-[var(--color-danger)] hover:border-[var(--color-danger)]"
@@ -1146,13 +1012,13 @@ function VariationsTable({
                     )}
                   </td>
                   <td className={`${cell} text-center`}>
-                    {!disabled && onSplit && !gone && (
+                    {!disabled && splitOffered && onSplit && !gone && (
                       <button
                         type="button"
                         onClick={() => onSplit(i)}
                         disabled={splitting !== null}
                         title="Create a separate single-item draft for this variation"
-                        className={`btn btn-sm mr-1 !h-7 !px-2.5 !text-[12px] ${variationsSupported === false ? "btn-accent" : "btn-secondary"}`}
+                        className={`btn btn-sm mr-1 !h-6.5 !px-2 !text-[11.5px] ${variationsSupported === false ? "btn-accent" : "btn-secondary"}`}
                       >
                         {splitting === i ? "Creating…" : "List separately"}
                       </button>
@@ -1196,6 +1062,9 @@ function VariationsTable({
 
 // --- AI panel --------------------------------------------------------------
 
+// One row of a proposal: what changes, from what, to what.
+type ChangeRow = { label: string; from?: string; to: string; long?: boolean };
+
 function AiPanel({
   scope,
   onScopeChange,
@@ -1203,14 +1072,14 @@ function AiPanel({
   onProposeText,
   onProposeImage,
   textProposal,
+  textRows,
   imageProposal,
   onAcceptText,
   onAcceptImage,
   onDiscard,
   busy,
   currentImageUrl,
-  currentTitle,
-  currentDescription,
+  hasVariations,
 }: {
   scope: "text" | "image";
   onScopeChange: (s: "text" | "image") => void;
@@ -1218,148 +1087,167 @@ function AiPanel({
   onProposeText: (instruction: string) => void;
   onProposeImage: (instruction: string) => void;
   textProposal: TextProposal | null;
+  textRows: ChangeRow[];
   imageProposal: ImageProposal | null;
   onAcceptText: () => void;
   onAcceptImage: () => void;
   onDiscard: () => void;
   busy: boolean;
   currentImageUrl: string | null;
-  currentTitle: string;
-  currentDescription: string;
+  hasVariations: boolean;
 }) {
   const [instruction, setInstruction] = useState("");
   const proposal = scope === "text" ? textProposal : imageProposal;
 
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!instruction.trim()) return;
-    if (scope === "text") onProposeText(instruction.trim());
-    else onProposeImage(instruction.trim());
+  function submit(e?: React.FormEvent) {
+    e?.preventDefault();
+    const text = instruction.trim();
+    if (!text) return;
+    if (scope === "text") onProposeText(text);
+    else onProposeImage(text);
   }
 
-  const chip = (value: "text" | "image", label: string) => (
-    <button
-      type="button"
-      onClick={() => onScopeChange(value)}
-      className={`chip ${scope === value ? "chip-primary" : ""}`}
-    >
-      {label}
-    </button>
-  );
+  const ideas =
+    scope === "text"
+      ? [
+          "Shorten the description",
+          "Add 3 bullet points of key benefits",
+          hasVariations ? "Set every price to £4.99" : "Set the quantity to 10",
+          "Make the title more searchable",
+        ]
+      : ['Add the heading "FREE UK DELIVERY"', "Add a UK flag badge"];
 
   return (
-    <div className={cardClass}>
-      <h3 className={cardTitleClass}>Ask AI to change something</h3>
-      <p className="mt-1 text-xs text-[var(--color-muted)] leading-relaxed">
-        Describe the change in your own words. You&apos;ll see the result next to what you have now, and nothing
-        changes until you accept it.
-      </p>
-      <div className="mt-3 flex gap-2">
-        {chip("text", "Title & description")}
-        {chip("image", imageLabel)}
+    <div className={`${cardClass} border-[var(--color-primary)]/25 bg-gradient-to-b from-[var(--color-primary-soft)]/50 to-[var(--color-panel)]`}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className={`${cardTitleClass} flex items-center gap-1.5`}>
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-[var(--color-primary)]">
+            <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15z" fill="currentColor" />
+          </svg>
+          Ask AI
+        </h3>
+        <div className="flex gap-1 rounded-full bg-[var(--color-paper)] p-0.5">
+          {(
+            [
+              ["text", "Listing"],
+              ["image", imageLabel],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onScopeChange(value)}
+              className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${
+                scope === value ? "bg-[var(--color-panel)] text-[var(--color-ink)] shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
-      <form onSubmit={submit} className="mt-3 flex gap-2">
-        <input
-          className={inputClass}
-          placeholder={
-            scope === "text"
-              ? 'e.g. "make the description shorter" or "mention it fits in a pocket"'
-              : 'e.g. "add the heading BUY 2 GET 1 FREE" or "add the UK flag badge"'
-          }
-          value={instruction}
-          onChange={(e) => setInstruction(e.target.value)}
-          disabled={busy}
-        />
-        <button
-          type="submit"
-          disabled={busy || !instruction.trim()}
-          className="btn btn-primary flex-shrink-0"
-        >
-          {busy ? "Working…" : "Propose"}
-        </button>
+      <p className="mt-1 text-[12px] leading-relaxed text-[var(--color-muted)]">
+        {scope === "text"
+          ? "Change anything on this page in your own words — title, description, specifics, prices, quantities, variation names, policies. Nothing changes until you accept."
+          : "Add a heading or a badge to this photo. You'll see the result before it replaces anything."}
+      </p>
+
+      <form onSubmit={submit} className="mt-2.5">
+        <div className="flex items-end gap-1.5 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5 focus-within:border-[var(--color-primary)]">
+          <textarea
+            rows={2}
+            className="min-h-[2.5rem] flex-1 resize-none bg-transparent px-2 py-1 text-[13px] leading-snug text-[var(--color-ink)] placeholder:text-[var(--color-muted)]/70 focus:outline-none"
+            placeholder={scope === "text" ? 'e.g. "make the description shorter and set all prices to £4.49"' : 'e.g. "add the heading BUY 2 GET 1 FREE"'}
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            disabled={busy}
+          />
+          <button type="submit" disabled={busy || !instruction.trim()} className="btn btn-primary btn-sm flex-shrink-0">
+            {busy ? "Working…" : "Propose"}
+          </button>
+        </div>
       </form>
+      {!proposal && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {ideas.map((idea) => (
+            <button
+              key={idea}
+              type="button"
+              disabled={busy}
+              onClick={() => setInstruction(idea)}
+              className="rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-0.5 text-[11px] text-[var(--color-muted)] transition-colors hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]"
+            >
+              {idea}
+            </button>
+          ))}
+        </div>
+      )}
 
       {proposal && (
-        <div className="mt-4 rounded-xl border border-[var(--color-primary)]/30 bg-[var(--color-primary-soft)]/60 p-4">
-          <p className="label text-[var(--color-primary)]">Proposed change</p>
-          <p className="mt-1 text-sm text-[var(--color-ink)]">{proposal.summary}</p>
+        <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)]">
+          <div className="flex items-start gap-2 border-b border-[var(--color-line)] px-3 py-2">
+            <span className={`mt-0.5 h-2 w-2 flex-shrink-0 rounded-full ${textProposal?.cannotDo && scope === "text" ? "bg-[var(--color-warning)]" : "bg-[var(--color-primary)]"}`} />
+            <p className="text-[12.5px] leading-snug text-[var(--color-ink)]">{proposal.summary}</p>
+          </div>
 
           {scope === "image" && imageProposal && (
-            <>
+            <div className="p-3">
               {imageProposal.policyWarning && (
-                <div className="mt-3">
+                <div className="mb-2">
                   <Alert>{imageProposal.policyWarning}</Alert>
                 </div>
               )}
-              <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <p className="mb-1 text-xs text-[var(--color-muted)]">Now</p>
+                  <p className="mb-1 text-[10.5px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Now</p>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  {currentImageUrl && <img src={currentImageUrl} alt="" className="aspect-square w-full rounded-lg border border-[var(--color-line)] object-contain bg-white" />}
+                  {currentImageUrl && <img src={currentImageUrl} alt="" className="aspect-square w-full rounded-lg border border-[var(--color-line)] bg-white object-contain" />}
                 </div>
                 <div>
-                  <p className="mb-1 text-xs text-[var(--color-muted)]">Proposed</p>
+                  <p className="mb-1 text-[10.5px] font-bold uppercase tracking-wide text-[var(--color-primary)]">Proposed</p>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={imageProposal.previewDataUrl} alt="" className="aspect-square w-full rounded-lg border border-[var(--color-accent)] object-contain bg-white" />
+                  <img src={imageProposal.previewDataUrl} alt="" className="aspect-square w-full rounded-lg border border-[var(--color-primary)] bg-white object-contain" />
                 </div>
               </div>
-            </>
-          )}
-
-          {scope === "text" && textProposal && (
-            <div className="mt-3 space-y-3 text-sm">
-              {(textProposal.changes.title ?? textProposal.changes.commonTitle) !== undefined && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <p className="mb-1 text-xs text-[var(--color-muted)]">Title now</p>
-                    <p className="rounded-lg border border-[var(--color-line)] bg-white p-2 text-[var(--color-ink)]">{currentTitle}</p>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-xs text-[var(--color-muted)]">Proposed</p>
-                    <p className="rounded-lg border border-[var(--color-accent)] bg-white p-2 text-[var(--color-ink)]">
-                      {textProposal.changes.title ?? textProposal.changes.commonTitle}
-                    </p>
-                  </div>
-                </div>
-              )}
-              {(textProposal.changes.description ?? textProposal.changes.commonDescription) !== undefined && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <p className="mb-1 text-xs text-[var(--color-muted)]">Description now</p>
-                    <p className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--color-line)] bg-white p-2 text-[var(--color-ink)]">{currentDescription}</p>
-                  </div>
-                  <div>
-                    <p className="mb-1 text-xs text-[var(--color-muted)]">Proposed</p>
-                    <p className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--color-accent)] bg-white p-2 text-[var(--color-ink)]">
-                      {textProposal.changes.description ?? textProposal.changes.commonDescription}
-                    </p>
-                  </div>
-                </div>
-              )}
-              {textProposal.changes.aspects && (
-                <p className="text-xs text-[var(--color-muted)]">
-                  Also updates item specifics: {Object.keys(textProposal.changes.aspects).join(", ")}
-                </p>
-              )}
             </div>
           )}
 
-          <div className="mt-4 flex gap-2">
-            <button
-              type="button"
-              onClick={scope === "text" ? onAcceptText : onAcceptImage}
-              disabled={busy}
-              className="btn btn-primary"
-            >
-              Accept
-            </button>
-            <button
-              type="button"
-              onClick={onDiscard}
-              disabled={busy}
-              className="btn btn-secondary"
-            >
-              Discard
+          {scope === "text" && textProposal && textRows.length > 0 && (
+            <ul className="max-h-72 divide-y divide-[var(--color-line)] overflow-y-auto">
+              {textRows.map((row, i) => (
+                <li key={i} className="px-3 py-2">
+                  <p className="text-[10.5px] font-bold uppercase tracking-wide text-[var(--color-muted)]">{row.label}</p>
+                  {row.long ? (
+                    <div className="mt-1 grid grid-cols-2 gap-2 text-[12px] leading-snug">
+                      <p className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg bg-[var(--color-paper)] p-2 text-[var(--color-muted)]">{row.from}</p>
+                      <p className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg border border-[var(--color-primary)]/40 bg-[var(--color-primary-soft)]/40 p-2 text-[var(--color-ink)]">{row.to}</p>
+                    </div>
+                  ) : (
+                    <p className="mt-0.5 text-[12.5px] leading-snug">
+                      {row.from !== undefined && <span className="text-[var(--color-muted)] line-through decoration-[var(--color-muted)]/60">{row.from}</span>}
+                      {row.from !== undefined && <span className="mx-1.5 text-[var(--color-muted)]">→</span>}
+                      <span className="font-semibold text-[var(--color-ink)]">{row.to}</span>
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="flex gap-1.5 border-t border-[var(--color-line)] bg-[var(--color-paper)]/60 px-3 py-2">
+            {!(scope === "text" && textProposal?.cannotDo) && (
+              <button type="button" onClick={scope === "text" ? onAcceptText : onAcceptImage} disabled={busy} className="btn btn-primary btn-sm">
+                Accept
+              </button>
+            )}
+            <button type="button" onClick={onDiscard} disabled={busy} className="btn btn-ghost btn-sm">
+              {scope === "text" && textProposal?.cannotDo ? "OK" : "Discard"}
             </button>
           </div>
         </div>
@@ -1467,8 +1355,9 @@ export default function DraftEditorPage() {
   // build the PATCH on save, so Discard is just clearing this state.
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [editingDescription, setEditingDescription] = useState(false);
-  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
+  // "text" reads the plain description; "edit" opens the editor; "preview"
+  // shows the branded eBay render (built lazily the first time).
+  const [descMode, setDescMode] = useState<"text" | "edit" | "preview">("text");
   // Item specifics as an ordered list so rows can be renamed, added and
   // removed in place. Multi-value aspects are edited as "a, b".
   const [specifics, setSpecifics] = useState<{ name: string; value: string }[]>([]);
@@ -1501,6 +1390,10 @@ export default function DraftEditorPage() {
   const [storeCategoryNames, setStoreCategoryNames] = useState<string[]>([]);
   const [categoryInfo, setCategoryInfo] = useState<DraftCategoryInfo | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [shopPickerOpen, setShopPickerOpen] = useState(false);
+  // The Shop's departments, read once per page (cached server-side): for
+  // the Shop category dialog and so the AI knows what it may file under.
+  const [storeCategories, setStoreCategories] = useState<{ categories: StoreCategory[]; note: string | null } | null>(null);
   const [refitting, setRefitting] = useState(false);
   const [showOptionalSpecifics, setShowOptionalSpecifics] = useState(false);
   const [splitting, setSplitting] = useState<number | null>(null);
@@ -1516,6 +1409,8 @@ export default function DraftEditorPage() {
   const [published, setPublished] = useState<DraftListing | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [ending, setEnding] = useState(false);
 
   const [aiScope, setAiScope] = useState<"text" | "image">("text");
   const [aiBusy, setAiBusy] = useState(false);
@@ -1559,7 +1454,6 @@ export default function DraftEditorPage() {
     const c = row.generated_data as DraftContent;
     setTitle(isVariationDraft(c) ? c.commonTitle : c.title);
     setDescription(isVariationDraft(c) ? c.commonDescription : c.description);
-    setEditingDescription(false);
     const aspects = isVariationDraft(c) ? c.variesBy.aspects : c.aspects;
     setSpecifics(withSchemaRows(Object.entries(aspects || {}).map(([name, values]) => ({ name, value: values.join(", ") })), categoryInfoRef.current));
     setImages(c.imageUrls || []);
@@ -1600,6 +1494,24 @@ export default function DraftEditorPage() {
     }
   }, []);
 
+  // The branded preview is built only when the seller switches to it, and
+  // again after a save while it is showing.
+  function switchDescMode(mode: "text" | "edit" | "preview") {
+    setDescMode(mode);
+    if (mode === "preview" && descriptionPreview === null && listing && !loadingPreview) loadDescriptionPreview(listing.id);
+  }
+  function previewOutdated(listingId: string) {
+    setDescriptionPreview(null);
+    if (descMode === "preview") loadDescriptionPreview(listingId);
+  }
+
+  useEffect(() => {
+    api
+      .getStoreCategories(params.id)
+      .then((data) => setStoreCategories({ categories: data.categories, note: data.unavailable || null }))
+      .catch(() => setStoreCategories({ categories: [], note: null }));
+  }, [params.id]);
+
   useEffect(() => {
     api
       .getDraftListing(params.offerId)
@@ -1610,11 +1522,10 @@ export default function DraftEditorPage() {
         setCategoryInfo(data.category);
         resetFrom(data.listing);
         loadSecondaryPath((data.listing.generated_data as DraftContent).secondaryCategoryId);
-        loadDescriptionPreview(data.listing.id);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load this draft."))
       .finally(() => setLoading(false));
-  }, [params.offerId, resetFrom, loadDescriptionPreview, loadSecondaryPath]);
+  }, [params.offerId, resetFrom, loadSecondaryPath]);
 
   // Every item specific eBay lists for the category appears as a row, filled
   // or not, so the seller sees what's required and what else could help.
@@ -1770,7 +1681,7 @@ export default function DraftEditorPage() {
       setCategoryInfo(detail.category);
       setImageCheck(data.imageCheck);
       resetFrom(detail.listing);
-      loadDescriptionPreview(detail.listing.id);
+      previewOutdated(detail.listing.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't change the category. Try again.");
     } finally {
@@ -1813,7 +1724,7 @@ export default function DraftEditorPage() {
       setImageCheck(data.imageCheck);
       setFixes(null);
       resetFrom(detail.listing);
-      loadDescriptionPreview(detail.listing.id);
+      previewOutdated(detail.listing.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't switch the category. Try again.");
     } finally {
@@ -1825,7 +1736,6 @@ export default function DraftEditorPage() {
     if (!listing || !variation) return;
     for (let i = 0; i < variation.variants.length; i += 1) {
       if (removedRows.has(i)) continue;
-      // eslint-disable-next-line no-await-in-loop
       await handleSplit(i);
     }
   }
@@ -1854,7 +1764,7 @@ export default function DraftEditorPage() {
       setListing(data.listing);
       setImageCheck(data.imageCheck);
       resetFrom(data.listing);
-      loadDescriptionPreview(data.listing.id);
+      previewOutdated(data.listing.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save your changes. Try again.");
     } finally {
@@ -1876,7 +1786,9 @@ export default function DraftEditorPage() {
       }
       const data = await api.publishDraftListing(listing.id);
       if (isLiveEdit) {
-        router.push(`/accounts/${params.id}/listings?updated=${listing.edit_of_item_id}`);
+        // eBay may have applied only part of the revision; say so on the way out.
+        const warning = data.warnings?.length ? `&warning=${encodeURIComponent(data.warnings.join(" "))}` : "";
+        router.push(`/accounts/${params.id}/listings?updated=${listing.edit_of_item_id}${warning}`);
         return;
       }
       setListing(data.listing);
@@ -1885,6 +1797,21 @@ export default function DraftEditorPage() {
       setError(err instanceof ApiError ? err.message : "Couldn't publish this listing. Try again.");
     } finally {
       setPublishing(false);
+    }
+  }
+
+  // Ends the live listing this working copy edits; the copy goes with it.
+  async function handleEndListing() {
+    if (!listing?.edit_of_item_id) return;
+    setEnding(true);
+    setError(null);
+    try {
+      await api.endLiveListing(params.id, listing.edit_of_item_id);
+      router.push(`/accounts/${params.id}/listings?filter=inactive&ended=${listing.edit_of_item_id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't end this listing. Try again.");
+      setEnding(false);
+      setConfirmEnd(false);
     }
   }
 
@@ -1950,12 +1877,50 @@ export default function DraftEditorPage() {
   }
 
   // --- AI ---
+  // The editor's state, unsaved edits included, is what the model works from.
+  function currentStateForAi(): RevisionCurrentState {
+    const axes = variation ? variation.variesBy.specifications.map((s) => s.name) : [];
+    const showAxis = (a: string) => axisRenames[a] || a;
+    const showValue = (a: string, v: string) => valueRenames[a]?.[v] || v;
+    const policyLabel = (key: "fulfillmentPolicyId" | "paymentPolicyId" | "returnPolicyId") => policyName(policies, key, policyIds[key]);
+    return {
+      title,
+      description,
+      aspects: editedAspects,
+      condition,
+      sku,
+      currency: (variation ? variation.variants[0]?.price.currency : single?.price.currency) || "GBP",
+      price: single ? singlePrice : undefined,
+      quantity: single ? Math.max(0, parseInt(singleQuantity, 10) || 0) : undefined,
+      specifications: variation
+        ? variation.variesBy.specifications.map((spec) => ({
+            name: showAxis(spec.name),
+            values: [...spec.values.filter((v) => !removedAxisValues.some((r) => r.axis === spec.name && r.value === v)).map((v) => showValue(spec.name, v)), ...addedValues.filter((a) => a.axis === spec.name).map((a) => a.value)],
+          }))
+        : [],
+      variants: variation
+        ? variation.variants
+            .map((v, index) => ({ v, index }))
+            .filter(({ v, index }) => !removedRows.has(index) && !Object.entries(v.aspects).some(([axis, values]) => removedAxisValues.some((r) => r.axis === axis && r.value === values[0])))
+            .map(({ v, index }) => ({
+              index,
+              options: axes.map((a) => (v.aspects[a]?.[0] ? showValue(a, v.aspects[a][0]) : "")).filter(Boolean).join(" · "),
+              price: priceOverrides[index] ?? v.price.value,
+              quantity: Math.max(0, parseInt(quantityOverrides[index] ?? String(v.quantity), 10) || 0),
+            }))
+        : [],
+      policies: content?.listingPolicies ? { postage: policyLabel("fulfillmentPolicyId"), payment: policyLabel("paymentPolicyId"), returns: policyLabel("returnPolicyId") } : undefined,
+      storeCategoryNames,
+      storeCategories: flattenStorePaths(storeCategories?.categories || []),
+    };
+  }
+
   async function proposeText(instruction: string) {
     if (!listing) return;
     setAiBusy(true);
     setError(null);
     try {
-      setTextProposal(await api.reviseDraftText(listing.id, instruction));
+      setTextProposal(await api.reviseDraftText(listing.id, instruction, currentStateForAi()));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The AI couldn't make that change.");
     } finally {
@@ -1976,25 +1941,131 @@ export default function DraftEditorPage() {
       setAiBusy(false);
     }
   }
+
+  // The model names options and attributes as the editor shows them (i.e.
+  // after any unsaved rename); local state is keyed by the draft's
+  // original names, so map back.
+  const originalAxis = (shown: string) => {
+    const hit = variation?.variesBy.specifications.find((s) => (axisRenames[s.name] || s.name).toLowerCase() === shown.toLowerCase());
+    return hit?.name ?? shown;
+  };
+  const originalValue = (axis: string, shown: string) => {
+    const spec = variation?.variesBy.specifications.find((s) => s.name === axis);
+    const hit = spec?.values.find((v) => (valueRenames[axis]?.[v] || v).toLowerCase() === shown.toLowerCase());
+    return hit ?? shown;
+  };
+
+  // The proposal, as rows the panel can show: field, before, after.
+  const textRows = useMemo<ChangeRow[]>(() => {
+    if (!textProposal) return [];
+    const c = textProposal.changes;
+    const rows: ChangeRow[] = [];
+    const newTitle = c.title ?? c.commonTitle;
+    const newDesc = c.description ?? c.commonDescription;
+    if (newTitle !== undefined && newTitle !== title) rows.push({ label: "Title", from: title, to: newTitle });
+    if (newDesc !== undefined && newDesc !== description) rows.push({ label: "Description", from: description, to: newDesc, long: true });
+    for (const [name, values] of Object.entries(c.aspects || {})) {
+      const from = editedAspects[name]?.join(", ");
+      rows.push({ label: `Specific · ${name}`, from, to: values.join(", ") });
+    }
+    for (const name of c.removeAspects || []) if (editedAspects[name]) rows.push({ label: `Specific · ${name}`, from: editedAspects[name].join(", "), to: "removed" });
+    if (c.condition && c.condition !== condition) rows.push({ label: "Condition", from: CONDITIONS.find((x) => x.value === condition)?.label, to: CONDITIONS.find((x) => x.value === c.condition)?.label || c.condition });
+    if (c.price && single) rows.push({ label: "Price", from: formatPrice(singlePrice, single.price.currency), to: formatPrice(c.price.value, c.price.currency) });
+    if (c.quantity !== undefined && single) rows.push({ label: "Quantity", from: singleQuantity, to: String(c.quantity) });
+    if (c.sku !== undefined) rows.push({ label: "SKU", from: sku || "—", to: c.sku });
+    if (c.allVariants?.price) rows.push({ label: "Every variation · price", to: formatPrice(c.allVariants.price.value, c.allVariants.price.currency) });
+    if (c.allVariants?.quantity !== undefined) rows.push({ label: "Every variation · quantity", to: String(c.allVariants.quantity) });
+    for (const v of c.variants || []) {
+      const cur = variation?.variants[v.index];
+      if (!cur) continue;
+      const name = Object.values(cur.aspects).map((x) => x[0]).join(" · ") || `Variation ${v.index + 1}`;
+      if (v.price) rows.push({ label: `${name} · price`, from: formatPrice(priceOverrides[v.index] ?? cur.price.value, cur.price.currency), to: formatPrice(v.price.value, v.price.currency) });
+      if (v.quantity !== undefined) rows.push({ label: `${name} · quantity`, from: quantityOverrides[v.index] ?? String(cur.quantity), to: String(v.quantity) });
+    }
+    for (const r of c.renameAxes || []) rows.push({ label: "Attribute", from: r.from, to: r.to });
+    for (const r of c.renameAxisValues || []) rows.push({ label: `${r.axis} option`, from: r.from, to: r.to });
+    for (const r of c.removeAxisValues || []) rows.push({ label: `${r.axis} option`, from: r.value, to: "removed with its variations" });
+    for (const r of c.addAxisValues || []) rows.push({ label: `${r.axis} option`, to: `${r.value} (new)` });
+    for (const i of c.removeVariants || []) {
+      const cur = variation?.variants[i];
+      if (cur) rows.push({ label: "Variation", from: Object.values(cur.aspects).map((x) => x[0]).join(" · "), to: "removed" });
+    }
+    if (c.listingPolicies) {
+      const labels = { fulfillmentPolicyId: "Postage", paymentPolicyId: "Payment", returnPolicyId: "Returns" } as const;
+      for (const key of Object.keys(labels) as (keyof typeof labels)[]) {
+        const id = c.listingPolicies[key];
+        if (id) rows.push({ label: labels[key], from: policyName(policies, key, policyIds[key]), to: policyName(policies, key, id) });
+      }
+    }
+    if (c.storeCategoryNames) rows.push({ label: "Shop categories", from: storeCategoryNames.join(", ") || "—", to: c.storeCategoryNames.join(", ") || "none" });
+    return rows;
+  }, [textProposal, title, description, editedAspects, condition, single, singlePrice, singleQuantity, sku, variation, priceOverrides, quantityOverrides, policies, policyIds, storeCategoryNames]);
+
   function acceptText() {
-    if (!textProposal) return;
+    if (!textProposal || !content) return;
     const c = textProposal.changes;
     const newTitle = c.title ?? c.commonTitle;
     const newDesc = c.description ?? c.commonDescription;
     if (newTitle !== undefined) setTitle(newTitle);
     if (newDesc !== undefined) setDescription(newDesc);
-    if (c.aspects) {
+    if (c.aspects || c.removeAspects) {
       setSpecifics((rows) => {
-        const next = [...rows];
-        for (const [name, values] of Object.entries(c.aspects!)) {
-          const i = next.findIndex((r) => r.name === name);
-          const row = { name, value: values.join(", ") };
+        let next = [...rows];
+        for (const [name, values] of Object.entries(c.aspects || {})) {
+          const i = next.findIndex((r) => r.name.trim().toLowerCase() === name.toLowerCase());
+          const row = { name: i >= 0 ? next[i].name : name, value: values.join(", ") };
           if (i >= 0) next[i] = row;
           else next.push(row);
+        }
+        for (const name of c.removeAspects || []) {
+          next = next.map((r) => (r.name.trim().toLowerCase() === name.toLowerCase() ? { ...r, value: "" } : r));
         }
         return next;
       });
     }
+    if (c.condition) setCondition(c.condition);
+    if (c.price && single) setSinglePrice(c.price.value);
+    if (c.quantity !== undefined && single) setSingleQuantity(String(c.quantity));
+    if (c.sku !== undefined) setSku(c.sku);
+    if (c.allVariants?.price) applyToAllVariants("price", c.allVariants.price.value);
+    if (c.allVariants?.quantity !== undefined) applyToAllVariants("quantity", String(c.allVariants.quantity));
+    if (c.variants?.length) {
+      const prices: Record<number, string> = {};
+      const qtys: Record<number, string> = {};
+      for (const v of c.variants) {
+        if (v.price) prices[v.index] = v.price.value;
+        if (v.quantity !== undefined) qtys[v.index] = String(v.quantity);
+      }
+      if (Object.keys(prices).length) setPriceOverrides((p) => ({ ...p, ...prices }));
+      if (Object.keys(qtys).length) setQuantityOverrides((p) => ({ ...p, ...qtys }));
+    }
+    if (c.renameAxes?.length) setAxisRenames((r) => ({ ...r, ...Object.fromEntries(c.renameAxes!.map((x) => [originalAxis(x.from), x.to])) }));
+    if (c.renameAxisValues?.length) {
+      setValueRenames((r) => {
+        const next = { ...r };
+        for (const x of c.renameAxisValues!) {
+          const axis = originalAxis(x.axis);
+          next[axis] = { ...(next[axis] || {}), [originalValue(axis, x.from)]: x.to };
+        }
+        return next;
+      });
+    }
+    if (c.removeAxisValues?.length) {
+      setRemovedAxisValues((list) => [...list, ...c.removeAxisValues!.map((x) => ({ axis: originalAxis(x.axis), value: originalValue(originalAxis(x.axis), x.value) }))]);
+    }
+    if (c.addAxisValues?.length) {
+      setAddedValues((list) => [
+        ...list,
+        ...c.addAxisValues!.map((x) => {
+          const axis = originalAxis(x.axis);
+          const spec = variation?.variesBy.specifications.find((s) => s.name === axis);
+          return { axis, value: x.value, copyFrom: x.copyFrom ? originalValue(axis, x.copyFrom) : spec?.values[0] || "" };
+        }),
+      ]);
+    }
+    if (c.removeVariants?.length) setRemovedRows((s) => new Set([...s, ...c.removeVariants!]));
+    if (c.listingPolicies) setPolicyIds((p) => ({ ...p, ...c.listingPolicies }));
+    if (c.storeCategoryNames) setStoreCategoryNames(c.storeCategoryNames);
     setTextProposal(null);
   }
   async function acceptImage() {
@@ -2100,9 +2171,9 @@ export default function DraftEditorPage() {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-7xl px-6 py-6">
+        <div className="mx-auto max-w-[1360px] px-5 py-4">
           {(error || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published") && (
-            <div className="mb-4 space-y-2">
+            <div className="mb-3 space-y-2">
               {error && (
                 <div className="notice notice-danger">
                   <span className="flex-1">{error}</span>
@@ -2129,16 +2200,16 @@ export default function DraftEditorPage() {
             </div>
           )}
           {showNotes && notes.length > 0 && (
-            <div className="mb-4 rounded-2xl border border-amber-200 bg-[var(--color-warning-soft)] px-4 py-3">
+            <div className="mb-3 rounded-2xl border border-amber-200 bg-[var(--color-warning-soft)] px-4 py-2.5">
               <div className="flex items-baseline justify-between">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-amber-800">Drafting notes</p>
                 <button type="button" onClick={() => setShowNotes(false)} className="text-xs text-amber-800 hover:underline">
                   Hide
                 </button>
               </div>
-              <ul className="mt-1.5 space-y-0.5">
+              <ul className="mt-1 space-y-0.5">
                 {notes.map((w) => (
-                  <li key={w} className="text-[13px] leading-relaxed text-amber-900">
+                  <li key={w} className="text-[12.5px] leading-relaxed text-amber-900">
                     • {w}
                   </li>
                 ))}
@@ -2146,9 +2217,10 @@ export default function DraftEditorPage() {
             </div>
           )}
 
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-            {/* ---- Left: photos + AI ---- */}
-            <div className="space-y-6">
+          {/* Photos and the AI box stay in view on the left while the details
+              scroll on the right, so there is never a blank column. */}
+          <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="space-y-4 lg:sticky lg:top-0 lg:max-h-[calc(100vh-7.5rem)] lg:self-start lg:overflow-y-auto lg:pb-1 lg:pr-0.5">
               <GalleryGrid
                 images={images}
                 selected={selectedImage}
@@ -2157,12 +2229,7 @@ export default function DraftEditorPage() {
                 onDelete={deleteImage}
                 onUpload={(files) => uploadFiles(files)}
                 onReplace={(i, file) => uploadFiles([file], { replaces: images[i] })}
-                onDownload={downloadImage}
                 onDownloadAll={downloadAll}
-                onEditWithAi={(i) => {
-                  setSelectedImage(i);
-                  setAiScope("image");
-                }}
                 uploading={uploading}
                 disabled={!editable || busy}
               />
@@ -2174,6 +2241,7 @@ export default function DraftEditorPage() {
                   onProposeText={proposeText}
                   onProposeImage={proposeImage}
                   textProposal={textProposal}
+                  textRows={textRows}
                   imageProposal={imageProposal}
                   onAcceptText={acceptText}
                   onAcceptImage={acceptImage}
@@ -2183,117 +2251,108 @@ export default function DraftEditorPage() {
                   }}
                   busy={aiBusy}
                   currentImageUrl={imageProposalTarget}
-                  currentTitle={title}
-                  currentDescription={description}
+                  hasVariations={Boolean(variation)}
                 />
               )}
             </div>
 
             {/* ---- Right: details ---- */}
-            <div className="space-y-6">
+            <div className="min-w-0 space-y-4">
               <div className={cardClass}>
-                <h3 className={cardTitleClass}>Listing details</h3>
+                <div className="flex items-baseline justify-between">
+                  <label className={labelClass}>Title</label>
+                  <span className={`text-[11px] ${title.length > TITLE_MAX ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>
+                    {title.length} / {TITLE_MAX}
+                  </span>
+                </div>
+                <input
+                  className={`${inputClass} mt-1 font-semibold ${title.length > TITLE_MAX ? "!border-[var(--color-danger)]" : ""}`}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  disabled={!editable || busy}
+                />
+                {title.length > TITLE_MAX && (
+                  <p className="mt-1 text-xs font-semibold text-[var(--color-danger)]">
+                    {title.length - TITLE_MAX} characters over eBay&apos;s 80-character limit. Shorten it to save.
+                  </p>
+                )}
 
-                <div className="mt-4">
-                  <div className="flex items-baseline justify-between">
-                    <label className={labelClass}>Title</label>
-                    <span className={`text-xs ${title.length > TITLE_MAX ? "text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>
-                      {title.length} / {TITLE_MAX}
-                    </span>
-                  </div>
-                  <input
-                    className={`${inputClass} mt-1.5 font-semibold ${title.length > TITLE_MAX ? "!border-[var(--color-danger)]" : ""}`}
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    disabled={!editable || busy}
-                  />
-                  {title.length > TITLE_MAX && (
-                    <p className="mt-1.5 text-xs font-semibold text-[var(--color-danger)]">
-                      {title.length - TITLE_MAX} characters over eBay&apos;s 80-character limit. Shorten it to save.
+                <div className="mt-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-1 rounded-xl bg-[var(--color-paper)] px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className={labelClass}>Category</p>
+                    <p className="mt-0.5 truncate text-[13px] text-[var(--color-ink)]" title={content.categoryPath?.join(" › ")}>
+                      {content.categoryPath?.length ? content.categoryPath.join(" › ") : `Category ${content.categoryId}`}
                     </p>
+                    <p className="text-[11.5px] text-[var(--color-muted)]">
+                      #{content.categoryId}
+                      {secondaryCategoryId ? ` · also in ${secondaryCategoryPath.join(" › ") || secondaryCategoryId}` : ""}
+                    </p>
+                    {refitting && <p className="mt-1 text-xs font-semibold text-[var(--color-primary)]">Refitting the title, item specifics and description to the new category…</p>}
+                    {variation && categoryInfo?.variationsSupported === false && (
+                      <p className="mt-1 text-xs text-[var(--color-danger)]">eBay doesn&apos;t allow multi-variation listings in this category. Change it, or list each variation separately below.</p>
+                    )}
+                    {editable && (content.categorySuggestions || []).some((sg) => sg.id !== content.categoryId) && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                        <span className="text-[11px] text-[var(--color-muted)]">eBay also suggests:</span>
+                        {(content.categorySuggestions || [])
+                          .filter((sg) => sg.id !== content.categoryId)
+                          .slice(0, 3)
+                          .map((sg) => (
+                            <button
+                              key={sg.id}
+                              type="button"
+                              disabled={busy}
+                              title={sg.path.join(" › ")}
+                              onClick={() => applyCategory({ categoryId: sg.id, categoryPath: sg.path, secondaryCategoryId, secondaryCategoryPath, storeCategoryNames })}
+                              className="rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-ink)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] disabled:opacity-50"
+                            >
+                              {sg.name}
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                  {editable && (
+                    <button type="button" onClick={() => setPickerOpen(true)} disabled={busy} className={smallButton}>
+                      {refitting ? "Refitting…" : "Edit"}
+                    </button>
                   )}
                 </div>
 
-                <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                  <div className="sm:col-span-3">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <p className={labelClass}>Category</p>
-                      {editable && (
-                        <button type="button" onClick={() => setPickerOpen(true)} disabled={busy} className={smallButton}>
-                          {refitting ? "Refitting…" : "Change"}
-                        </button>
-                      )}
-                    </div>
-                    <p className="mt-1.5 text-sm text-[var(--color-ink)]">
-                      {content.categoryPath?.length ? content.categoryPath.join(" › ") : `Category ${content.categoryId}`}
-                    </p>
-                    <p className="text-xs text-[var(--color-muted)]">
-                      eBay category {content.categoryId}
-                      {secondaryCategoryId ? ` · also in ${secondaryCategoryPath.join(" › ") || secondaryCategoryId}` : ""}
-                      {storeCategoryNames.length ? ` · Shop: ${storeCategoryNames.map((n) => n.replace(/^\//, "").replace(/\//g, " › ")).join(", ")}` : ""}
-                    </p>
-                    {refitting && (
-                      <p className="mt-2 text-xs font-semibold text-[var(--color-primary)]">
-                        Refitting the title, item specifics and description to the new category…
+                {/* The seller's own Shop departments: a different thing from
+                    eBay's category, so its own row and its own dialog. */}
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl bg-[var(--color-paper)] px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className={labelClass}>Shop category</p>
+                    {storeCategoryNames.length ? (
+                      <p className="mt-0.5 truncate text-[13px] text-[var(--color-ink)]">{storeCategoryNames.map(shopCategoryLabel).join(" · ")}</p>
+                    ) : (
+                      <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+                        {storeCategories?.note
+                          ? storeCategories.note
+                          : storeCategories && storeCategories.categories.length === 0
+                            ? "No eBay Shop departments on this account."
+                            : "Not filed under a Shop department."}
                       </p>
                     )}
-                    {variation && categoryInfo?.variationsSupported === false && (
-                      <div className="mt-2 rounded-xl border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-3 py-2 text-xs text-[var(--color-ink)]">
-                        <p>
-                          eBay doesn&apos;t allow multi-variation listings in this category. Change the category, or list each variation
-                          separately from the variations table below.
-                        </p>
-                      </div>
-                    )}
-                    {editable && (content.categorySuggestions || []).some((sg) => sg.id !== content.categoryId) && (
-                      <div className="mt-2">
-                        <p className="text-xs text-[var(--color-muted)]">eBay also suggests:</p>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {(content.categorySuggestions || [])
-                            .filter((sg) => sg.id !== content.categoryId)
-                            .slice(0, 3)
-                            .map((sg) => (
-                              <button
-                                key={sg.id}
-                                type="button"
-                                disabled={busy}
-                                title={sg.path.join(" › ")}
-                                onClick={() =>
-                                  applyCategory({
-                                    categoryId: sg.id,
-                                    categoryPath: sg.path,
-                                    secondaryCategoryId,
-                                    secondaryCategoryPath,
-                                    storeCategoryNames,
-                                  })
-                                }
-                                className="chip hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] disabled:opacity-50"
-                              >
-                                {sg.name}
-                              </button>
-                            ))}
-                        </div>
-                      </div>
-                    )}
                   </div>
-                  <div className="sm:col-span-3">
+                  {editable && (
+                    <button type="button" onClick={() => setShopPickerOpen(true)} disabled={busy || !storeCategories} className={smallButton}>
+                      {storeCategoryNames.length ? "Edit" : "Add"}
+                    </button>
+                  )}
+                </div>
+
+                <div className={`mt-3 grid gap-3 ${single ? "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)]" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]"}`}>
+                  <div>
                     <label className={labelClass}>SKU (custom label)</label>
-                    <input
-                      className={`${inputClass} mt-1.5 font-mono text-[13px]`}
-                      value={sku}
-                      maxLength={50}
-                      placeholder="e.g. Liston-1005006"
-                      onChange={(e) => setSku(e.target.value)}
-                      disabled={!editable || busy}
-                    />
-                    {variation && sku.trim() && (
-                      <p className="mt-1 text-xs text-[var(--color-muted)]">Variations publish as {sku.trim()}-1, {sku.trim()}-2, …</p>
-                    )}
+                    <input className={`${inputClass} mt-1 font-mono text-[12.5px]`} value={sku} maxLength={50} placeholder="e.g. Liston-1005006" onChange={(e) => setSku(e.target.value)} disabled={!editable || busy} />
+                    {variation && sku.trim() && <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">Variations publish as {sku.trim()}-1, -2, …</p>}
                   </div>
                   <div>
                     <label className={labelClass}>Condition</label>
                     {editable ? (
-                      <select className={`${inputClass} mt-1.5`} value={condition} onChange={(e) => setCondition(e.target.value)} disabled={busy}>
+                      <select className={`${inputClass} mt-1`} value={condition} onChange={(e) => setCondition(e.target.value)} disabled={busy}>
                         {CONDITIONS.map((c) => (
                           <option key={c.value} value={c.value}>
                             {c.label}
@@ -2301,31 +2360,26 @@ export default function DraftEditorPage() {
                         ))}
                       </select>
                     ) : (
-                      <p className="mt-1.5 text-sm text-[var(--color-ink)]">{conditionLabel}</p>
+                      <p className="mt-1 text-[13px] text-[var(--color-ink)]">{conditionLabel}</p>
                     )}
                   </div>
-                  {single ? (
+                  {single && (
                     <>
                       <div>
                         <label className={labelClass}>Price ({currencySymbol(single.price.currency)})</label>
-                        <input type="number" step="0.01" min="0" className={`${inputClass} mt-1.5`} value={singlePrice} onChange={(e) => setSinglePrice(e.target.value)} disabled={!editable || busy} />
+                        <input type="number" step="0.01" min="0" className={`${inputClass} mt-1`} value={singlePrice} onChange={(e) => setSinglePrice(e.target.value)} disabled={!editable || busy} />
                       </div>
                       <div>
-                        <label className={labelClass}>Quantity</label>
-                        <input type="number" step="1" min="0" className={`${inputClass} mt-1.5`} value={singleQuantity} onChange={(e) => setSingleQuantity(e.target.value)} disabled={!editable || busy} />
+                        <label className={labelClass}>Qty</label>
+                        <input type="number" step="1" min="0" className={`${inputClass} mt-1`} value={singleQuantity} onChange={(e) => setSingleQuantity(e.target.value)} disabled={!editable || busy} />
                       </div>
                     </>
-                  ) : (
-                    <div className="sm:col-span-2">
-                      <p className={labelClass}>Pricing</p>
-                      <p className="mt-1.5 text-sm text-[var(--color-ink)]">Per variation, edit in the table below.</p>
-                    </div>
                   )}
                 </div>
 
                 {single?.priceBreakdown && (
-                  <details className="mt-3 rounded-2xl border border-[var(--color-line)]">
-                    <summary className="cursor-pointer px-4 py-2 text-xs font-semibold text-[var(--color-ink)]">
+                  <details className="mt-2.5 rounded-xl border border-[var(--color-line)]">
+                    <summary className="cursor-pointer px-3 py-1.5 text-[12px] font-semibold text-[var(--color-ink)]">
                       How this price was worked out · {single.priceBreakdown.roiPercent.toFixed(0)}% ROI
                     </summary>
                     <div className="border-t border-[var(--color-line)] p-3">
@@ -2335,45 +2389,32 @@ export default function DraftEditorPage() {
                 )}
 
                 {content.listingPolicies && (
-                  <div className="mt-4">
-                    <div className="flex items-baseline justify-between">
-                      <p className={labelClass}>Business policies</p>
-                      <span className="text-xs text-[var(--color-muted)]">Defaults come from Settings; change them for this listing only.</span>
-                    </div>
-                    <div className="mt-2 grid gap-3 sm:grid-cols-3">
-                      {(
-                        [
-                          ["fulfillmentPolicyId", "Postage", policies?.fulfillmentPolicies || []],
-                          ["paymentPolicyId", "Payment", policies?.paymentPolicies || []],
-                          ["returnPolicyId", "Returns", policies?.returnPolicies || []],
-                        ] as const
-                      ).map(([key, label, list]) => (
-                        <div key={key}>
-                          <label className="text-xs font-semibold text-[var(--color-muted)]">{label}</label>
-                          {editable && list.length > 0 ? (
-                            <select
-                              className="input input-sm mt-1"
-                              value={policyIds[key]}
-                              onChange={(e) => setPolicyIds((p) => ({ ...p, [key]: e.target.value }))}
-                              disabled={busy}
-                            >
-                              {!list.some((p) => p[key] === policyIds[key]) && policyIds[key] && (
-                                <option value={policyIds[key]}>{policyIds[key]} (no longer on account)</option>
-                              )}
-                              {list.map((p) => (
-                                <option key={p[key]} value={p[key]}>
-                                  {p.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <p className="mt-1 truncate text-sm text-[var(--color-ink)]" title={policyName(policies, key, policyIds[key])}>
-                              {policyName(policies, key, policyIds[key])}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    {(
+                      [
+                        ["fulfillmentPolicyId", "Postage policy", policies?.fulfillmentPolicies || []],
+                        ["paymentPolicyId", "Payment policy", policies?.paymentPolicies || []],
+                        ["returnPolicyId", "Returns policy", policies?.returnPolicies || []],
+                      ] as const
+                    ).map(([key, label, list]) => (
+                      <div key={key}>
+                        <label className={labelClass}>{label}</label>
+                        {editable && list.length > 0 ? (
+                          <select className="input input-sm mt-1" value={policyIds[key]} onChange={(e) => setPolicyIds((p) => ({ ...p, [key]: e.target.value }))} disabled={busy}>
+                            {!list.some((p) => p[key] === policyIds[key]) && policyIds[key] && <option value={policyIds[key]}>{policyIds[key]} (no longer on account)</option>}
+                            {list.map((p) => (
+                              <option key={p[key]} value={p[key]}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <p className="mt-1 truncate text-[13px] text-[var(--color-ink)]" title={policyName(policies, key, policyIds[key])}>
+                            {policyName(policies, key, policyIds[key])}
+                          </p>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -2385,15 +2426,15 @@ export default function DraftEditorPage() {
                     Item specifics <span className="font-medium text-[var(--color-muted)]">· {specifics.filter((r) => r.value.trim()).length}</span>
                   </h3>
                   {editable && (
-                    <button type="button" onClick={() => setSpecifics((rows) => [...rows, { name: "", value: "" }])} disabled={busy} className="btn btn-secondary btn-sm">
+                    <button type="button" onClick={() => setSpecifics((rows) => [...rows, { name: "", value: "" }])} disabled={busy} className={smallButton}>
                       + Add
                     </button>
                   )}
                 </div>
                 {specifics.length === 0 ? (
-                  <p className="mt-3 text-sm text-[var(--color-muted)]">No item specifics yet.</p>
+                  <p className="mt-2 text-[13px] text-[var(--color-muted)]">No item specifics yet.</p>
                 ) : (
-                  <div className="mt-3 grid gap-x-6 md:grid-cols-2">
+                  <div className="mt-2 grid gap-x-5 md:grid-cols-2">
                     {specifics.map((row, i) => {
                       const entry = schemaByName.get(row.name.trim().toLowerCase());
                       const unfilled = !row.value.trim();
@@ -2401,46 +2442,44 @@ export default function DraftEditorPage() {
                       if (optionalHidden) return null;
                       const listId = entry?.allowedValues.length ? `aspect-values-${i}` : undefined;
                       return (
-                      <div key={i} className="flex items-center gap-1 border-b border-[var(--color-line)] py-0.5 text-[13px]">
-                        <input
-                          className="h-7 w-[42%] min-w-0 rounded-full border border-transparent bg-transparent px-2 text-[var(--color-muted)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
-                          value={row.name}
-                          placeholder="Name"
-                          onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
-                          disabled={!editable || busy}
-                        />
-                        {entry?.required && unfilled && (
-                          <span className="shrink-0 rounded-full bg-[var(--color-danger-soft)] px-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-danger)]">
-                            Required
-                          </span>
-                        )}
-                        <input
-                          className={`h-7 min-w-0 flex-1 rounded-full border border-transparent bg-transparent px-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100 ${unfilled ? "placeholder:italic" : ""}`}
-                          value={row.value}
-                          list={listId}
-                          placeholder={entry ? (entry.required ? "Required by eBay" : "Optional") : "Value"}
-                          onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
-                          disabled={!editable || busy}
-                        />
-                        {listId && (
-                          <datalist id={listId}>
-                            {entry!.allowedValues.map((v) => (
-                              <option key={v} value={v} />
-                            ))}
-                          </datalist>
-                        )}
-                        {editable && (
-                          <button
-                            type="button"
-                            aria-label={`Remove ${row.name || "specific"}`}
-                            onClick={() => setSpecifics((rows) => rows.filter((_, j) => j !== i))}
-                            disabled={busy}
-                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)] disabled:opacity-40"
-                          >
-                            {Icon.close}
-                          </button>
-                        )}
-                      </div>
+                        <div key={i} className="flex items-center gap-1 border-b border-[var(--color-line)] py-px text-[12.5px]">
+                          <input
+                            className="h-7 w-[40%] min-w-0 rounded-full border border-transparent bg-transparent px-2 text-[var(--color-muted)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100"
+                            value={row.name}
+                            placeholder="Name"
+                            onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
+                            disabled={!editable || busy}
+                          />
+                          {entry?.required && unfilled && (
+                            <span className="shrink-0 rounded-full bg-[var(--color-danger-soft)] px-1.5 text-[9.5px] font-bold uppercase tracking-wide text-[var(--color-danger)]">Required</span>
+                          )}
+                          <input
+                            className={`h-7 min-w-0 flex-1 rounded-full border border-transparent bg-transparent px-2 font-medium text-[var(--color-ink)] hover:border-[var(--color-line)] focus:border-[var(--color-primary)] focus:outline-none disabled:opacity-100 ${unfilled ? "placeholder:italic" : ""}`}
+                            value={row.value}
+                            list={listId}
+                            placeholder={entry ? (entry.required ? "Required by eBay" : "Optional") : "Value"}
+                            onChange={(e) => setSpecifics((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))}
+                            disabled={!editable || busy}
+                          />
+                          {listId && (
+                            <datalist id={listId}>
+                              {entry!.allowedValues.map((v) => (
+                                <option key={v} value={v} />
+                              ))}
+                            </datalist>
+                          )}
+                          {editable && (
+                            <button
+                              type="button"
+                              aria-label={`Remove ${row.name || "specific"}`}
+                              onClick={() => setSpecifics((rows) => rows.filter((_, j) => j !== i))}
+                              disabled={busy}
+                              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)] disabled:opacity-40"
+                            >
+                              {Icon.close}
+                            </button>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -2449,113 +2488,140 @@ export default function DraftEditorPage() {
                   const hiddenCount = specifics.filter((r) => !r.value.trim() && !schemaByName.get(r.name.trim().toLowerCase())?.required).length;
                   if (!hiddenCount && !showOptionalSpecifics) return null;
                   return (
-                    <button type="button" onClick={() => setShowOptionalSpecifics((v) => !v)} className="mt-3 text-xs font-semibold text-[var(--color-primary)] hover:underline">
+                    <button type="button" onClick={() => setShowOptionalSpecifics((v) => !v)} className="mt-2 text-[12px] font-semibold text-[var(--color-primary)] hover:underline">
                       {showOptionalSpecifics ? "Hide empty optional specifics" : `Show ${hiddenCount} more optional specific${hiddenCount === 1 ? "" : "s"} eBay lists for this category`}
                     </button>
                   );
                 })()}
               </div>
 
-              {/* Description */}
+              {/* Description: the text by default; the branded eBay render on request. */}
               <div className={cardClass}>
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className={cardTitleClass}>Description</h3>
-                  <div className="flex items-center gap-3 text-xs">
-                    <span className="text-[var(--color-muted)]">
-                      {loadingPreview ? "Building preview…" : dirty ? "Save to refresh the preview" : "As it will appear on eBay"}
-                    </span>
-                    {editable && (
-                      <button type="button" onClick={() => setEditingDescription((v) => !v)} className={smallButton}>
-                        {editingDescription ? "Hide text editor" : "Edit text"}
+                  <div className="flex gap-1 rounded-full bg-[var(--color-paper)] p-0.5">
+                    {(
+                      [
+                        ["text", "Text"],
+                        ...(editable ? ([["edit", "Edit"]] as const) : []),
+                        ["preview", "eBay preview"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => switchDescMode(value)}
+                        className={`rounded-full px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${
+                          descMode === value ? "bg-[var(--color-panel)] text-[var(--color-ink)] shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                        }`}
+                      >
+                        {label}
                       </button>
-                    )}
+                    ))}
                   </div>
                 </div>
-                {editingDescription && (
-                  <>
-                    <FormatToolbar textarea={descriptionRef} value={description} onChange={setDescription} disabled={!editable || busy} />
-                    <textarea
-                      ref={descriptionRef}
-                      className={`${inputClass} mt-2 min-h-[14rem] leading-relaxed`}
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      disabled={!editable || busy}
-                    />
-                  </>
+                {descMode === "edit" && <RichTextEditor value={description} onChange={setDescription} disabled={!editable || busy} />}
+                {descMode === "text" && (
+                  <div
+                    className="mt-2 max-h-[22rem] cursor-text overflow-y-auto whitespace-pre-wrap rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]/60 px-3.5 py-3 text-[13px] leading-relaxed text-[var(--color-ink)]"
+                    onClick={() => editable && switchDescMode("edit")}
+                    title={editable ? "Click to edit" : undefined}
+                  >
+                    {description.trim() ? (
+                      <div dangerouslySetInnerHTML={{ __html: markersToHtml(description) }} />
+                    ) : (
+                      <span className="italic text-[var(--color-muted)]">No description yet.</span>
+                    )}
+                  </div>
                 )}
-                {descriptionPreview !== null ? (
-                  <iframe
-                    title="Description preview"
-                    sandbox=""
-                    srcDoc={`<!doctype html><meta name="viewport" content="width=device-width"><body style="margin:0;padding:16px;background:#f3f3f3">${descriptionPreview}</body>`}
-                    className={`mt-3 h-[48rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${dirty ? "opacity-60" : ""}`}
-                  />
-                ) : (
-                  <div className="mt-3 h-[48rem] w-full animate-pulse rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]" />
+                {descMode === "preview" && (
+                  <div className="mt-2">
+                    <p className="mb-1.5 text-[11.5px] text-[var(--color-muted)]">
+                      {loadingPreview ? "Building the preview…" : dirty ? "Shows the last saved version — save to refresh it." : "As buyers will see it on eBay, in this account's template."}
+                    </p>
+                    {descriptionPreview !== null ? (
+                      <iframe
+                        title="Description preview"
+                        sandbox=""
+                        srcDoc={`<!doctype html><meta name="viewport" content="width=device-width"><body style="margin:0;padding:12px;background:#f3f3f3">${descriptionPreview}</body>`}
+                        className={`h-[32rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${dirty ? "opacity-60" : ""}`}
+                      />
+                    ) : (
+                      <div className="h-[32rem] w-full animate-pulse rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]" />
+                    )}
+                  </div>
                 )}
               </div>
+
+              {variation && (
+                <VariationsTable
+                  variants={variation.variants}
+                  specifications={variation.variesBy.specifications}
+                  galleryImages={images}
+                  removedIndexes={removedRows}
+                  removedAxisValues={removedAxisValues}
+                  priceOverrides={priceOverrides}
+                  quantityOverrides={quantityOverrides}
+                  imageOverrides={imageOverrides}
+                  onRemoveRow={(i) => setRemovedRows((s) => new Set([...s, i]))}
+                  onRestoreRow={(i) =>
+                    setRemovedRows((s) => {
+                      const n = new Set(s);
+                      n.delete(i);
+                      return n;
+                    })
+                  }
+                  onRemoveAxisValue={(r) => setRemovedAxisValues((list) => [...list, r])}
+                  onRestoreAxisValue={(r) => setRemovedAxisValues((list) => list.filter((x) => !(x.axis === r.axis && x.value === r.value)))}
+                  onPriceChange={(i, value) => setPriceOverrides((p) => ({ ...p, [i]: value }))}
+                  onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
+                  onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
+                  onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
+                  valueRenames={valueRenames}
+                  axisRenames={axisRenames}
+                  onRenameValue={(axis, from, to) => setValueRenames((r) => ({ ...r, [axis]: { ...(r[axis] || {}), [from]: to } }))}
+                  onRenameAxis={(from, to) => setAxisRenames((r) => ({ ...r, [from]: to }))}
+                  addedValues={addedValues}
+                  onAddValue={(axis, value, copyFrom) => setAddedValues((list) => [...list, { axis, value, copyFrom }])}
+                  onUndoAddValue={(axis, value) => setAddedValues((list) => list.filter((a) => !(a.axis === axis && a.value === value)))}
+                  allowedAxes={categoryInfo?.variationAspects ?? null}
+                  fixes={fixes}
+                  onApplyFix={editable ? handleApplyFix : undefined}
+                  applyingFix={applyingFix}
+                  onSplitAll={editable ? handleSplitAll : undefined}
+                  variationsSupported={categoryInfo?.variationsSupported ?? null}
+                  onSplit={editable ? handleSplit : undefined}
+                  splitting={splitting}
+                  splitDone={splitDone}
+                  accountId={params.id}
+                  onApplyAll={applyToAllVariants}
+                  disabled={!editable || busy}
+                />
+              )}
             </div>
           </div>
-
-          {/* ---- Full width: variations ---- */}
-          {variation && (
-            <div className="mt-6">
-              <VariationsTable
-                variants={variation.variants}
-                specifications={variation.variesBy.specifications}
-                galleryImages={images}
-                removedIndexes={removedRows}
-                removedAxisValues={removedAxisValues}
-                priceOverrides={priceOverrides}
-                quantityOverrides={quantityOverrides}
-                imageOverrides={imageOverrides}
-                onRemoveRow={(i) => setRemovedRows((s) => new Set([...s, i]))}
-                onRestoreRow={(i) =>
-                  setRemovedRows((s) => {
-                    const n = new Set(s);
-                    n.delete(i);
-                    return n;
-                  })
-                }
-                onRemoveAxisValue={(r) => setRemovedAxisValues((list) => [...list, r])}
-                onRestoreAxisValue={(r) => setRemovedAxisValues((list) => list.filter((x) => !(x.axis === r.axis && x.value === r.value)))}
-                onPriceChange={(i, value) => setPriceOverrides((p) => ({ ...p, [i]: value }))}
-                onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
-                onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
-                onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
-                valueRenames={valueRenames}
-                axisRenames={axisRenames}
-                onRenameValue={(axis, from, to) => setValueRenames((r) => ({ ...r, [axis]: { ...(r[axis] || {}), [from]: to } }))}
-                onRenameAxis={(from, to) => setAxisRenames((r) => ({ ...r, [from]: to }))}
-                addedValues={addedValues}
-                onAddValue={(axis, value, copyFrom) => setAddedValues((list) => [...list, { axis, value, copyFrom }])}
-                onUndoAddValue={(axis, value) => setAddedValues((list) => list.filter((a) => !(a.axis === axis && a.value === value)))}
-                allowedAxes={categoryInfo?.variationAspects ?? null}
-                fixes={fixes}
-                onApplyFix={editable ? handleApplyFix : undefined}
-                applyingFix={applyingFix}
-                onSplitAll={editable ? handleSplitAll : undefined}
-                variationsSupported={categoryInfo?.variationsSupported ?? null}
-                onSplit={editable ? handleSplit : undefined}
-                splitting={splitting}
-                splitDone={splitDone}
-                accountId={params.id}
-                onApplyAll={applyToAllVariants}
-                disabled={!editable || busy}
-              />
-            </div>
-          )}
-          <div className="h-6" />
+          <div className="h-4" />
         </div>
       </div>
 
       {editable && (
         <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
-            <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
-              {Icon.trash}
-              <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
+                {Icon.trash}
+                <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
+              </button>
+              {isLiveEdit && (
+                <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now">
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M8 12h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  <span>{ending ? "Ending…" : "End listing"}</span>
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-3">
               {isLiveEdit ? (
                 <>
@@ -2606,6 +2672,18 @@ export default function DraftEditorPage() {
           onClose={() => setPickerOpen(false)}
         />
       )}
+      {shopPickerOpen && storeCategories && (
+        <ShopCategoryPicker
+          value={storeCategoryNames}
+          categories={storeCategories.categories}
+          note={storeCategories.note}
+          onApply={(names) => {
+            setStoreCategoryNames(names);
+            setShopPickerOpen(false);
+          }}
+          onClose={() => setShopPickerOpen(false)}
+        />
+      )}
       <ConfirmDialog
         open={confirmPublish}
         title={isLiveEdit ? "Publish these changes?" : "Publish this listing?"}
@@ -2618,6 +2696,16 @@ export default function DraftEditorPage() {
         loading={publishing}
         onCancel={() => setConfirmPublish(false)}
         onConfirm={handlePublish}
+      />
+      <ConfirmDialog
+        open={confirmEnd}
+        title="End this listing on eBay?"
+        description="It comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it, and the changes you were making here are dropped. You can relist it from eBay later."
+        confirmLabel="End listing"
+        danger
+        loading={ending}
+        onCancel={() => setConfirmEnd(false)}
+        onConfirm={handleEndListing}
       />
       <ConfirmDialog
         open={confirmDelete}

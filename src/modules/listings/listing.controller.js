@@ -83,6 +83,18 @@ async function startLiveEdit(req, res, next) {
   }
 }
 
+async function endLive(req, res, next) {
+  try {
+    if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
+      return res.status(400).json({ error: 'That does not look like an eBay item number.' });
+    }
+    const result = await listingService.endLiveListing(req.params.id, req.ownerId, String(req.params.itemId));
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function removeInactive(req, res, next) {
   try {
     if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
@@ -117,7 +129,8 @@ async function descriptionPreview(req, res, next) {
 async function publish(req, res, next) {
   try {
     const listing = await listingService.publish(req.params.listingId, req.ownerId);
-    res.status(200).json({ listing });
+    const { warnings = [], ...row } = listing;
+    res.status(200).json({ listing: row, warnings });
   } catch (err) {
     next(err);
   }
@@ -195,7 +208,26 @@ async function update(req, res, next) {
   }
 }
 
-const reviseTextSchema = z.object({ instruction: z.string().min(3, 'Tell me what to change').max(500) });
+// `current` is the editor's state, unsaved edits included, so the model
+// works from what the seller sees rather than what was last saved.
+const currentStateSchema = z
+  .object({
+    title: z.string().max(200),
+    description: z.string().max(20000),
+    aspects: z.record(z.array(z.string())),
+    condition: z.string(),
+    sku: z.string().max(50),
+    currency: z.string().max(3),
+    price: z.string().max(20),
+    quantity: z.number().int().min(0),
+    specifications: z.array(z.object({ name: z.string(), values: z.array(z.string()) })),
+    variants: z.array(z.object({ index: z.number().int().min(0), options: z.string(), price: z.string().max(20), quantity: z.number().int().min(0) })).max(500),
+    policies: z.object({ postage: z.string(), payment: z.string(), returns: z.string() }).partial(),
+    storeCategoryNames: z.array(z.string()).max(2),
+    storeCategories: z.array(z.string()).max(200),
+  })
+  .partial();
+const reviseTextSchema = z.object({ instruction: z.string().min(3, 'Tell me what to change').max(500), current: currentStateSchema.optional() });
 const reviseImageSchema = z.object({
   imageUrl: z.string().url(),
   instruction: z.string().min(3, 'Tell me what to change').max(500),
@@ -209,7 +241,7 @@ async function reviseText(req, res, next) {
     const parsed = reviseTextSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
 
-    const proposal = await listingService.proposeTextRevision(req.params.listingId, req.ownerId, parsed.data.instruction);
+    const proposal = await listingService.proposeTextRevision(req.params.listingId, req.ownerId, parsed.data.instruction, parsed.data.current || null);
     res.status(200).json(proposal);
   } catch (err) {
     next(err);
@@ -313,4 +345,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, endLive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, reviseImage, acceptImage, uploadImage, downloadImage, publish };

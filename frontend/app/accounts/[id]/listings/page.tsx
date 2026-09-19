@@ -7,19 +7,13 @@ import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingStatusFi
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
+import { ListFooter } from "@/components/ListFooter";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 
 type Tab = ListingStatusFilter | "draft";
-const PAGE_SIZES: { key: number | "all"; label: string }[] = [
-  { key: 25, label: "25" },
-  { key: 50, label: "50" },
-  { key: 100, label: "100" },
-  { key: "all", label: "All" },
-];
-
 const TrashIcon = (
   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
     <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -52,7 +46,7 @@ function StockBadge({ available }: { available: number }) {
   );
 }
 
-function ListingRow({ item, onEdit, editing, onDelete }: { item: Listing; onEdit: () => void; editing: boolean; onDelete?: () => void }) {
+function ListingRow({ item, onEdit, editing, onDelete, onEnd }: { item: Listing; onEdit: () => void; editing: boolean; onDelete?: () => void; onEnd?: () => void }) {
   const open = () => {
     if (item.viewItemUrl) window.open(item.viewItemUrl, "_blank", "noopener");
   };
@@ -84,6 +78,19 @@ function ListingRow({ item, onEdit, editing, onDelete }: { item: Listing; onEdit
       >
         {editing ? "Opening…" : "Edit"}
       </button>
+      {onEnd && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEnd();
+          }}
+          className="btn btn-danger-ghost flex-shrink-0 !h-7 !px-3 !text-[12px]"
+          title="End this listing on eBay"
+        >
+          End
+        </button>
+      )}
       {onDelete && (
         <button
           type="button"
@@ -169,97 +176,6 @@ function SkeletonRows({ count = 6 }: { count?: number }) {
   );
 }
 
-function pageNumbers(page: number, total: number): (number | "…")[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const out: (number | "…")[] = [1];
-  const lo = Math.max(2, page - 1);
-  const hi = Math.min(total - 1, page + 1);
-  if (lo > 2) out.push("…");
-  for (let i = lo; i <= hi; i++) out.push(i);
-  if (hi < total - 1) out.push("…");
-  out.push(total);
-  return out;
-}
-
-function NavBtn({ dir, disabled, onClick }: { dir: "prev" | "next"; disabled: boolean; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} className="btn btn-ghost btn-icon" aria-label={dir === "prev" ? "Previous page" : "Next page"}>
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-        <path d={dir === "prev" ? "M15 6l-6 6 6 6" : "M9 6l6 6-6 6"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </button>
-  );
-}
-
-function Footer({
-  page,
-  totalPages,
-  totalEntries,
-  perPage,
-  onPage,
-  onPerPage,
-}: {
-  page: number;
-  totalPages: number;
-  totalEntries: number;
-  perPage: number | "all";
-  onPage: (p: number) => void;
-  onPerPage: (n: number | "all") => void;
-}) {
-  const size = perPage === "all" ? totalEntries : perPage;
-  const from = totalEntries === 0 ? 0 : (page - 1) * size + 1;
-  const to = Math.min(totalEntries, page * size);
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-line)] bg-[var(--color-paper)] px-5 py-3">
-      <div className="flex items-center gap-3">
-        <span className="text-[12px] text-[var(--color-muted)]">
-          Showing <span className="font-medium text-[var(--color-ink)]">{from}</span> to <span className="font-medium text-[var(--color-ink)]">{to}</span> of{" "}
-          <span className="font-medium text-[var(--color-ink)]">{totalEntries}</span>
-        </span>
-        <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-          {PAGE_SIZES.map((s) => (
-            <button
-              key={String(s.key)}
-              type="button"
-              onClick={() => onPerPage(s.key)}
-              className={`h-6 rounded-full px-2.5 text-[11.5px] font-medium transition-colors ${
-                perPage === s.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-        <span className="text-[12px] text-[var(--color-muted)]">per page</span>
-      </div>
-      {totalPages > 1 && (
-        <div className="flex items-center gap-1">
-          <NavBtn dir="prev" disabled={page <= 1} onClick={() => onPage(page - 1)} />
-          {pageNumbers(page, totalPages).map((n, i) =>
-            n === "…" ? (
-              <span key={`e${i}`} className="px-1 text-[12px] text-[var(--color-muted)]">
-                …
-              </span>
-            ) : (
-              <button
-                key={n}
-                type="button"
-                onClick={() => onPage(n)}
-                className={`h-7 min-w-7 rounded-full px-2 text-[12px] font-medium transition-colors ${
-                  n === page ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:bg-[var(--color-panel)] hover:text-[var(--color-ink)]"
-                }`}
-              >
-                {n}
-              </button>
-            )
-          )}
-          <NavBtn dir="next" disabled={page >= totalPages} onClick={() => onPage(page + 1)} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function AccountListingsPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -270,6 +186,8 @@ export default function AccountListingsPage() {
   // lands on the same tab rather than resetting to Active.
   const urlFilter = searchParams.get("filter");
   const updatedItemId = searchParams.get("updated");
+  const updateWarning = searchParams.get("warning");
+  const endedItemId = searchParams.get("ended");
   const [filter, setFilter] = useState<Tab>(urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active");
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -291,6 +209,8 @@ export default function AccountListingsPage() {
   const [deletingDraft, setDeletingDraft] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<Listing | null>(null);
+  const [itemToEnd, setItemToEnd] = useState<Listing | null>(null);
+  const [endingItem, setEndingItem] = useState(false);
   const [deletingItem, setDeletingItem] = useState(false);
 
   useEffect(() => {
@@ -395,6 +315,23 @@ export default function AccountListingsPage() {
     }
   }
 
+  async function handleEndItem() {
+    if (!connection || !itemToEnd) return;
+    setEndingItem(true);
+    try {
+      const result = await api.endLiveListing(connection.id, itemToEnd.itemId);
+      setItems((list) => list.filter((i) => i.itemId !== itemToEnd.itemId));
+      setTotalEntries((n) => Math.max(0, n - 1));
+      setCounts((c) => ({ ...c, active: Math.max(0, (c.active || 1) - 1), inactive: (c.inactive || 0) + 1 }));
+      setItemToEnd(null);
+      if (result.warnings.length) setError(`Ended, but eBay noted: ${result.warnings.join(" ")}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't end this listing. Try again.");
+    } finally {
+      setEndingItem(false);
+    }
+  }
+
   async function handleDeleteDraft() {
     if (!draftToDelete) return;
     setDeletingDraft(true);
@@ -455,15 +392,17 @@ export default function AccountListingsPage() {
           </p>
         </div>
       }
-    >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      subheader={
+        <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Same control as the per-page selector in the footer: a bordered
+            capsule with the active option filled. */}
         <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
           {tabs.map((t) => (
             <button
               key={t.key}
               type="button"
               onClick={() => changeFilter(t.key)}
-              className={`flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
+              className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
                 filter === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
               }`}
             >
@@ -500,15 +439,47 @@ export default function AccountListingsPage() {
         </div>
         </div>
       </div>
-
+      }
+      footer={
+        !loading && filter !== "draft" && items.length > 0 ? (
+          <ListFooter
+            page={page}
+            totalPages={totalPages}
+            totalEntries={totalEntries}
+            perPage={perPage}
+            sizes={[25, 50, 100, "all"]}
+            onPage={(p) => {
+              setPage(p);
+              document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+            onPerPage={(n) => {
+              setPerPage(n);
+              setPage(1);
+            }}
+          />
+        ) : null
+      }
+    >
       {error && (
         <div className="notice notice-danger mb-4">
           <span className="flex-1">{error}</span>
         </div>
       )}
-      {updatedItemId && (
+      {endedItemId && (
+        <div className="notice notice-success mb-4">
+          <span className="flex-1">Listing #{endedItemId} has been ended on eBay. It now sits under Inactive.</span>
+        </div>
+      )}
+      {updatedItemId && !updateWarning && (
         <div className="notice notice-success mb-4">
           <span className="flex-1">Listing #{updatedItemId} has been updated on eBay. It can take a minute to show here.</span>
+        </div>
+      )}
+      {updatedItemId && updateWarning && (
+        <div className="notice notice-warning mb-4">
+          <span className="flex-1">
+            Listing #{updatedItemId} was updated, but eBay didn&apos;t apply everything: {updateWarning}
+          </span>
         </div>
       )}
 
@@ -539,33 +510,18 @@ export default function AccountListingsPage() {
             <p className="mt-1 text-[13px] text-[var(--color-muted)]">{debounced ? "Try a different title, SKU or item number." : "Listings on eBay show up here as soon as they're live."}</p>
           </div>
         ) : (
-          <>
-            <ul className="divide-y divide-[var(--color-line)]">
-              {items.map((item) => (
-                <ListingRow
-                  key={item.itemId}
-                  item={item}
-                  editing={editingItemId === item.itemId}
-                  onEdit={() => openLiveEdit(item.itemId)}
-                  onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
-                />
-              ))}
-            </ul>
-            <Footer
-              page={page}
-              totalPages={totalPages}
-              totalEntries={totalEntries}
-              perPage={perPage}
-              onPage={(p) => {
-                setPage(p);
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-              onPerPage={(n) => {
-                setPerPage(n);
-                setPage(1);
-              }}
-            />
-          </>
+          <ul className="divide-y divide-[var(--color-line)]">
+            {items.map((item) => (
+              <ListingRow
+                key={item.itemId}
+                item={item}
+                editing={editingItemId === item.itemId}
+                onEdit={() => openLiveEdit(item.itemId)}
+                onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
+                onEnd={filter === "active" ? () => setItemToEnd(item) : undefined}
+              />
+            ))}
+          </ul>
         )}
       </div>
 
@@ -578,6 +534,16 @@ export default function AccountListingsPage() {
         loading={deletingItem}
         onCancel={() => setItemToDelete(null)}
         onConfirm={handleDeleteItem}
+      />
+      <ConfirmDialog
+        open={itemToEnd !== null}
+        title="End this listing on eBay?"
+        description={`"${itemToEnd?.title || ""}" comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it; you can relist it from eBay later.`}
+        confirmLabel="End listing"
+        danger
+        loading={endingItem}
+        onCancel={() => setItemToEnd(null)}
+        onConfirm={handleEndItem}
       />
       <ConfirmDialog
         open={draftToDelete !== null}

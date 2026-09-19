@@ -73,6 +73,16 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
             <PaidTime>2026-01-02T00:05:00.000Z</PaidTime>
             <ShippedTime>2026-01-03T09:00:00.000Z</ShippedTime>
             <CancelStatus>NotApplicable</CancelStatus>
+            <ShippingAddress>
+              <Name>Jane Doe</Name>
+              <Street1>1 High Street</Street1>
+              <Street2>Flat 2</Street2>
+              <CityName>Leeds</CityName>
+              <StateOrProvince>West Yorkshire</StateOrProvince>
+              <CountryName>United Kingdom</CountryName>
+              <Phone>Invalid Request</Phone>
+              <PostalCode>LS1 1AA</PostalCode>
+            </ShippingAddress>
             <TransactionArray>
               <Transaction>
                 <Buyer><UserFirstName>Jane</UserFirstName><UserLastName>Doe</UserLastName></Buyer>
@@ -103,6 +113,7 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
     subtotal: { amount: 12.5, currency: 'GBP' },
     buyerName: 'Jane Doe',
     buyerUserId: 'janedoe123',
+    shippingAddress: { name: 'Jane Doe', street1: '1 High Street', street2: 'Flat 2', city: 'Leeds', state: 'West Yorkshire', postalCode: 'LS1 1AA', country: 'United Kingdom', phone: '' },
     itemTitle: 'Widget',
     itemId: '456',
     itemCount: 1,
@@ -143,4 +154,21 @@ test('a Trading API failure response throws EbayTradingError with eBay\'s messag
       return true;
     }
   );
+});
+
+// eBay keeps the parts of a revision it refuses and says so only as a
+// warning on a successful call. That warning must reach the seller.
+test('reviseListing passes eBay\'s warnings back instead of swallowing them', async () => {
+  mock.method(global, 'fetch', async () =>
+    fakeResponse(`<?xml version="1.0"?>
+      <ReviseFixedPriceItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+        <Ack>Warning</Ack>
+        <Errors><SeverityCode>Warning</SeverityCode><ShortMessage>Description not revised.</ShortMessage><LongMessage>The description cannot be changed on a listing that has sales; the rest of the revision was applied.</LongMessage></Errors>
+        <ItemID>407219164790</ItemID>
+      </ReviseFixedPriceItemResponse>`)
+  );
+
+  const result = await ebayTrading.reviseListing('token', '407219164790', { descriptionHtml: '<p>new</p>', title: 'T' });
+  assert.strictEqual(result.itemId, '407219164790');
+  assert.deepStrictEqual(result.warnings, ['The description cannot be changed on a listing that has sales; the rest of the revision was applied.']);
 });

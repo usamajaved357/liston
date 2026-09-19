@@ -104,3 +104,76 @@ test('reviseImage enhances locally when asked to sharpen', async () => {
   assert.strictEqual(result.operation, 'enhance');
   assert.ok(result.previewDataUrl.startsWith('data:image/jpeg;base64,'));
 });
+
+// --- whole-listing revisions -------------------------------------------------
+
+function mockModel(input) {
+  const Anthropic = require('@anthropic-ai/sdk');
+  const messagesProto = Object.getPrototypeOf(new Anthropic({ apiKey: 'test-key' }).messages);
+  return mock.method(messagesProto, 'create', async (req) => {
+    mockModel.lastRequest = req;
+    return { content: [{ type: 'tool_use', name: 'submit_revision', input }] };
+  });
+}
+
+const variationDraft = {
+  commonTitle: 'Widget',
+  commonDescription: 'A widget.',
+  variesBy: { aspects: { Brand: ['Acme'] }, specifications: [{ name: 'Colour', values: ['Black', 'Brown'] }] },
+  variants: [
+    { aspects: { Colour: ['Black'] }, price: { value: '3.99', currency: 'GBP' }, quantity: 1, condition: 'NEW' },
+    { aspects: { Colour: ['Brown'] }, price: { value: '3.99', currency: 'GBP' }, quantity: 1, condition: 'NEW' },
+  ],
+  listingPolicies: { fulfillmentPolicyId: 'f1', paymentPolicyId: 'p1', returnPolicyId: 'r1' },
+};
+
+test('reviseText can change prices, options, specifics and policies, in the editor’s own terms', async () => {
+  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key';
+  mockModel({
+    title: 'Better Widget',
+    variants: [{ index: 1, price: 4.5 }, { index: 7, price: 9 }],
+    allVariants: { quantity: 5 },
+    renameAxisValues: [{ axis: 'Colour', from: 'Black', to: 'Jet Black' }],
+    removeVariants: [0, 99],
+    aspects: { Material: ['Steel'] },
+    removeAspects: ['Brand'],
+    listingPolicies: { postage: 'Free 48h', returns: 'No such policy' },
+    summary: 'Done',
+  });
+
+  const { changes, summary } = await revision.reviseText({
+    draft: variationDraft,
+    instruction: 'tidy up',
+    options: { policies: { postage: [{ id: 'f2', name: 'Free 48h' }], payment: [], returns: [{ id: 'r1', name: '30 days' }] } },
+  });
+
+  assert.strictEqual(summary, 'Done');
+  assert.strictEqual(changes.commonTitle, 'Better Widget', 'title lands on the variation key');
+  assert.deepStrictEqual(changes.variants, [{ index: 1, price: { value: '4.50', currency: 'GBP' } }], 'a variation that does not exist is dropped');
+  assert.deepStrictEqual(changes.allVariants, { quantity: 5 });
+  assert.deepStrictEqual(changes.removeVariants, [0]);
+  assert.deepStrictEqual(changes.renameAxisValues, [{ axis: 'Colour', from: 'Black', to: 'Jet Black' }]);
+  assert.deepStrictEqual(changes.aspects, { Material: ['Steel'] });
+  assert.deepStrictEqual(changes.removeAspects, ['Brand']);
+  assert.deepStrictEqual(changes.listingPolicies, { fulfillmentPolicyId: 'f2' }, 'policy names become ids; unknown names are ignored');
+});
+
+test('reviseText works from the editor’s unsaved state when it is given', async () => {
+  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key';
+  mockModel({ price: 12, summary: 'Priced' });
+  const { changes } = await revision.reviseText({
+    draft: { title: 'Old', description: 'd', price: { value: '9.00', currency: 'GBP' }, quantity: 1 },
+    instruction: 'set the price to 12',
+    current: { title: 'Typed but unsaved', description: 'd', currency: 'GBP', price: '9.00', quantity: 1, variants: [] },
+  });
+  const prompt = mockModel.lastRequest.messages[0].content;
+  assert.ok(prompt.includes('Typed but unsaved'), 'the model saw the unsaved title');
+  assert.deepStrictEqual(changes.price, { value: '12.00', currency: 'GBP' });
+});
+
+test('reviseText reports what it cannot do instead of inventing a change', async () => {
+  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key';
+  mockModel({ summary: 'n/a', cannotDo: 'Photos are edited from the gallery, not here.' });
+  const result = await revision.reviseText({ draft: variationDraft, instruction: 'remove the background of photo 2' });
+  assert.deepStrictEqual(result, { changes: {}, summary: 'Photos are edited from the gallery, not here.', cannotDo: true });
+});

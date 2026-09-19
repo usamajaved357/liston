@@ -117,4 +117,57 @@ function describeSchemaForPrompt(schema) {
   return lines.join('\n');
 }
 
-module.exports = { validateAspects, describeSchemaForPrompt, matchAllowedValue };
+// Product identifiers eBay marks required in many categories but accepts
+// an explicit "not applicable" for — its own sanctioned value, not an
+// invented one. Anything else that's required and missing is a real gap
+// the seller has to fill.
+const NOT_APPLICABLE = {
+  'manufacturer part number': 'Does Not Apply',
+  mpn: 'Does Not Apply',
+  upc: 'Does not apply',
+  ean: 'Does not apply',
+  isbn: 'Does not apply',
+  gtin: 'Does not apply',
+};
+
+/**
+ * Readies a draft's item specifics for eBay:
+ *  - a variation listing's shared specifics must not repeat a variation
+ *    attribute (eBay: "Variation Specifics and Item Specifics ... should be
+ *    different"), so any axis name is removed from the shared set;
+ *  - a required identifier with no value gets eBay's "Does Not Apply".
+ * Returns the corrected specifics and the names of required aspects that
+ * are still empty (an axis counts as filled).
+ */
+function prepareAspectsForEbay(aspects, schema, variationAxes = []) {
+  const axes = new Set(variationAxes.map(normalizeForCompare));
+  const prepared = {};
+  const removedAxes = [];
+  for (const [name, values] of Object.entries(aspects || {})) {
+    if (axes.has(normalizeForCompare(name))) {
+      removedAxes.push(name);
+      continue;
+    }
+    const list = (Array.isArray(values) ? values : [values]).map((v) => String(v ?? '').trim()).filter(Boolean);
+    if (list.length) prepared[name] = list;
+  }
+
+  const filled = [];
+  const missing = [];
+  for (const entry of schema || []) {
+    if (!entry.required) continue;
+    const key = normalizeForCompare(entry.name);
+    if (axes.has(key)) continue;
+    const has = Object.keys(prepared).some((name) => normalizeForCompare(name) === key);
+    if (has) continue;
+    if (NOT_APPLICABLE[key]) {
+      prepared[entry.name] = [NOT_APPLICABLE[key]];
+      filled.push(entry.name);
+    } else {
+      missing.push(entry.name);
+    }
+  }
+  return { aspects: prepared, removedAxes, filled, missing };
+}
+
+module.exports = { validateAspects, describeSchemaForPrompt, matchAllowedValue, prepareAspectsForEbay };

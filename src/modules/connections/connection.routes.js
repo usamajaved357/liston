@@ -38,6 +38,7 @@ router.get('/:id/categories/:categoryId', requireAuth, requireFeature('listings'
 router.get('/:id/store-categories', requireAuth, requireFeature('listings'), connectionController.storeCategories);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
 router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
+router.post('/:id/listings/:itemId/end', requireAuth, requireFeature('listings'), listingController.endLive);
 router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingController.removeInactive);
 // Step one of drafting: read both listings so the seller can pick which
 // variations to list, before anything is generated or paid for.

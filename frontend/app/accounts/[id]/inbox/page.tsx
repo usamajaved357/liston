@@ -35,7 +35,14 @@ export default function AccountInboxPage() {
       status={connection.status}
       permissions={connection.permissions}
       user={user}
-      header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Inbox</h1>}
+      header={
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Inbox</h1>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+            {connection.label} · {connection.platform_name}
+          </p>
+        </div>
+      }
     >
       <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
         <div className="flex items-center justify-between mb-1">

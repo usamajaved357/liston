@@ -507,6 +507,26 @@ async function getStoreCategories(credentials) {
   return { categories, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// The Shop's departments change rarely and the Trading call behind them is
+// rationed, so one read an hour per account serves the editor, the AI and
+// drafting alike. A rationed refusal is reported, not thrown: no Shop
+// categories is a valid state.
+const storeCategoryCache = new Map(); // connectionId -> { categories, expiresAt }
+const STORE_CATEGORY_TTL_MS = 60 * 60 * 1000;
+async function getStoreCategoriesCached(credentials, connectionId) {
+  const id = String(connectionId);
+  const cached = storeCategoryCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) return { categories: cached.categories, unavailable: null };
+  try {
+    const { categories } = await getStoreCategories(credentials);
+    storeCategoryCache.set(id, { categories, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
+    return { categories, unavailable: null };
+  } catch (err) {
+    if (err.statusCode === 429 || err.code === 'EBAY_BUDGET') return { categories: [], unavailable: err.message };
+    throw err;
+  }
+}
+
 async function detectMarketplace(credentials) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
@@ -687,6 +707,9 @@ async function persist(write) {
   }
 }
 
+// Bump when mapOrder gains a field, so every mirrored order is re-read once.
+const ORDER_SHAPE = 2;
+
 function ordersHorizon(now = new Date()) {
   return new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
 }
@@ -710,7 +733,12 @@ const ordersCache = createSwrCache({
     const state = await mirror.loadSnapshot(key, 'orders');
     if (!state) return null;
     const orders = await mirror.loadOrders(key, ordersHorizon());
-    return { value: orders, meta: state.meta, syncedAt: state.syncedAt };
+    // A copy read with an older field set is served but treated as stale,
+    // so the full re-read (see fetchOrdersIncrementally) runs behind it.
+    // Older than any fresh window (24h at most) but within the stale one,
+    // so the copy is still served while the re-read runs.
+    const syncedAt = state.meta?.shape === ORDER_SHAPE ? state.syncedAt : Math.min(state.syncedAt, Date.now() - FRESH_WITH_PUSH.orders - 1000);
+    return { value: orders, meta: state.meta, syncedAt };
   },
   // Order rows are written by the fetcher itself; this keeps the sync point.
   store: (key, value, meta) => mirror.saveSnapshot(key, 'orders', { count: value.length }, meta),
@@ -722,7 +750,11 @@ async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, m
     const now = new Date();
     const horizon = ordersHorizon(now);
     const lastSyncAt = meta?.lastSyncAt ? new Date(meta.lastSyncAt) : null;
-    const canIncrement = Array.isArray(current) && lastSyncAt && now - lastSyncAt < MAX_MOD_WINDOW_DAYS * DAY_MS - DAY_MS;
+    // Orders read before a field was added (the shipping address, say) only
+    // gain it on a full re-read; an incremental read brings back just what
+    // changed. The shape version forces one full pass per change.
+    const sameShape = meta?.shape === ORDER_SHAPE;
+    const canIncrement = sameShape && Array.isArray(current) && lastSyncAt && now - lastSyncAt < MAX_MOD_WINDOW_DAYS * DAY_MS - DAY_MS;
 
     let orders;
     if (canIncrement) {
@@ -739,7 +771,7 @@ async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, m
       meta = { ...(meta || {}), totalPages: result.totalPages };
     }
     await persist(() => mirror.pruneOrdersBefore(connectionId, horizon));
-    return { value: orders, meta: { ...(meta || {}), lastSyncAt: now.toISOString() } };
+    return { value: orders, meta: { ...(meta || {}), lastSyncAt: now.toISOString(), shape: ORDER_SHAPE } };
   }
 }
 
@@ -900,6 +932,32 @@ function invalidateListings(connectionId) {
 }
 
 // An ended item the seller removed for good: gone from the copy at once.
+// The seller ended a listing: it leaves the Active copy and joins the
+// Inactive one straight away (eBay's own lists follow within minutes; the
+// stale marks make the next look confirm).
+function moveListingToInactive(connectionId, itemId) {
+  const id = String(connectionId);
+  let ended = null;
+  listingsCache.patch(listingsKey(id, 'active'), (items) => {
+    ended = items.find((item) => item.itemId === String(itemId)) || null;
+    return items.filter((item) => item.itemId !== String(itemId));
+  });
+  if (ended) {
+    listingsCache.patch(listingsKey(id, 'inactive'), (items) => [{ ...ended, endTime: new Date().toISOString() }, ...items.filter((item) => item.itemId !== String(itemId))]);
+    activeCountCache.patch(id, (count) => Math.max(0, count - 1));
+  }
+  listingsCache.markStale(listingsKey(id, 'active'));
+  listingsCache.markStale(listingsKey(id, 'inactive'));
+  activeCountCache.markStale(id);
+}
+
+async function endLiveListing(credentials, connectionId, itemId) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.endListing(accessToken, itemId, { siteId });
+  moveListingToInactive(connectionId, itemId);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
 function removeListingFromMirror(connectionId, itemId) {
   listingsCache.patch(listingsKey(connectionId, 'inactive'), (items) => items.filter((item) => item.itemId !== String(itemId)));
 }
@@ -996,6 +1054,50 @@ async function syncAccount(credentials, connectionId, kinds = ['listings', 'orde
     }
   })();
   return entry.running;
+}
+
+// A sale changes one listing's quantity; on a big account a full re-read
+// of the lists to learn that costs 15–20 calls. So a sale is reflected
+// with one GetItem for that item, patched into the mirrored copy and
+// announced to open pages. A listing that just sold out leaves the active
+// list; the count follows. Falls back to a stale mark (re-read on the next
+// look, no call now) when there is no loaded copy to patch.
+async function applySale(credentials, connectionId, itemId) {
+  const id = String(connectionId);
+  const key = listingsKey(id, 'active');
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const summary = await governor.withContext({ connectionId: id, priority: 'push' }, () =>
+    ebayTrading.getItemSummary(accessToken, String(itemId), { siteId })
+  );
+  const soldOut = summary.quantityAvailable === 0;
+  let found = false;
+  const patched = listingsCache.patch(key, (items) => {
+    const next = [];
+    for (const item of items) {
+      if (String(item.itemId) !== String(itemId)) {
+        next.push(item);
+        continue;
+      }
+      found = true;
+      if (soldOut) continue;
+      next.push({
+        ...item,
+        quantity: summary.quantity ?? item.quantity,
+        quantityAvailable: summary.quantityAvailable ?? item.quantityAvailable,
+        quantitySold: summary.quantitySold ?? item.quantitySold,
+      });
+    }
+    return next;
+  });
+  if (!patched || !found) {
+    // Nothing loaded, or an item we have not seen yet (listed since the
+    // last read): the next look at the page re-reads.
+    listingsCache.markStale(key);
+    activeCountCache.markStale(id);
+    return { patched: false, soldOut };
+  }
+  if (soldOut && !activeCountCache.patch(id, (count) => Math.max(0, count - 1))) activeCountCache.markStale(id);
+  return { patched: true, soldOut };
 }
 
 function ordersWithin(orders, start, end) {
@@ -1183,6 +1285,7 @@ module.exports = {
   getLiveItem,
   detectMarketplace,
   getStoreCategories,
+  getStoreCategoriesCached,
   createMerchantLocation,
   deleteInventoryObjects,
   reviseLiveListing,
@@ -1190,9 +1293,11 @@ module.exports = {
   listListingsDetailed,
   invalidateListings,
   removeListingFromMirror,
+  endLiveListing,
   refreshAccount,
   markAccountStale,
   syncAccount,
+  applySale,
   enableNotifications,
   listOrdersDetailed,
   getEarningsSummary,

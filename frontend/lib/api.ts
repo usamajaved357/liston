@@ -223,6 +223,7 @@ export interface Order {
   subtotal: Money | null;
   buyerName: string | null;
   buyerUserId: string | null;
+  shippingAddress: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string } | null;
   itemTitle: string | null;
   itemId: string | null;
   itemCount: number;
@@ -427,14 +428,21 @@ export interface DraftPreviewAxisValue {
 
 export interface DraftPreview {
   previewId: string;
-  competitor: { title: string; priceText: string | null; categoryPath: string[] } | null;
+  competitor: { title: string; priceText: string | null; categoryPath: string[]; axes: { name: string; values: string[] }[] } | null;
   category: { id: string; path: string[] };
   categorySuggestions: CategorySuggestion[];
   source: {
     title: string;
     priceText: string | null;
     imageUrls: string[];
-    axes: { name: string; hasImages: boolean; values: DraftPreviewAxisValue[] }[];
+    // The variation axes as the draft will have them: `name` is the
+    // supplier's, `ebayName` what the listing will call it, `via` how that
+    // was decided (exact | competitor | synonym | source | unresolved).
+    axes: { name: string; ebayName: string; via: string; hasImages: boolean; values: DraftPreviewAxisValue[] }[];
+    // Supplier options with a single value: a property of the product, not a choice.
+    fixed: { name: string; value: string }[];
+    allowedAxes: string[];
+    warnings: string[];
     totalCombinations: number;
   };
 }
@@ -448,12 +456,28 @@ export type GenerateDraftInput =
 // The store's description template: branding, delivery and returns copy
 // that wraps every listing this account publishes. Per account — two
 // stores on one Liston get two different descriptions from the same draft.
+// The typefaces a template can use — font stacks buyers already have, since
+// eBay strips external stylesheets from a description. Mirrors FONTS in
+// src/modules/listings/description-template.js.
+export const TEMPLATE_FONTS: { id: string; name: string; stack: string; note: string }[] = [
+  { id: "modern", name: "Modern Sans", stack: "Nunito,'Segoe UI',Helvetica,Arial,sans-serif", note: "Friendly and clear — the default" },
+  { id: "classic", name: "Classic Sans", stack: "'Helvetica Neue',Helvetica,Arial,sans-serif", note: "Neutral, timeless" },
+  { id: "humanist", name: "Humanist", stack: "Verdana,Tahoma,'Segoe UI',sans-serif", note: "Wide and very readable" },
+  { id: "geometric", name: "Geometric", stack: "'Trebuchet MS','Gill Sans','Century Gothic',sans-serif", note: "Crisp, a little characterful" },
+  { id: "rounded", name: "Rounded", stack: "'Avenir Next Rounded','Arial Rounded MT Bold','Nunito',sans-serif", note: "Soft, approachable" },
+  { id: "system", name: "System", stack: "system-ui,-apple-system,'Segoe UI',Roboto,sans-serif", note: "Whatever the buyer's device uses" },
+  { id: "serif", name: "Classic Serif", stack: "Georgia,'Times New Roman',Times,serif", note: "Traditional, editorial" },
+  { id: "elegant", name: "Elegant Serif", stack: "'Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif", note: "Refined, boutique" },
+];
+
 export interface DescriptionTemplate {
   storeName: string;
   tagline: string;
   logoUrl: string;
   accentColor: string;
   darkColor: string;
+  // One of TEMPLATE_FONTS' ids; the template's typeface.
+  fontFamily: string;
   feedbackPercent: string;
   dispatchTime: string;
   dispatchNote: string;
@@ -539,12 +563,51 @@ export interface ImageCheck {
   warnings: string[];
 }
 
+// What the AI may change on a draft: everything on the editor except the
+// photos. Variations are addressed by index, options by their current name.
+export interface RevisionChanges {
+  title?: string;
+  commonTitle?: string;
+  description?: string;
+  commonDescription?: string;
+  aspects?: Record<string, string[]>;
+  removeAspects?: string[];
+  condition?: string;
+  price?: OfferPrice;
+  quantity?: number;
+  sku?: string;
+  variants?: { index: number; price?: OfferPrice; quantity?: number }[];
+  allVariants?: { price?: OfferPrice; quantity?: number };
+  renameAxes?: { from: string; to: string }[];
+  renameAxisValues?: { axis: string; from: string; to: string }[];
+  removeAxisValues?: { axis: string; value: string }[];
+  addAxisValues?: { axis: string; value: string; copyFrom?: string }[];
+  removeVariants?: number[];
+  listingPolicies?: Partial<ListingPolicies>;
+  storeCategoryNames?: string[];
+}
+
+// The editor's state as the AI sees it (unsaved edits included).
+export interface RevisionCurrentState {
+  title: string;
+  description: string;
+  aspects: Record<string, string[]>;
+  condition: string;
+  sku: string;
+  currency: string;
+  price?: string;
+  quantity?: number;
+  specifications: { name: string; values: string[] }[];
+  variants: { index: number; options: string; price: string; quantity: number }[];
+  policies?: { postage?: string; payment?: string; returns?: string };
+  storeCategoryNames: string[];
+  storeCategories?: string[];
+}
+
 export interface TextProposal {
-  changes: Partial<Pick<SingleDraftContent, "title" | "description" | "aspects">> & {
-    commonTitle?: string;
-    commonDescription?: string;
-  };
+  changes: RevisionChanges;
   summary: string;
+  cannotDo?: boolean;
 }
 
 export interface ImageProposal {
@@ -774,6 +837,10 @@ export const api = {
   removeInactiveListing: (connectionId: string, itemId: string) =>
     request<void>(`/api/connections/${connectionId}/listings/${itemId}`, { method: "DELETE" }),
 
+  // Ends a live eBay listing now. It moves to Inactive; eBay keeps it under Unsold.
+  endLiveListing: (connectionId: string, itemId: string) =>
+    request<{ itemId: string; endTime: string | null; warnings: string[] }>(`/api/connections/${connectionId}/listings/${itemId}/end`, { method: "POST" }),
+
   // Opens a live eBay listing in the editor; returns the transient working copy.
   startLiveEdit: (connectionId: string, itemId: string) =>
     request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit`, { method: "POST" }),
@@ -806,7 +873,7 @@ export const api = {
     request<{ categories: StoreCategory[]; unavailable?: string }>(`/api/connections/${connectionId}/store-categories`),
 
   publishDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
+    request<{ listing: DraftListing; warnings?: string[] }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
 
   // A draft lives only in Liston until Publish, so every edit below is a
   // plain update — nothing touches eBay until the seller decides to go live.
@@ -818,10 +885,10 @@ export const api = {
   deleteDraftListing: (listingId: string) => request<void>(`/api/listings/${listingId}`, { method: "DELETE" }),
 
   // AI revisions PROPOSE; nothing changes until the seller accepts.
-  reviseDraftText: (listingId: string, instruction: string) =>
+  reviseDraftText: (listingId: string, instruction: string, current?: RevisionCurrentState) =>
     request<TextProposal>(`/api/listings/${listingId}/revise`, {
       method: "POST",
-      body: JSON.stringify({ instruction }),
+      body: JSON.stringify({ instruction, current }),
     }),
   reviseDraftImage: (listingId: string, imageUrl: string, instruction: string) =>
     request<ImageProposal>(`/api/listings/${listingId}/images/revise`, {

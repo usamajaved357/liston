@@ -6,6 +6,7 @@
 // via the X-EBAY-API-IAF-TOKEN header, which eBay accepts for this API too.
 const { XMLParser } = require('fast-xml-parser');
 const governor = require('./request-governor');
+const logger = require('../../utils/logger');
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
 
@@ -69,6 +70,17 @@ async function tradingRequestNow(accessToken, callName, bodyXml, siteId = 0) {
       ? "eBay's daily API allowance for Liston is used up for today. Live figures return when eBay resets it (midnight Pacific time)."
       : raw;
     throw new EbayTradingError(message, /exceeded usage limit/i.test(raw) ? 429 : 502, errors);
+  }
+  // Ack=Warning is a success that did LESS than asked — eBay keeps parts of
+  // a revision it refuses (a description on a listing with sales, say) and
+  // only says so here. Logged, and handed to callers that can tell the
+  // seller.
+  if (body.Ack === 'Warning') {
+    const warnings = toArray(body.Errors).map((e) => e.LongMessage || e.ShortMessage).filter(Boolean);
+    if (warnings.length) {
+      logger.warn(`eBay ${callName} completed with warnings`, { warnings });
+      body._warnings = warnings;
+    }
   }
   return body;
 }
@@ -148,6 +160,29 @@ function mapLineItem(transaction) {
   };
 }
 
+// Where the order ships: the name eBay holds for the buyer, the address as
+// lines, and the phone number when the buyer gave one. eBay's "Invalid
+// Request" placeholder values are treated as absent.
+function mapShippingAddress(a) {
+  if (!a) return null;
+  const text = (v) => (v === undefined || v === null ? '' : String(typeof v === 'object' ? v['#text'] ?? '' : v).trim());
+  const clean = (v) => {
+    const t = text(v);
+    return t && !/invalid request/i.test(t) ? t : '';
+  };
+  const address = {
+    name: clean(a.Name),
+    street1: clean(a.Street1),
+    street2: clean(a.Street2),
+    city: clean(a.CityName),
+    state: clean(a.StateOrProvince),
+    postalCode: clean(a.PostalCode),
+    country: clean(a.CountryName) || clean(a.Country),
+    phone: clean(a.Phone),
+  };
+  return Object.values(address).some(Boolean) ? address : null;
+}
+
 function mapOrder(order) {
   const transactions = toArray(order.TransactionArray?.Transaction);
   const firstItem = transactions[0]?.Item;
@@ -163,6 +198,7 @@ function mapOrder(order) {
     subtotal: money(order.Subtotal),
     buyerName: [buyer?.UserFirstName, buyer?.UserLastName].filter(Boolean).join(' ') || null,
     buyerUserId: order.BuyerUserID || null,
+    shippingAddress: mapShippingAddress(order.ShippingAddress),
     itemTitle: firstItem?.Title || null,
     itemId: firstItem?.ItemID ? String(firstItem.ItemID) : null,
     itemCount: transactions.length,
@@ -184,6 +220,7 @@ async function getItemSummary(accessToken, itemId, { siteId } = {}) {
     `<OutputSelector>Item.PictureDetails</OutputSelector>` +
     `<OutputSelector>Item.Quantity</OutputSelector>` +
     `<OutputSelector>Item.QuantityAvailable</OutputSelector>` +
+    `<OutputSelector>Item.SellingStatus.QuantitySold</OutputSelector>` +
     `<OutputSelector>Item.ListingDetails.ViewItemURL</OutputSelector>`;
   const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
   const item = res.Item || {};
@@ -193,6 +230,7 @@ async function getItemSummary(accessToken, itemId, { siteId } = {}) {
     imageUrl: pictures[0] || item.PictureDetails?.GalleryURL || null,
     quantity: item.Quantity !== undefined ? Number(item.Quantity) : null,
     quantityAvailable: item.QuantityAvailable !== undefined ? Number(item.QuantityAvailable) : null,
+    quantitySold: item.SellingStatus?.QuantitySold !== undefined ? Number(item.SellingStatus.QuantitySold) : null,
     viewItemUrl: item.ListingDetails?.ViewItemURL || null,
   };
 }
@@ -213,6 +251,7 @@ const GET_ORDERS_FIELDS = [
   'OrderArray.Order.PaidTime',
   'OrderArray.Order.ShippedTime',
   'OrderArray.Order.CancelStatus',
+  'OrderArray.Order.ShippingAddress',
   'OrderArray.Order.TransactionArray.Transaction.Item.ItemID',
   'OrderArray.Order.TransactionArray.Transaction.Item.Title',
   'OrderArray.Order.TransactionArray.Transaction.QuantityPurchased',
@@ -271,6 +310,13 @@ async function getStoreProfile(accessToken, { siteId } = {}) {
 // Replaces the description of a LIVE listing. Republishing an inventory
 // item group doesn't revise the description of an already-live listing
 // (confirmed live), so a description change has to go through Trading's
+// Ends a live listing now. EndItem covers every listing type; the reason is
+// what eBay shows the seller in their own history.
+async function endListing(accessToken, itemId, { siteId, reason = 'NotAvailable' } = {}) {
+  const res = await tradingRequest(accessToken, 'EndItem', `<ItemID>${xmlEscape(String(itemId))}</ItemID><EndingReason>${reason}</EndingReason>`, siteId);
+  return { itemId: String(itemId), endTime: res.EndTime ? String(res.EndTime) : null, warnings: res._warnings || [] };
+}
+
 // ReviseFixedPriceItem. Also the only way to repair a listing that went up
 // with the plain text.
 async function reviseDescription(accessToken, itemId, descriptionHtml, { siteId } = {}) {
@@ -443,7 +489,7 @@ async function reviseListing(accessToken, itemId, { title, descriptionHtml, pric
   }
   body += '</Item>';
   const res = await tradingRequest(accessToken, 'ReviseFixedPriceItem', body, siteId);
-  return { itemId: String(res.ItemID || itemId) };
+  return { itemId: String(res.ItemID || itemId), warnings: res._warnings || [] };
 }
 
 // Which eBay site the seller registered on, and the address eBay holds for
@@ -484,5 +530,6 @@ module.exports = {
   getItem,
   getStoreProfile,
   reviseDescription,
+  endListing,
   reviseListing,
 };

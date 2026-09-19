@@ -39,7 +39,7 @@ export function SyncStatus({
   }, []);
 
   return (
-    <div className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+    <div className="flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-[var(--color-muted)]">
       <span className={note ? "text-[var(--color-warning)]" : ""}>{refreshing ? "Reading from eBay…" : note || describeAge(syncedAt, now)}</span>
       <button
         type="button"

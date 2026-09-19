@@ -21,51 +21,129 @@ function client() {
   return new Anthropic({ apiKey: config.anthropicApiKey });
 }
 
+const CONDITIONS = ['NEW', 'USED_EXCELLENT', 'USED_GOOD', 'USED_ACCEPTABLE'];
+
+// Everything on the editor except the photos: the seller says what to
+// change in plain words and the model returns just the fields that change,
+// in the editor's own terms (variations by index, options by name).
 const TEXT_TOOL = {
   name: 'submit_revision',
-  description: "Submit the revised listing fields. Include ONLY fields the instruction actually asks to change.",
+  description: 'Submit the changes to the draft listing. Include ONLY the fields the instruction asks to change; omit everything else.',
   input_schema: {
     type: 'object',
     properties: {
-      title: { type: 'string', maxLength: 80 },
-      description: { type: 'string' },
+      title: { type: 'string', maxLength: 80, description: 'New listing title (eBay allows 80 characters).' },
+      description: { type: 'string', description: 'New full description text. Plain text; **bold** is allowed.' },
       aspects: {
         type: 'object',
-        description: 'Item specifics as { aspectName: [value] } — only if the instruction concerns them.',
+        description: 'Item specifics to set or replace, as { name: [value] }. Only the ones that change.',
         additionalProperties: { type: 'array', items: { type: 'string' } },
       },
-      summary: { type: 'string', description: 'One short sentence describing what you changed, for the seller.' },
+      removeAspects: { type: 'array', items: { type: 'string' }, description: 'Item specifics to remove, by name.' },
+      condition: { type: 'string', enum: CONDITIONS },
+      price: { type: 'number', description: 'New price for a single-item listing (not a variation listing).' },
+      quantity: { type: 'integer', minimum: 0, description: 'New quantity for a single-item listing.' },
+      sku: { type: 'string', maxLength: 50, description: 'New custom label / SKU.' },
+      variants: {
+        type: 'array',
+        description: 'Price and/or quantity changes to specific variations, by the index shown in the variations table.',
+        items: {
+          type: 'object',
+          properties: { index: { type: 'integer', minimum: 0 }, price: { type: 'number' }, quantity: { type: 'integer', minimum: 0 } },
+          required: ['index'],
+        },
+      },
+      allVariants: {
+        type: 'object',
+        description: 'Price and/or quantity to apply to every variation.',
+        properties: { price: { type: 'number' }, quantity: { type: 'integer', minimum: 0 } },
+      },
+      renameAxes: {
+        type: 'array',
+        description: 'Rename a variation attribute (what buyers choose from), e.g. Color → Colour.',
+        items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string', maxLength: 65 } }, required: ['from', 'to'] },
+      },
+      renameAxisValues: {
+        type: 'array',
+        description: 'Rename an option of an attribute, e.g. Colour "Black H" → "Black with hooks".',
+        items: { type: 'object', properties: { axis: { type: 'string' }, from: { type: 'string' }, to: { type: 'string', maxLength: 50 } }, required: ['axis', 'from', 'to'] },
+      },
+      removeAxisValues: {
+        type: 'array',
+        description: 'Drop an option and every variation that uses it.',
+        items: { type: 'object', properties: { axis: { type: 'string' }, value: { type: 'string' } }, required: ['axis', 'value'] },
+      },
+      addAxisValues: {
+        type: 'array',
+        description: 'Add a new option to an attribute. Its variations copy price, quantity and photo from copyFrom (an existing option).',
+        items: { type: 'object', properties: { axis: { type: 'string' }, value: { type: 'string', maxLength: 50 }, copyFrom: { type: 'string' } }, required: ['axis', 'value'] },
+      },
+      removeVariants: { type: 'array', items: { type: 'integer', minimum: 0 }, description: 'Variations to drop, by index.' },
+      listingPolicies: {
+        type: 'object',
+        description: 'Business policies to switch to, by the exact names listed.',
+        properties: { postage: { type: 'string' }, payment: { type: 'string' }, returns: { type: 'string' } },
+      },
+      storeCategoryNames: { type: 'array', items: { type: 'string' }, maxItems: 2, description: 'Shop categories, from the list given.' },
+      summary: { type: 'string', description: 'One short sentence telling the seller what changed.' },
+      cannotDo: { type: 'string', description: 'If the instruction asks for something outside these fields (photos, the eBay category), say so here in one sentence and change nothing.' },
     },
     required: ['summary'],
   },
 };
 
+function describeCurrent(current, options) {
+  const lines = [];
+  lines.push(`Title (max 80 chars): ${current.title || ''}`);
+  lines.push(`Condition: ${current.condition || 'NEW'} (options: ${CONDITIONS.join(', ')})`);
+  if (current.sku) lines.push(`SKU / custom label: ${current.sku}`);
+  if (!current.variants?.length) {
+    lines.push(`Price: ${current.price ?? ''} ${current.currency || ''}`.trim());
+    lines.push(`Quantity: ${current.quantity ?? ''}`);
+  }
+  const aspects = current.aspects || {};
+  lines.push(`Item specifics: ${Object.keys(aspects).length ? JSON.stringify(aspects) : 'none'}`);
+  if (options?.requiredAspects?.length) lines.push(`Item specifics eBay requires in this category: ${options.requiredAspects.join(', ')}`);
+  if (current.variants?.length) {
+    const axes = (current.specifications || []).map((s) => `${s.name}: ${s.values.join(' | ')}`).join('; ');
+    lines.push(`Variation attributes and options: ${axes}`);
+    lines.push('Variations (index · options · price · quantity):');
+    for (const v of current.variants) lines.push(`  ${v.index} · ${v.options} · ${v.price} ${current.currency || ''} · qty ${v.quantity}`);
+  }
+  if (options?.policies) {
+    for (const [key, list] of Object.entries(options.policies)) {
+      if (list?.length) lines.push(`${key} policies available: ${list.map((p) => `"${p.name}"`).join(', ')} (current: "${current.policies?.[key] || ''}")`);
+    }
+  }
+  if (options?.storeCategories?.length) lines.push(`Shop categories available: ${options.storeCategories.map((c) => `"${c}"`).join(', ')} (current: ${JSON.stringify(current.storeCategoryNames || [])})`);
+  lines.push(`\nDescription:\n${current.description || ''}`);
+  return lines.join('\n');
+}
+
 /**
- * Proposes a text revision. Returns { changes, summary } — the caller decides
- * whether to persist it.
+ * Proposes a revision. `current` is the editor's state (including unsaved
+ * edits) in the shape the frontend sends; falls back to the stored draft.
+ * Returns { changes, summary } — the caller decides whether to apply it.
  */
-async function reviseText({ draft, instruction }) {
+async function reviseText({ draft, instruction, current: given, options = {} }) {
   const anthropic = client();
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
-  const currentTitle = isVariation ? draft.commonTitle : draft.title;
-  const currentDescription = isVariation ? draft.commonDescription : draft.description;
+  const current = given || currentFromDraft(draft);
 
   const response = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 2048,
+    max_tokens: 4096,
     tools: [TEXT_TOOL],
     tool_choice: { type: 'tool', name: TEXT_TOOL.name },
     messages: [
       {
         role: 'user',
         content:
-          `An eBay seller wants to change their draft listing. Apply ONLY what they ask for and leave everything ` +
-          `else exactly as it is — return just the fields the instruction touches.\n\n` +
-          `Current title (max 80 characters): ${currentTitle}\n\n` +
-          `Current description:\n${currentDescription}\n\n` +
-          (Object.keys(draft.aspects || draft.variesBy?.aspects || {}).length
-            ? `Current item specifics: ${JSON.stringify(draft.aspects || draft.variesBy?.aspects)}\n\n`
-            : '') +
+          `An eBay seller is editing a draft listing and has asked for a change. Apply exactly what they ask, ` +
+          `leave everything else as it is, and return ONLY the fields that change. Keep the title within 80 characters. ` +
+          `Refer to variations by their index and to options by their exact current names. Photos and the eBay ` +
+          `category cannot be changed here: if asked, fill in cannotDo and change nothing.\n\n` +
+          `Current listing:\n${describeCurrent(current, options)}\n\n` +
           `Their instruction: "${instruction}"`,
       },
     ],
@@ -76,8 +154,30 @@ async function reviseText({ draft, instruction }) {
     throw new AiGenerationError('The AI editor returned an unexpected response. Try rewording your instruction.');
   }
 
-  const { summary, ...changes } = toolUse.input;
-  return { changes: mapChangesForDraft(changes, isVariation), summary };
+  const { summary, cannotDo, ...changes } = toolUse.input;
+  if (cannotDo) return { changes: {}, summary: cannotDo, cannotDo: true };
+  return { changes: mapChangesForDraft(tidyChanges(changes, current, options), isVariation), summary };
+}
+
+// The editor's shape of the stored draft, for when the frontend sends nothing.
+function currentFromDraft(draft) {
+  const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const axes = (draft.variesBy?.specifications || []).map((s) => s.name);
+  return {
+    title: isVariation ? draft.commonTitle : draft.title,
+    description: isVariation ? draft.commonDescription : draft.description,
+    aspects: isVariation ? draft.variesBy?.aspects : draft.aspects,
+    condition: isVariation ? draft.variants[0]?.condition : draft.condition,
+    sku: draft.sku,
+    currency: (isVariation ? draft.variants[0]?.price : draft.price)?.currency,
+    price: isVariation ? undefined : draft.price?.value,
+    quantity: isVariation ? undefined : draft.quantity,
+    specifications: draft.variesBy?.specifications,
+    variants: isVariation
+      ? draft.variants.map((v, index) => ({ index, options: axes.map((a) => v.aspects?.[a]?.[0]).filter(Boolean).join(' · '), price: v.price?.value, quantity: v.quantity }))
+      : [],
+    storeCategoryNames: draft.storeCategoryNames,
+  };
 }
 
 // A variation listing stores its text under commonTitle/commonDescription, so
@@ -96,6 +196,41 @@ function mapChangesForDraft(changes, isVariation) {
     delete mapped.description;
   }
   return mapped;
+}
+
+// Numbers become the editor's strings; policy names become ids; anything
+// that names a variation or option that doesn't exist is dropped.
+function tidyChanges(changes, current, options) {
+  const out = { ...changes };
+  const currency = current.currency || 'GBP';
+  const money = (n) => ({ value: Number(n).toFixed(2), currency });
+  if (out.price !== undefined) out.price = money(out.price);
+  if (out.allVariants) {
+    out.allVariants = { ...(out.allVariants.price !== undefined ? { price: money(out.allVariants.price) } : {}), ...(out.allVariants.quantity !== undefined ? { quantity: out.allVariants.quantity } : {}) };
+  }
+  const count = current.variants?.length || 0;
+  if (Array.isArray(out.variants)) {
+    out.variants = out.variants
+      .filter((v) => Number.isInteger(v.index) && v.index >= 0 && v.index < count)
+      .map((v) => ({ index: v.index, ...(v.price !== undefined ? { price: money(v.price) } : {}), ...(v.quantity !== undefined ? { quantity: v.quantity } : {}) }));
+    if (!out.variants.length) delete out.variants;
+  }
+  if (Array.isArray(out.removeVariants)) {
+    out.removeVariants = out.removeVariants.filter((i) => Number.isInteger(i) && i >= 0 && i < count);
+    if (!out.removeVariants.length) delete out.removeVariants;
+  }
+  if (out.listingPolicies && options.policies) {
+    const ids = {};
+    const byKey = { postage: 'fulfillmentPolicyId', payment: 'paymentPolicyId', returns: 'returnPolicyId' };
+    for (const [key, name] of Object.entries(out.listingPolicies)) {
+      const list = options.policies[key] || [];
+      const hit = list.find((p) => p.name.toLowerCase() === String(name).toLowerCase());
+      if (hit) ids[byKey[key]] = hit.id;
+    }
+    if (Object.keys(ids).length) out.listingPolicies = ids;
+    else delete out.listingPolicies;
+  } else delete out.listingPolicies;
+  return out;
 }
 
 const IMAGE_OP_TOOL = {

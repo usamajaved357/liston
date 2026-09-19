@@ -28,7 +28,6 @@ const SUMMARY_RANGE = "90d";
 
 const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
   { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid, needs shipping", tone: "text-[var(--color-primary)]" },
-  { key: "awaiting_payment", label: "Awaiting payment", hint: "New, not paid yet", tone: "text-amber-700" },
   { key: "dispatched", label: "Dispatched", hint: "Already shipped", tone: "text-emerald-700" },
   { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-muted)]" },
 ];
@@ -103,7 +102,7 @@ function OrderQueue({ connectionId, counts, loading, error }: { connectionId: st
       {error ? (
         <Alert>{error}</Alert>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-3">
           {ORDER_TILES.map((tile) => (
             <Link
               key={tile.key}

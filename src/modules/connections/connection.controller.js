@@ -352,6 +352,7 @@ const updateTemplateSchema = z.object({
   logoUrl: z.string().url().or(z.literal('')).default(''),
   accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #FF6B2B').default('#FF6B2B'),
   darkColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #1E1E2E').default('#1E1E2E'),
+  fontFamily: z.enum(descriptionTemplate.FONTS.map((f) => f.id)).default('modern'),
   feedbackPercent: z.string().max(6).default(''),
   dispatchTime: z.string().max(40).default('1–2 Business Days'),
   dispatchNote: z.string().max(60).default('From our UK warehouse'),
@@ -552,25 +553,15 @@ async function categoryDetail(req, res, next) {
   }
 }
 
-// Per connection, briefly: the Trading call behind it is rationed.
-const storeCategoryCache = new Map();
-const STORE_CATEGORY_TTL_MS = 60 * 60 * 1000;
-
 async function storeCategories(req, res, next) {
   try {
-    const cached = storeCategoryCache.get(req.params.id);
-    if (cached && cached.expiresAt > Date.now()) return res.status(200).json({ categories: cached.categories });
     const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
     if (connection.platform_key !== 'ebay') return res.status(200).json({ categories: [] });
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
-      ebayService.getStoreCategories(credentials)
+      ebayService.getStoreCategoriesCached(credentials, req.params.id)
     );
-    storeCategoryCache.set(req.params.id, { categories: result.categories, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
-    res.status(200).json({ categories: result.categories });
+    res.status(200).json({ categories: result.categories, ...(result.unavailable ? { unavailable: result.unavailable } : {}) });
   } catch (err) {
-    // A rationed Trading call shouldn't break the editor: no Shop categories
-    // is a valid state, and the notice says why.
-    if (err.statusCode === 429) return res.status(200).json({ categories: [], unavailable: err.message });
     next(err);
   }
 }

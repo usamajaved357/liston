@@ -5,6 +5,9 @@ const ebayService = require('../ebay/ebay.service');
 const marketplaces = require('../ebay/marketplaces');
 const orchestrator = require('../ai-generation/generation.orchestrator');
 const imageGates = require('../ai-generation/image-pipeline/gates');
+const { prepareAspectsForEbay } = require('../ai-generation/aspect-validator');
+const storeCategory = require('./store-category');
+const logger = require('../../utils/logger');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
@@ -119,10 +122,18 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
   previews.set(previewId, { competitor, source, categorySuggestions, userId, connectionId, competitorUrl, sourceUrl, expiresAt: Date.now() + PREVIEW_TTL_MS });
   const category = await orchestrator.resolveCategory({ competitor, categorySuggestions, marketplaceId });
 
+  // The variations as the draft will shape them (see planVariationAxes):
+  // only axes with a real choice, under the names eBay and the competitor
+  // use in this category; single-option axes are shown as fixed. The seller
+  // chooses from exactly what will be drafted.
+  const allowedAxes = ((await ebayTaxonomy.getAspectSchema(marketplaceId, category.categoryId)) || []).filter((a) => a.variation).map((a) => a.name);
+  const plan = orchestrator.planVariationAxes({ source, competitor, allowedAxes });
   // Per option, a thumbnail where the supplier has one, so a colour can be
   // chosen by eye rather than by name.
-  const axes = (source.variantAxes || []).map((axis) => ({
+  const axes = plan.axes.map((axis) => ({
     name: axis.name,
+    ebayName: axis.ebayName,
+    via: axis.via,
     hasImages: axis.hasImages,
     values: axis.values.map((value) => ({
       value,
@@ -130,10 +141,18 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
       combinations: (source.variants || []).filter((v) => v.attributes[axis.name] === value).length,
     })),
   }));
+  const competitorAxes = Object.entries(
+    (competitor?.variants || []).reduce((acc, v) => {
+      for (const [axis, value] of Object.entries(v.attributes || {})) (acc[axis] = acc[axis] || new Set()).add(value);
+      return acc;
+    }, {})
+  ).map(([name, values]) => ({ name, values: [...values] }));
 
   return {
     previewId,
-    competitor: competitor ? { title: competitor.title, priceText: competitor.priceText, categoryPath: competitor.categoryBreadcrumb } : null,
+    competitor: competitor
+      ? { title: competitor.title, priceText: competitor.priceText, categoryPath: competitor.categoryBreadcrumb, axes: competitorAxes }
+      : null,
     category: { id: category.categoryId, path: category.categoryPath },
     categorySuggestions,
     source: {
@@ -141,6 +160,9 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
       priceText: source.priceText,
       imageUrls: source.imageUrls || [],
       axes,
+      fixed: Object.entries(plan.fixed).map(([name, value]) => ({ name, value })),
+      allowedAxes,
+      warnings: plan.warnings,
       totalCombinations: (source.variants || []).length,
     },
   };
@@ -222,7 +244,10 @@ async function generateEbayDraftFromUrlsNow(
   // The seller-visible SKU (eBay's "custom label"). Defaults to a Liston
   // prefix plus the supplier's product id; editable on the draft.
   const skuBase = baseSkuFromSourceUrl(sourceUrl);
-  const finalDraftInput = { ...draftInput, skuBase, sku: `Liston-${skuBase.replace(/^AE/, '')}` };
+  // Filed under the seller's own Shop department when one fits (their
+  // "New in" when none does); editable on the draft.
+  const storeCategoryNames = await suggestStoreCategoriesFor(connectionId, userId, draftInput);
+  const finalDraftInput = { ...draftInput, skuBase, sku: `Liston-${skuBase.replace(/^AE/, '')}`, ...(storeCategoryNames.length ? { storeCategoryNames } : {}) };
 
   return createEbayDraft(connectionId, userId, finalDraftInput, {
     sourceData: { competitor, source },
@@ -231,6 +256,23 @@ async function generateEbayDraftFromUrlsNow(
     // than the seller finding out from a live listing.
     warnings,
   });
+}
+
+async function suggestStoreCategoriesFor(connectionId, userId, draft) {
+  try {
+    const { categories } = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+      ebayService.getStoreCategoriesCached(credentials, connectionId)
+    );
+    const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+    return storeCategory.suggestStoreCategories(categories, {
+      title: isVariation ? draft.commonTitle : draft.title,
+      categoryPath: draft.categoryPath || [],
+      specifics: isVariation ? draft.variesBy?.aspects : draft.aspects,
+    }).names;
+  } catch (err) {
+    logger.warn('Could not suggest a Shop category', { connectionId, error: err.message });
+    return [];
+  }
 }
 
 async function listPendingDrafts(connectionId, userId) {
@@ -533,9 +575,29 @@ async function updateDraft(id, userId, patch) {
 // AI revisions are PROPOSALS — they read the draft but never write it. The
 // seller accepts by sending the change back through updateDraft, which is
 // the same path a hand edit takes.
-async function proposeTextRevision(id, userId, instruction) {
+async function proposeTextRevision(id, userId, instruction, current = null) {
   const listing = await loadEditableDraft(id, userId);
-  return revisionService.reviseText({ draft: listing.generated_data || {}, instruction });
+  const draft = listing.generated_data || {};
+  // What the model may pick from: the account's policies and Shop
+  // categories by name, and the specifics eBay requires here.
+  const [policies, category] = await Promise.all([
+    draft.listingPolicies
+      ? connectionService
+          .withDecryptedCredentials(listing.connection_id, userId, (credentials) => ebayService.getBusinessPolicies(credentials))
+          .catch(() => null)
+      : null,
+    categoryInfoFor(draft).catch(() => null),
+  ]);
+  const options = {
+    policies: policies && {
+      postage: (policies.fulfillmentPolicies || []).map((p) => ({ id: p.fulfillmentPolicyId, name: p.name })),
+      payment: (policies.paymentPolicies || []).map((p) => ({ id: p.paymentPolicyId, name: p.name })),
+      returns: (policies.returnPolicies || []).map((p) => ({ id: p.returnPolicyId, name: p.name })),
+    },
+    requiredAspects: (category?.aspects || []).filter((a) => a.required).map((a) => a.name),
+    storeCategories: current?.storeCategories || [],
+  };
+  return revisionService.reviseText({ draft, instruction, current, options });
 }
 
 async function proposeImageRevision(id, userId, { imageUrl, instruction }) {
@@ -955,7 +1017,16 @@ async function publishLiveEdit(listing, userId) {
   if (!imageCheck.ok) throw new ListingError(imageCheck.errors.join(' '), 400);
 
   const html = await renderDraftDescription(listing, userId);
-  const specifics = isVariation ? draft.variesBy?.aspects : draft.aspects;
+  // Same readiness rules as a new publish (no axis in the shared set,
+  // identifiers marked "Does Not Apply").
+  const readied = await readyAspectsForPublish(draft);
+  if (readied.missing.length) {
+    throw new ListingError(
+      `eBay requires ${readied.missing.join(', ')} for this category. Fill ${readied.missing.length === 1 ? 'it' : 'them'} in item specifics, then publish again.`,
+      400
+    );
+  }
+  const specifics = isVariation ? readied.draft.variesBy?.aspects : readied.draft.aspects;
   const payload = {
     title: isVariation ? draft.commonTitle : draft.title,
     descriptionHtml: html,
@@ -985,13 +1056,27 @@ async function publishLiveEdit(listing, userId) {
     payload.quantity = draft.quantity;
   }
 
-  await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
+  const revised = await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
     ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload)
   );
   resyncListings(listing.connection_id, userId);
   // The edit is now live; the working copy has done its job.
   await listingRepository.deleteById(listing.id);
-  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true };
+  // eBay applies what it can and warns about the rest (a description it
+  // refused to replace, for one). The seller must hear that, or they trust
+  // a preview that never went live.
+  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, warnings: revised.warnings || [] };
+}
+
+// Ends a live listing on eBay now. A working copy opened for editing it is
+// dropped — there is nothing left to publish changes to.
+async function endLiveListing(connectionId, userId, itemId) {
+  const result = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.endLiveListing(credentials, connectionId, itemId)
+  );
+  const workingCopy = await listingRepository.findLiveEdit(connectionId, userId, itemId);
+  if (workingCopy) await listingRepository.deleteById(workingCopy.id);
+  return { itemId: String(itemId), endTime: result.endTime, warnings: result.warnings || [] };
 }
 
 // Removes an ended listing for good: eBay's own Inventory objects if Liston
@@ -1085,6 +1170,20 @@ async function publishNow(listing, id, userId) {
       );
     }
   }
+  // The item specifics eBay will actually accept: no variation attribute
+  // repeated in the shared set, identifiers the product lacks marked "Does
+  // Not Apply", and anything still required but empty named here rather
+  // than in eBay's rejection after the build. Applied to the copy sent, not
+  // the stored draft, so older drafts get it too.
+  const readied = await readyAspectsForPublish(draft);
+  if (readied.missing.length) {
+    throw new ListingError(
+      `eBay requires ${readied.missing.join(', ')} for this category. Fill ${readied.missing.length === 1 ? 'it' : 'them'} in item specifics, then publish again.`,
+      400
+    );
+  }
+  const readyDraft = readied.draft;
+
   // Drafts created before drafts went local already have their eBay objects;
   // anything newer is built here, now.
   const alreadyOnEbay = Boolean(listing.platform_offer_id || listing.platform_group_key);
@@ -1105,7 +1204,7 @@ async function publishNow(listing, id, userId) {
       // stays as the inventory item's (4,000-char) description.
       const html = await renderDraftDescription(listing, userId);
       const branded = {
-        ...draft,
+        ...readyDraft,
         ...(Array.isArray(draft.variants) && draft.variants.length ? { commonListingDescription: html } : { listingDescription: html }),
       };
       const built = withSkus(branded, listing.connection_id);
@@ -1138,6 +1237,21 @@ async function publishNow(listing, id, userId) {
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
     throw err;
   }
+}
+
+// Item specifics as eBay accepts them (see prepareAspectsForEbay), on a
+// copy of the draft. Without a schema (Taxonomy down) only the axis rule
+// applies; a missing required aspect then surfaces from eBay as before.
+async function readyAspectsForPublish(draft) {
+  const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const axes = isVariation ? (draft.variesBy?.specifications || []).map((s) => s.name) : [];
+  const schema = draft.categoryId
+    ? await ebayTaxonomy.getEditorAspectSchema(draft.marketplaceId || 'EBAY_GB', draft.categoryId).catch(() => null)
+    : null;
+  const current = isVariation ? draft.variesBy?.aspects : draft.aspects;
+  const { aspects, missing } = prepareAspectsForEbay(current, schema, axes);
+  const readyDraft = isVariation ? { ...draft, variesBy: { ...draft.variesBy, aspects } } : { ...draft, aspects };
+  return { draft: readyDraft, missing };
 }
 
 // Assigns the SKUs (and group key) a publish needs, without mutating the
@@ -1183,5 +1297,6 @@ module.exports = {
   publish,
   startLiveEdit,
   removeInactiveListing,
+  endLiveListing,
   htmlToText,
 };
