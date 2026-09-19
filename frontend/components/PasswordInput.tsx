@@ -6,17 +6,22 @@ interface PasswordInputProps {
   value: string;
   onChange: (value: string) => void;
   autoComplete?: string;
+  name?: string;
+  required?: boolean;
   onFocus?: () => void;
   onBlur?: () => void;
 }
 
-export function PasswordInput({ value, onChange, autoComplete, onFocus, onBlur }: PasswordInputProps) {
+export function PasswordInput({ value, onChange, autoComplete, name, required, onFocus, onBlur }: PasswordInputProps) {
   const [visible, setVisible] = useState(false);
 
   return (
     <div className="relative">
       <input
         type={visible ? "text" : "password"}
+        name={name}
+        id={name}
+        required={required}
         value={value}
         autoComplete={autoComplete}
         onChange={(e) => onChange(e.target.value)}

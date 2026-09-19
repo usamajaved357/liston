@@ -65,6 +65,7 @@ function ResetPasswordForm() {
     <form onSubmit={handleSubmit} className="space-y-4">
       <PasswordField
         label="New password"
+        name="new-password"
         value={password}
         onChange={setPassword}
         autoComplete="new-password"
@@ -72,6 +73,7 @@ function ResetPasswordForm() {
       />
       <PasswordField
         label="Confirm new password"
+        name="confirm-password"
         value={confirmPassword}
         onChange={setConfirmPassword}
         autoComplete="new-password"

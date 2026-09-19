@@ -100,22 +100,6 @@ function ConnectionBanner() {
 function MemberAccountPicker({ user, connections }: { user: User; connections: Connection[] }) {
   const router = useRouter();
   const [confirmLogout, setConfirmLogout] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleDeleteAccount() {
-    setDeleting(true);
-    try {
-      await api.deleteAccount();
-      localStorage.removeItem("token");
-      router.push("/login");
-    } catch {
-      setError("Couldn't remove your login. Try again.");
-      setConfirmDelete(false);
-      setDeleting(false);
-    }
-  }
 
   return (
     <main className="min-h-screen px-6 py-10">
@@ -127,15 +111,8 @@ function MemberAccountPicker({ user, connections }: { user: User; connections: C
             subtitle="Team member"
             avatarUrl={user.avatar_url}
             onLogout={() => setConfirmLogout(true)}
-            onDeleteAccount={() => setConfirmDelete(true)}
           />
         </div>
-
-        {error && (
-          <div className="mb-4">
-            <Alert>{error}</Alert>
-          </div>
-        )}
 
         {connections.length === 0 ? (
           <p className="text-sm text-[var(--color-muted)]">
@@ -174,16 +151,6 @@ function MemberAccountPicker({ user, connections }: { user: User; connections: C
           router.push("/login");
         }}
       />
-      <ConfirmDialog
-        open={confirmDelete}
-        title="Remove your login?"
-        description="This removes your own team-member login. It doesn't affect the accounts or data owned by whoever gave you access."
-        confirmLabel="Remove my login"
-        danger
-        loading={deleting}
-        onCancel={() => setConfirmDelete(false)}
-        onConfirm={handleDeleteAccount}
-      />
     </main>
   );
 }
@@ -198,7 +165,7 @@ export default function ConnectionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
+  const [confirmLogout, setConfirmLogout] = useState(false);
   const [pendingDeleteConnectionId, setPendingDeleteConnectionId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -234,19 +201,6 @@ export default function ConnectionsPage() {
   function handleLogout() {
     localStorage.removeItem("token");
     router.push("/login");
-  }
-
-  async function handleDeleteAccount() {
-    setActionLoading(true);
-    try {
-      await api.deleteAccount();
-      localStorage.removeItem("token");
-      router.push("/signup");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't delete your account. Try again.");
-      setConfirmAction(null);
-      setActionLoading(false);
-    }
   }
 
   async function handleDeleteConnection() {
@@ -310,8 +264,7 @@ export default function ConnectionsPage() {
               email={user.email}
               subtitle={`${planName} plan`}
               avatarUrl={user.avatar_url}
-              onLogout={() => setConfirmAction("logout")}
-              onDeleteAccount={() => setConfirmAction("delete")}
+              onLogout={() => setConfirmLogout(true)}
             />
           </div>
         </div>
@@ -370,22 +323,12 @@ export default function ConnectionsPage() {
       )}
 
       <ConfirmDialog
-        open={confirmAction === "logout"}
+        open={confirmLogout}
         title="Log out?"
         description="You'll need to log in again to access your dashboard."
         confirmLabel="Log out"
-        onCancel={() => setConfirmAction(null)}
+        onCancel={() => setConfirmLogout(false)}
         onConfirm={handleLogout}
-      />
-      <ConfirmDialog
-        open={confirmAction === "delete"}
-        title="Delete your account?"
-        description="This permanently deletes your account, connections, and listing data. This action cannot be undone."
-        confirmLabel="Delete account"
-        danger
-        loading={actionLoading}
-        onCancel={() => setConfirmAction(null)}
-        onConfirm={handleDeleteAccount}
       />
       <ConfirmDialog
         open={pendingDeleteConnectionId !== null}

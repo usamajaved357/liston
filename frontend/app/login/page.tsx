@@ -48,8 +48,12 @@ export default function LoginPage() {
         </>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-3.5">
-        <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
+      {/* method/action are never used (submit is intercepted) but, together
+          with name/autocomplete on the inputs, they let Chrome and other
+          password managers recognise this as a login form: offer to save the
+          credentials the first time and fill them on later visits. */}
+      <form onSubmit={handleSubmit} method="post" action="/login" className="space-y-3.5">
+        <Field label="Email" type="email" name="email" value={email} onChange={setEmail} autoComplete="username" required />
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="block text-sm font-medium text-[var(--color-ink)]">Password</span>
@@ -60,7 +64,7 @@ export default function LoginPage() {
               Forgot password?
             </Link>
           </div>
-          <PasswordInput value={password} onChange={setPassword} autoComplete="current-password" />
+          <PasswordInput name="password" value={password} onChange={setPassword} autoComplete="current-password" required />
         </div>
         {error && <Alert>{error}</Alert>}
         <button

@@ -1531,7 +1531,7 @@ function explainPolicyBlock(err, draft, { cleared = false, freshSku = null } = {
     `eBay refused this listing under its Hazardous Materials policy — an automated filter that reacts to words in the title, description, item specifics or variation option names. ` +
     (triggers.length
       ? `Words it commonly reacts to were found: ${triggers.join('; ')}. Reword or remove them, then publish again.`
-      : `No word from the known list was found, so the trigger is a word this filter reacts to that isn't on it yet. Check the description and the option names for materials, chemicals, gases, coatings or fuels (fluorocarbon, PTFE, tungsten, resin…), reword the suspect one, and publish again.`) +
+      : `No word from the known list was found in the title, description, item specifics or option names, so rewording is unlikely to help. eBay's "Please do not relist" wording means it recognises this as an item it previously removed from this account under that policy (it matches on photos and title, not just words). Check Seller Hub for a removed listing of this product, appeal it from eBay's removal message, or relist with genuinely different photos.`) +
     (cleared ? ` What the failed attempts had created on eBay has been cleared${freshSku ? ` and the draft has a fresh SKU (${freshSku})` : ''}, so the next publish starts clean.` : '')
   );
 }

@@ -53,11 +53,14 @@ export default function SignupPage() {
         </>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-3.5">
-        <Field label="Your name" type="text" value={name} onChange={setName} autoComplete="name" />
-        <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
+      {/* See login: name/autocomplete let password managers offer to save
+          the new credentials once the account is created. */}
+      <form onSubmit={handleSubmit} method="post" action="/signup" className="space-y-3.5">
+        <Field label="Your name" type="text" name="name" value={name} onChange={setName} autoComplete="name" required />
+        <Field label="Email" type="email" name="email" value={email} onChange={setEmail} autoComplete="username" required />
         <PasswordField
           label="Password"
+          name="password"
           value={password}
           onChange={setPassword}
           autoComplete="new-password"

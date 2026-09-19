@@ -8,6 +8,8 @@ interface PasswordFieldProps {
   value: string;
   onChange: (value: string) => void;
   autoComplete?: string;
+  name?: string;
+  required?: boolean;
   error?: string;
   showCriteria?: boolean;
 }
@@ -17,6 +19,8 @@ export function PasswordField({
   value,
   onChange,
   autoComplete,
+  name,
+  required,
   error,
   showCriteria,
 }: PasswordFieldProps) {
@@ -30,6 +34,8 @@ export function PasswordField({
         value={value}
         onChange={onChange}
         autoComplete={autoComplete}
+        name={name}
+        required={required}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
       />

@@ -90,8 +90,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
-  const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   const loadOverview = useCallback(async (r: string) => {
     setRefreshing(true);
@@ -147,19 +146,6 @@ export default function DashboardPage() {
     router.push("/login");
   }
 
-  async function handleDeleteAccount() {
-    setActionLoading(true);
-    try {
-      await api.deleteAccount();
-      localStorage.removeItem("token");
-      router.push("/signup");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't delete your account. Try again.");
-      setConfirmAction(null);
-      setActionLoading(false);
-    }
-  }
-
   async function handleResendVerification() {
     setResendState("sending");
     try {
@@ -211,8 +197,7 @@ export default function DashboardPage() {
               email={user.email}
               subtitle={`${planName} plan`}
               avatarUrl={user.avatar_url}
-              onLogout={() => setConfirmAction("logout")}
-              onDeleteAccount={() => setConfirmAction("delete")}
+              onLogout={() => setConfirmLogout(true)}
             />
           </div>
         </div>
@@ -409,22 +394,12 @@ export default function DashboardPage() {
       )}
 
       <ConfirmDialog
-        open={confirmAction === "logout"}
+        open={confirmLogout}
         title="Log out?"
         description="You'll need to log in again to access your dashboard."
         confirmLabel="Log out"
-        onCancel={() => setConfirmAction(null)}
+        onCancel={() => setConfirmLogout(false)}
         onConfirm={handleLogout}
-      />
-      <ConfirmDialog
-        open={confirmAction === "delete"}
-        title="Delete your account?"
-        description="This permanently deletes your account, connections, and listing data. This action cannot be undone."
-        confirmLabel="Delete account"
-        danger
-        loading={actionLoading}
-        onCancel={() => setConfirmAction(null)}
-        onConfirm={handleDeleteAccount}
       />
     </AppShell>
   );

@@ -45,7 +45,7 @@ export default function ForgotPasswordPage() {
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
-          <Field label="Email" type="email" value={email} onChange={setEmail} autoComplete="email" />
+          <Field label="Email" type="email" name="email" value={email} onChange={setEmail} autoComplete="username" required />
           {error && <Alert>{error}</Alert>}
           <button
             type="submit"

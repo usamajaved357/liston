@@ -3,12 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { api, User } from "@/lib/api";
+import { User } from "@/lib/api";
 import { Logo } from "@/components/Logo";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { Alert } from "@/components/Alert";
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -59,26 +58,11 @@ export function AccountShell({
   const canShow = (feature: string) => permissions === undefined || permissions[feature];
   const pathname = usePathname();
   const base = `/accounts/${connectionId}`;
-  const [confirmAction, setConfirmAction] = useState<"logout" | "delete" | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmLogout, setConfirmLogout] = useState(false);
 
   function handleLogout() {
     localStorage.removeItem("token");
     router.push("/login");
-  }
-
-  async function handleDeleteAccount() {
-    setActionLoading(true);
-    try {
-      await api.deleteAccount();
-      localStorage.removeItem("token");
-      router.push("/login");
-    } catch {
-      setActionError("Couldn't remove your login. Try again.");
-      setConfirmAction(null);
-      setActionLoading(false);
-    }
   }
 
   return (
@@ -191,7 +175,7 @@ export function AccountShell({
               </svg>
               Your accounts
             </Link>
-            <button type="button" onClick={() => setConfirmAction("logout")} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
+            <button type="button" onClick={() => setConfirmLogout(true)} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                 <path d="M10 4H6a2 2 0 00-2 2v12a2 2 0 002 2h4M15 8l4 4-4 4M19 12H9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
@@ -227,37 +211,18 @@ export function AccountShell({
           </div>
         )}
         <div data-scroller className={`flex-1 min-h-0 overflow-y-auto px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>
-          {actionError && (
-            <div className="mb-4">
-              <Alert>{actionError}</Alert>
-            </div>
-          )}
           {children}
         </div>
         {footer && <div className="flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)]">{footer}</div>}
       </div>
 
       <ConfirmDialog
-        open={confirmAction === "logout"}
+        open={confirmLogout}
         title="Log out?"
         description="You'll need to log in again to get back here."
         confirmLabel="Log out"
-        onCancel={() => setConfirmAction(null)}
+        onCancel={() => setConfirmLogout(false)}
         onConfirm={handleLogout}
-      />
-      <ConfirmDialog
-        open={confirmAction === "delete"}
-        title="Remove your login?"
-        description={
-          permissions === undefined
-            ? "This permanently deletes your account, connections, and listing data. This action cannot be undone."
-            : "This removes your own team-member login. It doesn't affect the accounts or data owned by whoever gave you access."
-        }
-        confirmLabel={permissions === undefined ? "Delete account" : "Remove my login"}
-        danger
-        loading={actionLoading}
-        onCancel={() => setConfirmAction(null)}
-        onConfirm={handleDeleteAccount}
       />
     </div>
   );

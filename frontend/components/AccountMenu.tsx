@@ -12,10 +12,11 @@ interface AccountMenuProps {
   subtitle: string;
   avatarUrl?: string | null;
   onLogout: () => void;
-  onDeleteAccount: () => void;
 }
 
-export function AccountMenu({ email, subtitle, avatarUrl, onLogout, onDeleteAccount }: AccountMenuProps) {
+// Deleting the account deliberately isn't offered here: it's one click
+// from Log out and lives behind its own section on Account settings.
+export function AccountMenu({ email, subtitle, avatarUrl, onLogout }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -41,11 +42,13 @@ export function AccountMenu({ email, subtitle, avatarUrl, onLogout, onDeleteAcco
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-56 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5 shadow-lg z-10">
+        <div className="absolute right-0 mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5 shadow-lg z-10">
           <div className="flex items-center gap-2.5 px-3 py-2.5 mb-1 border-b border-[var(--color-line)]">
             <Avatar avatarUrl={avatarUrl} size={32} />
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-[var(--color-ink)] truncate">{email}</p>
+              <p className="text-sm font-semibold text-[var(--color-ink)] break-all leading-snug" title={email}>
+                {email}
+              </p>
               <p className="text-xs text-[var(--color-muted)]">{subtitle}</p>
             </div>
           </div>
@@ -82,25 +85,6 @@ export function AccountMenu({ email, subtitle, avatarUrl, onLogout, onDeleteAcco
               />
             </svg>
             Log out
-          </button>
-          <div className="my-1 border-t border-[var(--color-line)]" />
-          <button
-            onClick={() => {
-              setOpen(false);
-              onDeleteAccount();
-            }}
-            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium text-[var(--color-danger)] hover:bg-red-50 transition-colors"
-          >
-            <svg viewBox="0 0 24 24" fill="none" className="h-[15px] w-[15px]">
-              <path
-                d="M4 7h16M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2m2 0v12a2 2 0 01-2 2H9a2 2 0 01-2-2V7h10z"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            Delete account
           </button>
         </div>
       )}

@@ -28,7 +28,7 @@ function SettingRow({ title, description, children, last }: { title: string; des
   );
 }
 
-function ChangePasswordForm() {
+function ChangePasswordForm({ email }: { email: string }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -69,13 +69,17 @@ function ChangePasswordForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3.5">
+    <form onSubmit={handleSubmit} method="post" action="/account" className="space-y-3.5">
+      {/* Read-only, visually hidden username so the browser's password
+          manager updates the saved login for this email instead of asking
+          to save a second one. */}
+      <input type="email" name="username" autoComplete="username" value={email} readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
       <div>
         <span className="mb-1 block text-[13px] font-medium text-[var(--color-ink)]">Current password</span>
-        <PasswordInput value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
+        <PasswordInput name="current-password" value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" required />
       </div>
-      <PasswordField label="New password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" showCriteria />
-      <PasswordField label="Confirm new password" value={confirmPassword} onChange={setConfirmPassword} autoComplete="new-password" />
+      <PasswordField label="New password" name="new-password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" showCriteria required />
+      <PasswordField label="Confirm new password" name="confirm-password" value={confirmPassword} onChange={setConfirmPassword} autoComplete="new-password" required />
       {error && (
         <div className="notice notice-danger">
           <span className="flex-1">{error}</span>
@@ -172,7 +176,6 @@ export default function AccountPage() {
               subtitle={`${planName} plan`}
               avatarUrl={user.avatar_url}
               onLogout={() => setConfirmAction("logout")}
-              onDeleteAccount={() => setConfirmAction("delete")}
             />
           </div>
         </div>
@@ -214,7 +217,7 @@ export default function AccountPage() {
 
         <div className="card">
           <SettingRow title="Password" description="Choose a strong password you're not using anywhere else. You'll stay logged in on this device." last>
-            <ChangePasswordForm />
+            <ChangePasswordForm email={user.email} />
           </SettingRow>
         </div>
 
