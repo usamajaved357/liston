@@ -820,6 +820,10 @@ export const api = {
   removeInactiveListing: (connectionId: string, itemId: string) =>
     request<void>(`/api/connections/${connectionId}/listings/${itemId}`, { method: "DELETE" }),
 
+  // Ends a live eBay listing now. It moves to Inactive; eBay keeps it under Unsold.
+  endLiveListing: (connectionId: string, itemId: string) =>
+    request<{ itemId: string; endTime: string | null; warnings: string[] }>(`/api/connections/${connectionId}/listings/${itemId}/end`, { method: "POST" }),
+
   // Opens a live eBay listing in the editor; returns the transient working copy.
   startLiveEdit: (connectionId: string, itemId: string) =>
     request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit`, { method: "POST" }),

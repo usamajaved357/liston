@@ -52,7 +52,7 @@ function StockBadge({ available }: { available: number }) {
   );
 }
 
-function ListingRow({ item, onEdit, editing, onDelete }: { item: Listing; onEdit: () => void; editing: boolean; onDelete?: () => void }) {
+function ListingRow({ item, onEdit, editing, onDelete, onEnd }: { item: Listing; onEdit: () => void; editing: boolean; onDelete?: () => void; onEnd?: () => void }) {
   const open = () => {
     if (item.viewItemUrl) window.open(item.viewItemUrl, "_blank", "noopener");
   };
@@ -84,6 +84,19 @@ function ListingRow({ item, onEdit, editing, onDelete }: { item: Listing; onEdit
       >
         {editing ? "Opening…" : "Edit"}
       </button>
+      {onEnd && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEnd();
+          }}
+          className="btn btn-danger-ghost flex-shrink-0 !h-7 !px-3 !text-[12px]"
+          title="End this listing on eBay"
+        >
+          End
+        </button>
+      )}
       {onDelete && (
         <button
           type="button"
@@ -271,6 +284,7 @@ export default function AccountListingsPage() {
   const urlFilter = searchParams.get("filter");
   const updatedItemId = searchParams.get("updated");
   const updateWarning = searchParams.get("warning");
+  const endedItemId = searchParams.get("ended");
   const [filter, setFilter] = useState<Tab>(urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active");
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -292,6 +306,8 @@ export default function AccountListingsPage() {
   const [deletingDraft, setDeletingDraft] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<Listing | null>(null);
+  const [itemToEnd, setItemToEnd] = useState<Listing | null>(null);
+  const [endingItem, setEndingItem] = useState(false);
   const [deletingItem, setDeletingItem] = useState(false);
 
   useEffect(() => {
@@ -393,6 +409,23 @@ export default function AccountListingsPage() {
       setError(err instanceof ApiError ? err.message : "Couldn't delete this listing. Try again.");
     } finally {
       setDeletingItem(false);
+    }
+  }
+
+  async function handleEndItem() {
+    if (!connection || !itemToEnd) return;
+    setEndingItem(true);
+    try {
+      const result = await api.endLiveListing(connection.id, itemToEnd.itemId);
+      setItems((list) => list.filter((i) => i.itemId !== itemToEnd.itemId));
+      setTotalEntries((n) => Math.max(0, n - 1));
+      setCounts((c) => ({ ...c, active: Math.max(0, (c.active || 1) - 1), inactive: (c.inactive || 0) + 1 }));
+      setItemToEnd(null);
+      if (result.warnings.length) setError(`Ended, but eBay noted: ${result.warnings.join(" ")}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't end this listing. Try again.");
+    } finally {
+      setEndingItem(false);
     }
   }
 
@@ -528,6 +561,11 @@ export default function AccountListingsPage() {
           <span className="flex-1">{error}</span>
         </div>
       )}
+      {endedItemId && (
+        <div className="notice notice-success mb-4">
+          <span className="flex-1">Listing #{endedItemId} has been ended on eBay. It now sits under Inactive.</span>
+        </div>
+      )}
       {updatedItemId && !updateWarning && (
         <div className="notice notice-success mb-4">
           <span className="flex-1">Listing #{updatedItemId} has been updated on eBay. It can take a minute to show here.</span>
@@ -576,6 +614,7 @@ export default function AccountListingsPage() {
                 editing={editingItemId === item.itemId}
                 onEdit={() => openLiveEdit(item.itemId)}
                 onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
+                onEnd={filter === "active" ? () => setItemToEnd(item) : undefined}
               />
             ))}
           </ul>
@@ -591,6 +630,16 @@ export default function AccountListingsPage() {
         loading={deletingItem}
         onCancel={() => setItemToDelete(null)}
         onConfirm={handleDeleteItem}
+      />
+      <ConfirmDialog
+        open={itemToEnd !== null}
+        title="End this listing on eBay?"
+        description={`"${itemToEnd?.title || ""}" comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it; you can relist it from eBay later.`}
+        confirmLabel="End listing"
+        danger
+        loading={endingItem}
+        onCancel={() => setItemToEnd(null)}
+        onConfirm={handleEndItem}
       />
       <ConfirmDialog
         open={draftToDelete !== null}

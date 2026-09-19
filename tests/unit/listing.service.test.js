@@ -926,3 +926,18 @@ test('updateDraft refuses to rename an axis to a name eBay does not allow as a v
   mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [{ name: 'Colour', variation: true }, { name: 'Pack Size', variation: false }]);
   await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Unit Quantity', to: 'Pack Size' }] }), /accepts: Colour/);
 });
+
+// --- ending a live listing ----------------------------------------------------
+
+test('endLiveListing ends the item on eBay and drops any working copy opened to edit it', async () => {
+  const end = mock.method(ebayService, 'endLiveListing', async (credentials, connectionId, itemId) => ({ itemId, endTime: '2026-09-19T01:00:00.000Z', warnings: [] }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(listingRepository, 'findLiveEdit', async () => ({ id: 'copy-1' }));
+  const del = mock.method(listingRepository, 'deleteById', async () => {});
+
+  const result = await listingService.endLiveListing(CONNECTION_ID, USER_ID, '407000000009');
+
+  assert.deepStrictEqual(end.mock.calls[0].arguments.slice(1), [CONNECTION_ID, '407000000009']);
+  assert.deepStrictEqual(del.mock.calls[0].arguments, ['copy-1']);
+  assert.deepStrictEqual(result, { itemId: '407000000009', endTime: '2026-09-19T01:00:00.000Z', warnings: [] });
+});

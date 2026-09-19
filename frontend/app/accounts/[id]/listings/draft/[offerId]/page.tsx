@@ -1556,6 +1556,8 @@ export default function DraftEditorPage() {
   const [published, setPublished] = useState<DraftListing | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [ending, setEnding] = useState(false);
 
   const [aiScope, setAiScope] = useState<"text" | "image">("text");
   const [aiBusy, setAiBusy] = useState(false);
@@ -1942,6 +1944,21 @@ export default function DraftEditorPage() {
       setError(err instanceof ApiError ? err.message : "Couldn't publish this listing. Try again.");
     } finally {
       setPublishing(false);
+    }
+  }
+
+  // Ends the live listing this working copy edits; the copy goes with it.
+  async function handleEndListing() {
+    if (!listing?.edit_of_item_id) return;
+    setEnding(true);
+    setError(null);
+    try {
+      await api.endLiveListing(params.id, listing.edit_of_item_id);
+      router.push(`/accounts/${params.id}/listings?filter=inactive&ended=${listing.edit_of_item_id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't end this listing. Try again.");
+      setEnding(false);
+      setConfirmEnd(false);
     }
   }
 
@@ -2749,10 +2766,21 @@ export default function DraftEditorPage() {
       {editable && (
         <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
-            <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
-              {Icon.trash}
-              <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
+                {Icon.trash}
+                <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
+              </button>
+              {isLiveEdit && (
+                <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now">
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M8 12h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  <span>{ending ? "Ending…" : "End listing"}</span>
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-3">
               {isLiveEdit ? (
                 <>
@@ -2827,6 +2855,16 @@ export default function DraftEditorPage() {
         loading={publishing}
         onCancel={() => setConfirmPublish(false)}
         onConfirm={handlePublish}
+      />
+      <ConfirmDialog
+        open={confirmEnd}
+        title="End this listing on eBay?"
+        description="It comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it, and the changes you were making here are dropped. You can relist it from eBay later."
+        confirmLabel="End listing"
+        danger
+        loading={ending}
+        onCancel={() => setConfirmEnd(false)}
+        onConfirm={handleEndListing}
       />
       <ConfirmDialog
         open={confirmDelete}

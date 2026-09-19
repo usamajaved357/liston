@@ -581,3 +581,24 @@ test('bestSellingListings gives each listing its own mix of the top sellers, sta
   // Only top sellers ever appear: the pool is the best 24 of 30.
   for (const name of [...a1, ...b]) assert.ok(Number(name.replace('Item ', '')) < 24, name);
 });
+
+test('an ended listing moves from the Active copy to the Inactive one at once', async () => {
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  mock.method(ebayTrading, 'getActiveListings', async () => ({ items: [{ itemId: '1', title: 'a', quantity: 2, quantityAvailable: 2 }, { itemId: '2', title: 'b', quantity: 1, quantityAvailable: 1 }], totalEntries: 2, totalPages: 1 }));
+  mock.method(ebayTrading, 'getUnsoldListings', async () => ({ items: [], totalEntries: 0, totalPages: 1 }));
+  const endCall = mock.method(ebayTrading, 'endListing', async (token, itemId) => ({ itemId, endTime: 'now', warnings: [] }));
+
+  const connectionId = 'test-conn-end';
+  await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+  await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'inactive' });
+  await ebayService.countActiveListings(freshCredentials(), connectionId);
+
+  await ebayService.endLiveListing(freshCredentials(), connectionId, '1');
+  assert.strictEqual(endCall.mock.calls.length, 1);
+  const active = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active' });
+  const inactive = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'inactive' });
+  assert.deepStrictEqual(active.items.map((i) => i.itemId), ['2']);
+  assert.deepStrictEqual(inactive.items.map((i) => i.itemId), ['1']);
+  assert.strictEqual((await ebayService.countActiveListings(freshCredentials(), connectionId)).totalEntries, 1);
+});

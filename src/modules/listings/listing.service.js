@@ -1068,6 +1068,17 @@ async function publishLiveEdit(listing, userId) {
   return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, warnings: revised.warnings || [] };
 }
 
+// Ends a live listing on eBay now. A working copy opened for editing it is
+// dropped — there is nothing left to publish changes to.
+async function endLiveListing(connectionId, userId, itemId) {
+  const result = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.endLiveListing(credentials, connectionId, itemId)
+  );
+  const workingCopy = await listingRepository.findLiveEdit(connectionId, userId, itemId);
+  if (workingCopy) await listingRepository.deleteById(workingCopy.id);
+  return { itemId: String(itemId), endTime: result.endTime, warnings: result.warnings || [] };
+}
+
 // Removes an ended listing for good: eBay's own Inventory objects if Liston
 // created them, every Liston record of it, and it's hidden from the Inactive
 // tab from now on. eBay has no API for clearing its own Unsold list, so the
@@ -1286,5 +1297,6 @@ module.exports = {
   publish,
   startLiveEdit,
   removeInactiveListing,
+  endLiveListing,
   htmlToText,
 };

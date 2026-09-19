@@ -285,6 +285,13 @@ async function getStoreProfile(accessToken, { siteId } = {}) {
 // Replaces the description of a LIVE listing. Republishing an inventory
 // item group doesn't revise the description of an already-live listing
 // (confirmed live), so a description change has to go through Trading's
+// Ends a live listing now. EndItem covers every listing type; the reason is
+// what eBay shows the seller in their own history.
+async function endListing(accessToken, itemId, { siteId, reason = 'NotAvailable' } = {}) {
+  const res = await tradingRequest(accessToken, 'EndItem', `<ItemID>${xmlEscape(String(itemId))}</ItemID><EndingReason>${reason}</EndingReason>`, siteId);
+  return { itemId: String(itemId), endTime: res.EndTime ? String(res.EndTime) : null, warnings: res._warnings || [] };
+}
+
 // ReviseFixedPriceItem. Also the only way to repair a listing that went up
 // with the plain text.
 async function reviseDescription(accessToken, itemId, descriptionHtml, { siteId } = {}) {
@@ -498,5 +505,6 @@ module.exports = {
   getItem,
   getStoreProfile,
   reviseDescription,
+  endListing,
   reviseListing,
 };

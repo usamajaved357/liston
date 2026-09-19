@@ -920,6 +920,32 @@ function invalidateListings(connectionId) {
 }
 
 // An ended item the seller removed for good: gone from the copy at once.
+// The seller ended a listing: it leaves the Active copy and joins the
+// Inactive one straight away (eBay's own lists follow within minutes; the
+// stale marks make the next look confirm).
+function moveListingToInactive(connectionId, itemId) {
+  const id = String(connectionId);
+  let ended = null;
+  listingsCache.patch(listingsKey(id, 'active'), (items) => {
+    ended = items.find((item) => item.itemId === String(itemId)) || null;
+    return items.filter((item) => item.itemId !== String(itemId));
+  });
+  if (ended) {
+    listingsCache.patch(listingsKey(id, 'inactive'), (items) => [{ ...ended, endTime: new Date().toISOString() }, ...items.filter((item) => item.itemId !== String(itemId))]);
+    activeCountCache.patch(id, (count) => Math.max(0, count - 1));
+  }
+  listingsCache.markStale(listingsKey(id, 'active'));
+  listingsCache.markStale(listingsKey(id, 'inactive'));
+  activeCountCache.markStale(id);
+}
+
+async function endLiveListing(credentials, connectionId, itemId) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.endListing(accessToken, itemId, { siteId });
+  moveListingToInactive(connectionId, itemId);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
 function removeListingFromMirror(connectionId, itemId) {
   listingsCache.patch(listingsKey(connectionId, 'inactive'), (items) => items.filter((item) => item.itemId !== String(itemId)));
 }
@@ -1255,6 +1281,7 @@ module.exports = {
   listListingsDetailed,
   invalidateListings,
   removeListingFromMirror,
+  endLiveListing,
   refreshAccount,
   markAccountStale,
   syncAccount,
