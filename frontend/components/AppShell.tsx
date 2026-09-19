@@ -110,7 +110,7 @@ export function AppShell({ children, header, role, isAdmin }: AppShellProps) {
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">
         {header && (
-          <div className="flex-shrink-0 px-10 pt-8 pb-6 bg-[var(--color-paper)]">{header}</div>
+          <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">{header}</div>
         )}
         <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>{children}</div>
       </div>

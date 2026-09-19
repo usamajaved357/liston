@@ -201,18 +201,20 @@ export default function DashboardPage() {
       role={user.role}
       isAdmin={user.is_admin}
       header={
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">Overview</h1>
             <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Across all your connected accounts.</p>
           </div>
-          <AccountMenu
-            email={user.email}
-            subtitle={`${planName} plan`}
-            avatarUrl={user.avatar_url}
-            onLogout={() => setConfirmAction("logout")}
-            onDeleteAccount={() => setConfirmAction("delete")}
-          />
+          <div className="page-header-controls">
+            <AccountMenu
+              email={user.email}
+              subtitle={`${planName} plan`}
+              avatarUrl={user.avatar_url}
+              onLogout={() => setConfirmAction("logout")}
+              onDeleteAccount={() => setConfirmAction("delete")}
+            />
+          </div>
         </div>
       }
     >

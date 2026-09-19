@@ -201,20 +201,24 @@ export function AccountShell({
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">
         {header && (
-          <div className="flex-shrink-0 bg-[var(--color-paper)] px-10 pt-8 pb-6">
-          <div className="flex items-center gap-3">
+          <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
+          {/* Title and controls both sit on the sidebar's logo line (see
+              .page-header); the subtitle hangs below the title. */}
+          <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">{header}</div>
-            {actions}
-            {/* Owners came from the main dashboard; members have no dashboard,
-                their way out is the sidebar footer. */}
-            {permissions === undefined && (
-              <Link href="/dashboard" className="btn btn-sm flex-shrink-0 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                Dashboard
-              </Link>
-            )}
+            <div className="page-header-controls">
+              {actions}
+              {/* Owners came from the main dashboard; members have no dashboard,
+                  their way out is the sidebar footer. */}
+              {permissions === undefined && (
+                <Link href="/dashboard" className="btn btn-sm flex-shrink-0 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                    <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Dashboard
+                </Link>
+              )}
+            </div>
           </div>
           {subheader && <div className="mt-5">{subheader}</div>}
           </div>

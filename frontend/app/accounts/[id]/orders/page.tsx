@@ -366,7 +366,14 @@ function AccountOrdersContent() {
       status={connection.status}
       permissions={connection.permissions}
       user={user}
-      header={<h1 className="text-xl font-extrabold text-[var(--color-ink)]">Orders</h1>}
+      header={
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Orders</h1>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+            {connection.label} · {connection.platform_name}
+          </p>
+        </div>
+      }
     >
       {/* Status tabs */}
       <div className="flex flex-wrap items-center gap-1.5 mb-4 border-b border-[var(--color-line)] pb-3">
