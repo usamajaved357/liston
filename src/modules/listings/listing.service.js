@@ -1255,6 +1255,17 @@ async function publishNow(listing, id, userId) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way
     // through. The draft stays `pending_review` so it's still editable and
     // retryable, with eBay's own reason recorded against it.
+    // What was actually sent alongside eBay's reason: "Part Type is
+    // missing" reads very differently when the log shows it was there.
+    logger.warn('Draft publish failed', {
+      listingId: id,
+      categoryId: draft.categoryId,
+      message: err.message,
+      ebayErrors: err.details,
+      sharedAspects: Object.keys((Array.isArray(readyDraft.variants) && readyDraft.variants.length ? readyDraft.variesBy?.aspects : readyDraft.aspects) || {}),
+      axes: (readyDraft.variesBy?.specifications || []).map((s) => `${s.name}(${s.values.length})`),
+      variants: Array.isArray(readyDraft.variants) ? readyDraft.variants.length : 0,
+    });
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
     throw err;
   }

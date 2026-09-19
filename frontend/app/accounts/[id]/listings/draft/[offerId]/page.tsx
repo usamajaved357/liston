@@ -1788,22 +1788,69 @@ export default function DraftEditorPage() {
     }
   }
 
+  // Edits save themselves. Text is saved a moment after typing stops; row
+  // and option changes go with it. On success only the RELATIVE edits
+  // (removals, renames, per-row overrides — all indexed against the draft
+  // as it was) are cleared, since the server has applied them; anything
+  // typed while the request was in flight stays and goes in the next save.
   async function handleSave() {
-    if (!listing) return;
+    if (!listing) return false;
+    const patch = buildPatch();
+    const signature = JSON.stringify(patch);
     setSaving(true);
     setError(null);
     try {
-      const data = await api.updateDraftListing(listing.id, buildPatch());
+      const data = await api.updateDraftListing(listing.id, patch);
       setListing(data.listing);
       setImageCheck(data.imageCheck);
-      resetFrom(data.listing);
+      setRemovedRows(new Set());
+      setRemovedAxisValues([]);
+      setValueRenames({});
+      setAxisRenames({});
+      setAddedValues([]);
+      setPriceOverrides({});
+      setQuantityOverrides({});
+      setImageOverrides({});
       previewOutdated(data.listing.id);
+      failedSaveRef.current = null;
+      return true;
     } catch (err) {
+      failedSaveRef.current = signature;
       setError(err instanceof ApiError ? err.message : "Couldn't save your changes. Try again.");
+      return false;
     } finally {
       setSaving(false);
     }
   }
+
+  // What would be saved right now — the trigger for the autosave below.
+  const patchSignature = editable && !isLiveEdit && dirty ? JSON.stringify(buildPatch()) : "";
+  const failedSaveRef = useRef<string | null>(null);
+  const handleSaveRef = useRef(handleSave);
+  handleSaveRef.current = handleSave;
+  // Other server round-trips (a category refit, a split, a publish) save the
+  // pending edits themselves and then reset from the result; an autosave
+  // landing in the middle of one would race it.
+  const otherRequestBusy = publishing || deleting || refitting || applyingFix || splitting !== null;
+  useEffect(() => {
+    if (!patchSignature || saving || otherRequestBusy) return;
+    // A save eBay's rules rejected (a clashing option name, say) is not
+    // retried until the seller changes something.
+    if (failedSaveRef.current === patchSignature) return;
+    if (title.length > TITLE_MAX) return;
+    const timer = window.setTimeout(() => void handleSaveRef.current(), 900);
+    return () => window.clearTimeout(timer);
+  }, [patchSignature, saving, otherRequestBusy, title.length]);
+
+  // Leaving with a save still pending would lose it.
+  useEffect(() => {
+    if (!patchSignature && !saving) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [patchSignature, saving]);
 
   async function handlePublish() {
     if (!listing) return;
@@ -1811,8 +1858,8 @@ export default function DraftEditorPage() {
     setPublishing(true);
     setError(null);
     try {
-      // Editing a live listing is one step: unsaved changes go up with it.
-      if (isLiveEdit && dirty) {
+      // Whatever hasn't been saved yet goes up with the publish.
+      if (dirty) {
         const saved = await api.updateDraftListing(listing.id, buildPatch());
         setListing(saved.listing);
         resetFrom(saved.listing);
@@ -2147,7 +2194,7 @@ export default function DraftEditorPage() {
   }
 
   const busy = saving || publishing || deleting || aiBusy || refitting || splitting !== null || applyingFix;
-  const canPublish = editable && !dirty && !busy;
+  const canPublish = editable && !busy && title.length <= TITLE_MAX;
   const conditionLabel = CONDITIONS.find((c) => c.value === condition)?.label || condition;
   const notes = content.warnings || [];
 
@@ -2182,23 +2229,9 @@ export default function DraftEditorPage() {
               Live · #{listing.edit_of_item_id}
             </span>
           ) : editable ? (
-            <>
-              <span className="mr-1 hidden text-xs text-[var(--color-muted)] md:inline">{dirty ? "Unsaved changes" : "All changes saved"}</span>
-              {dirty && (
-                <button type="button" onClick={() => resetFrom(listing)} disabled={busy} className="btn btn-ghost btn-sm">
-                  Discard
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={!dirty || busy || title.length > TITLE_MAX}
-                title={title.length > TITLE_MAX ? "Shorten the title first" : undefined}
-                className="btn btn-primary btn-sm"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </>
+            <span className="chip text-xs font-medium text-[var(--color-muted)]" aria-live="polite">
+              {saving ? "Saving…" : title.length > TITLE_MAX ? "Shorten the title to save" : dirty ? "Saving soon…" : "All changes saved"}
+            </span>
           ) : null
         }
       />
@@ -2672,12 +2705,11 @@ export default function DraftEditorPage() {
                 </>
               ) : (
                 <>
-                  {dirty && <span className="text-xs text-[var(--color-muted)]">Save your changes to publish</span>}
                   <button
                     type="button"
                     onClick={() => setConfirmPublish(true)}
                     disabled={!canPublish}
-                    title={dirty ? "Save your changes first" : undefined}
+                    title={title.length > TITLE_MAX ? "Shorten the title first" : undefined}
                     className="btn btn-primary"
                   >
                     {publishing ? "Publishing…" : "Publish to eBay"}

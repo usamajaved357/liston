@@ -1,4 +1,5 @@
 const { apiBaseUrl } = require('./ebay.oauth');
+const logger = require('../../utils/logger');
 
 class EbayApiError extends Error {
   constructor(message, statusCode, details) {
@@ -76,10 +77,34 @@ async function request(accessToken, method, path, body, marketplaceId) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const message = data.errors?.[0]?.message || `eBay API request failed (${res.status})`;
-    throw new EbayApiError(message, 502, data.errors);
+    // Everything eBay said, in the log: the error id, the long message and
+    // the parameters that name the offending field. eBay's short message
+    // alone ("The item cannot be listed or modified…") is often too generic
+    // to act on.
+    logger.warn('eBay API error', {
+      method,
+      path,
+      status: res.status,
+      errors: (data.errors || []).map((e) => ({ errorId: e.errorId, message: e.message, longMessage: e.longMessage, parameters: e.parameters })),
+    });
+    throw new EbayApiError(describeErrors(data.errors, res.status), 502, data.errors);
   }
   return data;
+}
+
+// One readable line from eBay's errors: the first error's message, its
+// parameters when they name the field concerned, and the other errors'
+// messages when there are several.
+function describeErrors(errors, status) {
+  if (!errors?.length) return `eBay API request failed (${status})`;
+  const [first, ...rest] = errors;
+  const params = (first.parameters || [])
+    .filter((p) => p && p.value !== undefined && p.value !== null && String(p.value).trim())
+    .map((p) => (p.name ? `${p.name}: ${p.value}` : String(p.value)));
+  const parts = [first.message || first.longMessage || 'eBay rejected the request'];
+  if (params.length) parts.push(`(${params.join(', ')})`);
+  for (const error of rest) if (error.message && error.message !== first.message) parts.push(error.message);
+  return parts.join(' ');
 }
 
 // SKU is the seller's own identifier — inventory items are created/replaced

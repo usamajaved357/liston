@@ -104,3 +104,21 @@ test('publishOfferByInventoryItemGroup sends the matching marketplace locale', a
   const result = await ebayClient.publishOfferByInventoryItemGroup('tok-1', 'group-1', 'EBAY_DE');
   assert.strictEqual(result.listingId, 'l1');
 });
+
+test('an eBay error carries its parameters and any further errors in the message', async (t) => {
+  mock.method(global, 'fetch', async () => ({
+    ok: false,
+    status: 400,
+    json: async () => ({
+      errors: [
+        { errorId: 25002, message: 'Cannot revise listing. The item cannot be listed or modified.', parameters: [{ name: 'field', value: 'description' }] },
+        { errorId: 25003, message: 'Something else was wrong too.' },
+      ],
+    }),
+  }));
+  await assert.rejects(() => ebayClient.publishOfferByInventoryItemGroup('tok', 'grp', 'EBAY_GB'), (err) => {
+    assert.strictEqual(err.message, 'Cannot revise listing. The item cannot be listed or modified. (field: description) Something else was wrong too.');
+    assert.strictEqual(err.details.length, 2);
+    return true;
+  });
+});
