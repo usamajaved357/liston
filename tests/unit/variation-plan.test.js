@@ -42,8 +42,14 @@ test('with no competitor and no allowed list, the supplier’s names stand', () 
   assert.deepStrictEqual(plan.warnings, []);
 });
 
-test('nothing fits: the name is kept and the gap is reported for the editor to resolve', () => {
+test('a name eBay does not list is kept as the seller’s own attribute, with a note', () => {
   const plan = planVariationAxes({ source, competitor: null, allowedAxes: ['View Angle', 'MPN'] });
+  assert.deepStrictEqual(plan.axes.map((a) => [a.ebayName, a.via]), [['Cable Length', 'custom']]);
+  assert.match(plan.warnings[0], /isn't one of the attributes eBay suggests/);
+});
+
+test('an item specific eBay refuses to vary by is kept and the gap is reported for the editor to resolve', () => {
+  const plan = planVariationAxes({ source, competitor: null, allowedAxes: ['View Angle', 'MPN'], blockedAxes: ['Cable Length', 'Unit Quantity'] });
   assert.deepStrictEqual(plan.axes.map((a) => [a.ebayName, a.via]), [['Cable Length', 'unresolved']]);
   assert.match(plan.warnings[0], /doesn't allow "Cable Length"/);
 });
@@ -60,7 +66,7 @@ test('two axes never resolve to the same eBay name, and the seller’s selection
       { attributes: { Color: 'Red', Shade: 'Matte' } },
     ],
   };
-  const plan = planVariationAxes({ source: src, competitor: null, allowedAxes: ['Colour', 'Finish'] });
+  const plan = planVariationAxes({ source: src, competitor: null, allowedAxes: ['Colour', 'Finish'], blockedAxes: ['Shade'] });
   assert.deepStrictEqual(plan.axes.map((a) => [a.name, a.ebayName, a.via]), [['Color', 'Colour', 'synonym'], ['Shade', 'Shade', 'unresolved']]);
 
   // After the seller keeps only Black, Color has one option left: fixed.

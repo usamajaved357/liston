@@ -312,17 +312,43 @@ function asArray(value, innerKey) {
 function decodeSkuOptions(sku) {
   const properties = asArray(sku.ae_sku_property_dtos, 'ae_sku_property_d_t_o');
   const attributes = {};
+  const rawValues = {};
   let imageUrl = null;
 
   for (const property of properties) {
     if (!property || typeof property !== 'object') continue;
     const name = property.sku_property_name;
     const value = property.property_value_definition_name || property.sku_property_value;
-    if (name) attributes[String(name)] = value == null ? '' : String(value);
+    if (name) {
+      attributes[String(name)] = value == null ? '' : String(value);
+      const raw = property.sku_property_value;
+      if (raw != null && String(raw) !== String(value ?? '')) rawValues[String(name)] = String(raw);
+    }
     if (!imageUrl && property.sku_image) imageUrl = String(property.sku_image);
   }
 
-  return { attributes, imageUrl };
+  return { attributes, imageUrl, rawValues };
+}
+
+// Two SKUs shown under the same label ("Camo Brown" for both a 25lb and a
+// 35lb spool, one property id each) would be one variation to eBay, which
+// rejects the group. Where the raw property value tells them apart, the
+// label is replaced by it; a collision that can't be resolved is left for
+// the drafting step to drop.
+function separateColliding(entries) {
+  const key = (attributes) =>
+    Object.entries(attributes)
+      .map(([n, v]) => `${n.toLowerCase()}=${v.trim().replace(/\s+/g, ' ').toLowerCase()}`)
+      .sort()
+      .join('|');
+  const counts = new Map();
+  for (const entry of entries) counts.set(key(entry.attributes), (counts.get(key(entry.attributes)) || 0) + 1);
+  return entries.map((entry) => {
+    if ((counts.get(key(entry.attributes)) || 0) < 2) return entry;
+    const attributes = { ...entry.attributes };
+    for (const [name, raw] of Object.entries(entry.rawValues || {})) attributes[name] = raw;
+    return { ...entry, attributes };
+  });
 }
 
 function normalizeProduct(raw, productId, sourceUrl) {
@@ -356,7 +382,7 @@ function normalizeProduct(raw, productId, sourceUrl) {
     if (name) specifics[String(name)] = value == null ? '' : String(value);
   }
 
-  const variants = [];
+  const decoded = [];
   let priceText = null;
   for (const sku of asArray(body.ae_item_sku_info_dtos, 'ae_item_sku_info_d_t_o')) {
     if (!sku || typeof sku !== 'object') continue;
@@ -364,11 +390,12 @@ function normalizeProduct(raw, productId, sourceUrl) {
     // The product's base currency_code is CNY, but each SKU carries the
     // currency actually requested — so price must come from the SKU.
     const currency = sku.currency_code || '';
-    const { attributes, imageUrl } = decodeSkuOptions(sku);
+    const { attributes, imageUrl, rawValues } = decodeSkuOptions(sku);
 
-    variants.push({ attributes, imageUrl, priceText: amount ? `${currency} ${amount}`.trim() : null });
+    decoded.push({ attributes, rawValues, imageUrl, priceText: amount ? `${currency} ${amount}`.trim() : null });
     if (!priceText && amount) priceText = `${currency} ${amount}`.trim();
   }
+  const variants = separateColliding(decoded).map(({ rawValues, ...variant }) => variant);
 
   // The product page's gallery is the main photos PLUS each option's own
   // photo — the API keeps those on the SKUs. A glasses listing showed 8 on

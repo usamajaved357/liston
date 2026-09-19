@@ -348,6 +348,9 @@ export interface DraftCategoryInfo {
   aspects: AspectSchemaEntry[];
   // Attribute names eBay accepts as variations in this category; null when unknown.
   variationAspects?: string[] | null;
+  // Item specifics of this category eBay does NOT let a listing vary by
+  // ("Unit Quantity"); any other name, including the seller's own, is accepted.
+  blockedVariationAspects?: string[] | null;
 }
 
 export interface StoreCategory {

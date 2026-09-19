@@ -108,6 +108,21 @@ test('requestToken throws with eBay error_description when the request fails', a
   });
 });
 
+test('a refresh token from another app keyset is named as such, with the way out', async (t) => {
+  await withEbayConfig({ clientId: 'cid', clientSecret: 'csecret', ruName: 'ru' }, async () => {
+    mock.method(global, 'fetch', async () => ({
+      ok: false,
+      json: async () => ({ error: 'invalid_client', error_description: 'client authentication failed' }),
+    }));
+
+    await assert.rejects(() => ebayOauth.refreshAccessToken('rt'), (err) => {
+      assert.match(err.message, /different eBay app key.*Reconnect/);
+      assert.strictEqual(err.statusCode, 401);
+      return true;
+    });
+  });
+});
+
 test.after(() => {
   mock.restoreAll();
 });

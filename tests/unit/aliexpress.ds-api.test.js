@@ -200,3 +200,30 @@ test('deriveVariantAxes gives the photo to the axis it actually follows', () => 
   assert.strictEqual(axes.find((a) => a.name === 'Color').hasImages, true);
   assert.strictEqual(axes.find((a) => a.name === 'Prescription').hasImages, false);
 });
+
+test('normalizeProduct keeps two SKUs shown under the same label apart by their raw property value', () => {
+  const sku = (id, label, raw) => ({
+    sku_id: id,
+    offer_sale_price: '8.99',
+    currency_code: 'GBP',
+    ae_sku_property_dtos: {
+      ae_sku_property_d_t_o: [{ sku_property_name: 'Color', property_value_definition_name: label, sku_property_value: raw }],
+    },
+  });
+  const raw = {
+    aliexpress_ds_product_get_response: {
+      rsp_code: 200,
+      result: {
+        ae_item_base_info_dto: { subject: 'Braid', currency_code: 'CNY' },
+        ae_multimedia_info_dto: { image_urls: 'https://a.jpg' },
+        ae_item_sku_info_dtos: { ae_item_sku_info_d_t_o: [sku('1', 'Camo Brown', 'Camo Brown 25LB'), sku('2', 'Camo Brown', 'Camo Brown 35LB'), sku('3', 'Green', 'Green')] },
+      },
+    },
+  };
+
+  const result = dsApi.normalizeProduct(raw, '1', 'https://aliexpress.com/item/1.html');
+  assert.deepStrictEqual(
+    result.variants.map((v) => v.attributes.Color),
+    ['Camo Brown 25LB', 'Camo Brown 35LB', 'Green']
+  );
+});

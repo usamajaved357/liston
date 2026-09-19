@@ -73,6 +73,22 @@ function basicAuthHeader() {
   return `Basic ${Buffer.from(raw).toString('base64')}`;
 }
 
+// eBay's own wording for a failed token request is terse ("client
+// authentication failed") and points nowhere. The two cases a seller can
+// actually act on are named: a refresh token that belongs to a different app
+// keyset than the one this server runs with (an account authorised on one
+// environment and moved to another), and one eBay no longer honours
+// (revoked, or past its 18 months). Both are fixed by reconnecting.
+function describeTokenError(data) {
+  if (data.error === 'invalid_client') {
+    return "eBay didn't accept this server's app key for the account's token — the account was authorised under a different eBay app key. Reconnect the account from Connections.";
+  }
+  if (data.error === 'invalid_grant') {
+    return `eBay no longer accepts this account's authorisation${data.error_description ? ` (${data.error_description})` : ''}. Reconnect the account from Connections.`;
+  }
+  return data.error_description || 'eBay rejected the token request';
+}
+
 async function requestToken(body) {
   assertAppCredentials();
   const res = await fetch(`${apiBaseUrl()}/identity/v1/oauth2/token`, {
@@ -86,8 +102,9 @@ async function requestToken(body) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(data.error_description || 'eBay rejected the token request');
-    err.statusCode = 502;
+    const err = new Error(describeTokenError(data));
+    err.statusCode = data.error === 'invalid_client' || data.error === 'invalid_grant' ? 401 : 502;
+    err.ebayError = data.error;
     throw err;
   }
   return data;

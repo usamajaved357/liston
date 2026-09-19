@@ -435,7 +435,9 @@ function InlineName({
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {
           setEditing(false);
-          if (draft.trim() && draft.trim() !== value) onChange(draft.trim());
+          const next = draft.trim();
+          if (next && next !== value) onChange(next);
+          else setDraft(value);
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
@@ -557,6 +559,7 @@ function VariationsTable({
   onAddValue,
   onUndoAddValue,
   allowedAxes,
+  blockedAxes,
   fixes,
   onApplyFix,
   applyingFix,
@@ -565,6 +568,9 @@ function VariationsTable({
   variants: VariationDraftVariant[];
   // Attribute names eBay accepts as variations in this category; null if unknown.
   allowedAxes: string[] | null;
+  // Item specifics of the category eBay does NOT let a listing vary by; any
+  // other name (listed or the seller's own) is accepted. Null if unknown.
+  blockedAxes: string[] | null;
   fixes: VariationFixes | null;
   onApplyFix?: (fix: VariationFixes["categories"][number]) => void;
   applyingFix: boolean;
@@ -606,7 +612,8 @@ function VariationsTable({
   const [adding, setAdding] = useState<{ axis: string; value: string } | null>(null);
   // Names as the seller has renamed them (unsaved), falling back to the draft's.
   const showAxis = (axis: string) => axisRenames[axis] || axis;
-  const axisAllowed = (axis: string) => !allowedAxes || !allowedAxes.length || allowedAxes.some((a) => a.toLowerCase() === showAxis(axis).toLowerCase());
+  const axisAllowed = (axis: string) => !blockedAxes || !blockedAxes.some((a) => a.toLowerCase() === showAxis(axis).toLowerCase());
+  const [ownName, setOwnName] = useState("");
   const disallowedAxes = specifications.map((s) => s.name).filter((axis) => !axisAllowed(axis));
   // Listing options one by one is a way OUT of a category that refuses this
   // variation (or variations at all); offered only then, with the warning
@@ -680,7 +687,7 @@ function VariationsTable({
                 eBay won&apos;t accept &ldquo;{disallowedAxes.map(showAxis).join("”, “")}&rdquo; as the thing buyers choose in this category
               </p>
               <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">
-                Each eBay category has its own list of attributes a listing may vary by. Pick one of the ways out below; publishing is blocked until then.
+                In this category that&apos;s a fixed item specific, not something a listing may vary by. Pick one of the ways out below; publishing is blocked until then.
               </p>
             </div>
           </div>
@@ -715,7 +722,7 @@ function VariationsTable({
             </div>
             <div>
               <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Rename the attribute</p>
-              <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">Keep the category; call the options one of these instead:</p>
+              <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">Keep the category; call the options one of the names eBay suggests here:</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {(allowedAxes || []).map((name) => (
                   <button
@@ -729,6 +736,32 @@ function VariationsTable({
                   </button>
                 ))}
               </div>
+              <p className="mt-2.5 text-[12.5px] text-[var(--color-muted)]">…or a name of your own (eBay allows it):</p>
+              <form
+                className="mt-1.5 flex items-center gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const name = ownName.trim();
+                  if (!name || !axisAllowed(name)) return;
+                  disallowedAxes.forEach((axis) => onRenameAxis(axis, name));
+                  setOwnName("");
+                }}
+              >
+                <input
+                  className="h-8 min-w-0 flex-1 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3 text-[12.5px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-primary)] focus:outline-none"
+                  placeholder="e.g. Breaking Strain"
+                  value={ownName}
+                  maxLength={65}
+                  disabled={disabled}
+                  onChange={(e) => setOwnName(e.target.value)}
+                />
+                <button type="submit" disabled={disabled || !ownName.trim() || !axisAllowed(ownName.trim())} className="btn btn-primary btn-sm !h-8">
+                  Use it
+                </button>
+              </form>
+              {ownName.trim() && !axisAllowed(ownName.trim()) && (
+                <p className="mt-1 text-[11.5px] text-[var(--color-danger)]">eBay doesn&apos;t let listings vary by &ldquo;{ownName.trim()}&rdquo; in this category either.</p>
+              )}
             </div>
             <div>
               <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">List separately</p>
@@ -1693,8 +1726,8 @@ export default function DraftEditorPage() {
   // the ways out (categories to switch to, names accepted here).
   const needsFixes = Boolean(
     variation &&
-      categoryInfo?.variationAspects?.length &&
-      variation.variesBy.specifications.some((spec) => !categoryInfo.variationAspects!.some((a) => a.toLowerCase() === spec.name.toLowerCase()))
+      categoryInfo?.blockedVariationAspects?.length &&
+      variation.variesBy.specifications.some((spec) => categoryInfo.blockedVariationAspects!.some((a) => a.toLowerCase() === spec.name.toLowerCase()))
   );
   const fixesFor = useRef<string | null>(null);
   useEffect(() => {
@@ -2585,6 +2618,7 @@ export default function DraftEditorPage() {
                   onAddValue={(axis, value, copyFrom) => setAddedValues((list) => [...list, { axis, value, copyFrom }])}
                   onUndoAddValue={(axis, value) => setAddedValues((list) => list.filter((a) => !(a.axis === axis && a.value === value)))}
                   allowedAxes={categoryInfo?.variationAspects ?? null}
+                  blockedAxes={categoryInfo?.blockedVariationAspects ?? null}
                   fixes={fixes}
                   onApplyFix={editable ? handleApplyFix : undefined}
                   applyingFix={applyingFix}

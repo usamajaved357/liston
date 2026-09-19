@@ -382,9 +382,9 @@ export default function DashboardPage() {
                 <thead className="bg-[var(--color-paper)] text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                   <tr>
                     <th className="px-5 py-2">Account</th>
-                    <th className="px-5 py-2 text-right">Active listings</th>
-                    <th className="px-5 py-2 text-right">Orders</th>
-                    <th className="px-5 py-2 text-right">Earnings</th>
+                    <th className="w-40 px-3 py-2 text-center">Active listings</th>
+                    <th className="w-28 px-3 py-2 text-center">Orders</th>
+                    <th className="w-36 px-3 py-2 text-center">Earnings</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -396,9 +396,9 @@ export default function DashboardPage() {
                         </Link>
                         {!a.ok && <span className="ml-2 text-xs text-[var(--color-danger)]">unavailable</span>}
                       </td>
-                      <td className="px-5 py-2.5 text-right text-[var(--color-ink)]">{a.activeListings}</td>
-                      <td className="px-5 py-2.5 text-right text-[var(--color-ink)]">{a.orders}</td>
-                      <td className="px-5 py-2.5 text-right font-medium text-[var(--color-ink)]">{a.earnings ? formatPrice(a.earnings.amount, a.earnings.currency) : "—"}</td>
+                      <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{a.activeListings}</td>
+                      <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{a.orders}</td>
+                      <td className="px-3 py-2.5 text-center font-medium tabular-nums text-[var(--color-ink)]">{a.earnings ? formatPrice(a.earnings.amount, a.earnings.currency) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
