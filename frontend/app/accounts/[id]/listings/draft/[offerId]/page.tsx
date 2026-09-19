@@ -1956,6 +1956,15 @@ export default function DraftEditorPage() {
       setPublished(data.listing);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't publish this listing. Try again.");
+      // A failed publish can change the draft server-side (a renewed SKU,
+      // the recorded reason): show what's stored now.
+      try {
+        const detail = await api.getDraftListing(listing.id);
+        setListing(detail.listing);
+        resetFrom(detail.listing);
+      } catch {
+        /* the error above is what matters */
+      }
     } finally {
       setPublishing(false);
     }
