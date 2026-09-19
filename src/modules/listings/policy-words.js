@@ -12,6 +12,8 @@ const HAZMAT_TRIGGERS = [
   'glue', 'adhesive', 'epoxy', 'resin', 'acid', 'bleach', 'chemical', 'pesticide', 'poison', 'toxic', 'corrosive', 'radioactive',
   'asbestos', 'magnet', 'magnets', 'neodymium', 'airbag', 'ammunition', 'gunpowder', 'charcoal', 'alcohol', 'ethanol', 'nitro',
   'oxidiser', 'oxidizer', 'peroxide', 'ammonia', 'chlorine', 'dry ice', 'compressed', 'pressurised', 'pressurized',
+  'fluorocarbon', 'hydrofluorocarbon', 'refrigerant', 'r134a', 'r410a', 'freon', 'teflon', 'ptfe', 'lead core', 'sinker', 'sinkers',
+  'solder', 'flux', 'kerosene', 'paraffin', 'turpentine', 'acetone', 'nail polish', 'perfume', 'cologne', 'hairspray', 'deodorant',
 ];
 const HAZMAT_PATTERN = new RegExp(`\\b(${HAZMAT_TRIGGERS.map((w) => w.replace(/[-.]/g, '\\$&')).join('|')})\\b`, 'gi');
 

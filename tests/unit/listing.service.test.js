@@ -1111,6 +1111,9 @@ test('a Hazardous Materials block from eBay is explained with the words that lik
     err.details = [{ errorId: 25019, parameters: [{ name: '2', value: 'PI_HAZ_Hazardous_GeneralMessage' }] }];
     throw err;
   });
+  mock.method(ebayService, 'deleteInventoryObjects', async () => ({}));
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
   const status = mock.method(listingRepository, 'updateStatus', async (id, s, extra) => ({ id, status: s, ...extra }));
 
   await assert.rejects(() => listingService.publish('listing-1', USER_ID), (err) => {
@@ -1120,4 +1123,30 @@ test('a Hazardous Materials block from eBay is explained with the words that lik
     return true;
   });
   assert.match(status.mock.calls[0].arguments[2].errorMessage, /"lead" in the description/);
+});
+
+test('a policy block clears what the attempt created on eBay and renews the SKU', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({ marketplaceId: 'EBAY_GB', skuBase: 'AE1', sku: 'Liston-1-ABCD', title: 'Rig', description: 'Clean text.', aspects: {}, imageUrls: ['https://i.ebayimg.com/a.jpg'] })
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(ebayService, 'listListingsDetailed', async () => ({ items: [] }));
+  mock.method(ebayService, 'findLiveListingForSku', async () => ({ listingId: null }));
+  mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1', status: 'drafted' }));
+  mock.method(ebayService, 'publishDraft', async () => {
+    const err = new Error('Cannot revise listing. The item cannot be listed or modified.');
+    err.details = [{ errorId: 25019, parameters: [{ name: '2', value: 'PI_HAZ_Hazardous_GeneralMessage' }] }];
+    throw err;
+  });
+  const cleared = mock.method(ebayService, 'deleteInventoryObjects', async () => ({}));
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  mock.method(listingRepository, 'updateStatus', async (id, s, extra) => ({ id, status: s, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), /has been cleared and the draft has a fresh SKU/);
+  assert.strictEqual(cleared.mock.calls.length, 1);
+  assert.deepStrictEqual(cleared.mock.calls[0].arguments[1].skus, ['Liston-1-ABCD']);
+  const newSku = saved.mock.calls.at(-1).arguments[1].sku;
+  assert.match(newSku, /^Liston-1-[A-HJ-NP-Z2-9]{4}$/);
+  assert.notStrictEqual(newSku, 'Liston-1-ABCD');
 });

@@ -1280,6 +1280,8 @@ async function publishNow(listing, id, userId) {
   // anything newer is built here, now.
   const alreadyOnEbay = Boolean(listing.platform_offer_id || listing.platform_group_key);
   const skuWarnings = [];
+  // What this attempt built on eBay, for the failure path below.
+  const attempt = { built: null, credentials: null };
 
   try {
     const result = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
@@ -1317,6 +1319,8 @@ async function publishNow(listing, id, userId) {
         ...(Array.isArray(draft.variants) && draft.variants.length ? { commonListingDescription: html } : { listingDescription: html }),
       };
       const built = withSkus(branded, listing.connection_id);
+      attempt.built = built;
+      attempt.credentials = credentials;
       const isVariation = Array.isArray(built.variants) && built.variants.length > 0;
 
       const created = isVariation
@@ -1356,9 +1360,30 @@ async function publishNow(listing, id, userId) {
       axes: (readyDraft.variesBy?.specifications || []).map((s) => `${s.name}(${s.values.length})`),
       variants: Array.isArray(readyDraft.variants) ? readyDraft.variants.length : 0,
     });
-    const explained = explainPolicyBlock(err, readyDraft);
-    if (explained) {
-      err.message = explained;
+    if (isPolicyBlock(err)) {
+      // eBay keeps its verdict on the objects a refused attempt created and
+      // answers "do not relist" to any retry that reuses them — which a
+      // seller-set label does. So they are cleared and the draft gets a fresh
+      // label; once the words are fixed, the next publish starts clean.
+      let cleared = false;
+      let freshSku = null;
+      if (attempt.built && attempt.credentials) {
+        const skus = Array.isArray(attempt.built.variants) && attempt.built.variants.length ? attempt.built.variants.map((v) => v.sku) : [attempt.built.sku];
+        await ebayService.deleteInventoryObjects(attempt.credentials, { groupKey: attempt.built.groupKey, skus }).catch(() => {});
+        cleared = true;
+        freshSku = await uniqueSku(listing.connection_id, skuBaseOf(draft), { excludeListingId: id }).catch(() => null);
+        if (freshSku) await listingRepository.updateGeneratedData(id, { ...draft, sku: freshSku });
+      }
+      // The words the draft was published with, so the trigger can be found
+      // from the log when the known list doesn't name it.
+      logger.warn('Policy block: text as sent', {
+        listingId: id,
+        title: readyDraft.commonTitle || readyDraft.title,
+        description: readyDraft.commonDescription || readyDraft.description,
+        aspects: Array.isArray(readyDraft.variants) && readyDraft.variants.length ? readyDraft.variesBy?.aspects : readyDraft.aspects,
+        options: (readyDraft.variesBy?.specifications || []).map((sp) => `${sp.name}: ${sp.values.join(' | ')}`),
+      });
+      err.message = explainPolicyBlock(err, readyDraft, { cleared, freshSku });
       err.statusCode = 400;
     }
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
@@ -1437,15 +1462,20 @@ function dedupeVariationGroup(draft) {
 }
 
 // eBay's policy block, with what the seller can actually do about it.
-function explainPolicyBlock(err, draft) {
+function isPolicyBlock(err) {
   const text = `${err.message || ''} ${JSON.stringify(err.details || '')}`;
-  if (!/Hazardous Materials|PI_HAZ/i.test(text)) return null;
+  return /Hazardous Materials|PI_HAZ|improper words|violation of eBay policy/i.test(text);
+}
+
+function explainPolicyBlock(err, draft, { cleared = false, freshSku = null } = {}) {
+  if (!isPolicyBlock(err)) return null;
   const triggers = hazmatTriggersIn(draft);
   return (
-    `eBay refused this listing under its Hazardous Materials policy — an automated filter that reacts to words in the title, description, specifics or variation names. ` +
+    `eBay refused this listing under its Hazardous Materials policy — an automated filter that reacts to words in the title, description, item specifics or variation option names. ` +
     (triggers.length
       ? `Words it commonly reacts to were found: ${triggers.join('; ')}. Reword or remove them, then publish again.`
-      : `Look for words about batteries, lead, gases, fuels, glues, paints or chemicals in the text and variation names, reword them, then publish again.`)
+      : `No word from the known list was found, so the trigger is a word this filter reacts to that isn't on it yet. Check the description and the option names for materials, chemicals, gases, coatings or fuels (fluorocarbon, PTFE, tungsten, resin…), reword the suspect one, and publish again.`) +
+    (cleared ? ` What the failed attempts had created on eBay has been cleared${freshSku ? ` and the draft has a fresh SKU (${freshSku})` : ''}, so the next publish starts clean.` : '')
   );
 }
 
