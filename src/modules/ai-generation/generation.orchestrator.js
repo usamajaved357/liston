@@ -349,7 +349,12 @@ async function generateDraftInput({
   // what eBay (and the competitor) call them. Decided here, once, the same
   // way the "choose what to list" step showed it. Single-option axes are a
   // property of the product, so they go into the item specifics.
-  const plan = planVariationAxes({ source, competitor, allowedAxes: (aspectSchema || []).filter((a) => a.variation).map((a) => a.name) });
+  const plan = planVariationAxes({
+    source,
+    competitor,
+    allowedAxes: (aspectSchema || []).filter((a) => a.variation).map((a) => a.name),
+    blockedAxes: (aspectSchema || []).filter((a) => !a.variation).map((a) => a.name),
+  });
 
   // No axis with a real choice left (one combination chosen, or every axis
   // single-option) is not a variation listing — it's a plain listing of that

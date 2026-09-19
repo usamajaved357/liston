@@ -924,7 +924,22 @@ test('updateDraft refuses to rename an axis to a name eBay does not allow as a v
     })
   );
   mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [{ name: 'Colour', variation: true }, { name: 'Pack Size', variation: false }]);
-  await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Unit Quantity', to: 'Pack Size' }] }), /accepts: Colour/);
+  await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Unit Quantity', to: 'Pack Size' }] }), /fixed item specific here.*Colour/);
+});
+
+test('updateDraft lets an axis take a name of the seller’s own that eBay does not list', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      categoryId: '11844',
+      imageUrls: [],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Unit Quantity', values: ['1'] }] },
+      variants: [{ aspects: { 'Unit Quantity': ['1'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 }],
+    })
+  );
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => [{ name: 'Colour', variation: true }, { name: 'Pack Size', variation: false }]);
+  const updateMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  await listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Unit Quantity', to: 'Breaking Strain' }] });
+  assert.deepStrictEqual(updateMock.mock.calls[0].arguments[1].variesBy.specifications, [{ name: 'Breaking Strain', values: ['1'] }]);
 });
 
 // --- ending a live listing ----------------------------------------------------

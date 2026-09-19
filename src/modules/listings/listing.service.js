@@ -126,8 +126,9 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
   // only axes with a real choice, under the names eBay and the competitor
   // use in this category; single-option axes are shown as fixed. The seller
   // chooses from exactly what will be drafted.
-  const allowedAxes = ((await ebayTaxonomy.getAspectSchema(marketplaceId, category.categoryId)) || []).filter((a) => a.variation).map((a) => a.name);
-  const plan = orchestrator.planVariationAxes({ source, competitor, allowedAxes });
+  const schema = (await ebayTaxonomy.getAspectSchema(marketplaceId, category.categoryId)) || [];
+  const allowedAxes = schema.filter((a) => a.variation).map((a) => a.name);
+  const plan = orchestrator.planVariationAxes({ source, competitor, allowedAxes, blockedAxes: schema.filter((a) => !a.variation).map((a) => a.name) });
   // Per option, a thumbnail where the supplier has one, so a colour can be
   // chosen by eye rather than by name.
   const axes = plan.axes.map((axis) => ({
@@ -318,11 +319,18 @@ async function categoryInfoFor(draft) {
     aspects: aspects || [],
     // The attribute names eBay accepts as variations here (null when unknown).
     variationAspects: aspects ? aspects.filter((a) => a.variation).map((a) => a.name) : null,
+    // Item specifics of this category that eBay does NOT let a listing vary
+    // by ("Unit Quantity"). Any other name is fine: eBay accepts a seller's
+    // own variation attribute alongside the ones it suggests.
+    blockedVariationAspects: aspects ? aspects.filter((a) => !a.variation).map((a) => a.name) : null,
   };
 }
 
 // The variation attributes eBay refuses in this category, with what it
-// accepts instead. Empty when fine or unknown.
+// accepts instead. eBay turns down an item specific of the category that it
+// doesn't let vary ("Unit Quantity is not allowed as a variation specific",
+// seen live); a name it doesn't list at all is the seller's own attribute,
+// which it accepts. Empty when fine or unknown.
 async function disallowedVariationAxes(draft) {
   const specs = draft.variesBy?.specifications || [];
   if (!specs.length || !draft.categoryId) return { bad: [], allowed: [] };
@@ -330,8 +338,8 @@ async function disallowedVariationAxes(draft) {
   if (!aspects) return { bad: [], allowed: [] };
   const allowed = aspects.filter((a) => a.variation).map((a) => a.name);
   if (!allowed.length) return { bad: [], allowed: [] };
-  const ok = new Set(allowed.map((n) => n.toLowerCase()));
-  return { bad: specs.map((s) => s.name).filter((name) => !ok.has(name.toLowerCase())), allowed };
+  const blocked = new Set(aspects.filter((a) => !a.variation).map((a) => a.name.toLowerCase()));
+  return { bad: specs.map((s) => s.name).filter((name) => blocked.has(name.toLowerCase())), allowed };
 }
 
 // Only a draft can be edited. Once a listing is live, eBay owns it — editing
@@ -422,10 +430,14 @@ async function updateDraft(id, userId, patch) {
     if (otherAxes.some((name) => name.toLowerCase() === rename.to.toLowerCase())) {
       throw new ListingError(`"${rename.to}" is already a variation attribute on this listing.`, 400);
     }
-    // Only names eBay accepts as variations in this category, when known.
-    const { allowed } = await disallowedVariationAxes({ ...draft, variesBy: { specifications: [{ name: rename.to }] } });
-    if (allowed.length && !allowed.some((name) => name.toLowerCase() === rename.to.toLowerCase())) {
-      throw new ListingError(`eBay doesn't allow "${rename.to}" as a variation attribute in this category. It accepts: ${allowed.join(', ')}.`, 400);
+    // Not an item specific eBay refuses to vary by in this category; the
+    // seller's own names are fine.
+    const { bad, allowed } = await disallowedVariationAxes({ ...draft, variesBy: { specifications: [{ name: rename.to }] } });
+    if (bad.length) {
+      throw new ListingError(
+        `eBay doesn't allow "${rename.to}" as a variation attribute in this category — it's a fixed item specific here. Use one it suggests (${allowed.join(', ')}) or a name of your own.`,
+        400
+      );
     }
     draft.variants = (draft.variants || []).map((variant) => {
       if (!variant.aspects || !(rename.from in variant.aspects)) return variant;
@@ -1170,8 +1182,8 @@ async function publishNow(listing, id, userId) {
     const { bad, allowed } = await disallowedVariationAxes(draft);
     if (bad.length) {
       throw new ListingError(
-        `eBay doesn't allow "${bad.join('", "')}" as a variation attribute in this category. Rename it to one eBay accepts ` +
-          `(${allowed.join(', ')}), change the category, or list the options separately.`,
+        `eBay doesn't allow "${bad.join('", "')}" as a variation attribute in this category. Rename it to one eBay suggests ` +
+          `(${allowed.join(', ')}) or a name of your own, change the category, or list the options separately.`,
         400
       );
     }

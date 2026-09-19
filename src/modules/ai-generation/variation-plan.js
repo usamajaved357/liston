@@ -73,11 +73,14 @@ function pairWithCompetitor(axis, competitorAxes, multiCount) {
  * @param source     { variants, variantAxes? } after the seller's selection
  * @param competitor { variants } or null
  * @param allowedAxes aspect names eBay lets vary in the category; [] when unknown
+ * @param blockedAxes item specifics of the category eBay does NOT let vary
+ *   by ("Unit Quantity"); a name in neither list is the seller's own
+ *   attribute, which eBay accepts
  * @returns {{ axes: {name, ebayName, values, hasImages, via}[], fixed: Record<string,string>, warnings: string[] }}
  *   `name` is the supplier's key on each variant's attributes; `ebayName`
  *   is what the listing calls it; `fixed` holds single-option axes.
  */
-function planVariationAxes({ source, competitor, allowedAxes = [] }) {
+function planVariationAxes({ source, competitor, allowedAxes = [], blockedAxes = [] }) {
   const variants = source?.variants || [];
   const raw = source?.variantAxes?.length ? source.variantAxes : deriveAxesFromVariants(variants);
   // Values as they are after the seller's selection, not as the supplier
@@ -112,12 +115,15 @@ function planVariationAxes({ source, competitor, allowedAxes = [] }) {
     const hit = candidates.find(([, name]) => name && !taken.has(name.toLowerCase()));
     const ebayName = hit ? hit[1] : axis.name;
     taken.add(ebayName.toLowerCase());
-    const via = hit ? hit[0] : allowedAxes.length ? 'unresolved' : 'source';
+    const blocked = blockedAxes.some((name) => name.toLowerCase() === axis.name.toLowerCase());
+    const via = hit ? hit[0] : blocked ? 'unresolved' : allowedAxes.length ? 'custom' : 'source';
     if (via === 'unresolved') {
       warnings.push(
-        `eBay doesn't allow "${axis.name}" as a variation in this category. Rename the attribute to one eBay accepts here ` +
-          `(${allowedAxes.slice(0, 6).join(', ')}${allowedAxes.length > 6 ? '…' : ''}), change the category, or list the options separately.`
+        `eBay doesn't allow "${axis.name}" as a variation in this category. Rename the attribute to one eBay suggests here ` +
+          `(${allowedAxes.slice(0, 6).join(', ')}${allowedAxes.length > 6 ? '…' : ''}) or a name of your own, change the category, or list the options separately.`
       );
+    } else if (via === 'custom') {
+      warnings.push(`"${axis.name}" isn't one of the attributes eBay suggests for this category; it's listed as your own variation attribute.`);
     } else if (ebayName.toLowerCase() !== axis.name.toLowerCase()) {
       warnings.push(`The supplier's "${axis.name}" options are listed under "${ebayName}"${via === 'competitor' ? ', as the competitor does' : ''}.`);
     }
