@@ -7,7 +7,7 @@ import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
-import { EbayStylePagination } from "@/components/EbayStylePagination";
+import { ListFooter } from "@/components/ListFooter";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 
@@ -19,13 +19,10 @@ const RANGE_LABELS: Record<OrderRange, string> = {
 
 const STATUS_TABS: { key: OrderStatusFilter; label: string }[] = [
   { key: "all", label: "All orders" },
-  { key: "awaiting_payment", label: "Awaiting payment" },
   { key: "awaiting_dispatch", label: "Awaiting dispatch" },
-  { key: "dispatched", label: "Paid and dispatched" },
+  { key: "dispatched", label: "Dispatched" },
   { key: "cancelled", label: "Cancelled" },
 ];
-
-const SOON_TABS = ["Archived", "Returns", "Requests and disputes"];
 
 // eBay's own table doesn't use colored badges for status — just bold text,
 // occasionally tinted (red for cancelled). Matching that instead of a pill.
@@ -62,161 +59,160 @@ function cleanLineItemTitle(title: string | null): string {
 }
 
 // Fixed column widths shared by the header and every row, so everything
-// lines up into real table columns the way eBay's "Manage all orders" does:
-// Status | Order | Quantity | Subtotal | Total | Date sold | Date paid.
-const ROW_COLUMNS = "132px minmax(280px,1fr) 96px 84px 84px 92px 92px";
+// lines up into real table columns: Status | Order | Customer | Qty | Total
+// | Date. One price (what the buyer paid) and one date (when they bought):
+// the breakdown lives on eBay's order page, not here.
+const ROW_COLUMNS = "136px minmax(220px,1fr) 240px 48px 96px 96px";
 
 function OrderTableHeader() {
   return (
     <div
-      className="grid gap-4 px-5 py-3 border-b border-[var(--color-line)] text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]"
+      className="grid gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-4 py-2 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-muted)]"
       style={{ gridTemplateColumns: ROW_COLUMNS }}
     >
       <span>Status</span>
       <span>Order</span>
-      <span className="text-center">Quantity</span>
-      <span>Subtotal</span>
-      <span>Total</span>
-      <span>Date sold</span>
-      <span>Date paid</span>
+      <span className="text-center">Customer</span>
+      <span className="text-center">Qty</span>
+      <span className="text-right">Total</span>
+      <span className="text-right">Date</span>
     </div>
   );
 }
 
-function OrderCard({ order }: { order: Order }) {
+// International dialling codes for the markets Liston sells on. A buyer's
+// phone comes from eBay as a local number; the account's marketplace says
+// which country that is.
+const DIAL_CODES: Record<string, string> = { GB: "+44", US: "+1", CA: "+1", AU: "+61", DE: "+49", FR: "+33", IT: "+39", ES: "+34", IE: "+353" };
+
+// "07417 352555" on a UK account → "+44 7417352555"; a number that already
+// carries a country code is left alone.
+function internationalPhone(raw: string, country: string | undefined): string {
+  const digits = raw.replace(/[^\d+]/g, "");
+  if (!digits) return raw;
+  if (digits.startsWith("+")) return digits;
+  if (digits.startsWith("00")) return `+${digits.slice(2)}`;
+  const code = country ? DIAL_CODES[country] : undefined;
+  if (!code) return raw;
+  return `${code} ${digits.replace(/^0/, "")}`;
+}
+
+// Who it goes to: name, then the address as eBay gives it, then the phone
+// — each on its own line, so it can be read straight onto a label. The name
+// is a link-in-waiting: it opens a conversation once the Inbox exists.
+function CustomerCell({ order, country, countryName }: { order: Order; country: string | undefined; countryName: string | undefined }) {
+  const a = order.shippingAddress;
+  const name = a?.name || order.buyerName || order.buyerUserId || "Unknown buyer";
+  // Two lines: the street, then town · county · postcode · country. The
+  // buyer's own country is what matters for the label; on a domestic order
+  // it is the marketplace's and says nothing, so it is left off.
+  const streetLine = a ? [a.street1, a.street2].filter(Boolean).join(", ") : "";
+  const domestic = a?.country && countryName && a.country.toLowerCase() === countryName.toLowerCase();
+  const placeLine = a ? [a.city, a.state, a.postalCode, domestic ? "" : a.country].filter(Boolean).join(" · ") : "";
+  const addressLines = [streetLine, placeLine].filter(Boolean);
+  const phone = a?.phone ? internationalPhone(a.phone, country) : null;
+  return (
+    <div className="min-w-0 pt-0.5 text-center text-[12.5px] leading-snug text-[var(--color-ink)]">
+      <p className="truncate">
+        <button type="button" title="Message this buyer (coming with Inbox)" className="font-medium underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
+          {name}
+        </button>
+      </p>
+      {addressLines.map((line, i) => (
+        <p key={i} className="line-clamp-2 text-[11.5px] leading-[1.35] text-[var(--color-muted)]">
+          {line}
+        </p>
+      ))}
+      {phone && (
+        <p className="truncate text-[11.5px]">
+          <a href={`tel:${phone.replace(/\s+/g, "")}`} className="text-[var(--color-muted)] underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
+            {phone}
+          </a>
+        </p>
+      )}
+      {!a && order.buyerUserId && <p className="truncate text-[var(--color-muted)]">@{order.buyerUserId}</p>}
+    </div>
+  );
+}
+
+// One order per row. The Order column carries the order number and buyer
+// on a quiet first line, then each item as a thumbnail beside a two-line
+// title and its details; the money and dates sit in their columns at the
+// top of the row, where the eye lands.
+function OrderCard({ order, country, countryName }: { order: Order; country: string | undefined; countryName: string | undefined }) {
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
-  const lastIndex = order.lineItems.length - 1;
   const shippingCost =
     order.total && order.subtotal ? Math.round((order.total.amount - order.subtotal.amount) * 100) / 100 : null;
+  const quantity = order.lineItems.reduce((n, li) => n + (li.quantityPurchased || 0), 0);
+  const multi = order.lineItems.length > 1;
 
   return (
-    <div className="border-b border-[var(--color-line)] last:border-b-0 px-5 py-5">
-      {order.lineItems.map((li, i) => {
-        const isLast = i === lastIndex;
-        return (
-          <div
-            key={`${li.itemId}-${i}`}
-            className="grid gap-4 items-start py-3"
-            style={{ gridTemplateColumns: ROW_COLUMNS }}
-          >
-            {/* Status — only on the first line item, aligned with the order id/buyer top row */}
-            <div>{i === 0 && <p className={`text-xs ${statusStyle}`}>{statusLabel(order)}</p>}</div>
+    <div
+      className="grid cursor-pointer items-start gap-3 border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 hover:bg-[var(--color-paper)]/40"
+      style={{ gridTemplateColumns: ROW_COLUMNS }}
+      title="Order details (coming soon)"
+    >
+      <p className={`pt-0.5 text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order)}</p>
 
-            {/* Order: order id + buyer on one top row (first item only), then image + title + specifics below */}
-            <div className="min-w-0">
-              {i === 0 && (
-                <div className="flex items-baseline gap-4 mb-3">
-                  <span className="w-28 flex-shrink-0 text-xs text-[var(--color-ink)]">{order.orderId}</span>
-                  <span className="text-xs text-[var(--color-muted)]">
-                    {order.buyerName || "Unknown buyer"}
-                    {order.buyerUserId && <> &nbsp;@{order.buyerUserId}</>}
-                  </span>
-                </div>
+      <div className="min-w-0">
+        {/* A link-in-waiting: the order id (and the row itself) will open the
+            order's own page once there is one. */}
+        <p className="mb-2 pt-0.5 text-[12.5px] leading-snug">
+          <button type="button" title="Order details (coming soon)" className="block font-mono text-[12.5px] leading-snug tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
+            {order.orderId}
+          </button>
+        </p>
+        <div className="space-y-2.5">
+          {order.lineItems.map((li, i) => (
+            <div key={`${li.itemId}-${i}`} className="flex items-start gap-3">
+              {li.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={li.imageUrl} alt="" className="h-14 w-14 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-cover" />
+              ) : (
+                <div className="h-14 w-14 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)]" />
               )}
-              <div className="flex items-start gap-4">
-                <div className="relative flex-shrink-0">
-                  {li.imageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={li.imageUrl}
-                      alt=""
-                      className="h-28 w-28 rounded-xl object-cover border border-[var(--color-line)]"
-                    />
-                  ) : (
-                    <div className="h-28 w-28 rounded-xl bg-[var(--color-paper)] border border-[var(--color-line)]" />
-                  )}
-                  <button
-                    type="button"
-                    aria-label="Expand image"
-                    className="absolute top-1.5 right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-white/90 text-[var(--color-ink)] shadow-sm border border-[var(--color-line)] hover:bg-white transition-colors"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3">
-                      <path
-                        d="M4 14v6h6M20 10V4h-6M4 20l7-7M20 4l-7 7"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                </div>
-                <div className="min-w-0 pt-0.5">
-                  {li.viewItemUrl ? (
-                    <a
-                      href={li.viewItemUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-xs text-[var(--color-ink)] leading-snug line-clamp-2 underline decoration-[var(--color-line)] hover:decoration-[var(--color-ink)] underline-offset-2"
-                    >
-                      {cleanLineItemTitle(li.title)}
-                    </a>
-                  ) : (
-                    <p className="text-xs text-[var(--color-ink)] leading-snug line-clamp-2">
-                      {cleanLineItemTitle(li.title)}
-                    </p>
-                  )}
-                  <p className="text-xs text-[var(--color-muted)] mt-1">Item {li.itemId}</p>
-                  {li.variation.length > 0 && (
-                    <p className="text-xs text-[var(--color-ink)] mt-1">
-                      {li.variation.map((v, vi) => (
-                        <span key={v.name}>
-                          {vi > 0 && "   "}
-                          {v.name}: <span className="font-semibold">{v.value}</span>
-                        </span>
-                      ))}
-                    </p>
-                  )}
+              <div className="min-w-0 flex-1">
+                {li.viewItemUrl ? (
+                  <a href={li.viewItemUrl} target="_blank" rel="noreferrer" className="line-clamp-2 max-w-[400px] text-[12.5px] font-medium leading-snug text-[var(--color-ink)] hover:text-[var(--color-primary)]">
+                    {cleanLineItemTitle(li.title)}
+                  </a>
+                ) : (
+                  <p className="line-clamp-2 max-w-[400px] text-[12.5px] font-medium leading-snug text-[var(--color-ink)]">{cleanLineItemTitle(li.title)}</p>
+                )}
+                <p className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11.5px] text-[var(--color-muted)]">
+                  <span className="font-mono tracking-tight">#{li.itemId}</span>
+                  {multi && <span>× {li.quantityPurchased}</span>}
+                  {li.variation.map((v) => (
+                    <span key={v.name}>
+                      <span className="font-bold text-[var(--color-ink)]">{v.name}:</span> {v.value}
+                    </span>
+                  ))}
+                  {li.quantityAvailable !== null && <span>{li.quantityAvailable} in stock</span>}
                   {li.trackingNumber && (
-                    <p className="text-xs text-[var(--color-muted)] mt-1">
-                      {li.trackingCarrier ? `${li.trackingCarrier} · ` : ""}
+                    <span>
+                      {li.trackingCarrier ? `${li.trackingCarrier} ` : ""}
                       {li.trackingNumber}
-                    </p>
+                    </span>
                   )}
-                </div>
+                </p>
               </div>
             </div>
+          ))}
+        </div>
+      </div>
 
-            {/* Quantity */}
-            <div className="text-[13px] text-[var(--color-ink)] text-center">
-              <span className="font-bold">{li.quantityPurchased}</span>
-              {li.quantityAvailable !== null && (
-                <span className="text-[var(--color-muted)]"> ({li.quantityAvailable} available)</span>
-              )}
-            </div>
-
-            {/* Subtotal — order-level, shown once on the last item */}
-            <div className="text-[13px] text-[var(--color-ink)]">
-              {isLast && (
-                <>
-                  {formatMoney(order.subtotal)}
-                  <p className="text-xs text-[var(--color-muted)]">
-                    {shippingCost === 0 ? "Free postage" : shippingCost !== null ? `+${formatMoney({ amount: shippingCost, currency: order.total?.currency })}` : ""}
-                  </p>
-                </>
-              )}
-            </div>
-
-            {/* Total */}
-            <div className="text-[13px] font-bold text-[var(--color-ink)]">{isLast && formatMoney(order.total)}</div>
-
-            {/* Date sold */}
-            <div className="text-xs text-[var(--color-ink)]">
-              {isLast && (
-                <>
-                  <p className="font-bold">{formatShortDate(order.createdAt)}</p>
-                  <p className="text-[var(--color-muted)] font-normal">
-                    {new Date(order.createdAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                  </p>
-                </>
-              )}
-            </div>
-
-            {/* Date paid */}
-            <div className="text-xs text-[var(--color-ink)]">{isLast && formatShortDate(order.paidTime)}</div>
-          </div>
-        );
-      })}
+      <CustomerCell order={order} country={country} countryName={countryName} />
+      <p className="pt-0.5 text-center text-[12.5px] font-semibold leading-snug text-[var(--color-ink)]">{quantity}</p>
+      <div className="pt-0.5 text-right text-[12.5px] font-semibold leading-snug text-[var(--color-ink)]">
+        {formatMoney(order.total)}
+        {shippingCost !== null && shippingCost > 0 && (
+          <p className="mt-0.5 text-[11px] font-normal text-[var(--color-muted)]">incl. {formatMoney({ amount: shippingCost, currency: order.total?.currency })} postage</p>
+        )}
+      </div>
+      <div className="pt-0.5 text-right text-[12.5px] leading-snug text-[var(--color-ink)]">
+        <p>{formatShortDate(order.createdAt)}</p>
+        <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">{new Date(order.createdAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</p>
+      </div>
     </div>
   );
 }
@@ -334,12 +330,6 @@ function AccountOrdersContent() {
     }
   }
 
-  function clearSearch() {
-    setSearchInput("");
-    setSearch("");
-    setPage(1);
-  }
-
   if (loadingConnection) {
     return (
       <main className="min-h-screen flex items-center justify-center">
@@ -375,13 +365,13 @@ function AccountOrdersContent() {
         </div>
       }
       subheader={
-        <div>
-          <div className="inline-flex flex-wrap items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="inline-flex flex-shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
             {STATUS_TABS.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => changeStatus(tab.key)}
-                className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
+                className={`flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium transition-colors ${
                   status === tab.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
                 }`}
               >
@@ -389,82 +379,41 @@ function AccountOrdersContent() {
                 <span className={status === tab.key ? "text-white/70" : "text-[var(--color-muted)]/70"}>{counts[tab.key]}</span>
               </button>
             ))}
-            {SOON_TABS.map((label) => (
-              <span
-                key={label}
-                title="Not available yet, needs eBay's returns/cases API"
-                className="flex h-7 cursor-not-allowed items-center rounded-full px-3.5 text-[12.5px] font-medium text-[var(--color-muted)]/50"
-              >
-                {label}
-              </span>
-            ))}
           </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2 rounded-full border border-[var(--color-line)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-ink)]">
-              Period:
-              <select
-                value={range}
-                onChange={(e) => changeRange(e.target.value as OrderRange)}
-                className="bg-transparent font-bold focus:outline-none"
-              >
-                {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
-                  <option key={key} value={key}>
-                    {RANGE_LABELS[key]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <form onSubmit={handleSearchSubmit} className="flex items-center flex-1 min-w-[220px] max-w-sm">
-              <div className="group flex items-center flex-1 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-3.5 pr-1.5 py-1 transition-colors focus-within:border-[var(--color-accent)]">
-                <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-muted)] flex-shrink-0">
-                  <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-                  <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <input
-                  type="text"
-                  value={searchInput}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  placeholder="Search by order ID or item title"
-                  autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className="flex-1 min-w-0 bg-transparent border-0 px-2 py-1 text-xs text-[var(--color-ink)] placeholder:text-[var(--color-muted)] outline-none ring-0 focus:outline-none focus:ring-0"
-                />
-                {searchInput && (
-                  <button
-                    type="button"
-                    onClick={clearSearch}
-                    aria-label="Clear search"
-                    className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] transition-colors mr-1"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3">
-                      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  className="rounded-full bg-[var(--color-primary)] px-3 py-1 text-xs font-semibold text-white hover:bg-[var(--color-primary-hover)] transition-colors flex-shrink-0"
-                >
-                  Search
-                </button>
-              </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
+            <select value={range} onChange={(e) => changeRange(e.target.value as OrderRange)} className="input input-sm w-auto flex-shrink-0 !pr-8" aria-label="Period">
+              {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
+                <option key={key} value={key}>
+                  {RANGE_LABELS[key]}
+                </option>
+              ))}
+            </select>
+            <form onSubmit={handleSearchSubmit} className="relative w-56 min-w-[160px] flex-shrink">
+              <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
+                <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+              <input
+                type="search"
+                value={searchInput}
+                onChange={(e) => handleSearchChange(e.target.value)}
+                placeholder="Order ID or item title"
+                autoComplete="off"
+                className="input input-sm !pl-10"
+              />
             </form>
-            <div className="ml-auto">
-              <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
-            </div>
           </div>
         </div>
       }
       footer={
         !error && !loading && orders.length > 0 ? (
-          <EbayStylePagination
+          <ListFooter
             page={page}
             totalPages={totalPages}
-            perPage={perPage}
             totalEntries={totalEntries}
+            perPage={perPage}
+            sizes={[25, 50, 100, 200]}
             onPage={(p) => {
               setPage(p);
               document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
@@ -473,18 +422,28 @@ function AccountOrdersContent() {
               setPerPage(next);
               setPage(1);
             }}
-            bare
           />
         ) : null
       }
     >
       {search && (
-        <p className="text-xs text-[var(--color-muted)] mb-3">
-          Showing results for &ldquo;{search}&rdquo;
+        <p className="mb-2 text-xs text-[var(--color-muted)]">
+          Showing results for &ldquo;{search}&rdquo; ·{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setSearchInput("");
+              setSearch("");
+              setPage(1);
+            }}
+            className="font-semibold text-[var(--color-primary)] hover:underline"
+          >
+            Clear
+          </button>
         </p>
       )}
 
-      <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden">
+      <div className="card overflow-hidden">
         {error && (
           <div className="p-5">
             <Alert>{error}</Alert>
@@ -504,7 +463,7 @@ function AccountOrdersContent() {
             <div className="min-w-[980px]">
               <OrderTableHeader />
               {orders.map((order) => (
-                <OrderCard key={order.orderId} order={order} />
+                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} />
               ))}
             </div>
           </div>

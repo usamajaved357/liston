@@ -223,6 +223,7 @@ export interface Order {
   subtotal: Money | null;
   buyerName: string | null;
   buyerUserId: string | null;
+  shippingAddress: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string } | null;
   itemTitle: string | null;
   itemId: string | null;
   itemCount: number;

@@ -707,6 +707,9 @@ async function persist(write) {
   }
 }
 
+// Bump when mapOrder gains a field, so every mirrored order is re-read once.
+const ORDER_SHAPE = 2;
+
 function ordersHorizon(now = new Date()) {
   return new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
 }
@@ -730,7 +733,12 @@ const ordersCache = createSwrCache({
     const state = await mirror.loadSnapshot(key, 'orders');
     if (!state) return null;
     const orders = await mirror.loadOrders(key, ordersHorizon());
-    return { value: orders, meta: state.meta, syncedAt: state.syncedAt };
+    // A copy read with an older field set is served but treated as stale,
+    // so the full re-read (see fetchOrdersIncrementally) runs behind it.
+    // Older than any fresh window (24h at most) but within the stale one,
+    // so the copy is still served while the re-read runs.
+    const syncedAt = state.meta?.shape === ORDER_SHAPE ? state.syncedAt : Math.min(state.syncedAt, Date.now() - FRESH_WITH_PUSH.orders - 1000);
+    return { value: orders, meta: state.meta, syncedAt };
   },
   // Order rows are written by the fetcher itself; this keeps the sync point.
   store: (key, value, meta) => mirror.saveSnapshot(key, 'orders', { count: value.length }, meta),
@@ -742,7 +750,11 @@ async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, m
     const now = new Date();
     const horizon = ordersHorizon(now);
     const lastSyncAt = meta?.lastSyncAt ? new Date(meta.lastSyncAt) : null;
-    const canIncrement = Array.isArray(current) && lastSyncAt && now - lastSyncAt < MAX_MOD_WINDOW_DAYS * DAY_MS - DAY_MS;
+    // Orders read before a field was added (the shipping address, say) only
+    // gain it on a full re-read; an incremental read brings back just what
+    // changed. The shape version forces one full pass per change.
+    const sameShape = meta?.shape === ORDER_SHAPE;
+    const canIncrement = sameShape && Array.isArray(current) && lastSyncAt && now - lastSyncAt < MAX_MOD_WINDOW_DAYS * DAY_MS - DAY_MS;
 
     let orders;
     if (canIncrement) {
@@ -759,7 +771,7 @@ async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, m
       meta = { ...(meta || {}), totalPages: result.totalPages };
     }
     await persist(() => mirror.pruneOrdersBefore(connectionId, horizon));
-    return { value: orders, meta: { ...(meta || {}), lastSyncAt: now.toISOString() } };
+    return { value: orders, meta: { ...(meta || {}), lastSyncAt: now.toISOString(), shape: ORDER_SHAPE } };
   }
 }
 

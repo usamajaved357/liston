@@ -160,6 +160,29 @@ function mapLineItem(transaction) {
   };
 }
 
+// Where the order ships: the name eBay holds for the buyer, the address as
+// lines, and the phone number when the buyer gave one. eBay's "Invalid
+// Request" placeholder values are treated as absent.
+function mapShippingAddress(a) {
+  if (!a) return null;
+  const text = (v) => (v === undefined || v === null ? '' : String(typeof v === 'object' ? v['#text'] ?? '' : v).trim());
+  const clean = (v) => {
+    const t = text(v);
+    return t && !/invalid request/i.test(t) ? t : '';
+  };
+  const address = {
+    name: clean(a.Name),
+    street1: clean(a.Street1),
+    street2: clean(a.Street2),
+    city: clean(a.CityName),
+    state: clean(a.StateOrProvince),
+    postalCode: clean(a.PostalCode),
+    country: clean(a.CountryName) || clean(a.Country),
+    phone: clean(a.Phone),
+  };
+  return Object.values(address).some(Boolean) ? address : null;
+}
+
 function mapOrder(order) {
   const transactions = toArray(order.TransactionArray?.Transaction);
   const firstItem = transactions[0]?.Item;
@@ -175,6 +198,7 @@ function mapOrder(order) {
     subtotal: money(order.Subtotal),
     buyerName: [buyer?.UserFirstName, buyer?.UserLastName].filter(Boolean).join(' ') || null,
     buyerUserId: order.BuyerUserID || null,
+    shippingAddress: mapShippingAddress(order.ShippingAddress),
     itemTitle: firstItem?.Title || null,
     itemId: firstItem?.ItemID ? String(firstItem.ItemID) : null,
     itemCount: transactions.length,
@@ -227,6 +251,7 @@ const GET_ORDERS_FIELDS = [
   'OrderArray.Order.PaidTime',
   'OrderArray.Order.ShippedTime',
   'OrderArray.Order.CancelStatus',
+  'OrderArray.Order.ShippingAddress',
   'OrderArray.Order.TransactionArray.Transaction.Item.ItemID',
   'OrderArray.Order.TransactionArray.Transaction.Item.Title',
   'OrderArray.Order.TransactionArray.Transaction.QuantityPurchased',

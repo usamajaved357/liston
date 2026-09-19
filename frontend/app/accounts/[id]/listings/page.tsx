@@ -7,19 +7,13 @@ import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingStatusFi
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
+import { ListFooter } from "@/components/ListFooter";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 
 type Tab = ListingStatusFilter | "draft";
-const PAGE_SIZES: { key: number | "all"; label: string }[] = [
-  { key: 25, label: "25" },
-  { key: 50, label: "50" },
-  { key: 100, label: "100" },
-  { key: "all", label: "All" },
-];
-
 const TrashIcon = (
   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
     <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -179,97 +173,6 @@ function SkeletonRows({ count = 6 }: { count?: number }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-function pageNumbers(page: number, total: number): (number | "…")[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const out: (number | "…")[] = [1];
-  const lo = Math.max(2, page - 1);
-  const hi = Math.min(total - 1, page + 1);
-  if (lo > 2) out.push("…");
-  for (let i = lo; i <= hi; i++) out.push(i);
-  if (hi < total - 1) out.push("…");
-  out.push(total);
-  return out;
-}
-
-function NavBtn({ dir, disabled, onClick }: { dir: "prev" | "next"; disabled: boolean; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} className="btn btn-ghost btn-icon" aria-label={dir === "prev" ? "Previous page" : "Next page"}>
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-        <path d={dir === "prev" ? "M15 6l-6 6 6 6" : "M9 6l6 6-6 6"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </button>
-  );
-}
-
-function Footer({
-  page,
-  totalPages,
-  totalEntries,
-  perPage,
-  onPage,
-  onPerPage,
-}: {
-  page: number;
-  totalPages: number;
-  totalEntries: number;
-  perPage: number | "all";
-  onPage: (p: number) => void;
-  onPerPage: (n: number | "all") => void;
-}) {
-  const size = perPage === "all" ? totalEntries : perPage;
-  const from = totalEntries === 0 ? 0 : (page - 1) * size + 1;
-  const to = Math.min(totalEntries, page * size);
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3 py-2.5">
-      <div className="flex items-center gap-3">
-        <span className="text-[12px] text-[var(--color-muted)]">
-          Showing <span className="font-medium text-[var(--color-ink)]">{from}</span> to <span className="font-medium text-[var(--color-ink)]">{to}</span> of{" "}
-          <span className="font-medium text-[var(--color-ink)]">{totalEntries}</span>
-        </span>
-        <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-          {PAGE_SIZES.map((s) => (
-            <button
-              key={String(s.key)}
-              type="button"
-              onClick={() => onPerPage(s.key)}
-              className={`h-6 rounded-full px-2.5 text-[11.5px] font-medium transition-colors ${
-                perPage === s.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-        <span className="text-[12px] text-[var(--color-muted)]">per page</span>
-      </div>
-      {totalPages > 1 && (
-        <div className="flex items-center gap-1">
-          <NavBtn dir="prev" disabled={page <= 1} onClick={() => onPage(page - 1)} />
-          {pageNumbers(page, totalPages).map((n, i) =>
-            n === "…" ? (
-              <span key={`e${i}`} className="px-1 text-[12px] text-[var(--color-muted)]">
-                …
-              </span>
-            ) : (
-              <button
-                key={n}
-                type="button"
-                onClick={() => onPage(n)}
-                className={`h-7 min-w-7 rounded-full px-2 text-[12px] font-medium transition-colors ${
-                  n === page ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:bg-[var(--color-panel)] hover:text-[var(--color-ink)]"
-                }`}
-              >
-                {n}
-              </button>
-            )
-          )}
-          <NavBtn dir="next" disabled={page >= totalPages} onClick={() => onPage(page + 1)} />
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -539,11 +442,12 @@ export default function AccountListingsPage() {
       }
       footer={
         !loading && filter !== "draft" && items.length > 0 ? (
-          <Footer
+          <ListFooter
             page={page}
             totalPages={totalPages}
             totalEntries={totalEntries}
             perPage={perPage}
+            sizes={[25, 50, 100, "all"]}
             onPage={(p) => {
               setPage(p);
               document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });

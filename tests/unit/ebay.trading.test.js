@@ -73,6 +73,16 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
             <PaidTime>2026-01-02T00:05:00.000Z</PaidTime>
             <ShippedTime>2026-01-03T09:00:00.000Z</ShippedTime>
             <CancelStatus>NotApplicable</CancelStatus>
+            <ShippingAddress>
+              <Name>Jane Doe</Name>
+              <Street1>1 High Street</Street1>
+              <Street2>Flat 2</Street2>
+              <CityName>Leeds</CityName>
+              <StateOrProvince>West Yorkshire</StateOrProvince>
+              <CountryName>United Kingdom</CountryName>
+              <Phone>Invalid Request</Phone>
+              <PostalCode>LS1 1AA</PostalCode>
+            </ShippingAddress>
             <TransactionArray>
               <Transaction>
                 <Buyer><UserFirstName>Jane</UserFirstName><UserLastName>Doe</UserLastName></Buyer>
@@ -103,6 +113,7 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
     subtotal: { amount: 12.5, currency: 'GBP' },
     buyerName: 'Jane Doe',
     buyerUserId: 'janedoe123',
+    shippingAddress: { name: 'Jane Doe', street1: '1 High Street', street2: 'Flat 2', city: 'Leeds', state: 'West Yorkshire', postalCode: 'LS1 1AA', country: 'United Kingdom', phone: '' },
     itemTitle: 'Widget',
     itemId: '456',
     itemCount: 1,
