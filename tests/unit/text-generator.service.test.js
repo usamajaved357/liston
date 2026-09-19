@@ -273,3 +273,31 @@ test('generateListingContent tells the model to name variations the way the comp
   assert.match(prompt, /competitor's listing offers "Colour" \(Midnight Black, Arctic White\)/);
   assert.match(prompt, /MUST be one of eBay's variation-enabled aspects for this category: Colour/);
 });
+
+test('generateListingContent tells the model to write around eBay’s hazardous-materials words, and flags any that slip through', async () => {
+  config.anthropicApiKey = 'test-key';
+  delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+  let prompt;
+  mock.method(messagesProto, 'create', async (args) => {
+    if (!prompt) prompt = args.messages[0].content;
+    return toolResultResponse({ title: 'x'.repeat(72), description: 'Pairs with lead clips and a petrol lighter.', condition: 'NEW', aspects: {} });
+  });
+
+  const result = await textGenerator.generateListingContent({
+    competitor: null,
+    source: { title: 'Rig', variants: [], specifics: {}, categoryBreadcrumb: [] },
+    costPrice: 5,
+    sellPrice: 15,
+    currency: 'GBP',
+    categoryPath: ['Sporting Goods', 'Fishing'],
+  });
+
+  assert.match(prompt, /hazardous-materials filter/);
+  assert.match(prompt, /lead → weight/);
+  const warning = result.aspectWarnings.find((w) => /hazardous-materials/.test(w));
+  assert.match(warning, /"lead" in the description/);
+  assert.match(warning, /"petrol" in the description/);
+  assert.match(warning, /"lighter" in the description/);
+});

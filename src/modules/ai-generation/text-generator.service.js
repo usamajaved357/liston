@@ -82,6 +82,8 @@ const VARIATION_TOOL = {
 
 // eBay's title limit is 80 characters and search rewards using it: a short
 // title leaves keywords buyers type on the table.
+const policyWords = require('../listings/policy-words');
+
 const TITLE_RULE =
   `TITLE RULE: the title MUST be between 70 and 80 characters long (count them). Pack it with the words buyers ` +
   `search for: product type, key feature, use, compatibility, size or pack count, colour if fixed. No filler ` +
@@ -137,6 +139,7 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
     `The seller is a UK business dispatching from the UK. Never mention China, AliExpress, overseas shipping, ` +
     `import, or any supplier in the title, description or item specifics.\n` +
     TITLE_RULE +
+    policyWords.PROMPT_GUIDANCE +
     `\nThe seller pays ${currency} ${costPrice} per unit and will sell at ${currency} ${sellPrice}.\n\n` +
     (competitor ? `--- Competitor's eBay listing ---\n${summarizeListing(competitor)}\n\n` : '') +
     (categoryPath?.length ? `--- eBay category this will be listed in ---\n${categoryPath.join(' > ')}\n\n` : '') +
@@ -289,6 +292,20 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   }
   content[titleKey] = await ensureTitleLength(anthropic, content[titleKey], summarizeListing(source));
 
+  // Whatever the model was told, a trigger word that slips through (or
+  // sits in a supplier's option name, which isn't the model's to change)
+  // is named now, not by eBay at publish.
+  const triggers = policyWords.hazmatTriggersIn(
+    hasVariants
+      ? { commonTitle: content.commonTitle, commonDescription: content.commonDescription, variants: [{}], variesBy: { aspects, specifications: [{ name: content.varyingAspectName || 'Option', values: Object.values(content.variantAspectValues || {}) }] } }
+      : { title: content.title, description: content.description, aspects }
+  );
+  if (triggers.length) {
+    warnings.push(
+      `eBay's hazardous-materials filter blocks listings containing certain words, and this draft has ${triggers.join('; ')}. Reword before publishing.`
+    );
+  }
+
   return { ...content, [aspectKey]: aspects, aspectWarnings: warnings };
 }
 
@@ -338,6 +355,7 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
           `The seller is a UK business dispatching from the UK. Never mention China, AliExpress, overseas shipping, ` +
           `import, or any supplier.\n` +
           TITLE_RULE +
+          policyWords.PROMPT_GUIDANCE +
           (variationAxes.length
             ? `This is a multi-variation listing: buyers choose ${variationAxes.join(' and ')}. The title and shared ` +
               `specifics must NOT name any one option (no single colour, size or model); the ${variationAxes.join('/')} ` +

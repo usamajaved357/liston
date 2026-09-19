@@ -1427,6 +1427,9 @@ export default function DraftEditorPage() {
   const [secondaryCategoryPath, setSecondaryCategoryPath] = useState<string[]>([]);
   const [storeCategoryNames, setStoreCategoryNames] = useState<string[]>([]);
   const [categoryInfo, setCategoryInfo] = useState<DraftCategoryInfo | null>(null);
+  // Words eBay's hazardous-materials filter refuses (from the server), so
+  // the seller sees a "lead clip" problem while typing, not at publish.
+  const [policyWords, setPolicyWords] = useState<string[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [shopPickerOpen, setShopPickerOpen] = useState(false);
   // The Shop's departments, read once per page (cached server-side): for
@@ -1559,6 +1562,7 @@ export default function DraftEditorPage() {
         setPolicies(data.policies);
         categoryInfoRef.current = data.category;
         setCategoryInfo(data.category);
+        setPolicyWords(data.policyWords || []);
         resetFrom(data.listing);
         loadSecondaryPath((data.listing.generated_data as DraftContent).secondaryCategoryId);
       })
@@ -1607,6 +1611,29 @@ export default function DraftEditorPage() {
     (policyIds.fulfillmentPolicyId !== content.listingPolicies.fulfillmentPolicyId ||
       policyIds.paymentPolicyId !== content.listingPolicies.paymentPolicyId ||
       policyIds.returnPolicyId !== content.listingPolicies.returnPolicyId);
+
+  const policyTriggers = useMemo(() => {
+    if (!policyWords.length) return [];
+    const pattern = new RegExp(`\\b(${policyWords.map((w) => w.replace(/[-.]/g, "\\$&")).join("|")})\\b`, "gi");
+    const found = new Map<string, Set<string>>();
+    const scan = (where: string, text: string) => {
+      for (const m of text.matchAll(pattern)) {
+        const word = m[1].toLowerCase();
+        if (!found.has(word)) found.set(word, new Set());
+        found.get(word)!.add(where);
+      }
+    };
+    scan("the title", title);
+    scan("the description", description);
+    for (const row of specifics) if (row.value.trim()) scan(`item specific “${row.name.trim()}”`, row.value);
+    if (variation) {
+      for (const spec of variation.variesBy.specifications) {
+        const shown = spec.values.map((v) => valueRenames[spec.name]?.[v] || v).concat(addedValues.filter((a) => a.axis === spec.name).map((a) => a.value));
+        scan(`the ${axisRenames[spec.name] || spec.name} options`, shown.join(" "));
+      }
+    }
+    return [...found].map(([word, places]) => `“${word}” in ${[...places].join(", ")}`);
+  }, [policyWords, title, description, specifics, variation, valueRenames, axisRenames, addedValues]);
 
   const dirty = useMemo(() => {
     if (!content) return false;
@@ -2259,8 +2286,15 @@ export default function DraftEditorPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1360px] px-5 py-4">
-          {(error || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published") && (
+          {(error || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published" || (editable && policyTriggers.length > 0)) && (
             <div className="mb-3 space-y-2">
+              {editable && policyTriggers.length > 0 && (
+                <div className="notice notice-warning">
+                  <span className="flex-1">
+                    eBay&apos;s hazardous-materials filter blocks listings with certain words, and this draft has {policyTriggers.join("; ")}. Reword before publishing (e.g. “lead clip” → “weight clip”, “lead-free” → “non-toxic”).
+                  </span>
+                </div>
+              )}
               {error && (
                 <div className="notice notice-danger">
                   <span className="flex-1">{error}</span>

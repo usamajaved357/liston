@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const policyWords = require('./policy-words');
 const Anthropic = require('@anthropic-ai/sdk');
 const sharp = require('sharp');
 const config = require('../../config');
@@ -141,6 +142,7 @@ async function reviseText({ draft, instruction, current: given, options = {} }) 
         content:
           `An eBay seller is editing a draft listing and has asked for a change. Apply exactly what they ask, ` +
           `leave everything else as it is, and return ONLY the fields that change. Keep the title within 80 characters. ` +
+          policyWords.PROMPT_GUIDANCE +
           `Refer to variations by their index and to options by their exact current names. Photos and the eBay ` +
           `category cannot be changed here: if asked, fill in cannotDo and change nothing.\n\n` +
           `Current listing:\n${describeCurrent(current, options)}\n\n` +

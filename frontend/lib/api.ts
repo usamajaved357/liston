@@ -852,7 +852,7 @@ export const api = {
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
 
   getDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null }>(`/api/listings/${listingId}`),
+    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null; policyWords?: string[] }>(`/api/listings/${listingId}`),
 
   // Ways out when eBay refuses the draft's variation attribute in its category.
   getVariationFixes: (listingId: string) => request<VariationFixes>(`/api/listings/${listingId}/variation-fixes`),

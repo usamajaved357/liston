@@ -109,8 +109,8 @@ async function removeInactive(req, res, next) {
 
 async function getOne(req, res, next) {
   try {
-    const { listing, policies, category } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
-    res.status(200).json({ listing, policies, category });
+    const { listing, policies, category, policyWords } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
+    res.status(200).json({ listing, policies, category, policyWords });
   } catch (err) {
     next(err);
   }

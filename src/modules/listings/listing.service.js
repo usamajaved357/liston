@@ -8,6 +8,7 @@ const imageGates = require('../ai-generation/image-pipeline/gates');
 const { prepareAspectsForEbay } = require('../ai-generation/aspect-validator');
 const storeCategory = require('./store-category');
 const logger = require('../../utils/logger');
+const { hazmatTriggersIn, HAZMAT_TRIGGERS } = require('./policy-words');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
@@ -363,7 +364,14 @@ async function getDraftDetail(id, userId) {
     }
   }
 
-  return { listing, policies, category: await categoryInfoFor(listing.generated_data || {}) };
+  return {
+    listing,
+    policies,
+    category: await categoryInfoFor(listing.generated_data || {}),
+    // Words eBay's hazardous-materials filter blocks, for the editor to
+    // flag as the seller types (see policy-words.js).
+    policyWords: HAZMAT_TRIGGERS,
+  };
 }
 
 // What the editor needs to know about a draft's category: whether eBay lets
@@ -1426,37 +1434,6 @@ function dedupeVariationGroup(draft) {
     draft: { ...draft, variants, variesBy: { ...(draft.variesBy || {}), specifications: kept } },
     warnings,
   };
-}
-
-// eBay's hazardous-materials filter is an automated word match over the
-// title, description, item specifics and variation names — and its
-// rejection names none of them. These are the words it is known to react
-// to; naming where they appear turns "the listing may violate policy" into
-// something a seller can fix in a minute.
-const HAZMAT_TRIGGERS = [
-  'lead', 'leadcore', 'lead-free', 'mercury', 'lithium', 'li-ion', 'battery', 'batteries', 'aerosol', 'flammable', 'explosive',
-  'fireworks', 'gas', 'propane', 'butane', 'lighter', 'fuel', 'petrol', 'gasoline', 'diesel', 'paint', 'spray', 'solvent', 'thinner',
-  'glue', 'adhesive', 'epoxy', 'resin', 'acid', 'bleach', 'chemical', 'pesticide', 'poison', 'toxic', 'corrosive', 'radioactive',
-  'asbestos', 'magnet', 'magnets', 'neodymium', 'airbag', 'ammunition', 'gunpowder', 'charcoal', 'alcohol', 'ethanol', 'nitro',
-  'oxidiser', 'oxidizer', 'peroxide', 'ammonia', 'chlorine', 'dry ice', 'compressed', 'pressurised', 'pressurized',
-];
-const HAZMAT_PATTERN = new RegExp(`\\b(${HAZMAT_TRIGGERS.map((w) => w.replace(/[-.]/g, '\\$&')).join('|')})\\b`, 'gi');
-
-function hazmatTriggersIn(draft) {
-  const found = new Map();
-  const scan = (where, text) => {
-    for (const match of String(text || '').matchAll(HAZMAT_PATTERN)) {
-      const word = match[1].toLowerCase();
-      if (!found.has(word)) found.set(word, new Set());
-      found.get(word).add(where);
-    }
-  };
-  scan('the title', draft.commonTitle || draft.title);
-  scan('the description', draft.commonDescription || draft.description);
-  const aspects = Array.isArray(draft.variants) && draft.variants.length ? draft.variesBy?.aspects : draft.aspects;
-  for (const [name, values] of Object.entries(aspects || {})) scan(`item specific "${name}"`, (values || []).join(' '));
-  for (const spec of draft.variesBy?.specifications || []) scan(`the ${spec.name} options`, (spec.values || []).join(' '));
-  return [...found].map(([word, places]) => `"${word}" in ${[...places].join(', ')}`);
 }
 
 // eBay's policy block, with what the seller can actually do about it.
