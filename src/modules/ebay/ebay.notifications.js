@@ -9,7 +9,9 @@ const config = require('../../config');
 // at the page refreshes them. Nothing here changes data; the worst a forged
 // notification can do is cause one re-read, and those are throttled.
 
-const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', removeNSPrefix: true });
+// See ebay.trading.js: escaped HTML in eBay payloads exceeds the parser's
+// default entity-expansion cap.
+const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', removeNSPrefix: true, processEntities: { maxTotalExpansions: Infinity, maxExpandedLength: 50_000_000 } });
 
 // Everything that changes what the Listings or Orders pages show.
 const EVENTS = [

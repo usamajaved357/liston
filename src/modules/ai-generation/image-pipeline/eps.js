@@ -26,7 +26,7 @@ const TRADING_API_URL = 'https://api.ebay.com/ws/api.dll';
 const COMPATIBILITY_LEVEL = '1193';
 const UPLOAD_TIMEOUT_MS = 60 * 1000;
 
-const parser = new XMLParser({ ignoreAttributes: false });
+const parser = new XMLParser({ ignoreAttributes: false, processEntities: { maxTotalExpansions: Infinity, maxExpandedLength: 50_000_000 } });
 
 // eBay's numeric site ids, which the Trading API uses instead of the
 // marketplace ids the REST APIs take.

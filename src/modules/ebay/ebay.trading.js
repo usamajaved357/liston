@@ -8,7 +8,12 @@ const { XMLParser } = require('fast-xml-parser');
 const governor = require('./request-governor');
 const logger = require('../../utils/logger');
 
-const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_' });
+// eBay escapes a listing's HTML description inside the XML, so one GetItem
+// carries thousands of &lt;/&gt; entities — over fast-xml-parser's default
+// "entity expansion" safety cap (1000), which is aimed at billion-laughs
+// DOCTYPE bombs, not ordinary escaped text. Lifted for eBay's responses.
+const PROCESS_ENTITIES = { maxTotalExpansions: Infinity, maxExpandedLength: 50_000_000 };
+const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', processEntities: PROCESS_ENTITIES });
 
 class EbayTradingError extends Error {
   constructor(message, statusCode = 502, details) {
@@ -53,7 +58,8 @@ async function tradingRequestNow(accessToken, callName, bodyXml, siteId = 0) {
   let parsed;
   try {
     parsed = parser.parse(text);
-  } catch {
+  } catch (err) {
+    logger.warn('eBay Trading response unparseable', { callName, status: res.status, reason: err.message, head: text.slice(0, 300) });
     throw new EbayTradingError(`Couldn't parse eBay's response for ${callName}`, 502);
   }
 
