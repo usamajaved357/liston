@@ -115,7 +115,60 @@ function plainDescription(text) {
     .slice(0, INVENTORY_DESCRIPTION_MAX);
 }
 
-function buildInventoryItem({ title, description, imageUrls, aspects, condition, quantity }) {
+// eBay's "product identifier unavailable" text, per site (see the Selling
+// Integration Guide, "Product Identifier Text"). Sent as the EAN/UPC/ISBN of
+// a product that has none, in a category that requires one.
+const NOT_APPLICABLE_TEXT = {
+  EBAY_DE: 'Nicht zutreffend',
+  EBAY_AT: 'Nicht zutreffend',
+  EBAY_CH: 'Nicht zutreffend',
+  EBAY_FR: 'Non applicable',
+  EBAY_BE: 'Non applicable',
+  EBAY_IT: 'Non applicabile',
+  EBAY_NL: 'Niet van toepassing',
+  EBAY_ES: 'No aplicable',
+  EBAY_PL: 'Nie dotyczy',
+};
+
+function notApplicableText(marketplaceId) {
+  return NOT_APPLICABLE_TEXT[marketplaceId] || 'Does not apply';
+}
+
+// Product identifiers live on the inventory item's `product` (ean, upc,
+// isbn, mpn, brand), not among the item specifics — an "EAN" aspect is
+// ignored by eBay's "The EAN field is missing" check. Sellers and the AI
+// naturally put them in specifics, so they are lifted from there: barcodes
+// move across (they aren't item specifics), Brand and MPN are sent both ways.
+// `identifiers` are explicit values that win over the aspects.
+const IDENTIFIER_ASPECTS = { ean: 'ean', upc: 'upc', isbn: 'isbn', gtin: 'ean', mpn: 'mpn', 'manufacturer part number': 'mpn', brand: 'brand' };
+const LIST_IDENTIFIERS = new Set(['ean', 'upc', 'isbn']);
+
+function splitProductIdentifiers(aspects, identifiers = {}) {
+  const product = {};
+  const rest = {};
+  for (const [name, values] of Object.entries(aspects || {})) {
+    const field = IDENTIFIER_ASPECTS[name.trim().toLowerCase()];
+    const list = (Array.isArray(values) ? values : [values]).map((v) => String(v ?? '').trim()).filter(Boolean);
+    if (!field || !list.length) {
+      rest[name] = values;
+      continue;
+    }
+    if (LIST_IDENTIFIERS.has(field)) product[field] = [...(product[field] || []), ...list];
+    else {
+      product[field] = product[field] || list[0];
+      rest[name] = values;
+    }
+  }
+  for (const [field, value] of Object.entries(identifiers || {})) {
+    const list = (Array.isArray(value) ? value : [value]).map((v) => String(v ?? '').trim()).filter(Boolean);
+    if (!list.length) continue;
+    product[field] = LIST_IDENTIFIERS.has(field) ? list : list[0];
+  }
+  return { product, aspects: rest };
+}
+
+function buildInventoryItem({ title, description, imageUrls, aspects, condition, quantity, identifiers }) {
+  const split = splitProductIdentifiers(aspects, identifiers);
   return {
     availability: {
       shipToLocationAvailability: { quantity },
@@ -125,7 +178,8 @@ function buildInventoryItem({ title, description, imageUrls, aspects, condition,
       title,
       description: plainDescription(description),
       imageUrls,
-      aspects,
+      aspects: split.aspects,
+      ...split.product,
     },
   };
 }
@@ -289,7 +343,7 @@ async function clearStaleGroup(accessToken, groupKey, variants, marketplaceId) {
   await ebayClient.deleteInventoryItemGroup(accessToken, groupKey);
 }
 
-async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, merchantLocationKey, locationInput, listingPolicies }) {
+async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, merchantLocationKey, locationInput, listingPolicies, identifiers }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   ensureListingPolicies(listingPolicies);
@@ -313,6 +367,7 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         aspects: { ...variesBy.aspects, ...variant.aspects },
         condition: variant.condition,
         quantity: variant.quantity,
+        identifiers,
       }),
       marketplaceId
     );
@@ -1316,6 +1371,8 @@ module.exports = {
   ensureValidAccessToken,
   createOfferWithRetry,
   buildInventoryItem,
+  splitProductIdentifiers,
+  notApplicableText,
   buildOffer,
   draftListing,
   draftVariationListing,

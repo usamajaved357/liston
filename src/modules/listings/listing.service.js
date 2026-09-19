@@ -1339,9 +1339,13 @@ async function publishNow(listing, id, userId) {
   const skuWarnings = [];
   // What this attempt built on eBay, for the failure path below.
   const attempt = { built: null, credentials: null };
+  // Product identifiers (EAN/UPC/ISBN) the draft carries explicitly; see
+  // the "field is missing" retry below for how one gets added.
+  let identifiers = { ...(draft.identifiers || {}) };
+  let identifierRetried = false;
 
-  try {
-    const result = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
+  const runAttempt = () =>
+    connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
       if (alreadyOnEbay) {
         return listing.platform_group_key
           ? ebayService.publishGroup(credentials, listing.platform_group_key, marketplaceId)
@@ -1372,6 +1376,7 @@ async function publishNow(listing, id, userId) {
       const html = await renderDraftDescription(listing, userId);
       const branded = {
         ...readyDraft,
+        identifiers,
         ...(sku ? { sku } : {}),
         ...(Array.isArray(draft.variants) && draft.variants.length ? { commonListingDescription: html } : { listingDescription: html }),
       };
@@ -1390,6 +1395,34 @@ async function publishNow(listing, id, userId) {
 
       return { ...published, created, isVariation };
     });
+
+  try {
+    let result;
+    for (;;) {
+      try {
+        result = await runAttempt();
+        break;
+      } catch (err) {
+        // Some categories require a barcode (EAN/UPC/ISBN) on the product
+        // itself. eBay's sanctioned answer for a product that has none is its
+        // "Does not apply" text, so that is sent and the publish retried once,
+        // and kept on the draft so later publishes don't hit it again.
+        const field = missingIdentifierField(err);
+        if (!field || identifierRetried || alreadyOnEbay || identifiers[field]) throw err;
+        identifierRetried = true;
+        if (attempt.built && attempt.credentials) {
+          const skus = Array.isArray(attempt.built.variants) && attempt.built.variants.length ? attempt.built.variants.map((v) => v.sku) : [attempt.built.sku];
+          await ebayService.deleteInventoryObjects(attempt.credentials, { groupKey: attempt.built.groupKey, skus }).catch(() => {});
+        }
+        identifiers = { ...identifiers, [field]: ebayService.notApplicableText(marketplaceId) };
+        await listingRepository.updateGeneratedData(id, { ...draft, identifiers });
+        skuWarnings.push(
+          `eBay requires ${field === 'upc' ? 'a' : 'an'} ${field.toUpperCase()} in this category and the draft had none, so "${identifiers[field]}" was sent. ` +
+            `If the product has a barcode, add it as a ${field.toUpperCase()} item specific and it will be used instead.`
+        );
+        logger.warn('Draft publish retried with a product identifier', { listingId: id, field, value: identifiers[field] });
+      }
+    }
 
     if (!alreadyOnEbay) {
       await listingRepository.setPlatformIds(id, {
@@ -1522,6 +1555,17 @@ function dedupeVariationGroup(draft) {
 function isPolicyBlock(err) {
   const text = `${err.message || ''} ${JSON.stringify(err.details || '')}`;
   return /Hazardous Materials|PI_HAZ|improper words|violation of eBay policy/i.test(text);
+}
+
+// eBay 25002 "The EAN field is missing. Please add EAN to the listing and
+// try again." — the identifier it wants, lower-cased, or null.
+function missingIdentifierField(err) {
+  const texts = [err?.message, ...((err?.details || []).flatMap((d) => [d.message, ...((d.parameters || []).map((p) => p.value))]))];
+  for (const text of texts) {
+    const m = /\bThe (EAN|UPC|ISBN) field is missing/i.exec(String(text || ''));
+    if (m) return m[1].toLowerCase();
+  }
+  return null;
 }
 
 function explainPolicyBlock(err, draft, { cleared = false, freshSku = null } = {}) {

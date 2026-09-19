@@ -698,3 +698,26 @@ test('listListingsDetailed search survives a numeric SKU or title from an older 
   const byTitle = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active', search: '1234' });
   assert.deepStrictEqual(byTitle.items.map((l) => l.itemId), ['2']);
 });
+
+test('buildInventoryItem lifts product identifiers out of the specifics onto product', () => {
+  const { buildInventoryItem, notApplicableText } = require('../../src/modules/ebay/ebay.service');
+  const item = buildInventoryItem({
+    title: 'T',
+    description: 'd',
+    imageUrls: [],
+    aspects: { EAN: ['5012345678900'], Brand: ['Acme'], MPN: ['X-1'], Colour: ['Red'] },
+    condition: 'NEW',
+    quantity: 1,
+  });
+  // Barcodes are product fields, not item specifics; Brand/MPN are both.
+  assert.deepStrictEqual(item.product.ean, ['5012345678900']);
+  assert.strictEqual(item.product.brand, 'Acme');
+  assert.strictEqual(item.product.mpn, 'X-1');
+  assert.deepStrictEqual(Object.keys(item.product.aspects).sort(), ['Brand', 'Colour', 'MPN']);
+
+  // Explicit identifiers win, e.g. the "Does not apply" a retry adds.
+  const none = buildInventoryItem({ title: 'T', description: 'd', imageUrls: [], aspects: {}, condition: 'NEW', quantity: 1, identifiers: { ean: 'Does not apply' } });
+  assert.deepStrictEqual(none.product.ean, ['Does not apply']);
+  assert.strictEqual(notApplicableText('EBAY_DE'), 'Nicht zutreffend');
+  assert.strictEqual(notApplicableText('EBAY_GB'), 'Does not apply');
+});

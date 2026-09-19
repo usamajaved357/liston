@@ -290,6 +290,39 @@ test('publish leaves a failed listing editable and retryable, with eBay reason r
   assert.match(updateStatusMock.mock.calls[0].arguments[2].errorMessage, /Invalid category/);
 });
 
+test('publish retries once with "Does not apply" when the category requires an EAN the draft lacks', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({ marketplaceId: 'EBAY_GB', skuBase: 'AE1', title: 'Tracker', imageUrls: ['https://i.ebayimg.com/a.jpg'] })
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  const draftMock = mock.method(ebayService, 'draftListing', async (credentials, input) => ({ offerId: `offer-${draftMock.mock.calls.length}`, status: 'drafted', identifiers: input.identifiers }));
+  const deleteMock = mock.method(ebayService, 'deleteInventoryObjects', async () => {});
+  let publishes = 0;
+  mock.method(ebayService, 'publishDraft', async () => {
+    publishes += 1;
+    if (publishes === 1) {
+      const err = new Error('A user error has occurred. The EAN field is missing. Please add EAN to the listing and try again.');
+      err.details = [{ errorId: 25002, parameters: [{ name: '4', value: 'EAN' }] }];
+      throw err;
+    }
+    return { externalProductId: 'ebay-1', status: 'published' };
+  });
+  const updateDataMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  const result = await listingService.publish('listing-1', USER_ID);
+
+  // First build had no identifier; it was cleared and rebuilt with eBay's text.
+  assert.strictEqual(draftMock.mock.calls.length, 2);
+  assert.strictEqual(draftMock.mock.calls[0].arguments[1].identifiers.ean, undefined);
+  assert.strictEqual(draftMock.mock.calls[1].arguments[1].identifiers.ean, 'Does not apply');
+  assert.strictEqual(deleteMock.mock.calls.length, 1);
+  assert.strictEqual(updateDataMock.mock.calls[0].arguments[1].identifiers.ean, 'Does not apply');
+  assert.strictEqual(result.externalProductId, 'ebay-1');
+  assert.match(result.warnings[0], /requires a EAN|requires an EAN/);
+});
+
 // --- editing ---------------------------------------------------------------
 
 test('updateDraft applies text edits and persists them', async () => {
