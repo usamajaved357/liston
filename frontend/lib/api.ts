@@ -456,12 +456,28 @@ export type GenerateDraftInput =
 // The store's description template: branding, delivery and returns copy
 // that wraps every listing this account publishes. Per account — two
 // stores on one Liston get two different descriptions from the same draft.
+// The typefaces a template can use — font stacks buyers already have, since
+// eBay strips external stylesheets from a description. Mirrors FONTS in
+// src/modules/listings/description-template.js.
+export const TEMPLATE_FONTS: { id: string; name: string; stack: string; note: string }[] = [
+  { id: "modern", name: "Modern Sans", stack: "Nunito,'Segoe UI',Helvetica,Arial,sans-serif", note: "Friendly and clear — the default" },
+  { id: "classic", name: "Classic Sans", stack: "'Helvetica Neue',Helvetica,Arial,sans-serif", note: "Neutral, timeless" },
+  { id: "humanist", name: "Humanist", stack: "Verdana,Tahoma,'Segoe UI',sans-serif", note: "Wide and very readable" },
+  { id: "geometric", name: "Geometric", stack: "'Trebuchet MS','Gill Sans','Century Gothic',sans-serif", note: "Crisp, a little characterful" },
+  { id: "rounded", name: "Rounded", stack: "'Avenir Next Rounded','Arial Rounded MT Bold','Nunito',sans-serif", note: "Soft, approachable" },
+  { id: "system", name: "System", stack: "system-ui,-apple-system,'Segoe UI',Roboto,sans-serif", note: "Whatever the buyer's device uses" },
+  { id: "serif", name: "Classic Serif", stack: "Georgia,'Times New Roman',Times,serif", note: "Traditional, editorial" },
+  { id: "elegant", name: "Elegant Serif", stack: "'Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif", note: "Refined, boutique" },
+];
+
 export interface DescriptionTemplate {
   storeName: string;
   tagline: string;
   logoUrl: string;
   accentColor: string;
   darkColor: string;
+  // One of TEMPLATE_FONTS' ids; the template's typeface.
+  fontFamily: string;
   feedbackPercent: string;
   dispatchTime: string;
   dispatchNote: string;

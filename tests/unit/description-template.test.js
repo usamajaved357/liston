@@ -91,3 +91,17 @@ test('textToHtml treats a bold-only line as a heading without doubling the tags'
   const { textToHtml } = require('../../src/modules/listings/description-template');
   assert.strictEqual(textToHtml('**Key Features:**\n• A'), '<p><strong>Key Features</strong></p><ul><li>A</li></ul>');
 });
+
+// A chosen typeface reaches the CSS as a stack of fonts buyers already have
+// (eBay strips external stylesheets); an unknown id falls back to the default.
+test('renderDescription sets the template font, and {{fontFamily}} is available to custom HTML', () => {
+  const { FONTS, renderTemplateSource } = require('../../src/modules/listings/description-template');
+  assert.ok(FONTS.length >= 6);
+  const serif = renderDescription({ template: { ...base, fontFamily: 'serif' }, productName: 'P', description: 'd' });
+  assert.ok(serif.includes("font-family:Georgia,'Times New Roman',Times,serif"));
+  const fallback = renderDescription({ template: { ...base, fontFamily: 'nope' }, productName: 'P', description: 'd' });
+  assert.ok(fallback.includes("font-family:Nunito,'Segoe UI'"));
+  assert.ok(typeof renderTemplateSource === 'function');
+  const custom = renderDescription({ template: { ...base, fontFamily: 'elegant', customHtml: '<div style="font-family:{{fontFamily}}">{{productName}}</div>' }, productName: 'P', description: 'd' });
+  assert.ok(custom.includes("font-family:&#39;Palatino Linotype&#39;") || custom.includes("font-family:'Palatino Linotype'"));
+});

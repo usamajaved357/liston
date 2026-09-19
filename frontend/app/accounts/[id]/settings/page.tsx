@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ConnectionPolicies, DescriptionTemplate, EbaySettings, LocationAddress, Marketplace, Policy, PricingSettings, StoreReview } from "@/lib/api";
+import { api, ApiError, ConnectionPolicies, DescriptionTemplate, EbaySettings, LocationAddress, Marketplace, Policy, PricingSettings, StoreReview, TEMPLATE_FONTS } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { currencySymbol } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -31,6 +31,7 @@ const DEFAULT_TEMPLATE: DescriptionTemplate = {
   logoUrl: "",
   accentColor: "#FF6B2B",
   darkColor: "#1E1E2E",
+  fontFamily: "modern",
   feedbackPercent: "",
   dispatchTime: "1 to 2 business days",
   dispatchNote: "From our UK warehouse",
@@ -81,6 +82,53 @@ function Row({ title, hint, children, last }: { title: string; hint?: string; ch
         {hint && <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">{hint}</p>}
       </div>
       <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+// The typeface picker: every option set in its own face, with a sample
+// line, so the choice is made by eye rather than by name.
+function FontPickerDialog({ value, onPick, onClose }: { value: string; onPick: (id: string) => void; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-[var(--color-ink)]">Choose a font</h2>
+            <p className="text-xs text-[var(--color-muted)]">Fonts buyers already have on their device, so the listing looks the same on eBay as it does here.</p>
+          </div>
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+            Close
+          </button>
+        </div>
+        <div className="mt-4 grid max-h-[60vh] gap-2 overflow-y-auto sm:grid-cols-2">
+          {TEMPLATE_FONTS.map((f) => {
+            const active = f.id === value;
+            return (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => onPick(f.id)}
+                className={`rounded-xl border p-3.5 text-left transition-colors ${
+                  active ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)]" : "border-[var(--color-line)] hover:border-[var(--color-line-strong)]"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-[var(--color-ink)]">{f.name}</span>
+                  {active && <span className="chip chip-primary !h-5 !text-[10.5px]">Selected</span>}
+                </div>
+                <p className="mt-1.5 text-[17px] leading-tight text-[var(--color-ink)]" style={{ fontFamily: f.stack }}>
+                  Sample Product Title — Free UK Delivery
+                </p>
+                <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]" style={{ fontFamily: f.stack }}>
+                  Durable, well made and ready to ship. 30-day returns.
+                </p>
+                <p className="mt-1.5 text-[11px] text-[var(--color-muted)]">{f.note}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -221,6 +269,7 @@ export default function AccountSettingsPage() {
   const [templateSaved, setTemplateSaved] = useState(false);
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [fetchingProfile, setFetchingProfile] = useState(false);
+  const [fontPickerOpen, setFontPickerOpen] = useState(false);
   const [logoPalettes, setLogoPalettes] = useState<{ name: string; accentColor: string; darkColor: string }[]>([]);
   const [paletteState, setPaletteState] = useState<"idle" | "loading" | "none">("idle");
   // The real rendered template over a sample product, kept in step with
@@ -501,12 +550,27 @@ export default function AccountSettingsPage() {
   const activePalette = (p: { accentColor: string; darkColor: string }) =>
     p.accentColor.toLowerCase() === template.accentColor.toLowerCase() && p.darkColor.toLowerCase() === template.darkColor.toLowerCase();
 
+  const policyIdsDirty = JSON.stringify([fulfillmentPolicyId, paymentPolicyId, returnPolicyId, merchantLocationKey]) !== savedSnapshot.policies;
+  const templateDirty = JSON.stringify(template) !== savedSnapshot.template;
+  // The Policies tab holds the policy ids and the delivery/returns copy (part
+  // of the template); one Save writes whichever changed.
+  const savePoliciesTab = async () => {
+    if (policyIdsDirty) await handleSave();
+    if (templateDirty) await handleSaveTemplate();
+  };
   const saveState =
     tab === "policies"
-      ? { dirty: JSON.stringify([fulfillmentPolicyId, paymentPolicyId, returnPolicyId, merchantLocationKey]) !== savedSnapshot.policies, saving, saved, error, onSave: handleSave, can: canSavePolicies }
+      ? {
+          dirty: policyIdsDirty || templateDirty,
+          saving: saving || savingTemplate,
+          saved: saved || templateSaved,
+          error: error || templateError,
+          onSave: savePoliciesTab,
+          can: policyIdsDirty ? canSavePolicies : true,
+        }
       : tab === "pricing"
         ? { dirty: JSON.stringify(pricing) !== savedSnapshot.pricing, saving: savingPricing, saved: pricingSaved, error: pricingError, onSave: handleSavePricing, can: true }
-        : { dirty: JSON.stringify(template) !== savedSnapshot.template, saving: savingTemplate, saved: templateSaved, error: templateError, onSave: handleSaveTemplate, can: true };
+        : { dirty: templateDirty, saving: savingTemplate, saved: templateSaved, error: templateError, onSave: handleSaveTemplate, can: true };
   const saveControl = (
     <div className="flex items-center gap-3">
       {(saveState.error || saveState.saved) && (
@@ -570,6 +634,7 @@ export default function AccountSettingsPage() {
             (loading ? (
               <Skeleton />
             ) : (
+              <div className="space-y-6">
               <div className="card overflow-hidden">
                 <SectionHead
                   title="Listing policies"
@@ -645,6 +710,34 @@ export default function AccountSettingsPage() {
                     </button>
                   )}
                 </Row>
+              </div>
+
+              {/* What the listing says about delivery and returns. Kept with the
+                  policies: it's a promise to the buyer, not a matter of style. */}
+              <div className="card overflow-hidden">
+                <SectionHead title="Delivery and returns" blurb="What every listing tells buyers about dispatch, delivery and returns — shown as badges and a short section under the description." />
+                <Row title="Dispatch" hint="How fast, and from where.">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input className="input input-sm" placeholder="1 to 2 business days" value={template.dispatchTime} onChange={(e) => setT({ dispatchTime: e.target.value })} />
+                    <input className="input input-sm" placeholder={connection.marketplace?.template?.warehouse || "From our UK warehouse"} value={template.dispatchNote} onChange={(e) => setT({ dispatchNote: e.target.value })} />
+                  </div>
+                </Row>
+                <Row title="Delivery" hint="Carrier and typical delivery time.">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input className="input input-sm" placeholder={connection.marketplace?.template?.carrier || "Royal Mail / Evri"} value={template.carrier} onChange={(e) => setT({ carrier: e.target.value })} />
+                    <input className="input input-sm" placeholder="2 to 4 business days" value={template.deliveryTime} onChange={(e) => setT({ deliveryTime: e.target.value })} />
+                  </div>
+                </Row>
+                <Row title={`Free ${connection.marketplace?.template?.postageWord || "P&P"} on ${connection.marketplace?.template?.region || "UK"} orders`} hint={`Off shows a Tracked ${connection.marketplace?.template?.postageWord || "P&P"} badge instead.`}>
+                  <Switch on={template.freePostage} onChange={(v) => setT({ freePostage: v })} label="Free postage" />
+                </Row>
+                <Row title="Returns window" hint="0 hides the returns section.">
+                  <Unit value={template.returnsDays} unit="days" onChange={(v) => setT({ returnsDays: v })} />
+                </Row>
+                <Row title="Reply time" hint="How quickly you answer messages." last>
+                  <input className="input input-sm w-40" placeholder="24 hours" value={template.responseTime} onChange={(e) => setT({ responseTime: e.target.value })} />
+                </Row>
+              </div>
               </div>
             ))}
 
@@ -726,11 +819,29 @@ export default function AccountSettingsPage() {
                     <input className="input input-sm" placeholder="https://i.ebayimg.com/…" value={template.logoUrl} onChange={(e) => setT({ logoUrl: e.target.value })} onBlur={() => loadPalettes(template.logoUrl || undefined)} />
                   </div>
                 </Row>
-                <Row title="Feedback score" hint="Blank uses your live eBay score." last>
+                <Row title="Feedback score" hint="Blank uses your live eBay score.">
                   <div className="relative w-36">
                     <input className="input input-sm !pr-8" placeholder="Live score" value={template.feedbackPercent} onChange={(e) => setT({ feedbackPercent: e.target.value.replace(/[^\d.]/g, "") })} />
                     <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[12px] text-[var(--color-muted)]">%</span>
                   </div>
+                </Row>
+                <Row title="Font" hint="The typeface for the whole description." last>
+                  {(() => {
+                    const font = TEMPLATE_FONTS.find((f) => f.id === template.fontFamily) || TEMPLATE_FONTS[0];
+                    return (
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--color-line)] px-4 py-2.5">
+                        <div className="min-w-0">
+                          <p className="text-[13px] font-semibold text-[var(--color-ink)]">{font.name}</p>
+                          <p className="truncate text-[15px] leading-tight text-[var(--color-ink)]" style={{ fontFamily: font.stack }}>
+                            Sample Product Title — Free UK Delivery
+                          </p>
+                        </div>
+                        <button type="button" onClick={() => setFontPickerOpen(true)} className="btn btn-secondary btn-sm flex-shrink-0">
+                          Change font
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </Row>
               </div>
 
@@ -774,31 +885,6 @@ export default function AccountSettingsPage() {
                     </div>
                   </div>
                 </div>
-              </div>
-
-              <div className="card overflow-hidden">
-                <SectionHead title="Delivery and returns" blurb="Shown as badges and a short section under the description." />
-                <Row title="Dispatch" hint="How fast, and from where.">
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <input className="input input-sm" placeholder="1 to 2 business days" value={template.dispatchTime} onChange={(e) => setT({ dispatchTime: e.target.value })} />
-                    <input className="input input-sm" placeholder={connection.marketplace?.template?.warehouse || "From our UK warehouse"} value={template.dispatchNote} onChange={(e) => setT({ dispatchNote: e.target.value })} />
-                  </div>
-                </Row>
-                <Row title="Delivery" hint="Carrier and typical delivery time.">
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <input className="input input-sm" placeholder={connection.marketplace?.template?.carrier || "Royal Mail / Evri"} value={template.carrier} onChange={(e) => setT({ carrier: e.target.value })} />
-                    <input className="input input-sm" placeholder="2 to 4 business days" value={template.deliveryTime} onChange={(e) => setT({ deliveryTime: e.target.value })} />
-                  </div>
-                </Row>
-                <Row title={`Free ${connection.marketplace?.template?.postageWord || "P&P"} on ${connection.marketplace?.template?.region || "UK"} orders`} hint={`Off shows a Tracked ${connection.marketplace?.template?.postageWord || "P&P"} badge instead.`}>
-                  <Switch on={template.freePostage} onChange={(v) => setT({ freePostage: v })} label="Free postage" />
-                </Row>
-                <Row title="Returns window" hint="0 hides the returns section.">
-                  <Unit value={template.returnsDays} unit="days" onChange={(v) => setT({ returnsDays: v })} />
-                </Row>
-                <Row title="Reply time" hint="How quickly you answer messages." last>
-                  <input className="input input-sm w-40" placeholder="24 hours" value={template.responseTime} onChange={(e) => setT({ responseTime: e.target.value })} />
-                </Row>
               </div>
 
               <div className="card overflow-hidden">
@@ -987,6 +1073,16 @@ export default function AccountSettingsPage() {
             <p className="mt-2 text-[12px] text-[var(--color-muted)]">Applied code shows in the live preview; press Save template to keep it. eBay doesn&apos;t allow scripts or iframes.</p>
           </div>
         </div>
+      )}
+      {fontPickerOpen && (
+        <FontPickerDialog
+          value={template.fontFamily}
+          onPick={(id) => {
+            setT({ fontFamily: id });
+            setFontPickerOpen(false);
+          }}
+          onClose={() => setFontPickerOpen(false)}
+        />
       )}
     </AccountShell>
   );

@@ -352,6 +352,7 @@ const updateTemplateSchema = z.object({
   logoUrl: z.string().url().or(z.literal('')).default(''),
   accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #FF6B2B').default('#FF6B2B'),
   darkColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour like #1E1E2E').default('#1E1E2E'),
+  fontFamily: z.enum(descriptionTemplate.FONTS.map((f) => f.id)).default('modern'),
   feedbackPercent: z.string().max(6).default(''),
   dispatchTime: z.string().max(40).default('1–2 Business Days'),
   dispatchNote: z.string().max(60).default('From our UK warehouse'),
