@@ -106,6 +106,34 @@ const CONDITIONS = [
   { value: "USED_ACCEPTABLE", label: "Used, acceptable" },
 ];
 
+// The same working as the backend's priceForCost, re-run for a price the
+// seller has typed, so the ROI badge and its panel follow the input as it
+// changes rather than describing the price the AI originally chose.
+function repriceBreakdown(breakdown: PriceBreakdown, priceText: string | undefined): PriceBreakdown {
+  if (priceText === undefined) return breakdown;
+  const sellPrice = Number(priceText);
+  if (!Number.isFinite(sellPrice) || sellPrice <= 0 || Math.abs(sellPrice - breakdown.sellPrice) < 0.005) return breakdown;
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const adsRate = breakdown.feeRates ? breakdown.feeRates.adsPercent / 100 : breakdown.sellPrice > 0 ? breakdown.fees.ads / breakdown.sellPrice : 0;
+  const processingRate = breakdown.feeRates
+    ? breakdown.feeRates.processingPercent / 100
+    : breakdown.sellPrice > 0
+      ? breakdown.fees.processing / breakdown.sellPrice
+      : 0;
+  const ads = round2(sellPrice * adsRate);
+  const processing = round2(sellPrice * processingRate);
+  const profit = round2(sellPrice - breakdown.totalCost - ads - processing - breakdown.fees.fixed);
+  return {
+    ...breakdown,
+    sellPrice: round2(sellPrice),
+    fees: { ...breakdown.fees, ads, processing },
+    profit,
+    roiPercent: breakdown.totalCost > 0 ? round2((profit / breakdown.totalCost) * 100) : 0,
+    // A typed price is the seller's own, whichever rule chose the original.
+    basis: "manual",
+  };
+}
+
 // A price the seller didn't type needs to show its working, or it's just a
 // number they have to take on faith.
 function PriceBreakdownPanel({ breakdown }: { breakdown: PriceBreakdown }) {
@@ -142,7 +170,12 @@ function PriceBreakdownPanel({ breakdown }: { breakdown: PriceBreakdown }) {
         {breakdown.roiPercent.toFixed(0)}% ROI {hitTarget ? "is at or above" : "is BELOW"} your{" "}
         {breakdown.targetRoiPercent}% target
       </p>
-      {breakdown.basis === "competitor" ? (
+      {breakdown.basis === "manual" ? (
+        <p className="mt-1 text-xs text-[var(--color-muted)]">
+          Your own price{breakdown.floorPrice ? ` · target-ROI floor is ${formatPrice(breakdown.floorPrice, breakdown.currency)}` : ""}
+          {breakdown.competitorPrice != null ? `, competitor sells at ${formatPrice(breakdown.competitorPrice, breakdown.currency)}` : ""}.
+        </p>
+      ) : breakdown.basis === "competitor" ? (
         <p className="mt-1 text-xs text-[var(--color-muted)]">
           Matched the competitor&apos;s {formatPrice(breakdown.competitorPrice ?? 0, breakdown.currency)}, above your floor
           of {formatPrice(breakdown.floorPrice ?? 0, breakdown.currency)}.
@@ -932,7 +965,7 @@ function VariationsTable({
               const gone = isRowGone(v, i);
               const rowRemovedDirectly = removedIndexes.has(i);
               const image = imageOverrides[i] ?? v.imageUrls[0];
-              const roi = v.priceBreakdown;
+              const roi = v.priceBreakdown ? repriceBreakdown(v.priceBreakdown, priceOverrides[i] ?? v.price.value) : undefined;
               return (
                 <tr
                   key={v.sku || i}
@@ -2571,10 +2604,10 @@ export default function DraftEditorPage() {
                 {single?.priceBreakdown && (
                   <details className="mt-2.5 rounded-xl border border-[var(--color-line)]">
                     <summary className="cursor-pointer px-3 py-1.5 text-[12px] font-semibold text-[var(--color-ink)]">
-                      How this price was worked out · {single.priceBreakdown.roiPercent.toFixed(0)}% ROI
+                      How this price was worked out · {repriceBreakdown(single.priceBreakdown, singlePrice).roiPercent.toFixed(0)}% ROI
                     </summary>
                     <div className="border-t border-[var(--color-line)] p-3">
-                      <PriceBreakdownPanel breakdown={single.priceBreakdown} />
+                      <PriceBreakdownPanel breakdown={repriceBreakdown(single.priceBreakdown, singlePrice)} />
                     </div>
                   </details>
                 )}

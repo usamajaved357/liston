@@ -524,13 +524,14 @@ export interface PriceBreakdown {
   shippingCost: number;
   totalCost: number;
   fees: { ads: number; processing: number; fixed: number };
+  feeRates?: { adsPercent: number; processingPercent: number };
   profit: number;
   roiPercent: number;
   currency: string;
   targetRoiPercent: number;
   costIsExact?: boolean;
   // Which rule set the price: our ROI floor, or the competitor's own price.
-  basis?: "target-roi" | "competitor";
+  basis?: "target-roi" | "competitor" | "manual";
   floorPrice?: number;
   competitorPrice?: number | null;
 }

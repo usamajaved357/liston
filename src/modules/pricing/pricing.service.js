@@ -113,6 +113,9 @@ function priceForCost(itemCost, pricing = {}, { competitorPrice } = {}) {
     shippingCost: round2(Number(settings.shippingCostPerOrder || 0)),
     totalCost: round2(totalCost),
     fees: { ads: adsFee, processing: processingFee, fixed: round2(fixed) },
+    // The rates behind the fees, so the editor can re-run this working for a
+    // price the seller types without a round trip.
+    feeRates: { adsPercent: Number(settings.adsFeePercent), processingPercent: Number(settings.processingFeePercent) },
     profit,
     roiPercent: round2((profit / totalCost) * 100),
     currency: settings.currency,
