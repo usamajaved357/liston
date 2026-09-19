@@ -241,11 +241,35 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
+// A seller-chosen SKU keeps the same group key across publish attempts, so
+// a retry finds the group a failed attempt left behind — with the shared
+// item specifics as they were THEN. eBay validates each SKU it re-creates
+// against that stale group before the group itself can be updated, which
+// is how a draft kept failing with "Part Type is missing" after Part Type
+// had been added (seen live). Dropping the unpublished group first lets the
+// attempt rebuild it from the current draft. A group that is live is left
+// alone and named, since deleting it would take the listing down.
+async function clearStaleGroup(accessToken, groupKey, variants, marketplaceId) {
+  const existing = await ebayClient.getInventoryItemGroup(accessToken, groupKey).catch(() => null);
+  if (!existing) return;
+  const firstSku = existing.variantSKUs?.[0] || variants[0]?.sku;
+  const offers = firstSku ? await ebayClient.getOffersBySku(accessToken, firstSku, marketplaceId).catch(() => ({ offers: [] })) : { offers: [] };
+  const live = (offers.offers || []).find((o) => o.status === 'PUBLISHED' && o.listing?.listingId);
+  if (live) {
+    throw new EbayError(
+      `The custom label "${groupKey}" is already used by live listing ${live.listing.listingId}. Give this draft a different SKU, or end that listing first.`,
+      400
+    );
+  }
+  await ebayClient.deleteInventoryItemGroup(accessToken, groupKey);
+}
+
 async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, merchantLocationKey, locationInput, listingPolicies }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   ensureListingPolicies(listingPolicies);
   await ensureInventoryLocation(accessToken, merchantLocationKey, locationInput);
+  await clearStaleGroup(accessToken, groupKey, variants, marketplaceId);
 
   // Each variant costs two sequential eBay calls (inventory item, then
   // offer), so a real multi-axis matrix — a phone case is 6 colours x 27

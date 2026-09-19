@@ -336,9 +336,58 @@ test('buildInventoryItem strips HTML and caps at 4000 while buildOffer carries t
 // A variation listing's item specifics live on the GROUP; each SKU carries
 // only the varying aspect. Publishing with the shared aspects on the SKUs
 // alone failed live with "The item specific Type is missing".
+function variationInput(overrides = {}) {
+  return {
+    groupKey: 'G1',
+    commonTitle: 'Hanger',
+    commonDescription: 'plain',
+    commonListingDescription: '<p>html</p>',
+    imageUrls: ['https://example.com/a.jpg'],
+    variesBy: { aspects: { Type: ['Clothes Drying Rack'], Brand: ['Unbranded'] }, aspectsImageVariesBy: ['Colour'], specifications: [{ name: 'Colour', values: ['Silver', 'Black'] }] },
+    variants: [
+      { sku: 'G1-1', imageUrls: ['https://example.com/s.jpg'], aspects: { Colour: ['Silver'] }, quantity: 1, price: { value: '9.99', currency: 'GBP' } },
+      { sku: 'G1-2', imageUrls: ['https://example.com/b.jpg'], aspects: { Colour: ['Black'] }, quantity: 1, price: { value: '9.99', currency: 'GBP' } },
+    ],
+    marketplaceId: 'EBAY_GB',
+    categoryId: '81241',
+    merchantLocationKey: 'main',
+    listingPolicies: validListingPolicies(),
+    ...overrides,
+  };
+}
+
+test('draftVariationListing drops the unpublished group a failed attempt left under the same key before rebuilding', async () => {
+  const calls = [];
+  mock.method(ebayClient, 'getInventoryLocations', async () => ({ locations: [{ merchantLocationKey: 'main' }] }));
+  mock.method(ebayClient, 'getInventoryItemGroup', async () => ({ inventoryItemGroupKey: 'G1', variantSKUs: ['G1-1', 'G1-2'] }));
+  mock.method(ebayClient, 'getOffersBySku', async () => ({ offers: [{ offerId: 'o1', status: 'UNPUBLISHED', marketplaceId: 'EBAY_GB' }] }));
+  mock.method(ebayClient, 'deleteInventoryItemGroup', async () => calls.push('deleteGroup'));
+  mock.method(ebayClient, 'createOrReplaceInventoryItem', async (token, sku) => calls.push(`item:${sku}`));
+  mock.method(ebayClient, 'createOffer', async (token, offer) => ({ offerId: `offer-${offer.sku}` }));
+  mock.method(ebayClient, 'createOrReplaceInventoryItemGroup', async () => calls.push('createGroup'));
+
+  await ebayService.draftVariationListing(freshCredentials(), variationInput());
+
+  assert.strictEqual(calls[0], 'deleteGroup', 'the stale group goes before any SKU is re-created');
+  assert.strictEqual(calls[calls.length - 1], 'createGroup');
+});
+
+test('draftVariationListing refuses a custom label whose group is already a live listing', async () => {
+  mock.method(ebayClient, 'getInventoryLocations', async () => ({ locations: [{ merchantLocationKey: 'main' }] }));
+  mock.method(ebayClient, 'getInventoryItemGroup', async () => ({ inventoryItemGroupKey: 'G1', variantSKUs: ['G1-1'] }));
+  mock.method(ebayClient, 'getOffersBySku', async () => ({ offers: [{ offerId: 'o1', status: 'PUBLISHED', listing: { listingId: '123456' } }] }));
+  const del = mock.method(ebayClient, 'deleteInventoryItemGroup', async () => {});
+
+  await assert.rejects(() => ebayService.draftVariationListing(freshCredentials(), variationInput()), /already used by live listing 123456/);
+  assert.strictEqual(del.mock.calls.length, 0);
+});
+
 test('draftVariationListing puts shared aspects on the group and merged aspects on each SKU', async () => {
   let group = null;
   const items = [];
+  mock.method(ebayClient, 'getInventoryItemGroup', async () => {
+    throw new Error('not found');
+  });
   mock.method(ebayClient, 'getInventoryLocations', async () => ({ locations: [{ merchantLocationKey: 'main' }] }));
   mock.method(ebayClient, 'createOrReplaceInventoryItem', async (token, sku, item) => {
     items.push([sku, item]);

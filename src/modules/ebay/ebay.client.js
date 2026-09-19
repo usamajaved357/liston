@@ -141,6 +141,10 @@ function createOffer(accessToken, offer) {
 
 // The unpublished/published offers already on a SKU (eBay allows one per
 // marketplace). Used to recover from "offer already exists" on a retry.
+function getInventoryItemGroup(accessToken, groupKey) {
+  return request(accessToken, 'GET', `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
+}
+
 function getOffersBySku(accessToken, sku, marketplaceId) {
   return request(accessToken, 'GET', `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${marketplaceId}`, undefined, marketplaceId);
 }
@@ -219,6 +223,7 @@ module.exports = {
   EbayApiError,
   createOrReplaceInventoryItem,
   createOrReplaceInventoryItemGroup,
+  getInventoryItemGroup,
   createOffer,
   getOffersBySku,
   updateOffer,
