@@ -112,7 +112,7 @@ export function AppShell({ children, header, role, isAdmin }: AppShellProps) {
         {header && (
           <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">{header}</div>
         )}
-        <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>{children}</div>
+        <div className={`flex-1 min-h-0 overflow-y-auto px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
       </div>
     </div>
   );

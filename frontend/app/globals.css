@@ -35,6 +35,7 @@
   --shadow-pop: 0 12px 32px -12px rgba(15, 23, 42, 0.25);
   --radius-card: 16px;
   --radius-control: 999px; /* capsule buttons and inputs */
+  --page-gutter: 28px; /* space between the sidebar/window edge and page content, both sides */
   --radius-field: 14px; /* multi-line fields */
 
   --font-display: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
@@ -176,7 +177,7 @@ select:focus-visible {
    @utility: it styles descendants, which utilities can't. */
 @layer components {
   .page-header {
-    padding: 16px 40px 20px;
+    padding: 16px var(--page-gutter) 20px;
   }
   .page-header h1 {
     display: flex;

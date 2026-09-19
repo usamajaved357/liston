@@ -374,91 +374,110 @@ function AccountOrdersContent() {
           </p>
         </div>
       }
-    >
-      {/* Status tabs */}
-      <div className="flex flex-wrap items-center gap-1.5 mb-4 border-b border-[var(--color-line)] pb-3">
-        {STATUS_TABS.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => changeStatus(tab.key)}
-            className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-              status === tab.key
-                ? "bg-[var(--color-primary)] text-white"
-                : "text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
-            }`}
-          >
-            {tab.label} ({counts[tab.key]})
-          </button>
-        ))}
-        {SOON_TABS.map((label) => (
-          <span
-            key={label}
-            title="Not available yet, needs eBay's returns/cases API"
-            className="rounded-full px-3.5 py-1.5 text-xs font-semibold text-[var(--color-muted)]/50 cursor-not-allowed"
-          >
-            {label}
-          </span>
-        ))}
-      </div>
-
-      {/* Filter bar */}
-      <div className="flex flex-wrap items-center gap-3 mb-5">
-        <label className="flex items-center gap-2 rounded-full border border-[var(--color-line)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-ink)]">
-          Period:
-          <select
-            value={range}
-            onChange={(e) => changeRange(e.target.value as OrderRange)}
-            className="bg-transparent font-bold focus:outline-none"
-          >
-            {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
-              <option key={key} value={key}>
-                {RANGE_LABELS[key]}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <form onSubmit={handleSearchSubmit} className="flex items-center flex-1 min-w-[220px] max-w-sm">
-          <div className="group flex items-center flex-1 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-3.5 pr-1.5 py-1 transition-colors focus-within:border-[var(--color-accent)]">
-            <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-muted)] flex-shrink-0">
-              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-              <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            <input
-              type="text"
-              value={searchInput}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              placeholder="Search by order ID or item title"
-              autoComplete="off"
-              autoCorrect="off"
-              spellCheck={false}
-              className="flex-1 min-w-0 bg-transparent border-0 px-2 py-1 text-xs text-[var(--color-ink)] placeholder:text-[var(--color-muted)] outline-none ring-0 focus:outline-none focus:ring-0"
-            />
-            {searchInput && (
+      subheader={
+        <div>
+          <div className="inline-flex flex-wrap items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+            {STATUS_TABS.map((tab) => (
               <button
-                type="button"
-                onClick={clearSearch}
-                aria-label="Clear search"
-                className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] transition-colors mr-1"
+                key={tab.key}
+                onClick={() => changeStatus(tab.key)}
+                className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
+                  status === tab.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                }`}
               >
-                <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3">
-                  <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
+                {tab.label}
+                <span className={status === tab.key ? "text-white/70" : "text-[var(--color-muted)]/70"}>{counts[tab.key]}</span>
               </button>
-            )}
-            <button
-              type="submit"
-              className="rounded-full bg-[var(--color-primary)] px-3 py-1 text-xs font-semibold text-white hover:bg-[var(--color-primary-hover)] transition-colors flex-shrink-0"
-            >
-              Search
-            </button>
+            ))}
+            {SOON_TABS.map((label) => (
+              <span
+                key={label}
+                title="Not available yet, needs eBay's returns/cases API"
+                className="flex h-7 cursor-not-allowed items-center rounded-full px-3.5 text-[12.5px] font-medium text-[var(--color-muted)]/50"
+              >
+                {label}
+              </span>
+            ))}
           </div>
-        </form>
-        <div className="ml-auto">
-          <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
-        </div>
-      </div>
 
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <label className="flex items-center gap-2 rounded-full border border-[var(--color-line)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-ink)]">
+              Period:
+              <select
+                value={range}
+                onChange={(e) => changeRange(e.target.value as OrderRange)}
+                className="bg-transparent font-bold focus:outline-none"
+              >
+                {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
+                  <option key={key} value={key}>
+                    {RANGE_LABELS[key]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <form onSubmit={handleSearchSubmit} className="flex items-center flex-1 min-w-[220px] max-w-sm">
+              <div className="group flex items-center flex-1 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-3.5 pr-1.5 py-1 transition-colors focus-within:border-[var(--color-accent)]">
+                <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-muted)] flex-shrink-0">
+                  <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+                  <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(e) => handleSearchChange(e.target.value)}
+                  placeholder="Search by order ID or item title"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="flex-1 min-w-0 bg-transparent border-0 px-2 py-1 text-xs text-[var(--color-ink)] placeholder:text-[var(--color-muted)] outline-none ring-0 focus:outline-none focus:ring-0"
+                />
+                {searchInput && (
+                  <button
+                    type="button"
+                    onClick={clearSearch}
+                    aria-label="Clear search"
+                    className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] transition-colors mr-1"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3">
+                      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  className="rounded-full bg-[var(--color-primary)] px-3 py-1 text-xs font-semibold text-white hover:bg-[var(--color-primary-hover)] transition-colors flex-shrink-0"
+                >
+                  Search
+                </button>
+              </div>
+            </form>
+            <div className="ml-auto">
+              <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
+            </div>
+          </div>
+        </div>
+      }
+      footer={
+        !error && !loading && orders.length > 0 ? (
+          <EbayStylePagination
+            page={page}
+            totalPages={totalPages}
+            perPage={perPage}
+            totalEntries={totalEntries}
+            onPage={(p) => {
+              setPage(p);
+              document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+            onPerPage={(next) => {
+              setPerPage(next);
+              setPage(1);
+            }}
+            bare
+          />
+        ) : null
+      }
+    >
       {search && (
         <p className="text-xs text-[var(--color-muted)] mb-3">
           Showing results for &ldquo;{search}&rdquo;
@@ -491,19 +510,6 @@ function AccountOrdersContent() {
           </div>
         )}
 
-        {!error && !loading && orders.length > 0 && (
-          <EbayStylePagination
-            page={page}
-            totalPages={totalPages}
-            perPage={perPage}
-            totalEntries={totalEntries}
-            onPage={setPage}
-            onPerPage={(next) => {
-              setPerPage(next);
-              setPage(1);
-            }}
-          />
-        )}
       </div>
     </AccountShell>
   );

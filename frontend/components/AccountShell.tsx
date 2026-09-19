@@ -20,6 +20,8 @@ interface AccountShellProps {
   // page scrolls; it spans the same width as the content, so anything
   // aligned in it lines up with the cards below.
   subheader?: React.ReactNode;
+  // A full-width row pinned under the scrolling body (paging, say).
+  footer?: React.ReactNode;
   connectionId: string;
   label: string;
   platformKey: string;
@@ -44,6 +46,7 @@ export function AccountShell({
   header,
   actions,
   subheader,
+  footer,
   connectionId,
   label,
   platformKey,
@@ -223,7 +226,7 @@ export function AccountShell({
           {subheader && <div className="mt-5">{subheader}</div>}
           </div>
         )}
-        <div className={`flex-1 min-h-0 overflow-y-auto px-10 ${header ? "pb-8" : "py-8"}`}>
+        <div data-scroller className={`flex-1 min-h-0 overflow-y-auto px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>
           {actionError && (
             <div className="mb-4">
               <Alert>{actionError}</Alert>
@@ -231,6 +234,7 @@ export function AccountShell({
           )}
           {children}
         </div>
+        {footer && <div className="flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)]">{footer}</div>}
       </div>
 
       <ConfirmDialog

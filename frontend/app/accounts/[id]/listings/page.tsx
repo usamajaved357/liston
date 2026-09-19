@@ -210,7 +210,7 @@ function Footer({
   const from = totalEntries === 0 ? 0 : (page - 1) * size + 1;
   const to = Math.min(totalEntries, page * size);
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-line)] bg-[var(--color-paper)] px-5 py-3">
+    <div className="flex flex-wrap items-center justify-between gap-3 py-2.5">
       <div className="flex items-center gap-3">
         <span className="text-[12px] text-[var(--color-muted)]">
           Showing <span className="font-medium text-[var(--color-ink)]">{from}</span> to <span className="font-medium text-[var(--color-ink)]">{to}</span> of{" "}
@@ -456,15 +456,17 @@ export default function AccountListingsPage() {
           </p>
         </div>
       }
-    >
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      subheader={
+        <div className="flex flex-wrap items-center justify-between gap-3">
+        {/* Same control as the per-page selector in the footer: a bordered
+            capsule with the active option filled. */}
         <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
           {tabs.map((t) => (
             <button
               key={t.key}
               type="button"
               onClick={() => changeFilter(t.key)}
-              className={`flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
+              className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
                 filter === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
               }`}
             >
@@ -501,7 +503,26 @@ export default function AccountListingsPage() {
         </div>
         </div>
       </div>
-
+      }
+      footer={
+        !loading && filter !== "draft" && items.length > 0 ? (
+          <Footer
+            page={page}
+            totalPages={totalPages}
+            totalEntries={totalEntries}
+            perPage={perPage}
+            onPage={(p) => {
+              setPage(p);
+              document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+            onPerPage={(n) => {
+              setPerPage(n);
+              setPage(1);
+            }}
+          />
+        ) : null
+      }
+    >
       {error && (
         <div className="notice notice-danger mb-4">
           <span className="flex-1">{error}</span>
@@ -547,33 +568,17 @@ export default function AccountListingsPage() {
             <p className="mt-1 text-[13px] text-[var(--color-muted)]">{debounced ? "Try a different title, SKU or item number." : "Listings on eBay show up here as soon as they're live."}</p>
           </div>
         ) : (
-          <>
-            <ul className="divide-y divide-[var(--color-line)]">
-              {items.map((item) => (
-                <ListingRow
-                  key={item.itemId}
-                  item={item}
-                  editing={editingItemId === item.itemId}
-                  onEdit={() => openLiveEdit(item.itemId)}
-                  onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
-                />
-              ))}
-            </ul>
-            <Footer
-              page={page}
-              totalPages={totalPages}
-              totalEntries={totalEntries}
-              perPage={perPage}
-              onPage={(p) => {
-                setPage(p);
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-              onPerPage={(n) => {
-                setPerPage(n);
-                setPage(1);
-              }}
-            />
-          </>
+          <ul className="divide-y divide-[var(--color-line)]">
+            {items.map((item) => (
+              <ListingRow
+                key={item.itemId}
+                item={item}
+                editing={editingItemId === item.itemId}
+                onEdit={() => openLiveEdit(item.itemId)}
+                onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
+              />
+            ))}
+          </ul>
         )}
       </div>
 

@@ -25,6 +25,8 @@ interface EbayStylePaginationProps {
   totalEntries: number;
   onPage: (page: number) => void;
   onPerPage: (perPage: number) => void;
+  // No border or side padding: for a shell's pinned footer, which brings its own.
+  bare?: boolean;
 }
 
 export function EbayStylePagination({
@@ -34,12 +36,13 @@ export function EbayStylePagination({
   totalEntries,
   onPage,
   onPerPage,
+  bare = false,
 }: EbayStylePaginationProps) {
   const start = totalEntries === 0 ? 0 : (page - 1) * perPage + 1;
   const end = Math.min(totalEntries, page * perPage);
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 border-t border-[var(--color-line)]">
+    <div className={bare ? "flex flex-wrap items-center justify-between gap-4 py-2.5" : "flex flex-wrap items-center justify-between gap-4 px-5 py-4 border-t border-[var(--color-line)]"}>
       <span className="text-xs text-[var(--color-muted)]">
         {totalEntries === 0 ? "No results" : `Results: ${start}-${end} of ${totalEntries}`}
       </span>

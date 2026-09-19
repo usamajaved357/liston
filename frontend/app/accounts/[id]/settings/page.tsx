@@ -547,7 +547,7 @@ export default function AccountSettingsPage() {
                       key={t.key}
                       type="button"
                       onClick={() => setTab(t.key)}
-                      className={`flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
+                      className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
                         tab === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
                       }`}
                     >
