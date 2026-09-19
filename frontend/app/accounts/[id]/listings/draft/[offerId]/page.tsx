@@ -78,6 +78,11 @@ const Icon = {
       <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  refresh: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M20 12a8 8 0 01-14.9 4M4 12a8 8 0 0114.9-4M19 4v4h-4M5 20v-4h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
   restore: (
     <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
       <path d="M4 10h11a5 5 0 010 10h-4M4 10l4-4M4 10l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -1438,6 +1443,7 @@ export default function DraftEditorPage() {
 
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [regeneratingSku, setRegeneratingSku] = useState(false);
   const [confirmPublish, setConfirmPublish] = useState(false);
   const [published, setPublished] = useState<DraftListing | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1831,7 +1837,7 @@ export default function DraftEditorPage() {
   // Other server round-trips (a category refit, a split, a publish) save the
   // pending edits themselves and then reset from the result; an autosave
   // landing in the middle of one would race it.
-  const otherRequestBusy = publishing || deleting || refitting || applyingFix || splitting !== null;
+  const otherRequestBusy = publishing || deleting || refitting || applyingFix || splitting !== null || regeneratingSku;
   useEffect(() => {
     if (!patchSignature || saving || otherRequestBusy) return;
     // A save eBay's rules rejected (a clashing option name, say) is not
@@ -1851,6 +1857,21 @@ export default function DraftEditorPage() {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [patchSignature, saving]);
+
+  async function handleRegenerateSku() {
+    if (!listing) return;
+    setRegeneratingSku(true);
+    setError(null);
+    try {
+      const data = await api.regenerateDraftSku(listing.id);
+      setListing(data.listing);
+      setSku(data.sku);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't generate a new SKU. Try again.");
+    } finally {
+      setRegeneratingSku(false);
+    }
+  }
 
   async function handlePublish() {
     if (!listing) return;
@@ -2412,8 +2433,25 @@ export default function DraftEditorPage() {
                 <div className={`mt-3 grid gap-3 ${single ? "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)]" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]"}`}>
                   <div>
                     <label className={labelClass}>SKU (custom label)</label>
-                    <input className={`${inputClass} mt-1 font-mono text-[12.5px]`} value={sku} maxLength={50} placeholder="e.g. Liston-1005006" onChange={(e) => setSku(e.target.value)} disabled={!editable || busy} />
-                    {variation && sku.trim() && <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">Variations publish as {sku.trim()}-1, -2, …</p>}
+                    <div className="relative mt-1">
+                      <input className={`${inputClass} font-mono text-[12.5px] ${editable ? "pr-10" : ""}`} value={sku} maxLength={50} placeholder="e.g. Liston-1005006" onChange={(e) => setSku(e.target.value)} disabled={!editable || busy} />
+                      {editable && (
+                        <button
+                          type="button"
+                          onClick={handleRegenerateSku}
+                          disabled={busy || regeneratingSku}
+                          title="Generate a new SKU that nothing else on this account uses"
+                          aria-label="Generate a new SKU"
+                          className={`absolute right-1.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-primary-soft)] hover:text-[var(--color-primary)] disabled:opacity-50 ${regeneratingSku ? "animate-spin" : ""}`}
+                        >
+                          {Icon.refresh}
+                        </button>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">
+                      {variation && sku.trim() ? `Variations publish as ${sku.trim()}-1, -2, … · ` : ""}
+                      Kept unique across the account; a label already in use is replaced at publish.
+                    </p>
                   </div>
                   <div>
                     <label className={labelClass}>Condition</label>

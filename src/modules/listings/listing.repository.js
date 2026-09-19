@@ -95,6 +95,20 @@ async function updateStatus(id, status, { externalProductId, errorMessage } = {}
 // The edited draft, wholesale. `generated_data` is the single source of
 // truth for a draft (eBay holds nothing until publish), so an edit is just a
 // rewrite of this column.
+// Another Liston record on this connection carrying the SKU — as its own
+// custom label, or as the label a live edit / published listing was given.
+async function findOtherWithSku(connectionId, sku, excludeId = null) {
+  const result = await query(
+    `SELECT id, status, external_product_id FROM listings
+     WHERE connection_id = $1 AND ($3::uuid IS NULL OR id <> $3)
+       AND (sku = $2 OR generated_data->>'sku' = $2)
+     ORDER BY (status = 'published') DESC, created_at DESC
+     LIMIT 1`,
+    [connectionId, sku, excludeId]
+  );
+  return result.rows[0] || null;
+}
+
 async function updateGeneratedData(id, generatedData) {
   const result = await query(
     `UPDATE listings SET generated_data = $1, updated_at = now() WHERE id = $2 RETURNING *`,
@@ -130,6 +144,7 @@ async function deleteDraft(id, userId) {
 }
 
 module.exports = {
+  findOtherWithSku,
   findLiveEdit,
   createLiveEdit,
   findPublishedByItemId,

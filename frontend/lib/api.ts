@@ -886,6 +886,8 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   deleteDraftListing: (listingId: string) => request<void>(`/api/listings/${listingId}`, { method: "DELETE" }),
+  // A fresh custom label nothing else on the account uses, saved to the draft.
+  regenerateDraftSku: (listingId: string) => request<{ sku: string; listing: DraftListing }>(`/api/listings/${listingId}/sku`, { method: "POST" }),
 
   // AI revisions PROPOSE; nothing changes until the seller accepts.
   reviseDraftText: (listingId: string, instruction: string, current?: RevisionCurrentState) =>

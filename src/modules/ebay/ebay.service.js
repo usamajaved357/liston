@@ -202,6 +202,7 @@ async function draftListing(credentials, input) {
 
   ensureListingPolicies(input.listingPolicies);
   await ensureInventoryLocation(accessToken, input.merchantLocationKey, input.locationInput);
+  await refuseLiveSku(accessToken, input.sku, input.marketplaceId);
   await ebayClient.createOrReplaceInventoryItem(accessToken, input.sku, buildInventoryItem(input), input.marketplaceId);
   const offer = await createOfferWithRetry(accessToken, buildOffer(input));
 
@@ -249,18 +250,42 @@ async function mapWithConcurrency(items, limit, fn) {
 // had been added (seen live). Dropping the unpublished group first lets the
 // attempt rebuild it from the current draft. A group that is live is left
 // alone and named, since deleting it would take the listing down.
+// The live listing a SKU (or the first variation SKU built from it) belongs
+// to, if any — the check behind Liston's unique custom labels.
+async function findLiveListingForSku(credentials, sku, marketplaceId) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  let listingId = null;
+  for (const candidate of [sku, `${sku}-1`]) {
+    const offers = await ebayClient.getOffersBySku(accessToken, candidate, marketplaceId).catch(() => ({ offers: [] }));
+    const live = (offers.offers || []).find((o) => o.status === 'PUBLISHED' && o.listing?.listingId);
+    if (live) {
+      listingId = String(live.listing.listingId);
+      break;
+    }
+  }
+  return { listingId, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// A SKU is one product on the account. Re-creating an inventory item under
+// a SKU that is already live would REVISE that listing into this product
+// (a seller-typed custom label reused across two drafts, seen live), so a
+// SKU with a published offer is refused outright.
+async function refuseLiveSku(accessToken, sku, marketplaceId) {
+  const offers = await ebayClient.getOffersBySku(accessToken, sku, marketplaceId).catch(() => ({ offers: [] }));
+  const live = (offers.offers || []).find((o) => o.status === 'PUBLISHED' && o.listing?.listingId);
+  if (live) {
+    throw new EbayError(
+      `The custom label "${sku}" is already used by live listing ${live.listing.listingId}. Give this draft a different SKU, or end that listing first.`,
+      400
+    );
+  }
+}
+
 async function clearStaleGroup(accessToken, groupKey, variants, marketplaceId) {
   const existing = await ebayClient.getInventoryItemGroup(accessToken, groupKey).catch(() => null);
   if (!existing) return;
   const firstSku = existing.variantSKUs?.[0] || variants[0]?.sku;
-  const offers = firstSku ? await ebayClient.getOffersBySku(accessToken, firstSku, marketplaceId).catch(() => ({ offers: [] })) : { offers: [] };
-  const live = (offers.offers || []).find((o) => o.status === 'PUBLISHED' && o.listing?.listingId);
-  if (live) {
-    throw new EbayError(
-      `The custom label "${groupKey}" is already used by live listing ${live.listing.listingId}. Give this draft a different SKU, or end that listing first.`,
-      400
-    );
-  }
+  if (firstSku) await refuseLiveSku(accessToken, firstSku, marketplaceId);
   await ebayClient.deleteInventoryItemGroup(accessToken, groupKey);
 }
 
@@ -1312,6 +1337,7 @@ module.exports = {
   getStoreCategoriesCached,
   createMerchantLocation,
   deleteInventoryObjects,
+  findLiveListingForSku,
   reviseLiveListing,
   conditionIdFor,
   listListingsDetailed,

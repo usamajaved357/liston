@@ -42,6 +42,67 @@ function shortRandomSuffix() {
   return crypto.randomBytes(3).toString('hex');
 }
 
+// --- unique custom labels ----------------------------------------------------
+//
+// eBay treats a SKU as ONE product per account: publishing under a label a
+// live listing already uses revises that listing into this product (seen
+// live — a headlight draft nearly overwrote an endoscope listing). So a
+// label is checked against everything Liston knows before it is used, and
+// replaced with a fresh one when it's taken.
+
+// A short, readable, unambiguous tag: no 0/O or 1/I.
+const SKU_TAG_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const SKU_TAG_PATTERN = /-[A-HJ-NP-Z2-9]{4}$/;
+
+function skuTag() {
+  const bytes = crypto.randomBytes(4);
+  return [...bytes].map((b) => SKU_TAG_ALPHABET[b % SKU_TAG_ALPHABET.length]).join('');
+}
+
+// What a draft's labels are built from: the label as it stands minus any
+// tag Liston added, else the Liston prefix plus the supplier's product id.
+function skuBaseOf(draft) {
+  const current = typeof draft.sku === 'string' ? draft.sku.trim() : '';
+  if (current) return current.replace(SKU_TAG_PATTERN, '');
+  return `Liston-${String(draft.skuBase || `SRC${Date.now()}`).replace(/^AE/, '')}`;
+}
+
+// Where a label is already in use, described for the seller, or null.
+//   • another Liston record on this connection (a draft, or a published one)
+//   • a live listing in the account's mirror (labels set on eBay directly)
+//   • eBay's own offers, when credentials are given (the authority)
+async function skuInUse(connectionId, sku, { excludeListingId = null, credentials = null, marketplaceId } = {}) {
+  const other = await listingRepository.findOtherWithSku(connectionId, sku, excludeListingId);
+  if (other) return other.status === 'published' && other.external_product_id ? `live listing ${other.external_product_id}` : 'another draft';
+  if (!credentials) return null;
+  const page = await ebayService.listListingsDetailed(credentials, { connectionId, status: 'active', search: sku, perPage: 0 }).catch(() => null);
+  const mirrored = page?.items?.find((item) => item.sku === sku || String(item.sku || '').startsWith(`${sku}-`));
+  if (mirrored) return `live listing ${mirrored.itemId}`;
+  const live = await ebayService.findLiveListingForSku(credentials, sku, marketplaceId).catch(() => ({ listingId: null }));
+  return live.listingId ? `live listing ${live.listingId}` : null;
+}
+
+// A label nothing else on the account uses: the base plus a fresh tag,
+// re-drawn until it's free.
+async function uniqueSku(connectionId, base, options = {}) {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const candidate = `${base}-${skuTag()}`;
+    if (!(await skuInUse(connectionId, candidate, options))) return candidate;
+  }
+  throw new ListingError("Couldn't find a free SKU for this draft. Try again.", 500);
+}
+
+// The seller's "give me a new SKU" button.
+async function regenerateSku(id, userId) {
+  const listing = await loadEditableDraft(id, userId);
+  const draft = listing.generated_data || {};
+  const sku = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) =>
+    uniqueSku(listing.connection_id, skuBaseOf(draft), { excludeListingId: id, credentials, marketplaceId: draft.marketplaceId || 'EBAY_GB' })
+  );
+  const saved = await listingRepository.updateGeneratedData(id, { ...draft, sku });
+  return { sku, listing: saved };
+}
+
 // A draft lives ONLY in Liston until it's published — nothing is created on
 // eBay here.
 //
@@ -248,7 +309,10 @@ async function generateEbayDraftFromUrlsNow(
   // Filed under the seller's own Shop department when one fits (their
   // "New in" when none does); editable on the draft.
   const storeCategoryNames = await suggestStoreCategoriesFor(connectionId, userId, draftInput);
-  const finalDraftInput = { ...draftInput, skuBase, sku: `Liston-${skuBase.replace(/^AE/, '')}`, ...(storeCategoryNames.length ? { storeCategoryNames } : {}) };
+  // Drafting the same supplier product twice must not hand both drafts the
+  // same label; eBay itself is consulted at publish (see publishNow).
+  const sku = await uniqueSku(connectionId, `Liston-${skuBase.replace(/^AE/, '')}`);
+  const finalDraftInput = { ...draftInput, skuBase, sku, ...(storeCategoryNames.length ? { storeCategoryNames } : {}) };
 
   return createEbayDraft(connectionId, userId, finalDraftInput, {
     sourceData: { competitor, source },
@@ -1207,6 +1271,7 @@ async function publishNow(listing, id, userId) {
   // Drafts created before drafts went local already have their eBay objects;
   // anything newer is built here, now.
   const alreadyOnEbay = Boolean(listing.platform_offer_id || listing.platform_group_key);
+  const skuWarnings = [];
 
   try {
     const result = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
@@ -1214,6 +1279,21 @@ async function publishNow(listing, id, userId) {
         return listing.platform_group_key
           ? ebayService.publishGroup(credentials, listing.platform_group_key, marketplaceId)
           : ebayService.publishDraft(credentials, listing.platform_offer_id, marketplaceId);
+      }
+
+      // A label already used elsewhere on the account is swapped for a
+      // fresh one here, on the draft too, rather than failing — or worse,
+      // revising the listing that owns it.
+      let sku = typeof readyDraft.sku === 'string' && readyDraft.sku.trim() ? readyDraft.sku.trim() : null;
+      if (sku) {
+        const takenBy = await skuInUse(listing.connection_id, sku, { excludeListingId: id, credentials, marketplaceId });
+        if (takenBy) {
+          const fresh = await uniqueSku(listing.connection_id, skuBaseOf(readyDraft), { excludeListingId: id, credentials, marketplaceId });
+          skuWarnings.push(`SKU changed from ${sku} to ${fresh}: ${sku} is already used by ${takenBy}.`);
+          logger.warn('Draft SKU replaced for publish', { listingId: id, from: sku, to: fresh, takenBy });
+          await listingRepository.updateGeneratedData(id, { ...draft, sku: fresh });
+          sku = fresh;
+        }
       }
 
       // SKUs are assigned at publish rather than at draft: a failed publish
@@ -1225,6 +1305,7 @@ async function publishNow(listing, id, userId) {
       const html = await renderDraftDescription(listing, userId);
       const branded = {
         ...readyDraft,
+        ...(sku ? { sku } : {}),
         ...(Array.isArray(draft.variants) && draft.variants.length ? { commonListingDescription: html } : { listingDescription: html }),
       };
       const built = withSkus(branded, listing.connection_id);
@@ -1250,7 +1331,8 @@ async function publishNow(listing, id, userId) {
 
     resyncListings(listing.connection_id, userId);
     const row = await listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
-    return tidied.warnings.length ? { ...row, warnings: tidied.warnings } : row;
+    const warnings = [...skuWarnings, ...tidied.warnings];
+    return warnings.length ? { ...row, warnings } : row;
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way
     // through. The draft stays `pending_review` so it's still editable and
@@ -1397,6 +1479,9 @@ module.exports = {
   acceptImageRevision,
   removeAxisValue,
   dedupeVariationGroup,
+  regenerateSku,
+  uniqueSku,
+  skuInUse,
   publish,
   startLiveEdit,
   removeInactiveListing,

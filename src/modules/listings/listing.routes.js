@@ -35,6 +35,7 @@ router.post('/:listingId/variants/:index/split', ...editGuard, listingController
 router.get('/:listingId/variation-fixes', ...editGuard, listingController.variationFixes);
 router.post('/:listingId/variation-fixes', ...editGuard, listingController.applyVariationFix);
 router.post('/:listingId/revise', ...editGuard, listingController.reviseText);
+router.post('/:listingId/sku', ...editGuard, listingController.regenerateSku);
 router.post('/:listingId/images/revise', ...editGuard, listingController.reviseImage);
 router.post('/:listingId/images/accept', ...editGuard, listingController.acceptImage);
 // A base64 image can be ~16MB for eBay's 12MB cap — well past the app-wide

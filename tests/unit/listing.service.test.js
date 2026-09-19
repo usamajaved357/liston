@@ -120,6 +120,7 @@ test('publish calls publishDraft for a single-SKU listing and updates status', a
 
 test('generateEbayDraftFromUrls records a SKU base, forwards sourceData, and creates a draft', async () => {
   mock.method(connectionService, 'getConnectionSummary', async () => ebayConnection());
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
   mock.method(orchestrator, 'generateDraftInput', async (input) => {
     assert.strictEqual(input.merchantLocationKey, 'main');
     return {
@@ -170,6 +171,7 @@ test('generateEbayDraftFromUrls records a SKU base, forwards sourceData, and cre
 });
 
 test('generateEbayDraftFromUrls creates a variation draft with no eBay objects yet', async () => {
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
   mock.method(connectionService, 'getConnectionSummary', async () => ebayConnection());
   mock.method(orchestrator, 'generateDraftInput', async () => ({
     draftInput: {
@@ -606,6 +608,9 @@ const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
 const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
 
 test('publish uses the seller’s own SKU as-is, and numbers variations from it', async () => {
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(ebayService, 'listListingsDetailed', async () => ({ items: [] }));
+  mock.method(ebayService, 'findLiveListingForSku', async () => ({ listingId: null }));
   mock.method(listingRepository, 'findByIdForUser', async () =>
     pendingDraft({
       marketplaceId: 'EBAY_GB',
@@ -1025,4 +1030,65 @@ test('updateDraft refuses to rename an axis onto another axis of the listing', a
     () => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Size', to: 'colour' }] }),
     /already a variation attribute/
   );
+});
+
+// --- unique custom labels ------------------------------------------------------
+
+test('uniqueSku draws a fresh tag until Liston has no other record with the label', async () => {
+  const seen = [];
+  mock.method(listingRepository, 'findOtherWithSku', async (connectionId, sku) => {
+    seen.push(sku);
+    return seen.length === 1 ? { id: 'other', status: 'pending_review' } : null;
+  });
+  const sku = await listingService.uniqueSku(CONNECTION_ID, 'Liston-1005006');
+  assert.match(sku, /^Liston-1005006-[A-HJ-NP-Z2-9]{4}$/);
+  assert.strictEqual(seen.length, 2);
+  assert.notStrictEqual(seen[0], seen[1]);
+});
+
+test('skuInUse names a live listing found through eBay offers', async () => {
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(ebayService, 'listListingsDetailed', async () => ({ items: [] }));
+  mock.method(ebayService, 'findLiveListingForSku', async () => ({ listingId: '800684782461' }));
+  const where = await listingService.skuInUse(CONNECTION_ID, 'Liston-X', { credentials: { accessToken: 't' }, marketplaceId: 'EBAY_GB' });
+  assert.strictEqual(where, 'live listing 800684782461');
+});
+
+test('publish swaps a label another live listing owns for a fresh one, on the draft too, and says so', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({ marketplaceId: 'EBAY_GB', skuBase: 'AE999', sku: 'Liston-DSAEZEESEP19', title: 'Headlight', imageUrls: ['https://i.ebayimg.com/a.jpg'] })
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(ebayService, 'listListingsDetailed', async () => ({ items: [] }));
+  mock.method(ebayService, 'findLiveListingForSku', async (credentials, sku) => ({ listingId: sku === 'Liston-DSAEZEESEP19' ? '800684782461' : null }));
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  let usedSku = null;
+  mock.method(ebayService, 'draftListing', async (credentials, input) => {
+    usedSku = input.sku;
+    return { offerId: 'offer-1', status: 'drafted' };
+  });
+  mock.method(ebayService, 'publishDraft', async () => ({ externalProductId: 'ebay-1', status: 'published' }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  const result = await listingService.publish('listing-1', USER_ID);
+
+  assert.match(usedSku, /^Liston-DSAEZEESEP19-[A-HJ-NP-Z2-9]{4}$/);
+  assert.strictEqual(saved.mock.calls[0].arguments[1].sku, usedSku, 'the draft keeps the label it was published under');
+  assert.match(result.warnings[0], /SKU changed from Liston-DSAEZEESEP19 to Liston-DSAEZEESEP19-[A-HJ-NP-Z2-9]{4}: .*live listing 800684782461/);
+});
+
+test('regenerateSku gives a draft a new label built from its current one and persists it', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => pendingDraft({ marketplaceId: 'EBAY_GB', sku: 'Liston-1005006-ABCD', imageUrls: [] }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(ebayService, 'listListingsDetailed', async () => ({ items: [] }));
+  mock.method(ebayService, 'findLiveListingForSku', async () => ({ listingId: null }));
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  const { sku } = await listingService.regenerateSku('listing-1', USER_ID);
+  assert.match(sku, /^Liston-1005006-[A-HJ-NP-Z2-9]{4}$/);
+  assert.notStrictEqual(sku, 'Liston-1005006-ABCD');
+  assert.strictEqual(saved.mock.calls[0].arguments[1].sku, sku);
 });

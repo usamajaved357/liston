@@ -372,6 +372,31 @@ test('draftVariationListing drops the unpublished group a failed attempt left un
   assert.strictEqual(calls[calls.length - 1], 'createGroup');
 });
 
+test('draftListing refuses a custom label that is already a live listing', async () => {
+  mock.method(ebayClient, 'getInventoryLocations', async () => ({ locations: [{ merchantLocationKey: 'main' }] }));
+  mock.method(ebayClient, 'getOffersBySku', async () => ({ offers: [{ offerId: 'o1', status: 'PUBLISHED', listing: { listingId: '999' } }] }));
+  const put = mock.method(ebayClient, 'createOrReplaceInventoryItem', async () => {});
+  await assert.rejects(
+    () =>
+      ebayService.draftListing(freshCredentials(), {
+        sku: 'MY-LABEL',
+        title: 't',
+        description: 'd',
+        imageUrls: ['https://example.com/a.jpg'],
+        aspects: {},
+        condition: 'NEW',
+        quantity: 1,
+        price: { value: '9.99', currency: 'GBP' },
+        marketplaceId: 'EBAY_GB',
+        categoryId: '1',
+        merchantLocationKey: 'main',
+        listingPolicies: validListingPolicies(),
+      }),
+    /"MY-LABEL" is already used by live listing 999/
+  );
+  assert.strictEqual(put.mock.calls.length, 0, 'the live item is never overwritten');
+});
+
 test('draftVariationListing refuses a custom label whose group is already a live listing', async () => {
   mock.method(ebayClient, 'getInventoryLocations', async () => ({ locations: [{ merchantLocationKey: 'main' }] }));
   mock.method(ebayClient, 'getInventoryItemGroup', async () => ({ inventoryItemGroupKey: 'G1', variantSKUs: ['G1-1'] }));
