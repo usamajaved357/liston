@@ -25,6 +25,7 @@ import { Alert } from "@/components/Alert";
 import { EditorHeader } from "@/components/EditorHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CategoryPicker, CategorySelection, ShopCategoryPicker, shopCategoryLabel } from "@/components/CategoryPicker";
+import { RichTextEditor, markersToHtml } from "@/components/RichTextEditor";
 import { currencySymbol, formatPrice } from "@/lib/format";
 
 // The draft editor. A draft lives only in Liston until Publish, so every
@@ -88,17 +89,6 @@ const Icon = {
     </svg>
   ),
 };
-
-// The description carries light formatting markers (**bold**, ==mark==,
-// [color=#hex]…[/color], [size=lg]…[/size]) that the template renders; the
-// read view shows the words without them.
-function plainDescription(text: string) {
-  return text
-    .replace(/\*\*([\s\S]*?)\*\*/g, "$1")
-    .replace(/==([\s\S]*?)==/g, "$1")
-    .replace(/\[color=#[0-9a-fA-F]{6}\]([\s\S]*?)\[\/color\]/g, "$1")
-    .replace(/\[size=(?:sm|lg|xl)\]([\s\S]*?)\[\/size\]/g, "$1");
-}
 
 function flattenStorePaths(categories: StoreCategory[], prefix = ""): string[] {
   return categories.flatMap((c) => [`${prefix}/${c.name}`, ...flattenStorePaths(c.children || [], `${prefix}/${c.name}`)]);
@@ -188,153 +178,6 @@ function policyName(
 // The toolbar wraps the current selection in the textarea with those markers,
 // so what's stored stays safe text and the AI can still rewrite it.
 
-const TEXT_COLOURS = ["#e11d48", "#d97706", "#059669", "#2563eb", "#7c3aed", "#0f172a"];
-
-// Each marker kind knows how to detect itself around (or inside) a selection,
-// so a second click toggles it off and a different colour/size REPLACES the
-// current one rather than nesting another wrapper.
-const MARKERS = {
-  bold: { open: /\*\*$/, close: /^\*\*/, inner: /^\*\*([\s\S]*)\*\*$/ },
-  highlight: { open: /==$/, close: /^==/, inner: /^==([\s\S]*)==$/ },
-  color: { open: /\[color=#[0-9a-fA-F]{6}\]$/, close: /^\[\/color\]/, inner: /^\[color=#[0-9a-fA-F]{6}\]([\s\S]*)\[\/color\]$/ },
-  size: { open: /\[size=(?:sm|lg|xl)\]$/, close: /^\[\/size\]/, inner: /^\[size=(?:sm|lg|xl)\]([\s\S]*)\[\/size\]$/ },
-} as const;
-type MarkerKind = keyof typeof MARKERS;
-
-function applyMarker(value: string, start: number, end: number, kind: MarkerKind, open: string, close: string, toggle: boolean) {
-  const m = MARKERS[kind];
-  let before = value.slice(0, start);
-  let selected = value.slice(start, end);
-  let after = value.slice(end);
-
-  // Already wrapped: either the wrapper sits just outside the selection, or
-  // the selection includes it. Strip it first.
-  let wasWrapped = false;
-  const outsideOpen = before.match(m.open);
-  const outsideClose = after.match(m.close);
-  if (outsideOpen && outsideClose) {
-    before = before.slice(0, before.length - outsideOpen[0].length);
-    after = after.slice(outsideClose[0].length);
-    wasWrapped = true;
-  } else {
-    const inside = selected.match(m.inner);
-    if (inside) {
-      selected = inside[1];
-      wasWrapped = true;
-    }
-  }
-  if (!selected) selected = "text";
-  // Toggle kinds (bold, highlight) come off on a second click; replace kinds
-  // (colour, size) swap to the new value.
-  const wrapNow = !(toggle && wasWrapped);
-  const next = before + (wrapNow ? open : "") + selected + (wrapNow ? close : "") + after;
-  const selStart = before.length + (wrapNow ? open.length : 0);
-  return { next, selStart, selEnd: selStart + selected.length };
-}
-
-function FormatToolbar({
-  textarea,
-  value,
-  onChange,
-  disabled,
-}: {
-  textarea: React.RefObject<HTMLTextAreaElement | null>;
-  value: string;
-  onChange: (next: string) => void;
-  disabled: boolean;
-}) {
-  const [showColours, setShowColours] = useState(false);
-
-  function apply(kind: MarkerKind, open: string, close: string, toggle: boolean) {
-    const el = textarea.current;
-    if (!el) return;
-    const { next, selStart, selEnd } = applyMarker(value, el.selectionStart, el.selectionEnd, kind, open, close, toggle);
-    onChange(next);
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(selStart, selEnd);
-    });
-  }
-
-  const tool =
-    "flex h-8 min-w-8 items-center justify-center px-2 text-[var(--color-ink)] transition-colors hover:bg-[var(--color-paper)] disabled:opacity-40";
-  const divider = <span className="mx-0.5 h-5 w-px bg-[var(--color-line)]" />;
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-3">
-      <div className="inline-flex items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-        <button type="button" disabled={disabled} title="Bold (click again to remove)" aria-label="Bold" onClick={() => apply("bold", "**", "**", true)} className={`${tool} rounded-full font-extrabold`}>
-          B
-        </button>
-        <button type="button" disabled={disabled} title="Highlight (click again to remove)" aria-label="Highlight" onClick={() => apply("highlight", "==", "==", true)} className={`${tool} rounded-full`}>
-          <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]">
-            <rect x="3" y="18.5" width="18" height="3" rx="1.5" fill="#fde047" />
-            <path d="M14.5 4.5l5 5-8 8H6.5v-5l8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="#fef3c7" />
-            <path d="M12 7l5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-        </button>
-        {divider}
-        <button type="button" disabled={disabled} title="Normal size" aria-label="Normal size" onClick={() => apply("size", "", "", true)} className={`${tool} rounded-full text-[12px] font-semibold`}>
-          T
-        </button>
-        <button type="button" disabled={disabled} title="Large" aria-label="Large text" onClick={() => apply("size", "[size=lg]", "[/size]", false)} className={`${tool} rounded-full text-[15px] font-semibold`}>
-          T
-        </button>
-        <button type="button" disabled={disabled} title="Extra large" aria-label="Extra large text" onClick={() => apply("size", "[size=xl]", "[/size]", false)} className={`${tool} rounded-full text-[18px] font-bold`}>
-          T
-        </button>
-        {divider}
-        <div className="relative">
-          <button type="button" disabled={disabled} title="Text colour" aria-label="Text colour" onClick={() => setShowColours((v) => !v)} className={`${tool} gap-1 rounded-full`}>
-            <span className="flex flex-col items-center leading-none">
-              <span className="text-[13px] font-bold">A</span>
-              <span className="mt-0.5 h-[3px] w-4 rounded-sm bg-gradient-to-r from-[#e11d48] via-[#059669] to-[#2563eb]" />
-            </span>
-            <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3 text-[var(--color-muted)]">
-              <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-          {showColours && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowColours(false)} aria-hidden />
-              <div className="absolute left-0 top-full z-50 mt-2 flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5" style={{ boxShadow: "var(--shadow-pop)" }}>
-                {TEXT_COLOURS.map((hex) => (
-                  <button
-                    key={hex}
-                    type="button"
-                    aria-label={`Colour ${hex}`}
-                    title={hex}
-                    onClick={() => {
-                      apply("color", `[color=${hex}]`, "[/color]", false);
-                      setShowColours(false);
-                    }}
-                    className="h-6 w-6 rounded-full ring-2 ring-white transition-transform hover:scale-110"
-                    style={{ background: hex, boxShadow: "0 0 0 1px var(--color-line)" }}
-                  />
-                ))}
-                <span className="mx-0.5 h-5 w-px bg-[var(--color-line)]" />
-                <button
-                  type="button"
-                  title="Remove colour"
-                  aria-label="Remove colour"
-                  onClick={() => {
-                    apply("color", "", "", true);
-                    setShowColours(false);
-                  }}
-                  className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
-                >
-                  {Icon.close}
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-      <span className="text-xs text-[var(--color-muted)]">Select text, then apply. Click again to remove. Shows in the preview after saving.</span>
-    </div>
-  );
-}
-
 // --- Gallery ----------------------------------------------------------------
 //
 // Every image at once, not a carousel: the seller is deciding what to keep,
@@ -384,9 +227,7 @@ function GalleryGrid({
   onDelete,
   onUpload,
   onReplace,
-  onDownload,
   onDownloadAll,
-  onEditWithAi,
   uploading,
   disabled,
 }: {
@@ -397,9 +238,7 @@ function GalleryGrid({
   onDelete: (index: number) => void;
   onUpload: (files: File[]) => void;
   onReplace: (index: number, file: File) => void;
-  onDownload: (index: number) => void;
   onDownloadAll: () => void;
-  onEditWithAi: (index: number) => void;
   uploading: boolean;
   disabled: boolean;
 }) {
@@ -421,7 +260,8 @@ function GalleryGrid({
     <div className={cardClass}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className={cardTitleClass}>
-          Photos <span className="font-medium text-[var(--color-muted)]">· {count} of 24</span>
+          Photos <span className="font-medium text-[var(--color-muted)]">· {count}</span>
+          <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]" title="eBay allows up to 24 photos per listing">(max 24)</span>
         </h3>
         <div className="flex items-center gap-1.5">
           <FileButton
@@ -453,8 +293,10 @@ function GalleryGrid({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={current} alt="" className="h-full w-full rounded-xl object-contain" />
             {selected === 0 && (
-              <span className="chip chip-primary absolute left-3 top-3">
-                Main photo
+              <span title="Main photo" className="absolute left-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-sm">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
+                  <path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8L12 3.5z" />
+                </svg>
               </span>
             )}
             <span className="absolute right-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-white">
@@ -486,29 +328,31 @@ function GalleryGrid({
             )}
           </div>
 
-          {/* Actions for the selected image — icons only, labels on hover */}
-          <div className="mt-2 flex items-center gap-1">
-            <button type="button" onClick={() => onSetMain(selected)} disabled={disabled || selected === 0} title="Set as main photo" aria-label="Set as main photo" className="btn btn-secondary btn-icon">
-              {Icon.star}
-            </button>
-            <FileButton label={Icon.swap} disabled={disabled || uploading} onFiles={(f) => onReplace(selected, f[0])} className="btn btn-secondary btn-icon" title="Replace this photo" />
-            <button type="button" onClick={() => onDownload(selected)} title="Download this photo" aria-label="Download this photo" className="btn btn-secondary btn-icon">
-              {Icon.download}
-            </button>
-            <button type="button" onClick={() => onEditWithAi(selected)} disabled={disabled} title="Add text or a badge" aria-label="Add text or a badge" className="btn btn-secondary btn-icon">
-              {Icon.text}
-            </button>
-            <span className="ml-auto text-xs text-[var(--color-muted)]">Photo {selected + 1}</span>
+          {/* One action here: which photo leads. Everything else lives on
+              the thumbnails (remove) and in the AI box (badges). */}
+          <div className="mt-2 flex items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() => onDelete(selected)}
-              disabled={disabled || count === 1}
-              title={count === 1 ? "A listing needs at least one photo" : "Remove this photo"}
-              aria-label="Remove this photo"
-              className="btn btn-danger-ghost btn-icon"
+              onClick={() => onSetMain(selected)}
+              disabled={disabled || selected === 0}
+              className="btn !h-7 !px-3 !text-[12px] bg-[var(--color-primary-soft)] font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white disabled:opacity-100 disabled:hover:bg-[var(--color-primary-soft)] disabled:hover:text-[var(--color-primary)]"
             >
-              {Icon.trash}
+              {selected === 0 ? "Main photo" : "Set as main"}
             </button>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-[var(--color-muted)]">Photo {selected + 1}</span>
+              <FileButton label={Icon.swap} disabled={disabled || uploading} onFiles={(f) => onReplace(selected, f[0])} className="btn btn-secondary btn-icon !h-7 !w-7" title="Replace this photo" />
+              <button
+                type="button"
+                onClick={() => onDelete(selected)}
+                disabled={disabled || count === 1}
+                title={count === 1 ? "A listing needs at least one photo" : "Remove this photo"}
+                aria-label="Remove this photo"
+                className="btn btn-danger-ghost btn-icon !h-7 !w-7"
+              >
+                {Icon.trash}
+              </button>
+            </div>
           </div>
 
           {/* Every image */}
@@ -526,8 +370,10 @@ function GalleryGrid({
                 <img src={url} alt="" className="h-full w-full object-contain" />
                 <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-bold text-white">{i + 1}</span>
                 {i === 0 && (
-                  <span className="absolute left-0 right-0 top-0 bg-[var(--color-primary)] py-0.5 text-center text-[9px] font-bold uppercase tracking-wide text-white">
-                    Main
+                  <span title="Main photo" className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-sm">
+                    <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor">
+                      <path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8L12 3.5z" />
+                    </svg>
                   </span>
                 )}
               </button>
@@ -762,6 +608,10 @@ function VariationsTable({
   const showAxis = (axis: string) => axisRenames[axis] || axis;
   const axisAllowed = (axis: string) => !allowedAxes || !allowedAxes.length || allowedAxes.some((a) => a.toLowerCase() === showAxis(axis).toLowerCase());
   const disallowedAxes = specifications.map((s) => s.name).filter((axis) => !axisAllowed(axis));
+  // Listing options one by one is a way OUT of a category that refuses this
+  // variation (or variations at all); offered only then, with the warning
+  // above the table that explains it.
+  const splitOffered = Boolean(onSplit) && (variationsSupported === false || disallowedAxes.length > 0);
   const showValue = (axis: string, value: string) => valueRenames[axis]?.[value] || value;
   // Every photo the draft has, for the picker: gallery first, then each
   // variation's own.
@@ -944,12 +794,16 @@ function VariationsTable({
                     ) : (
                       <InlineName value={showValue(spec.name, value)} onChange={(to) => onRenameValue(spec.name, value, to)} disabled={disabled} className="font-medium" />
                     )}
-                    <span className="rounded-full bg-[var(--color-paper)] px-1.5 text-[10.5px] font-semibold text-[var(--color-muted)]">{count}</span>
+                    {specifications.length > 1 && (
+                      <span title={`${count} variation${count === 1 ? "" : "s"} use this`} className="rounded-full bg-[var(--color-paper)] px-1.5 text-[10.5px] font-semibold text-[var(--color-muted)]">
+                        {count}
+                      </span>
+                    )}
                     {!disabled && (
                       <button
                         type="button"
                         aria-label={gone ? `Restore ${value}` : `Remove ${value}`}
-                        title={gone ? "Restore" : `Remove all ${count} combination${count === 1 ? "" : "s"}`}
+                        title={gone ? "Restore" : specifications.length > 1 ? `Remove all ${count} combination${count === 1 ? "" : "s"}` : "Remove this option"}
                         onClick={() => (gone ? onRestoreAxisValue({ axis: spec.name, value }) : onRemoveAxisValue({ axis: spec.name, value }))}
                         className={`flex h-5.5 w-5.5 items-center justify-center rounded-full transition-colors ${
                           gone
@@ -1032,7 +886,7 @@ function VariationsTable({
               <th className={`${cell} w-28 text-center`}>Price ({currencySymbol(currency)})</th>
               <th className={`${cell} w-20 text-center`}>Qty</th>
               <th className={`${cell} w-20 text-center`}>ROI</th>
-              <th className={`${cell} ${onSplit ? "w-40" : "w-12"}`} />
+              <th className={`${cell} ${splitOffered ? "w-40" : "w-12"}`} />
             </tr>
           </thead>
           <tbody>
@@ -1158,7 +1012,7 @@ function VariationsTable({
                     )}
                   </td>
                   <td className={`${cell} text-center`}>
-                    {!disabled && onSplit && !gone && (
+                    {!disabled && splitOffered && onSplit && !gone && (
                       <button
                         type="button"
                         onClick={() => onSplit(i)}
@@ -1504,7 +1358,6 @@ export default function DraftEditorPage() {
   // "text" reads the plain description; "edit" opens the editor; "preview"
   // shows the branded eBay render (built lazily the first time).
   const [descMode, setDescMode] = useState<"text" | "edit" | "preview">("text");
-  const descriptionRef = useRef<HTMLTextAreaElement | null>(null);
   // Item specifics as an ordered list so rows can be renamed, added and
   // removed in place. Multi-value aspects are edited as "a, b".
   const [specifics, setSpecifics] = useState<{ name: string; value: string }[]>([]);
@@ -2376,12 +2229,7 @@ export default function DraftEditorPage() {
                 onDelete={deleteImage}
                 onUpload={(files) => uploadFiles(files)}
                 onReplace={(i, file) => uploadFiles([file], { replaces: images[i] })}
-                onDownload={downloadImage}
                 onDownloadAll={downloadAll}
-                onEditWithAi={(i) => {
-                  setSelectedImage(i);
-                  setAiScope("image");
-                }}
                 uploading={uploading}
                 disabled={!editable || busy}
               />
@@ -2672,25 +2520,18 @@ export default function DraftEditorPage() {
                     ))}
                   </div>
                 </div>
-                {descMode === "edit" && (
-                  <>
-                    <FormatToolbar textarea={descriptionRef} value={description} onChange={setDescription} disabled={!editable || busy} />
-                    <textarea
-                      ref={descriptionRef}
-                      className={`${inputClass} mt-2 min-h-[16rem] text-[13px] leading-relaxed`}
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      disabled={!editable || busy}
-                    />
-                  </>
-                )}
+                {descMode === "edit" && <RichTextEditor value={description} onChange={setDescription} disabled={!editable || busy} />}
                 {descMode === "text" && (
                   <div
                     className="mt-2 max-h-[22rem] cursor-text overflow-y-auto whitespace-pre-wrap rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]/60 px-3.5 py-3 text-[13px] leading-relaxed text-[var(--color-ink)]"
                     onClick={() => editable && switchDescMode("edit")}
                     title={editable ? "Click to edit" : undefined}
                   >
-                    {plainDescription(description) || <span className="italic text-[var(--color-muted)]">No description yet.</span>}
+                    {description.trim() ? (
+                      <div dangerouslySetInnerHTML={{ __html: markersToHtml(description) }} />
+                    ) : (
+                      <span className="italic text-[var(--color-muted)]">No description yet.</span>
+                    )}
                   </div>
                 )}
                 {descMode === "preview" && (
