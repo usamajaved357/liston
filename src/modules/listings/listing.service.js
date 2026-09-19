@@ -8,7 +8,7 @@ const imageGates = require('../ai-generation/image-pipeline/gates');
 const { prepareAspectsForEbay } = require('../ai-generation/aspect-validator');
 const storeCategory = require('./store-category');
 const logger = require('../../utils/logger');
-const { hazmatTriggersIn, HAZMAT_TRIGGERS } = require('./policy-words');
+const { hazmatTriggersIn, HAZMAT_TRIGGERS, scrubDraft } = require('./policy-words');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
@@ -688,6 +688,63 @@ async function proposeTextRevision(id, userId, instruction, current = null) {
     storeCategories: current?.storeCategories || [],
   };
   return revisionService.reviseText({ draft, instruction, current, options });
+}
+
+// Rewrites every word eBay's hazardous-materials filter reacts to, on the
+// draft itself. The model goes first — it can rephrase a sentence rather
+// than swap a word — under an instruction that leaves it no discretion;
+// whatever it leaves behind is swapped by the fixed replacement table, so
+// the draft never comes back still carrying a trigger word. Applied and
+// saved, not proposed: the seller asked for exactly this.
+async function fixPolicyWords(id, userId) {
+  const listing = await loadEditableDraft(id, userId);
+  let draft = listing.generated_data || {};
+  const before = hazmatTriggersIn(draft);
+  if (!before.length) return { changed: false, before: [], remaining: [], summary: 'No word from the filter list is in this draft.' };
+
+  const words = [...new Set(before.map((entry) => entry.match(/^"([^"]+)"/)[1]))];
+  const applied = [];
+  try {
+    const proposal = await revisionService.reviseText({
+      draft,
+      instruction:
+        `Remove every occurrence of ${words.map((w) => `"${w}"`).join(', ')} from the title, the description, the item specifics and the variation option names. ` +
+        `This is mandatory even where the word describes the product accurately — eBay's automated filter refuses the listing while any of them is present. ` +
+        `Rephrase so the meaning survives without the word (a fluorocarbon coating becomes "clear low-visibility coating", lead becomes "weight", ` +
+        `lead-free becomes "eco-friendly"). Return the complete new title and description, every changed item specific, and a renameAxisValues entry for every option name that contained one of the words.`,
+      options: {},
+    });
+    if (!proposal.cannotDo && Object.keys(proposal.changes).length) {
+      const patch = {};
+      for (const key of ['title', 'commonTitle', 'description', 'commonDescription']) if (proposal.changes[key] !== undefined) patch[key] = proposal.changes[key];
+      if (proposal.changes.aspects) {
+        const current = Array.isArray(draft.variants) && draft.variants.length ? draft.variesBy?.aspects : draft.aspects;
+        patch.aspects = { ...(current || {}), ...proposal.changes.aspects };
+      }
+      if (proposal.changes.renameAxisValues?.length) patch.renameAxisValues = proposal.changes.renameAxisValues;
+      if (Object.keys(patch).length) {
+        const result = await updateDraft(id, userId, patch);
+        draft = result.listing.generated_data || draft;
+        applied.push(proposal.summary || 'Reworded by the AI editor.');
+      }
+    }
+  } catch (err) {
+    logger.warn('AI rewording of policy words failed; falling back to replacement', { listingId: id, error: err.message });
+  }
+
+  // Backstop: whatever is still there is swapped for safe wording.
+  if (hazmatTriggersIn(draft).length) {
+    const { changes } = scrubDraft(draft);
+    if (Object.keys(changes).length) {
+      const result = await updateDraft(id, userId, changes);
+      draft = result.listing.generated_data || draft;
+      applied.push('Remaining words swapped for safe wording.');
+    }
+  }
+
+  const remaining = hazmatTriggersIn(draft);
+  const fresh = await listingRepository.findByIdForUser(id, userId);
+  return { changed: applied.length > 0, before, remaining, summary: applied.join(' '), listing: fresh };
 }
 
 async function proposeImageRevision(id, userId, { imageUrl, instruction }) {
@@ -1537,6 +1594,7 @@ module.exports = {
   dedupeVariationGroup,
   regenerateSku,
   hazmatTriggersIn,
+  fixPolicyWords,
   uniqueSku,
   skuInUse,
   publish,

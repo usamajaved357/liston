@@ -886,6 +886,10 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   deleteDraftListing: (listingId: string) => request<void>(`/api/listings/${listingId}`, { method: "DELETE" }),
+  // Rewrites every word eBay's hazardous-materials filter reacts to, on the
+  // draft itself (AI first, fixed replacements as backstop), and saves.
+  fixDraftPolicyWords: (listingId: string) =>
+    request<{ changed: boolean; before: string[]; remaining: string[]; summary: string; listing: DraftListing }>(`/api/listings/${listingId}/policy-words/fix`, { method: "POST" }),
   // A fresh custom label nothing else on the account uses, saved to the draft.
   regenerateDraftSku: (listingId: string) => request<{ sku: string; listing: DraftListing }>(`/api/listings/${listingId}/sku`, { method: "POST" }),
 

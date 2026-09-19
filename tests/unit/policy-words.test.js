@@ -9,7 +9,7 @@ test('hazmatTriggersIn names each trigger word once, with everywhere it appears'
     variants: [{}],
     variesBy: { aspects: { Material: ['Braided Wire'] }, specifications: [{ name: 'Colour', values: ['Camo Brown', 'Lead Grey'] }] },
   });
-  assert.deepStrictEqual(found, ['"lead" in the description, the Colour options']);
+  assert.deepStrictEqual(found, ['"lead-free" in the description', '"lead" in the description, the Colour options']);
 });
 
 test('hazmatTriggersIn matches whole words only', () => {

@@ -1447,6 +1447,8 @@ export default function DraftEditorPage() {
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [regeneratingSku, setRegeneratingSku] = useState(false);
+  const [fixingWords, setFixingWords] = useState(false);
+  const [policyFixNote, setPolicyFixNote] = useState<string | null>(null);
   const [confirmPublish, setConfirmPublish] = useState(false);
   const [published, setPublished] = useState<DraftListing | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1864,7 +1866,7 @@ export default function DraftEditorPage() {
   // Other server round-trips (a category refit, a split, a publish) save the
   // pending edits themselves and then reset from the result; an autosave
   // landing in the middle of one would race it.
-  const otherRequestBusy = publishing || deleting || refitting || applyingFix || splitting !== null || regeneratingSku;
+  const otherRequestBusy = publishing || deleting || refitting || applyingFix || splitting !== null || regeneratingSku || fixingWords;
   useEffect(() => {
     if (!patchSignature || saving || otherRequestBusy) return;
     // A save eBay's rules rejected (a clashing option name, say) is not
@@ -1884,6 +1886,37 @@ export default function DraftEditorPage() {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [patchSignature, saving]);
+
+  // Rewords the filter's words on the server (AI, then fixed replacements)
+  // and reloads the draft; anything typed but not yet saved goes up first so
+  // nothing is lost.
+  async function handleFixPolicyWords() {
+    if (!listing) return;
+    setFixingWords(true);
+    setError(null);
+    try {
+      if (dirty) {
+        const saved = await api.updateDraftListing(listing.id, buildPatch());
+        setListing(saved.listing);
+        resetFrom(saved.listing);
+      }
+      const result = await api.fixDraftPolicyWords(listing.id);
+      setListing(result.listing);
+      resetFrom(result.listing);
+      previewOutdated(result.listing.id);
+      setPolicyFixNote(
+        result.remaining.length
+          ? `Reworded, but ${result.remaining.join("; ")} still need${result.remaining.length === 1 ? "s" : ""} a manual edit.`
+          : result.changed
+            ? `Reworded: ${result.before.join("; ")} — gone. Read the text over, then publish.`
+            : result.summary
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't reword the draft. Try again.");
+    } finally {
+      setFixingWords(false);
+    }
+  }
 
   async function handleRegenerateSku() {
     if (!listing) return;
@@ -2286,13 +2319,24 @@ export default function DraftEditorPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1360px] px-5 py-4">
-          {(error || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published" || (editable && policyTriggers.length > 0)) && (
+          {(error || policyFixNote || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published" || (editable && policyTriggers.length > 0)) && (
             <div className="mb-3 space-y-2">
               {editable && policyTriggers.length > 0 && (
                 <div className="notice notice-warning">
                   <span className="flex-1">
-                    eBay&apos;s hazardous-materials filter blocks listings with certain words, and this draft has {policyTriggers.join("; ")}. Reword before publishing (e.g. “lead clip” → “weight clip”, “lead-free” → “non-toxic”).
+                    eBay&apos;s hazardous-materials filter blocks listings with certain words, and this draft has {policyTriggers.join("; ")}. Reword before publishing (e.g. “lead clip” → “weight clip”, “lead-free” → “eco-friendly”), or let the AI do it.
                   </span>
+                  <button type="button" onClick={handleFixPolicyWords} disabled={busy || fixingWords} className="btn btn-primary btn-sm whitespace-nowrap">
+                    {fixingWords ? "Rewording…" : "Fix it for me"}
+                  </button>
+                </div>
+              )}
+              {policyFixNote && (
+                <div className="notice notice-success">
+                  <span className="flex-1">{policyFixNote}</span>
+                  <button type="button" onClick={() => setPolicyFixNote(null)} aria-label="Dismiss" className="opacity-70 hover:opacity-100">
+                    {Icon.close}
+                  </button>
                 </div>
               )}
               {error && (

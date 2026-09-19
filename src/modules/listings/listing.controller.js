@@ -248,6 +248,15 @@ async function reviseText(req, res, next) {
   }
 }
 
+async function fixPolicyWords(req, res, next) {
+  try {
+    const result = await listingService.fixPolicyWords(req.params.listingId, req.ownerId);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function regenerateSku(req, res, next) {
   try {
     const result = await listingService.regenerateSku(req.params.listingId, req.ownerId);
@@ -354,4 +363,4 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, endLive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, regenerateSku, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, endLive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, regenerateSku, fixPolicyWords, reviseImage, acceptImage, uploadImage, downloadImage, publish };

@@ -143,6 +143,9 @@ async function reviseText({ draft, instruction, current: given, options = {} }) 
           `An eBay seller is editing a draft listing and has asked for a change. Apply exactly what they ask, ` +
           `leave everything else as it is, and return ONLY the fields that change. Keep the title within 80 characters. ` +
           policyWords.PROMPT_GUIDANCE +
+          `When the seller asks for a word to be removed or replaced, remove it from EVERYWHERE it appears — title, description, ` +
+          `item specifics and option names — without exception, even if it describes the product accurately; rephrase so the ` +
+          `meaning survives.\n` +
           `Refer to variations by their index and to options by their exact current names. Photos and the eBay ` +
           `category cannot be changed here: if asked, fill in cannotDo and change nothing.\n\n` +
           `Current listing:\n${describeCurrent(current, options)}\n\n` +

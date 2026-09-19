@@ -1150,3 +1150,57 @@ test('a policy block clears what the attempt created on eBay and renews the SKU'
   assert.match(newSku, /^Liston-1-[A-HJ-NP-Z2-9]{4}$/);
   assert.notStrictEqual(newSku, 'Liston-1-ABCD');
 });
+
+// --- rewording eBay's filter words ------------------------------------------
+
+test('fixPolicyWords applies the AI rewording, then swaps whatever it left behind, and saves', async () => {
+  const revisionService = require('../../src/modules/listings/listing-revision.service');
+  let stored = pendingDraft({
+    commonTitle: 'Fluorocarbon Hooklink Braid 20m',
+    commonDescription: 'Fluorocarbon coated braid. Pairs with lead clips.',
+    imageUrls: [],
+    variesBy: { aspects: { Material: ['Fluorocarbon'] }, aspectsImageVariesBy: [], specifications: [{ name: 'Colour', values: ['Camo Brown', 'Lead Grey'] }] },
+    variants: [
+      { aspects: { Colour: ['Camo Brown'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      { aspects: { Colour: ['Lead Grey'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+    ],
+  });
+  mock.method(listingRepository, 'findByIdForUser', async () => stored);
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => {
+    stored = { ...stored, generated_data: data };
+    return stored;
+  });
+  // The model fixes the title and description but forgets the specific and the option.
+  mock.method(revisionService, 'reviseText', async ({ instruction }) => {
+    assert.match(instruction, /"fluorocarbon", "lead"/);
+    return { changes: { commonTitle: 'Low-Vis Hooklink Braid 20m', commonDescription: 'Clear low-visibility coated braid. Pairs with weight clips.' }, summary: 'Reworded.' };
+  });
+
+  const result = await listingService.fixPolicyWords('listing-1', USER_ID);
+
+  assert.strictEqual(result.changed, true);
+  assert.deepStrictEqual(result.remaining, []);
+  const data = stored.generated_data;
+  assert.strictEqual(data.commonTitle, 'Low-Vis Hooklink Braid 20m');
+  assert.deepStrictEqual(data.variesBy.aspects.Material, ['Low-visibility']);
+  assert.deepStrictEqual(data.variesBy.specifications[0].values, ['Camo Brown', 'Weight Grey']);
+  assert.deepStrictEqual(data.variants[1].aspects.Colour, ['Weight Grey']);
+});
+
+test('fixPolicyWords still clears the words when the AI editor is unavailable', async () => {
+  const revisionService = require('../../src/modules/listings/listing-revision.service');
+  let stored = pendingDraft({ title: 'Lead-free Braid', description: 'Uses lead clips.', aspects: {}, imageUrls: [] });
+  mock.method(listingRepository, 'findByIdForUser', async () => stored);
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => {
+    stored = { ...stored, generated_data: data };
+    return stored;
+  });
+  mock.method(revisionService, 'reviseText', async () => {
+    throw new Error('no key');
+  });
+
+  const result = await listingService.fixPolicyWords('listing-1', USER_ID);
+  assert.deepStrictEqual(result.remaining, []);
+  assert.strictEqual(stored.generated_data.title, 'Eco-friendly Braid');
+  assert.strictEqual(stored.generated_data.description, 'Uses weight clips.');
+});
