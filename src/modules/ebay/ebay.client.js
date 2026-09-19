@@ -98,13 +98,36 @@ async function request(accessToken, method, path, body, marketplaceId) {
 function describeErrors(errors, status) {
   if (!errors?.length) return `eBay API request failed (${status})`;
   const [first, ...rest] = errors;
-  const params = (first.parameters || [])
-    .filter((p) => p && p.value !== undefined && p.value !== null && String(p.value).trim())
-    .map((p) => (p.name ? `${p.name}: ${p.value}` : String(p.value)));
   const parts = [first.message || first.longMessage || 'eBay rejected the request'];
-  if (params.length) parts.push(`(${params.join(', ')})`);
+  const details = readableParameters(first.parameters);
+  if (details.length) parts.push(`(${details.join('; ')})`);
   for (const error of rest) if (error.message && error.message !== first.message) parts.push(error.message);
   return parts.join(' ');
+}
+
+// eBay's error parameters mix the sentence a seller should read with its
+// own template pieces (the same sentence with "{URL0}" unresolved, the rule
+// code, the bare URL, the message id in a <font> tag). Keep the sentences,
+// with markup stripped, and drop the scaffolding.
+function readableParameters(parameters) {
+  const seen = new Set();
+  const out = [];
+  for (const p of parameters || []) {
+    if (!p || p.value === undefined || p.value === null) continue;
+    const text = String(p.value)
+      .replace(/<font[^>]*>\s*\{[^}]*\}\s*<\/font>/gi, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!text || text.includes('{') || /^https?:\/\//i.test(text) || !/\s/.test(text)) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // A named parameter ("text1: SKU-1") is worth its label; eBay's
+    // numbered ones ("0", "1"…) are not.
+    out.push(p.name && !/^\d+$/.test(p.name) ? `${p.name}: ${text}` : text);
+  }
+  return out;
 }
 
 // SKU is the seller's own identifier — inventory items are created/replaced

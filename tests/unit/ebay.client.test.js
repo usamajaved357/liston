@@ -111,13 +111,29 @@ test('an eBay error carries its parameters and any further errors in the message
     status: 400,
     json: async () => ({
       errors: [
-        { errorId: 25002, message: 'Cannot revise listing. The item cannot be listed or modified.', parameters: [{ name: 'field', value: 'description' }] },
+        {
+          errorId: 25019,
+          message: 'Cannot revise listing. The item cannot be listed or modified.',
+          // eBay's real parameter set for a policy block: the sentence with
+          // markup, the same sentence with a template hole, a rule code, a
+          // bare URL, and the sentence again.
+          parameters: [
+            { name: '0', value: 'This item is not permitted under the <a href=https://x>Hazardous Materials policy</a>. Please do not relist.<font color=#757575 size=1>{e299813-1122718x}</font>' },
+            { name: '1', value: 'This item is not permitted under the {URL0}. Please do not relist.' },
+            { name: '2', value: 'PI_HAZ_Hazardous_GeneralMessage' },
+            { name: '4', value: 'https://www.ebay.co.uk/help/policies/x' },
+            { name: '7', value: 'This item is not permitted under the <a href=https://x>Hazardous Materials policy</a>. Please do not relist.' },
+          ],
+        },
         { errorId: 25003, message: 'Something else was wrong too.' },
       ],
     }),
   }));
   await assert.rejects(() => ebayClient.publishOfferByInventoryItemGroup('tok', 'grp', 'EBAY_GB'), (err) => {
-    assert.strictEqual(err.message, 'Cannot revise listing. The item cannot be listed or modified. (field: description) Something else was wrong too.');
+    assert.strictEqual(
+      err.message,
+      'Cannot revise listing. The item cannot be listed or modified. (This item is not permitted under the Hazardous Materials policy. Please do not relist.) Something else was wrong too.'
+    );
     assert.strictEqual(err.details.length, 2);
     return true;
   });

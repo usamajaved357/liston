@@ -1348,6 +1348,11 @@ async function publishNow(listing, id, userId) {
       axes: (readyDraft.variesBy?.specifications || []).map((s) => `${s.name}(${s.values.length})`),
       variants: Array.isArray(readyDraft.variants) ? readyDraft.variants.length : 0,
     });
+    const explained = explainPolicyBlock(err, readyDraft);
+    if (explained) {
+      err.message = explained;
+      err.statusCode = 400;
+    }
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
     throw err;
   }
@@ -1423,6 +1428,50 @@ function dedupeVariationGroup(draft) {
   };
 }
 
+// eBay's hazardous-materials filter is an automated word match over the
+// title, description, item specifics and variation names — and its
+// rejection names none of them. These are the words it is known to react
+// to; naming where they appear turns "the listing may violate policy" into
+// something a seller can fix in a minute.
+const HAZMAT_TRIGGERS = [
+  'lead', 'leadcore', 'lead-free', 'mercury', 'lithium', 'li-ion', 'battery', 'batteries', 'aerosol', 'flammable', 'explosive',
+  'fireworks', 'gas', 'propane', 'butane', 'lighter', 'fuel', 'petrol', 'gasoline', 'diesel', 'paint', 'spray', 'solvent', 'thinner',
+  'glue', 'adhesive', 'epoxy', 'resin', 'acid', 'bleach', 'chemical', 'pesticide', 'poison', 'toxic', 'corrosive', 'radioactive',
+  'asbestos', 'magnet', 'magnets', 'neodymium', 'airbag', 'ammunition', 'gunpowder', 'charcoal', 'alcohol', 'ethanol', 'nitro',
+  'oxidiser', 'oxidizer', 'peroxide', 'ammonia', 'chlorine', 'dry ice', 'compressed', 'pressurised', 'pressurized',
+];
+const HAZMAT_PATTERN = new RegExp(`\\b(${HAZMAT_TRIGGERS.map((w) => w.replace(/[-.]/g, '\\$&')).join('|')})\\b`, 'gi');
+
+function hazmatTriggersIn(draft) {
+  const found = new Map();
+  const scan = (where, text) => {
+    for (const match of String(text || '').matchAll(HAZMAT_PATTERN)) {
+      const word = match[1].toLowerCase();
+      if (!found.has(word)) found.set(word, new Set());
+      found.get(word).add(where);
+    }
+  };
+  scan('the title', draft.commonTitle || draft.title);
+  scan('the description', draft.commonDescription || draft.description);
+  const aspects = Array.isArray(draft.variants) && draft.variants.length ? draft.variesBy?.aspects : draft.aspects;
+  for (const [name, values] of Object.entries(aspects || {})) scan(`item specific "${name}"`, (values || []).join(' '));
+  for (const spec of draft.variesBy?.specifications || []) scan(`the ${spec.name} options`, (spec.values || []).join(' '));
+  return [...found].map(([word, places]) => `"${word}" in ${[...places].join(', ')}`);
+}
+
+// eBay's policy block, with what the seller can actually do about it.
+function explainPolicyBlock(err, draft) {
+  const text = `${err.message || ''} ${JSON.stringify(err.details || '')}`;
+  if (!/Hazardous Materials|PI_HAZ/i.test(text)) return null;
+  const triggers = hazmatTriggersIn(draft);
+  return (
+    `eBay refused this listing under its Hazardous Materials policy — an automated filter that reacts to words in the title, description, specifics or variation names. ` +
+    (triggers.length
+      ? `Words it commonly reacts to were found: ${triggers.join('; ')}. Reword or remove them, then publish again.`
+      : `Look for words about batteries, lead, gases, fuels, glues, paints or chemicals in the text and variation names, reword them, then publish again.`)
+  );
+}
+
 // Item specifics as eBay accepts them (see prepareAspectsForEbay), on a
 // copy of the draft. Without a schema (Taxonomy down) only the axis rule
 // applies; a missing required aspect then surfaces from eBay as before.
@@ -1480,6 +1529,7 @@ module.exports = {
   removeAxisValue,
   dedupeVariationGroup,
   regenerateSku,
+  hazmatTriggersIn,
   uniqueSku,
   skuInUse,
   publish,

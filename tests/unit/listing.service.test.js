@@ -1092,3 +1092,32 @@ test('regenerateSku gives a draft a new label built from its current one and per
   assert.notStrictEqual(sku, 'Liston-1005006-ABCD');
   assert.strictEqual(saved.mock.calls[0].arguments[1].sku, sku);
 });
+
+test('a Hazardous Materials block from eBay is explained with the words that likely triggered it', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      skuBase: 'AE1',
+      title: 'Carp Hooklink Braid',
+      description: 'Lead-free sinking braid that pairs with lead clips.',
+      aspects: { Type: ['Braided Line'] },
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+    })
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1', status: 'drafted' }));
+  mock.method(ebayService, 'publishDraft', async () => {
+    const err = new Error('Cannot revise listing. The item cannot be listed or modified.');
+    err.details = [{ errorId: 25019, parameters: [{ name: '2', value: 'PI_HAZ_Hazardous_GeneralMessage' }] }];
+    throw err;
+  });
+  const status = mock.method(listingRepository, 'updateStatus', async (id, s, extra) => ({ id, status: s, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), (err) => {
+    assert.match(err.message, /Hazardous Materials policy/);
+    assert.match(err.message, /"lead" in the description/);
+    assert.strictEqual(err.statusCode, 400);
+    return true;
+  });
+  assert.match(status.mock.calls[0].arguments[2].errorMessage, /"lead" in the description/);
+});
