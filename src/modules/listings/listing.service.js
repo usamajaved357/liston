@@ -416,6 +416,12 @@ async function updateDraft(id, userId, patch) {
   }
   for (const rename of patch.renameAxes || []) {
     if (rename.from === rename.to) continue;
+    // Renaming onto another axis would fold two choices into one, leaving
+    // variations that only differed on the old axis identical.
+    const otherAxes = (draft.variesBy?.specifications || []).map((spec) => spec.name).filter((name) => name !== rename.from);
+    if (otherAxes.some((name) => name.toLowerCase() === rename.to.toLowerCase())) {
+      throw new ListingError(`"${rename.to}" is already a variation attribute on this listing.`, 400);
+    }
     // Only names eBay accepts as variations in this category, when known.
     const { allowed } = await disallowedVariationAxes({ ...draft, variesBy: { specifications: [{ name: rename.to }] } });
     if (allowed.length && !allowed.some((name) => name.toLowerCase() === rename.to.toLowerCase())) {
@@ -1182,7 +1188,9 @@ async function publishNow(listing, id, userId) {
       400
     );
   }
-  const readyDraft = readied.draft;
+  const tidied = dedupeVariationGroup(readied.draft);
+  const readyDraft = tidied.draft;
+  if (tidied.warnings.length) logger.warn('Draft variations deduplicated for publish', { listingId: id, warnings: tidied.warnings });
 
   // Drafts created before drafts went local already have their eBay objects;
   // anything newer is built here, now.
@@ -1229,7 +1237,8 @@ async function publishNow(listing, id, userId) {
     }
 
     resyncListings(listing.connection_id, userId);
-    return listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
+    const row = await listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
+    return tidied.warnings.length ? { ...row, warnings: tidied.warnings } : row;
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way
     // through. The draft stays `pending_review` so it's still editable and
@@ -1237,6 +1246,76 @@ async function publishNow(listing, id, userId) {
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
     throw err;
   }
+}
+
+// eBay treats "Camo Brown", "camo brown" and "Camo  Brown" as the same
+// option, and rejects the whole group ("Duplicate name-value combination in
+// variation specifics") when two variations end up with the same
+// combination, or a specification lists a value twice. Two supplier SKUs
+// with the same display label, or an axis renamed onto a name another axis
+// already uses, both get there. The copy sent to eBay is tidied here; the
+// stored draft is untouched, and what was dropped is reported.
+function optionKey(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function dedupeVariationGroup(draft) {
+  const warnings = [];
+  if (!Array.isArray(draft.variants) || !draft.variants.length) return { draft, warnings };
+
+  // Specifications: one entry per axis name, each value once.
+  const specsByName = new Map();
+  for (const spec of draft.variesBy?.specifications || []) {
+    const key = optionKey(spec.name);
+    const entry = specsByName.get(key) || { name: spec.name, values: [], seen: new Set() };
+    for (const value of spec.values || []) {
+      const valueKey = optionKey(value);
+      if (!valueKey || entry.seen.has(valueKey)) continue;
+      entry.seen.add(valueKey);
+      entry.values.push(value);
+    }
+    specsByName.set(key, entry);
+  }
+  const specifications = [...specsByName.values()].map(({ name, values }) => ({ name, values }));
+
+  // Variations: the first of each combination stays; later identical ones
+  // can't be told apart by a buyer anyway.
+  const axisNames = specifications.map((s) => s.name);
+  const seen = new Set();
+  const dropped = [];
+  const variants = draft.variants.filter((variant) => {
+    const combo = axisNames.map((axis) => `${optionKey(axis)}=${optionKey(variant.aspects?.[axis]?.[0])}`).join('|');
+    if (seen.has(combo)) {
+      dropped.push(axisNames.map((axis) => `${axis}: ${variant.aspects?.[axis]?.[0] ?? '—'}`).join(', '));
+      return false;
+    }
+    seen.add(combo);
+    return true;
+  });
+
+  if (dropped.length) {
+    const unique = [...new Set(dropped)];
+    warnings.push(
+      `${dropped.length} duplicate variation${dropped.length === 1 ? ' was' : 's were'} left out: eBay needs every variation to be a ` +
+        `different combination, and ${unique.length === 1 ? 'this one appeared' : 'these appeared'} more than once — ${unique.join('; ')}.`
+    );
+  }
+
+  // Every specification value must still be backed by a variation.
+  const kept = specifications
+    .map((spec) => ({
+      ...spec,
+      values: spec.values.filter((value) => variants.some((variant) => optionKey(variant.aspects?.[spec.name]?.[0]) === optionKey(value))),
+    }))
+    .filter((spec) => spec.values.length > 0);
+
+  return {
+    draft: { ...draft, variants, variesBy: { ...(draft.variesBy || {}), specifications: kept } },
+    warnings,
+  };
 }
 
 // Item specifics as eBay accepts them (see prepareAspectsForEbay), on a
@@ -1294,6 +1373,7 @@ module.exports = {
   proposeImageRevision,
   acceptImageRevision,
   removeAxisValue,
+  dedupeVariationGroup,
   publish,
   startLiveEdit,
   removeInactiveListing,

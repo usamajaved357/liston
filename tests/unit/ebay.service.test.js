@@ -602,3 +602,25 @@ test('an ended listing moves from the Active copy to the Inactive one at once', 
   assert.deepStrictEqual(inactive.items.map((i) => i.itemId), ['1']);
   assert.strictEqual((await ebayService.countActiveListings(freshCredentials(), connectionId)).totalEntries, 1);
 });
+
+test('listListingsDetailed search survives a numeric SKU or title from an older mirror copy', async () => {
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  mock.method(ebayTrading, 'getActiveListings', async () => ({
+    // A purely numeric custom label parsed as a number, as the mirror held it.
+    items: [
+      { itemId: '800004132806', sku: 10023, title: 'Braid', quantity: 1, quantityAvailable: 1, quantitySold: 0 },
+      { itemId: '2', sku: 'ABC', title: 1234, quantity: 1, quantityAvailable: 1, quantitySold: 0 },
+    ],
+    totalEntries: 2,
+    totalPages: 1,
+  }));
+
+  const connectionId = 'test-conn-numeric-sku';
+  const byId = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active', search: '800004132806' });
+  assert.deepStrictEqual(byId.items.map((l) => l.itemId), ['800004132806']);
+  const bySku = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active', search: '1002' });
+  assert.deepStrictEqual(bySku.items.map((l) => l.itemId), ['800004132806']);
+  const byTitle = await ebayService.listListingsDetailed(freshCredentials(), { connectionId, status: 'active', search: '1234' });
+  assert.deepStrictEqual(byTitle.items.map((l) => l.itemId), ['2']);
+});

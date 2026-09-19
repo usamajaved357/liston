@@ -941,3 +941,73 @@ test('endLiveListing ends the item on eBay and drops any working copy opened to 
   assert.deepStrictEqual(del.mock.calls[0].arguments, ['copy-1']);
   assert.deepStrictEqual(result, { itemId: '407000000009', endTime: '2026-09-19T01:00:00.000Z', warnings: [] });
 });
+
+test('dedupeVariationGroup drops repeated combinations and repeated specification values, case-insensitively', () => {
+  const draft = {
+    variesBy: {
+      aspects: {},
+      aspectsImageVariesBy: ['Colour'],
+      specifications: [
+        { name: 'Colour', values: ['Camo Brown', 'camo brown', 'Camo Green'] },
+        { name: 'Size', values: ['25lb', '35lb'] },
+      ],
+    },
+    variants: [
+      { aspects: { Colour: ['Camo Brown'], Size: ['25lb'] }, price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      { aspects: { Colour: ['camo brown'], Size: ['25lb'] }, price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      { aspects: { Colour: ['Camo Green'], Size: ['35lb'] }, price: { value: '9', currency: 'GBP' }, quantity: 1 },
+    ],
+  };
+
+  const { draft: tidy, warnings } = listingService.dedupeVariationGroup(draft);
+
+  assert.strictEqual(tidy.variants.length, 2);
+  assert.deepStrictEqual(tidy.variesBy.specifications, [
+    { name: 'Colour', values: ['Camo Brown', 'Camo Green'] },
+    // 25lb is only used by the kept Camo Brown row, 35lb by Camo Green.
+    { name: 'Size', values: ['25lb', '35lb'] },
+  ]);
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /1 duplicate variation was left out/);
+  assert.match(warnings[0], /Colour: camo brown, Size: 25lb/);
+  // The stored draft is untouched.
+  assert.strictEqual(draft.variants.length, 3);
+});
+
+test('dedupeVariationGroup merges two specifications with the same name', () => {
+  const draft = {
+    variesBy: { aspects: {}, specifications: [{ name: 'Colour', values: ['Black'] }, { name: 'colour', values: ['Red'] }] },
+    variants: [
+      { aspects: { Colour: ['Black'] }, price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      { aspects: { Colour: ['Red'] }, price: { value: '9', currency: 'GBP' }, quantity: 1 },
+    ],
+  };
+  const { draft: tidy, warnings } = listingService.dedupeVariationGroup(draft);
+  assert.deepStrictEqual(tidy.variesBy.specifications, [{ name: 'Colour', values: ['Black', 'Red'] }]);
+  assert.deepStrictEqual(warnings, []);
+});
+
+test('updateDraft refuses to rename an axis onto another axis of the listing', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      imageUrls: [],
+      categoryId: null,
+      variesBy: {
+        aspects: {},
+        aspectsImageVariesBy: [],
+        specifications: [
+          { name: 'Colour', values: ['Black', 'Red'] },
+          { name: 'Size', values: ['S', 'M'] },
+        ],
+      },
+      variants: [
+        { aspects: { Colour: ['Black'], Size: ['S'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+        { aspects: { Colour: ['Black'], Size: ['M'] }, imageUrls: [], price: { value: '9', currency: 'GBP' }, quantity: 1 },
+      ],
+    })
+  );
+  await assert.rejects(
+    () => listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Size', to: 'colour' }] }),
+    /already a variation attribute/
+  );
+});

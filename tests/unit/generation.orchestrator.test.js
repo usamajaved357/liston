@@ -564,3 +564,18 @@ test('closestVariationAspect maps a supplier axis onto the aspect eBay allows, o
   assert.strictEqual(orchestrator.closestVariationAspect('Phone Model', allowed), 'Compatible Model');
   assert.strictEqual(orchestrator.closestVariationAspect('Unit Quantity', allowed), null);
 });
+
+test('dedupeSourceVariants keeps the first of two supplier options with the same labels and says so', () => {
+  const source = {
+    variants: [
+      { attributes: { Color: 'Camo Brown', Size: '25LB' }, imageUrl: 'a' },
+      { attributes: { Color: 'camo  brown', Size: '25lb' }, imageUrl: 'b' },
+      { attributes: { Color: 'Camo Brown', Size: '35LB' }, imageUrl: 'c' },
+    ],
+  };
+  const { source: kept, warnings } = orchestrator.dedupeSourceVariants(source);
+  assert.deepStrictEqual(kept.variants.map((v) => v.imageUrl), ['a', 'c']);
+  assert.strictEqual(warnings.length, 1);
+  assert.match(warnings[0], /camo  brown \/ 25lb/);
+  assert.deepStrictEqual(orchestrator.dedupeSourceVariants({ variants: kept.variants }).warnings, []);
+});

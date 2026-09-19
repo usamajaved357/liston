@@ -101,8 +101,9 @@ function money(node) {
 function mapListingItem(item) {
   return {
     itemId: String(item.ItemID),
-    sku: item.SKU || null,
-    title: item.Title,
+    // A purely numeric custom label ("10023") parses as a number.
+    sku: item.SKU !== undefined && item.SKU !== null && item.SKU !== '' ? String(item.SKU) : null,
+    title: String(item.Title ?? ''),
     price: money(item.SellingStatus?.CurrentPrice),
     convertedPrice: money(item.SellingStatus?.ConvertedCurrentPrice),
     quantity: Number(item.Quantity ?? 0),

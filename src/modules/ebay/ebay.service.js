@@ -837,7 +837,7 @@ async function listListingsDetailed(credentials, { connectionId, status = 'activ
   if (search && search.trim()) {
     const needle = search.trim().toLowerCase();
     filtered = all.filter(
-      (item) => (item.title || '').toLowerCase().includes(needle) || (item.sku || '').toLowerCase().includes(needle) || item.itemId.includes(needle)
+      (item) => String(item.title || '').toLowerCase().includes(needle) || String(item.sku || '').toLowerCase().includes(needle) || String(item.itemId).includes(needle)
     );
   }
 

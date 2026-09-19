@@ -269,6 +269,36 @@ function selectVariants(source, selection) {
   return { ...source, variants, variantAxes };
 }
 
+// Suppliers do list two SKUs under the same display label ("Camo Brown"
+// twice, one per property id). To a buyer — and to eBay, which rejects a
+// group with a repeated combination — those are one option, so only the
+// first is kept, and the seller is told.
+function dedupeSourceVariants(source) {
+  const variants = source.variants || [];
+  const seen = new Set();
+  const dropped = [];
+  const kept = variants.filter((variant) => {
+    const key = Object.entries(variant.attributes || {})
+      .map(([axis, value]) => `${axis.trim().toLowerCase()}=${String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase()}`)
+      .sort()
+      .join('|');
+    if (seen.has(key)) {
+      dropped.push(Object.values(variant.attributes || {}).join(' / '));
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  if (!dropped.length) return { source, warnings: [] };
+  return {
+    source: { ...source, variants: kept },
+    warnings: [
+      `The supplier lists ${dropped.length} option${dropped.length === 1 ? '' : 's'} under a name already used ` +
+        `(${[...new Set(dropped)].join('; ')}); only the first of each was kept, as eBay won't accept two variations with the same options.`,
+    ],
+  };
+}
+
 // STEP TWO: everything that costs something — AI text, image generation,
 // eBay uploads — run only over the variations the seller kept.
 async function generateDraftInput({
@@ -302,6 +332,8 @@ async function generateDraftInput({
   // offers, and only what survives their choice is subject to the listing
   // size limit.
   let source = capVariants(selectVariants(read.source, variantSelection));
+  const duplicates = dedupeSourceVariants(source);
+  source = duplicates.source;
 
   if ((read.source.variants || []).length && !source.variants.length) {
     throw new ScrapingError('None of the variations you selected exist on the supplier listing.', { source: 'aliexpress' });
@@ -372,7 +404,7 @@ async function generateDraftInput({
 
   // Surfaced on the review page so the seller sees what the automated steps
   // couldn't do, rather than discovering it on a live listing.
-  const warnings = [...priced.warnings, ...(content.aspectWarnings || []), ...imageWarnings];
+  const warnings = [...duplicates.warnings, ...priced.warnings, ...(content.aspectWarnings || []), ...imageWarnings];
 
   if (!hasVariants) {
     return {
@@ -524,4 +556,4 @@ async function generateDraftInput({
   };
 }
 
-module.exports = { generateDraftInput, readSources, resolveCategory, closestVariationAspect, planVariationAxes, selectVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };
+module.exports = { generateDraftInput, readSources, resolveCategory, closestVariationAspect, planVariationAxes, selectVariants, dedupeSourceVariants, applyOrigin, resolveVariantAspectValues, resolvePricing };
