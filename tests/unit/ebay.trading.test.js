@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { mock } = require('node:test');
 
-const ebayTrading = require('../../src/modules/ebay/ebay.trading');
+const ebayTrading = require('../../src/modules/ebay/api/ebay.trading');
 
 test.afterEach(() => {
   mock.restoreAll();

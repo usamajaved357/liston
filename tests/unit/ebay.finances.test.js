@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { mapOrderEarnings } = require('../../src/modules/ebay/ebay.finances');
+const { mapOrderEarnings } = require('../../src/modules/ebay/api/ebay.finances');
 
 // Shaped like a real getTransactions answer for a £4.74 sale on EBAY_GB
 // that Seller Hub showed as "Transaction fees −£1.00, Ad fee general −£1.07,

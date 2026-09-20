@@ -1,10 +1,10 @@
 const { z } = require('zod');
 const connectionService = require('./connection.service');
-const ebayOauth = require('../ebay/ebay.oauth');
+const ebayOauth = require('../ebay/api/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
-const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const descriptionTemplate = require('../listings/description-template');
 const listingService = require('../listings/listing.service');
 const accountEvents = require('../ebay/account-events');

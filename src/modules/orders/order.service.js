@@ -5,7 +5,7 @@ const ebayService = require('../ebay/ebay.service');
 const listingRepository = require('../listings/listing.repository');
 const orderRepository = require('./order.repository');
 const { CARRIERS, detectCarrier } = require('./carriers');
-const { SELLER_CANCEL_REASONS } = require('../ebay/ebay.postorder');
+const { SELLER_CANCEL_REASONS } = require('../ebay/api/ebay.postorder');
 const logger = require('../../utils/logger');
 
 class OrderError extends Error {

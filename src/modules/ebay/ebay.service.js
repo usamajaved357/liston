@@ -1,10 +1,10 @@
-const ebayClient = require('./ebay.client');
-const ebayOauth = require('./ebay.oauth');
-const ebayTrading = require('./ebay.trading');
-const ebayFulfillment = require('./ebay.fulfillment');
-const ebayFinances = require('./ebay.finances');
-const ebaySignature = require('./ebay.signature');
-const ebayPostOrder = require('./ebay.postorder');
+const ebayClient = require('./api/ebay.client');
+const ebayOauth = require('./api/ebay.oauth');
+const ebayTrading = require('./api/ebay.trading');
+const ebayFulfillment = require('./api/ebay.fulfillment');
+const ebayFinances = require('./api/ebay.finances');
+const ebaySignature = require('./api/ebay.signature');
+const ebayPostOrder = require('./api/ebay.postorder');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');

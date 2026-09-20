@@ -1,49 +1,40 @@
 # Liston
 
-Multi-tenant SaaS: scrape competitor listings, generate AI content, publish to destination marketplaces.
+Multi-tenant SaaS for eBay dropshipping teams: AI-drafted listings from a competitor + supplier link, publish to eBay, then run the orders (sourcing, dispatch, refunds, cases) from Liston.
 
 ## Read first
 
-- `ARCHITECTURE.md` — Phase 1 architecture, database schema, module structure, feature checklist, build order (Section 10 is the authoritative next-steps list)
-- `PHASE-2.md` — multi-platform expansion plan (AliExpress/Amazon), not yet started, later phase
+- `ARCHITECTURE.md` — the system as built, the layering rules (§4) every change follows, the schema (§5), and the roadmap (§9). Keep it in step with the code: a change that adds a table, module or flow updates it in the same commit.
+- `PHASE-2.md` — old multi-platform notes (AliExpress/Amazon as destinations); superseded by the roadmap in ARCHITECTURE.md.
 
 ## Stack
 
-- Backend: Node.js/Express, PostgreSQL (`pg`, raw SQL — no ORM), Redis/BullMQ (not wired up yet), JWT auth
-- Frontend: Next.js (App Router), TypeScript, Tailwind CSS
-- Two separate `package.json`s: `/` (backend) and `/frontend` (frontend) — not a monorepo tool, run as two processes
+- Backend: Node.js/Express (CommonJS), PostgreSQL via `pg` + raw SQL (no ORM), JWT auth. `bullmq`/`ioredis` installed but not wired.
+- Frontend: Next.js (App Router), TypeScript, Tailwind — `frontend/`, talks to the backend only through `frontend/lib/api.ts`.
+- Two separate `package.json`s (`/` and `/frontend`), run as two processes.
 
-## Conventions (follow these for every new module)
+## Layout (see ARCHITECTURE.md §4 for the rules)
 
-- Feature-based folders under `src/modules/<feature>/`, each with `*.controller.js` (req/res only), `*.service.js` (business logic), `*.repository.js` (only files touching the DB), `*.routes.js`
-- Source platform modules implement `scrapeStore(storeUrl) → Listing[]`; destination platform modules implement `publishListing(listing, credentials) → { externalProductId, status }` — see `ARCHITECTURE.md` Section 4
-- Zod for request validation in controllers (see `auth.controller.js`)
-- Errors: throw `Error` with `.statusCode` set; the central `errorHandler.middleware.js` handles the response
-- Never log request bodies or credentials (see `errorHandler.middleware.js`, `app.js` request logger)
-- All platform credentials must be encrypted at rest via `src/modules/connections/credentials.encryption.js` (AES-256-GCM) — never store raw
+- `src/modules/<feature>/` with `*.routes.js` → `*.controller.js` (req/res + Zod) → `*.service.js` (rules) → `*.repository.js` (DB only). Pure helpers sit beside them.
+- Platform adapters: `src/modules/ebay/` (with `api/` holding one thin client per eBay API) and `src/modules/sourcing/aliexpress/`. Nothing else calls an external API.
+- Frontend pages in `app/` stay thin; reusable UI in `components/`, per-area subfolders (`components/orders/`).
+- Errors: throw `Error` with `.statusCode`; `errorHandler.middleware.js` responds. Never log bodies or credentials. Credentials encrypted via `credentials.encryption.js`, used only inside `withDecryptedCredentials`.
 
 ## Commands
 
-Backend (from repo root):
-- `npm run dev` — start with auto-restart
-- `npm run migrate` / `npm run migrate:down` — schema migrations
-- `npm run seed` — seed plans + platforms
-- `npm test` — run test suite (needs Postgres running)
+Backend (repo root): `npm run dev` · `npm run migrate` / `migrate:down` · `npm run seed` · `npm test` (needs local Postgres; runs unit + integration + cleanup).
+Frontend (`/frontend`): `npm run dev -- -p 3001` · `npm run build` (typecheck + lint).
 
-Frontend (from `/frontend`):
-- `npm run dev -- -p 3001` — start dev server (backend already uses 3000)
-- `npm run build` — verify production build compiles
+## Working rules
 
-## Current state (update this section as phases complete)
+- Restart the backend after backend edits (a stale process has caused phantom bugs). If a stray `.next/**/* 2.*` duplicate breaks `tsc`, delete it: `find .next -name "* [0-9].*" -delete`.
+- Never commit or push; the owner does all git work. Leave changes in the working tree and give a commit line when asked.
+- Never publish, revise, dispatch, refund or end anything on a live eBay account without asking; read-only eBay calls are fine.
+- Schema changes: new `NNN_name.up.sql`/`.down.sql`, never edit an applied migration; update ARCHITECTURE.md §5.
+- Every backend feature gets real tests (`tests/unit`, `tests/integration` against the local DB, fixtures `@example.com`). Frontend: `npm run build` clean and a browser check before "done".
 
-**Done:** Auth (signup/login/JWT), users/plans/platforms schema, `/dashboard` frontend showing live plan+usage, full DB schema for connections/tracked_stores/listings/jobs_log (tables exist, no CRUD yet).
+## Current state (update as phases land)
 
-**Not started:** Connections module (backend CRUD + TikTok BYOK credential form + frontend pages) — this is next per `ARCHITECTURE.md` Section 10, Phase 2 (of the Phase 1 build order, not to be confused with `PHASE-2.md` which is a different, later phase). After that: eBay scraping, AI generation, TikTok publishing, Sheets sync, billing.
+**Built:** auth + team/member permissions; eBay connect/reconnect with all 24 seller scopes; AI listing drafts (Browse + AliExpress DS + Taxonomy + Anthropic + pricing + image pipeline), draft editor with autosave, publish with unique SKUs / identifiers / policy-word handling, live-listing editing; orders list + order page matching Seller Hub (variation photo, specifics, fees/earnings, buyer contact), sourcing panel with auto-dispatch, dispatch/refund/cancel/decline, returns, item-not-received, payment disputes, archive; Shop categories incl. creating departments.
 
-## Before making DB schema changes
-
-Add a new migration file (`00N_description.up.sql` / `.down.sql`) — never edit an already-applied migration. Update the schema documented in `ARCHITECTURE.md` Section 5 to match.
-
-## Testing expectations
-
-Every new backend feature should get real tests (see `tests/integration/auth.test.js` for the pattern — hits the real local DB, not mocked). Verify frontend changes with `npm run build` at minimum; a browser check is expected before considering a feature done.
+**Next (ARCHITECTURE.md §9):** Inbox (messaging), Campaigns (Promoted Listings), inline sourcing on the order list, AliExpress order automation, `ebay.service.js` split, background jobs, Stripe, TikTok Shop.

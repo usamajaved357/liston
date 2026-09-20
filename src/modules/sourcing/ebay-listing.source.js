@@ -1,4 +1,4 @@
-const browse = require('../ebay/ebay.browse');
+const browse = require('../ebay/api/ebay.browse');
 const { ScrapingError } = require('../scraping/scraping.errors');
 
 const DEFAULT_MARKETPLACE = 'EBAY_GB';

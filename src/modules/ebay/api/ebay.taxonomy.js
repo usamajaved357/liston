@@ -2,7 +2,7 @@ const { apiBaseUrl } = require('./ebay.oauth');
 const { getApplicationToken } = require('./ebay.app-token');
 const fs = require('fs');
 const path = require('path');
-const logger = require('../../utils/logger');
+const logger = require('../../../utils/logger');
 
 // eBay publishes, per category, exactly which item specifics it expects:
 // which are REQUIRED, which accept only values from a fixed list, and whether

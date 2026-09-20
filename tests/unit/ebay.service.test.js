@@ -3,9 +3,9 @@ const assert = require('node:assert');
 const { mock } = require('node:test');
 require('dotenv').config();
 
-const ebayClient = require('../../src/modules/ebay/ebay.client');
-const ebayOauth = require('../../src/modules/ebay/ebay.oauth');
-const ebayTrading = require('../../src/modules/ebay/ebay.trading');
+const ebayClient = require('../../src/modules/ebay/api/ebay.client');
+const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
+const ebayTrading = require('../../src/modules/ebay/api/ebay.trading');
 const ebayService = require('../../src/modules/ebay/ebay.service');
 
 function validListingPolicies() {
@@ -730,7 +730,7 @@ test('buildInventoryItem lifts product identifiers out of the specifics onto pro
 });
 
 test('reviseInventoryListing replaces the item and offer, then republishes the offer', async () => {
-  const ebayClient = require('../../src/modules/ebay/ebay.client');
+  const ebayClient = require('../../src/modules/ebay/api/ebay.client');
   const ebayService = require('../../src/modules/ebay/ebay.service');
   const calls = [];
   const existing = { offerId: 'offer-7', sku: 'S-1', status: 'PUBLISHED', marketplaceId: 'EBAY_GB', format: 'FIXED_PRICE', availableQuantity: 1, categoryId: '1', listingPolicies: { fulfillmentPolicyId: 'f' }, pricingSummary: { price: { value: '9.95', currency: 'GBP' } }, merchantLocationKey: 'm', listing: { listingId: '407' } };
@@ -767,7 +767,7 @@ test('reviseInventoryListing replaces the item and offer, then republishes the o
 });
 
 test('getStoreCategoriesCached reports a failed read instead of caching it as "no departments"', async () => {
-  const ebayTrading = require('../../src/modules/ebay/ebay.trading');
+  const ebayTrading = require('../../src/modules/ebay/api/ebay.trading');
   const ebayService = require('../../src/modules/ebay/ebay.service');
   let calls = 0;
   const m = mock.method(ebayTrading, 'getStoreCategories', async () => {
@@ -796,7 +796,7 @@ test('getStoreCategoriesCached reports a failed read instead of caching it as "n
 });
 
 test('addStoreCategory creates the department then serves the refreshed tree', async () => {
-  const ebayTrading = require('../../src/modules/ebay/ebay.trading');
+  const ebayTrading = require('../../src/modules/ebay/api/ebay.trading');
   const ebayService = require('../../src/modules/ebay/ebay.service');
   const tree = [{ id: '1', name: 'Tech', children: [] }];
   const get = mock.method(ebayTrading, 'getStoreCategories', async () => ({ categories: tree, hasStore: true }));

@@ -28,10 +28,13 @@ frontend/build/
 # Coverage / test artifacts
 coverage/
 
-# Internal planning docs — kept local only, not pushed to the shared repo
+# Internal planning docs and AI-assistant config — kept local only, not pushed
 ARCHITECTURE.md
 PHASE-2.md
 PROGRESS.md
+CLAUDE.md
+frontend/AGENTS.md
+.claude/
 .cache/
 
 # TypeScript incremental cache (breaks Nixpacks cache mounts when committed)

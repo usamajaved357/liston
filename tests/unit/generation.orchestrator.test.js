@@ -233,7 +233,7 @@ test('generateDraftInput assembles a variation draftInput when the source has va
 });
 
 test('generateDraftInput writes variation options under eBay spelling when the category lists them', async () => {
-  const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+  const ebayTaxonomy = require('../../src/modules/ebay/api/ebay.taxonomy');
   mock.method(ebaySource, 'fetchListing', async () => ({ title: 'Competitor', categoryId: '57989', variants: [] }));
   mock.method(aliexpressSource, 'fetchProduct', async () => ({
     title: 'Source',
@@ -550,7 +550,7 @@ test('applyOrigin adds the standard eBay origin aspect when none was present', (
 });
 
 test('generateDraftInput drafts without a competitor, taking the category from eBay’s suggestions', async () => {
-  const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+  const ebayTaxonomy = require('../../src/modules/ebay/api/ebay.taxonomy');
   const fetchListingMock = mock.method(ebaySource, 'fetchListing', async () => {
     throw new Error('should not be called');
   });
@@ -589,7 +589,7 @@ test('generateDraftInput drafts without a competitor, taking the category from e
 });
 
 test('readSources refuses a no-competitor draft when eBay has no category suggestion', async () => {
-  const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+  const ebayTaxonomy = require('../../src/modules/ebay/api/ebay.taxonomy');
   mock.method(aliexpressSource, 'fetchProduct', async () => ({ title: 'zzz', priceText: '£1', imageUrls: [], specifics: {}, variants: [] }));
   mock.method(ebayTaxonomy, 'suggestCategories', async () => []);
   await assert.rejects(() => orchestrator.readSources({ sourceUrl: 'https://aliexpress.com/item/1.html' }), ScrapingError);

@@ -5,8 +5,8 @@
 // inventory items it created itself. Auth reuses the same OAuth access token
 // via the X-EBAY-API-IAF-TOKEN header, which eBay accepts for this API too.
 const { XMLParser } = require('fast-xml-parser');
-const governor = require('./request-governor');
-const logger = require('../../utils/logger');
+const governor = require('../request-governor');
+const logger = require('../../../utils/logger');
 
 // eBay escapes a listing's HTML description inside the XML, so one GetItem
 // carries thousands of &lt;/&gt; entities — over fast-xml-parser's default

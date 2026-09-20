@@ -113,7 +113,7 @@ function schedulePersist() {
 async function syncWithEbay() {
   if (!config.ebay.clientId || config.env === 'test') return;
   try {
-    const { getApplicationToken } = require('./ebay.app-token');
+    const { getApplicationToken } = require('./api/ebay.app-token');
     const token = await getApplicationToken();
     const res = await fetch('https://api.ebay.com/developer/analytics/v1_beta/rate_limit/?api_context=tradingapi', {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },

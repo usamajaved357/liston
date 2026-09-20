@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { mock } = require('node:test');
 
-const taxonomy = require('../../src/modules/ebay/ebay.taxonomy');
-const appToken = require('../../src/modules/ebay/ebay.app-token');
+const taxonomy = require('../../src/modules/ebay/api/ebay.taxonomy');
+const appToken = require('../../src/modules/ebay/api/ebay.app-token');
 
 // Shaped like a real get_item_aspects_for_category response (EBAY_GB / 20702,
 // captured live during implementation).

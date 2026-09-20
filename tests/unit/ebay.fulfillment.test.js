@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { mock } = require('node:test');
 
-const ebayFulfillment = require('../../src/modules/ebay/ebay.fulfillment');
-const ebayOauth = require('../../src/modules/ebay/ebay.oauth');
+const ebayFulfillment = require('../../src/modules/ebay/api/ebay.fulfillment');
+const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
 
 test('scopes: new tokens carry the order scopes, legacy ones refresh with what they had', () => {
   assert.ok(ebayOauth.SCOPES.includes(ebayOauth.SCOPE_FULFILLMENT));
