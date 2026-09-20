@@ -170,4 +170,131 @@ function prepareAspectsForEbay(aspects, schema, variationAxes = []) {
   return { aspects: prepared, removedAxes, filled, missing };
 }
 
-module.exports = { validateAspects, describeSchemaForPrompt, matchAllowedValue, prepareAspectsForEbay };
+// ---------------------------------------------------------------------------
+// Variation option values.
+//
+// eBay has started refusing custom values on aspects its Taxonomy API still
+// reports as FREE_TEXT: Men's Trousers rejected "XXL" at publish ("no longer
+// support custom values for Size") while listing the size as "2XL". So the
+// schema's `selectionOnly` flag can't be trusted to say when a value must be
+// eBay's own; whenever eBay publishes a value list for an axis, an option
+// that plainly means one of them is sent under eBay's spelling.
+
+const SIZE_WORDS = new Map([
+  ['extra extra small', '2XS'],
+  ['extra small', 'XS'],
+  ['small', 'S'],
+  ['medium', 'M'],
+  ['large', 'L'],
+  ['extra large', 'XL'],
+  ['extra extra large', '2XL'],
+  ['one size', 'One Size'],
+  ['one size fits all', 'One Size'],
+  ['free size', 'One Size'],
+  ['os', 'One Size'],
+]);
+
+// Other spellings of the same size, most likely first: "XXL" -> ["2XL"],
+// "2XL" -> ["XXL"], "XX-Large" -> ["2XL", "XXL"], "Extra Large" -> ["XL"].
+function sizeAliases(value) {
+  const raw = String(value ?? '').trim();
+  const out = [];
+  const add = (v) => {
+    if (v && normalizeForCompare(v) !== normalizeForCompare(raw) && !out.includes(v)) out.push(v);
+  };
+  const word = SIZE_WORDS.get(normalizeForCompare(raw).replace(/[-_]/g, ' ').replace(/\s+/g, ' '));
+  if (word) add(word);
+
+  // "XX-Large" / "3X Large" / "xxlarge" -> a letter form first.
+  const compact = raw.replace(/[\s_-]+/g, '').toUpperCase();
+  let letters = compact;
+  const worded = /^(\d*)(X*)(LARGE|SMALL)$/.exec(compact);
+  if (worded) letters = `${worded[1]}${worded[2]}${worded[3][0]}`;
+
+  // A run of X's <-> a count: XXL <-> 2XL.
+  let m = /^(X{2,})(L|S)$/.exec(letters);
+  if (m) add(`${m[1].length}X${m[2]}`);
+  m = /^(\d+)X(L|S)$/.exec(letters);
+  if (m && Number(m[1]) >= 2 && Number(m[1]) <= 10) add('X'.repeat(Number(m[1])) + m[2]);
+  if (letters !== compact) add(letters);
+  return out;
+}
+
+// eBay's spelling of an option value, or null when nothing on its list
+// plainly means the same thing.
+function canonicalAxisValue(value, allowedValues) {
+  if (!Array.isArray(allowedValues) || !allowedValues.length) return null;
+  const direct = matchAllowedValue(value, allowedValues);
+  if (direct) return direct;
+  for (const alias of sizeAliases(value)) {
+    const hit = matchAllowedValue(alias, allowedValues);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Rewrites a variation draft's option values to eBay's own spelling where
+ * eBay lists values for that axis. Works on copies; the stored draft is the
+ * caller's business.
+ * @returns { specifications, variants, renamed: [{ axis, from, to }],
+ *            unmatched: [{ axis, value, allowedValues, selectionOnly }] }
+ *          `unmatched` names values eBay lists nothing for; with a full
+ *          selection-only list that is a certain rejection, otherwise eBay
+ *          may or may not accept it.
+ */
+function canonicalizeVariationValues({ specifications = [], variants = [] }, schema) {
+  const renamed = [];
+  const unmatched = [];
+  if (!schema || !specifications.length) return { specifications, variants, renamed, unmatched };
+
+  const byName = new Map(schema.map((entry) => [normalizeForCompare(entry.name), entry]));
+  const renames = new Map(); // axis -> Map(from -> to)
+
+  for (const spec of specifications) {
+    const entry = byName.get(normalizeForCompare(spec.name));
+    if (!entry || !entry.allowedValues?.length) continue;
+    const taken = new Set((spec.values || []).map(normalizeForCompare));
+    const map = new Map();
+    for (const value of spec.values || []) {
+      const to = canonicalAxisValue(value, entry.allowedValues);
+      if (!to) {
+        if (!entry.hasMoreValues) unmatched.push({ axis: spec.name, value, allowedValues: entry.allowedValues, selectionOnly: entry.selectionOnly });
+        continue;
+      }
+      if (to === value) continue;
+      // "XXL" and "2XL" both present would collapse into one option; leave
+      // that for the duplicate check to report rather than silently merge.
+      if (normalizeForCompare(to) !== normalizeForCompare(value) && taken.has(normalizeForCompare(to))) continue;
+      map.set(value, to);
+      renamed.push({ axis: spec.name, from: value, to });
+    }
+    if (map.size) renames.set(spec.name, map);
+  }
+
+  if (!renames.size) return { specifications, variants, renamed, unmatched };
+
+  const outSpecs = specifications.map((spec) => {
+    const map = renames.get(spec.name);
+    return map ? { ...spec, values: spec.values.map((v) => map.get(v) ?? v) } : spec;
+  });
+  const outVariants = variants.map((variant) => {
+    let aspects = variant.aspects;
+    for (const [axis, map] of renames) {
+      const current = aspects?.[axis]?.[0];
+      if (current !== undefined && map.has(current)) aspects = { ...aspects, [axis]: [map.get(current)] };
+    }
+    return aspects === variant.aspects ? variant : { ...variant, aspects };
+  });
+  return { specifications: outSpecs, variants: outVariants, renamed, unmatched };
+}
+
+module.exports = {
+  validateAspects,
+  describeSchemaForPrompt,
+  matchAllowedValue,
+  prepareAspectsForEbay,
+  sizeAliases,
+  canonicalAxisValue,
+  canonicalizeVariationValues,
+};

@@ -232,6 +232,44 @@ test('generateDraftInput assembles a variation draftInput when the source has va
   assert.strictEqual(buildGalleryMock.mock.calls[0].arguments[0].categoryId, '123');
 });
 
+test('generateDraftInput writes variation options under eBay spelling when the category lists them', async () => {
+  const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+  mock.method(ebaySource, 'fetchListing', async () => ({ title: 'Competitor', categoryId: '57989', variants: [] }));
+  mock.method(aliexpressSource, 'fetchProduct', async () => ({
+    title: 'Source',
+    priceText: '£2.00',
+    imageUrls: ['https://example.com/group.jpg'],
+    variants: [
+      { attributes: { Size: 'XL' }, imageUrl: 'https://example.com/a.jpg' },
+      { attributes: { Size: 'XXL' }, imageUrl: 'https://example.com/a.jpg' },
+    ],
+  }));
+  // Mirrors EBAY_GB Men's Trousers, where eBay refused "XXL" at publish
+  // while its schema still called Size free text.
+  const schema = [{ name: 'Size', required: true, variation: true, selectionOnly: false, allowedValues: ['S', 'M', 'L', 'XL', '2XL'], hasMoreValues: false }];
+  mock.method(ebayTaxonomy, 'getAspectSchema', async () => schema);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => schema);
+  mock.method(textGenerator, 'generateListingContent', async () => ({
+    commonTitle: 'Joggers',
+    commonDescription: 'desc',
+    condition: 'NEW',
+    sharedAspects: {},
+    varyingAspectName: 'Size',
+    variantAspectValues: { XL: 'XL', XXL: 'XXL' },
+  }));
+  mock.method(imagePipeline, 'buildGalleryImages', async ({ sourceImageUrls }) => ({ imageUrls: sourceImageUrls, warnings: [] }));
+  mock.method(imagePipeline, 'buildVariantImage', async ({ sourceImageUrl }) => sourceImageUrl || null);
+
+  const { draftInput } = await orchestrator.generateDraftInput({
+    competitorUrl: 'https://ebay.co.uk/itm/1',
+    sourceUrl: 'https://aliexpress.com/item/1.html',
+    merchantLocationKey: 'main',
+  });
+
+  assert.deepStrictEqual(draftInput.variesBy.specifications, [{ name: 'Size', values: ['XL', '2XL'] }]);
+  assert.deepStrictEqual(draftInput.variants.map((v) => v.aspects.Size[0]), ['XL', '2XL']);
+});
+
 test('generateDraftInput fills a variant with no photo of its own from the gallery', async () => {
   mock.method(ebaySource, 'fetchListing', async () => ({ title: 'Competitor', categoryId: '123', variants: [] }));
   mock.method(aliexpressSource, 'fetchProduct', async () => ({

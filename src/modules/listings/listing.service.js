@@ -5,7 +5,7 @@ const ebayService = require('../ebay/ebay.service');
 const marketplaces = require('../ebay/marketplaces');
 const orchestrator = require('../ai-generation/generation.orchestrator');
 const imageGates = require('../ai-generation/image-pipeline/gates');
-const { prepareAspectsForEbay } = require('../ai-generation/aspect-validator');
+const { prepareAspectsForEbay, canonicalizeVariationValues } = require('../ai-generation/aspect-validator');
 const storeCategory = require('./store-category');
 const logger = require('../../utils/logger');
 const { hazmatTriggersIn, HAZMAT_TRIGGERS, scrubDraft } = require('./policy-words');
@@ -1387,6 +1387,14 @@ async function publishNow(listing, id, userId) {
       400
     );
   }
+  // A value eBay lists nothing for, on an axis it only takes listed values
+  // on, is a certain rejection — said here, with the options, not after the
+  // group has been built.
+  const certain = (readied.unmatched || []).find((u) => u.selectionOnly);
+  if (certain) {
+    throw new ListingError(explainRejectedAxisValue({ axis: certain.axis, value: certain.value }, readied.unmatched), 400);
+  }
+  if (readied.warnings.length) logger.info('Draft option values sent under eBay spelling', { listingId: id, warnings: readied.warnings });
   const tidied = dedupeVariationGroup(readied.draft);
   const readyDraft = tidied.draft;
   if (tidied.warnings.length) logger.warn('Draft variations deduplicated for publish', { listingId: id, warnings: tidied.warnings });
@@ -1491,7 +1499,7 @@ async function publishNow(listing, id, userId) {
 
     resyncListings(listing.connection_id, userId);
     const row = await listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
-    const warnings = [...skuWarnings, ...tidied.warnings];
+    const warnings = [...skuWarnings, ...readied.warnings, ...tidied.warnings];
     return warnings.length ? { ...row, warnings } : row;
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way
@@ -1532,6 +1540,14 @@ async function publishNow(listing, id, userId) {
         options: (readyDraft.variesBy?.specifications || []).map((sp) => `${sp.name}: ${sp.values.join(' | ')}`),
       });
       err.message = explainPolicyBlock(err, readyDraft, { cleared, freshSku });
+      err.statusCode = 400;
+    }
+    // An option value eBay refused even though its schema called the axis
+    // free text: named with the values it does take, since eBay's own
+    // message points at an API call the seller can't make.
+    const rejected = rejectedAxisValue(err);
+    if (rejected) {
+      err.message = explainRejectedAxisValue(rejected, readied.unmatched);
       err.statusCode = 400;
     }
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
@@ -1649,8 +1665,53 @@ async function readyAspectsForPublish(draft) {
     : null;
   const current = isVariation ? draft.variesBy?.aspects : draft.aspects;
   const { aspects, missing } = prepareAspectsForEbay(current, schema, axes);
-  const readyDraft = isVariation ? { ...draft, variesBy: { ...draft.variesBy, aspects } } : { ...draft, aspects };
-  return { draft: readyDraft, missing };
+  if (!isVariation) return { draft: { ...draft, aspects }, missing, warnings: [] };
+
+  // Option values under eBay's own spelling ("XXL" -> "2XL"): eBay now
+  // rejects custom values on axes it still calls free text, so a value that
+  // plainly means one of its listed ones is sent as that one, and said so.
+  const canon = canonicalizeVariationValues(
+    { specifications: draft.variesBy?.specifications || [], variants: draft.variants },
+    schema
+  );
+  const warnings = [];
+  const byAxis = new Map();
+  for (const r of canon.renamed) byAxis.set(r.axis, [...(byAxis.get(r.axis) || []), `${r.from} → ${r.to}`]);
+  for (const [axis, pairs] of byAxis) {
+    warnings.push(`${axis} options were sent under eBay's spelling for this category: ${pairs.join(', ')}.`);
+  }
+  const readyDraft = {
+    ...draft,
+    variants: canon.variants,
+    variesBy: { ...draft.variesBy, aspects, specifications: canon.specifications },
+  };
+  return { draft: readyDraft, missing, warnings, unmatched: canon.unmatched };
+}
+
+// eBay 25129 "XXL is not a valid value for Size. Select a value from the
+// available options." — the axis and value it refused, or null.
+function rejectedAxisValue(err) {
+  const texts = [err?.message, ...((err?.details || []).flatMap((d) => [d.message, ...((d.parameters || []).map((p) => p.value))]))];
+  for (const text of texts) {
+    // The value sits at the start of its own sentence; in the combined
+    // message that sentence follows a ";" or "(".
+    const m = /(?:^|[;(]\s*)([^;()]+?) is not a valid value for ([^.;()]+?)\. Select a value/i.exec(String(text || ''));
+    if (m) return { value: m[1].trim(), axis: m[2].trim() };
+  }
+  return null;
+}
+
+// What the seller can do about a refused option value: which one, and the
+// values eBay does take on that axis, instead of eBay's "use
+// getItemAspectsForCategory".
+function explainRejectedAxisValue(rejected, unmatched = []) {
+  const hint = unmatched.find((u) => u.axis.toLowerCase() === rejected.axis.toLowerCase());
+  const options = hint?.allowedValues?.length ? ` eBay's ${rejected.axis} values for this category are: ${hint.allowedValues.join(', ')}.` : '';
+  return (
+    `eBay only accepts its own ${rejected.axis} values in this category and "${rejected.value}" isn't one of them.` +
+    options +
+    ` Rename the "${rejected.value}" option under Variations to one of those, then publish again.`
+  );
 }
 
 // Assigns the SKUs (and group key) a publish needs, without mutating the

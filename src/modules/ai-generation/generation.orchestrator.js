@@ -8,6 +8,7 @@ const { ScrapingError } = require('../scraping/scraping.errors');
 const pricingService = require('../pricing/pricing.service');
 const marketplaces = require('../ebay/marketplaces');
 const { planVariationAxes, closestVariationAspect } = require('./variation-plan');
+const { canonicalizeVariationValues } = require('./aspect-validator');
 const priceParser = require('../pricing/price-parser');
 const { PricingError } = require('../pricing/pricing.service');
 
@@ -527,6 +528,20 @@ async function generateDraftInput({
     );
   }
 
+  // One entry PER AXIS — this is the list that makes eBay render a dropdown
+  // for each. Values are taken from the variants actually built, so a
+  // capped matrix never advertises an option that has no variation behind
+  // it. Option values go under eBay's own spelling where it lists them
+  // ("XXL" -> "2XL"): eBay refuses custom values on such axes at publish,
+  // and the seller should see the draft the way it will be listed. The
+  // full value list is needed for that, not the prompt-sized one.
+  const specifications = axes.map((axis) => ({
+    name: axis.ebayName,
+    values: [...new Set(variants.map((v) => v.aspects[axis.ebayName]?.[0]).filter(Boolean))],
+  }));
+  const fullSchema = await ebayTaxonomy.getEditorAspectSchema(marketplaceId, category.categoryId);
+  const canon = canonicalizeVariationValues({ specifications, variants }, fullSchema);
+
   return {
     draftInput: {
       groupKey: null, // assigned by the caller alongside SKUs
@@ -540,16 +555,9 @@ async function generateDraftInput({
         // per-option photography (Size, Model) just makes eBay swap to the
         // same image.
         aspectsImageVariesBy: axes.filter((axis) => axis.hasImages).map((axis) => axis.ebayName),
-        // One entry PER AXIS — this is the list that makes eBay render a
-        // dropdown for each. Values are taken from the variants actually
-        // built, so a capped matrix never advertises an option that has no
-        // variation behind it.
-        specifications: axes.map((axis) => ({
-          name: axis.ebayName,
-          values: [...new Set(variants.map((v) => v.aspects[axis.ebayName]?.[0]).filter(Boolean))],
-        })),
+        specifications: canon.specifications,
       },
-      variants,
+      variants: canon.variants,
       categoryId: category.categoryId,
       categoryPath: category.categoryPath,
       categorySuggestions,

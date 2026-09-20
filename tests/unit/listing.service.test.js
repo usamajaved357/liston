@@ -789,6 +789,114 @@ test('publish sends eBay-ready specifics: no axis in the shared set, identifiers
   assert.strictEqual(statusMock.mock.calls[0].arguments[1], 'published');
 });
 
+// Size list mirrors EBAY_GB "Men's Trousers" (57989) read live, where eBay
+// refused "XXL" at publish (25129) although its schema called Size free text.
+const TROUSERS_SCHEMA = [
+  { name: 'Colour', required: true, variation: true, selectionOnly: false, allowedValues: ['Black', 'Grey', 'Navy'], hasMoreValues: false },
+  { name: 'Size', required: true, variation: true, selectionOnly: false, allowedValues: ['S', 'M', 'L', 'XL', '2XL', '3XL'], hasMoreValues: false },
+  { name: 'Brand', required: true, variation: false },
+];
+
+function trousersDraft(sizes, extra = {}) {
+  const variants = sizes.map((size) => ({
+    aspects: { Colour: ['Grey'], Size: [size] },
+    imageUrls: ['https://i.ebayimg.com/g.jpg'],
+    price: { value: '19', currency: 'GBP' },
+    quantity: 1,
+  }));
+  return pendingDraft({
+    marketplaceId: 'EBAY_GB',
+    categoryId: '57989',
+    commonTitle: 'Mens Joggers',
+    commonDescription: 'd',
+    imageUrls: ['https://i.ebayimg.com/a.jpg'],
+    variesBy: {
+      aspects: { Brand: ['Unbranded'] },
+      aspectsImageVariesBy: [],
+      specifications: [
+        { name: 'Colour', values: ['Grey'] },
+        { name: 'Size', values: sizes },
+      ],
+    },
+    variants,
+    ...extra,
+  });
+}
+
+test('publish sends variation options under eBay spelling ("XXL" -> "2XL") and says so', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => trousersDraft(['XL', 'XXL', 'xxxl']));
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => TROUSERS_SCHEMA);
+  mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  let sent;
+  mock.method(ebayService, 'draftVariationListing', async (credentials, input) => {
+    sent = input;
+    return { groupKey: input.groupKey };
+  });
+  mock.method(ebayService, 'publishGroup', async () => ({ externalProductId: 'ebay-1' }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  const result = await listingService.publish('listing-1', USER_ID);
+  assert.deepStrictEqual(sent.variesBy.specifications, [
+    { name: 'Colour', values: ['Grey'] },
+    { name: 'Size', values: ['XL', '2XL', '3XL'] },
+  ]);
+  assert.deepStrictEqual(sent.variants.map((v) => v.aspects.Size[0]), ['XL', '2XL', '3XL']);
+  assert.ok(result.warnings.some((w) => /Size options were sent under eBay's spelling.*XXL → 2XL, xxxl → 3XL/.test(w)), result.warnings.join('\n'));
+});
+
+test('publish refuses an option eBay lists nothing for, on a fixed-list axis, before building anything', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => trousersDraft(['M', 'Petite']));
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => TROUSERS_SCHEMA.map((a) => (a.name === 'Size' ? { ...a, selectionOnly: true } : a)));
+  const draftMock = mock.method(ebayService, 'draftVariationListing', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(
+    () => listingService.publish('listing-1', USER_ID),
+    /eBay only accepts its own Size values in this category and "Petite" isn't one of them. eBay's Size values for this category are: S, M, L, XL, 2XL, 3XL. Rename the "Petite" option under Variations/
+  );
+  assert.strictEqual(draftMock.mock.calls.length, 0);
+});
+
+test("publish turns eBay's 25129 refusal of an option value into the axis, the value and eBay's list", async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => trousersDraft(['M', 'Petite']));
+  mock.method(ebayTaxonomy, 'getVariationsSupported', async () => true);
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => TROUSERS_SCHEMA);
+  mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(ebayService, 'draftVariationListing', async (credentials, input) => ({ groupKey: input.groupKey }));
+  mock.method(ebayService, 'publishGroup', async () => {
+    const err = new Error(
+      'The product aspects for this category no longer support custom values for Size. Your listing was not published. (Enter a valid value for Size.; Petite is not a valid value for Size. Select a value from the available options.)'
+    );
+    err.statusCode = 400;
+    err.details = [
+      {
+        errorId: 25129,
+        message: 'The product aspects for this category no longer support custom values for Size.',
+        parameters: [
+          { name: '0', value: 'Enter a valid value for Size.' },
+          { name: '1', value: 'Petite is not a valid value for Size. Select a value from the available options.' },
+          { name: '3', value: 'Size' },
+          { name: '4', value: 'Petite' },
+        ],
+      },
+    ];
+    throw err;
+  });
+  const statusMock = mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(
+    () => listingService.publish('listing-1', USER_ID),
+    /eBay only accepts its own Size values in this category and "Petite" isn't one of them. eBay's Size values for this category are: S, M, L, XL, 2XL, 3XL./
+  );
+  assert.strictEqual(statusMock.mock.calls[0].arguments[1], 'pending_review');
+  assert.match(statusMock.mock.calls[0].arguments[2].errorMessage, /Rename the "Petite" option under Variations/);
+});
+
 test('publish names a required specific that is still empty instead of letting eBay reject the build', async () => {
   mock.method(listingRepository, 'findByIdForUser', async () =>
     pendingDraft({

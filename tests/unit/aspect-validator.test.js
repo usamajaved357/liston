@@ -146,3 +146,84 @@ test('prepareAspectsForEbay without a schema still applies the axis rule', () =>
   assert.deepStrictEqual(aspects, { Brand: ['Acme'] });
   assert.deepStrictEqual(missing, []);
 });
+
+// ---------------------------------------------------------------------------
+// Variation option values. The Size list mirrors EBAY_GB "Men's Trousers"
+// (57989) read live: eBay's Taxonomy API still called it FREE_TEXT while
+// publish refused "XXL" with "no longer support custom values for Size".
+const { sizeAliases, canonicalAxisValue, canonicalizeVariationValues } = require('../../src/modules/ai-generation/aspect-validator');
+
+const TROUSERS = [
+  {
+    name: 'Size',
+    required: true,
+    selectionOnly: false,
+    variation: true,
+    allowedValues: ['2XS', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', '30', '32', 'One Size'],
+    hasMoreValues: false,
+  },
+  { name: 'Colour', required: true, selectionOnly: false, variation: true, allowedValues: ['Black', 'Blue', 'Grey'], hasMoreValues: false },
+];
+
+test('sizeAliases spells a size the other ways eBay might list it', () => {
+  assert.deepStrictEqual(sizeAliases('XXL'), ['2XL']);
+  assert.deepStrictEqual(sizeAliases('xxxl'), ['3XL']);
+  assert.deepStrictEqual(sizeAliases('2XL'), ['XXL']);
+  assert.deepStrictEqual(sizeAliases('XX-Large'), ['2XL', 'XXL']);
+  assert.deepStrictEqual(sizeAliases('Extra Large'), ['XL']);
+  assert.deepStrictEqual(sizeAliases('One size fits all'), ['One Size']);
+  assert.deepStrictEqual(sizeAliases('M'), []);
+  assert.deepStrictEqual(sizeAliases('32'), []);
+});
+
+test('canonicalAxisValue prefers eBay spelling, exact first, then a size alias', () => {
+  assert.strictEqual(canonicalAxisValue('m', TROUSERS[0].allowedValues), 'M');
+  assert.strictEqual(canonicalAxisValue('XXL', TROUSERS[0].allowedValues), '2XL');
+  assert.strictEqual(canonicalAxisValue('XXXXL', TROUSERS[0].allowedValues), '4XL');
+  assert.strictEqual(canonicalAxisValue('Extra Large', TROUSERS[0].allowedValues), 'XL');
+  assert.strictEqual(canonicalAxisValue('Petite', TROUSERS[0].allowedValues), null);
+  assert.strictEqual(canonicalAxisValue('XXL', []), null);
+});
+
+test('canonicalizeVariationValues renames options and every variant using them', () => {
+  const draft = {
+    specifications: [
+      { name: 'Colour', values: ['Grey', 'Navy'] },
+      { name: 'Size', values: ['S', 'M', 'L', 'XL', 'XXL'] },
+    ],
+    variants: [
+      { aspects: { Colour: ['Grey'], Size: ['XL'] } },
+      { aspects: { Colour: ['Grey'], Size: ['XXL'] } },
+      { aspects: { Colour: ['Navy'], Size: ['XXL'] } },
+    ],
+  };
+  const out = canonicalizeVariationValues(draft, TROUSERS);
+  assert.deepStrictEqual(out.specifications[1].values, ['S', 'M', 'L', 'XL', '2XL']);
+  assert.deepStrictEqual(out.variants.map((v) => v.aspects.Size[0]), ['XL', '2XL', '2XL']);
+  assert.deepStrictEqual(out.renamed, [{ axis: 'Size', from: 'XXL', to: '2XL' }]);
+  // Navy isn't on eBay's Colour list; on a free-text axis that's reported,
+  // not refused, and left as the seller wrote it.
+  assert.deepStrictEqual(out.specifications[0].values, ['Grey', 'Navy']);
+  assert.deepStrictEqual(out.unmatched.map((u) => [u.axis, u.value, u.selectionOnly]), [['Colour', 'Navy', false]]);
+  // Inputs untouched.
+  assert.deepStrictEqual(draft.specifications[1].values, ['S', 'M', 'L', 'XL', 'XXL']);
+  assert.deepStrictEqual(draft.variants[1].aspects.Size, ['XXL']);
+});
+
+test('canonicalizeVariationValues never merges two options into one', () => {
+  const out = canonicalizeVariationValues(
+    {
+      specifications: [{ name: 'Size', values: ['2XL', 'XXL'] }],
+      variants: [{ aspects: { Size: ['2XL'] } }, { aspects: { Size: ['XXL'] } }],
+    },
+    TROUSERS
+  );
+  assert.deepStrictEqual(out.specifications[0].values, ['2XL', 'XXL']);
+  assert.deepStrictEqual(out.renamed, []);
+});
+
+test('canonicalizeVariationValues passes through without a schema or a value list', () => {
+  const draft = { specifications: [{ name: 'Model', values: ['iPhone 15'] }], variants: [{ aspects: { Model: ['iPhone 15'] } }] };
+  assert.deepStrictEqual(canonicalizeVariationValues(draft, null), { ...draft, renamed: [], unmatched: [] });
+  assert.deepStrictEqual(canonicalizeVariationValues(draft, [{ name: 'Model', allowedValues: [] }]), { ...draft, renamed: [], unmatched: [] });
+});
