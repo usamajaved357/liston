@@ -950,7 +950,7 @@ async function persist(write) {
 }
 
 // Bump when mapOrder gains a field, so every mirrored order is re-read once.
-const ORDER_SHAPE = 2;
+const ORDER_SHAPE = 4; // 4: buyer email and sales record number; 3: delivery window and service
 
 function ordersHorizon(now = new Date()) {
   return new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
@@ -1258,6 +1258,25 @@ function scopeMissingError() {
   return err;
 }
 
+
+// The photo for the variation a buyer chose (Colour: Black Lace → that
+// swatch's picture), falling back to the listing's main photo. Names and
+// values are compared loosely: the order's "Color" and the listing's
+// "Colour" are the same axis.
+function variationImageFor(summary, variation) {
+  if (!summary) return null;
+  const norm = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const chosen = (variation || []).map((v) => ({ name: norm(v.name), value: norm(v.value) }));
+  for (const set of summary.variationPictures || []) {
+    const axis = norm(set.specificName);
+    const match = chosen.find((c) => c.name === axis || c.name.replace('colour', 'color') === axis.replace('colour', 'color'));
+    if (!match) continue;
+    const entry = Object.entries(set.byValue || {}).find(([value]) => norm(value) === match.value);
+    if (entry) return entry[1];
+  }
+  return summary.imageUrl || null;
+}
+
 // The order as eBay's Fulfillment API returns it, with each line's photo
 // and listing link. Without the scope, the Trading copy the order list
 // already holds is returned instead (no line-item ids → no actions), so the
@@ -1286,9 +1305,16 @@ async function getOrderDetail(credentials, { connectionId, orderId }) {
   // fees eBay took and where the funds are (Finances API), the buyer's
   // feedback score and whether they've bought before (the order list the
   // account already holds). None of it should keep the order from showing.
-  const signed = ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES)
+  // Why the fee breakdown may be missing, so the page can say the right
+  // thing: 'scope' (token predates the finances permission → reconnect),
+  // 'pending' (eBay hasn't posted the sale to Finances yet), 'error'.
+  let earningsUnavailable = null;
+  const hasFinancesScope = ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES);
+  if (!hasFinancesScope) earningsUnavailable = 'scope';
+  const signed = hasFinancesScope
     ? await ensureSigningKey({ ...refreshedCredentials, marketplaceId }, accessToken).catch((err) => {
         logger.warn('Could not get an eBay signing key for the order earnings', { orderId, error: err.message });
+        earningsUnavailable = 'error';
         return null;
       })
     : null;
@@ -1297,9 +1323,14 @@ async function getOrderDetail(credentials, { connectionId, orderId }) {
     signed
       ? ebayFinances
           .getOrderTransactions(accessToken, orderId, marketplaceId, signed.key)
-          .then(ebayFinances.mapOrderEarnings)
+          .then((res) => {
+            const mapped = ebayFinances.mapOrderEarnings(res);
+            if (!mapped) earningsUnavailable = 'pending';
+            return mapped;
+          })
           .catch((err) => {
             logger.warn('Could not load the order earnings from eBay', { orderId, error: err.message });
+            earningsUnavailable = 'error';
             return null;
           })
       : Promise.resolve(null),
@@ -1307,10 +1338,17 @@ async function getOrderDetail(credentials, { connectionId, orderId }) {
   ]);
   order.lineItems = order.lineItems.map((li) => {
     const summary = li.itemId ? summaries.get(li.itemId) : null;
-    return { ...li, imageUrl: summary?.imageUrl || null, viewItemUrl: summary?.viewItemUrl || null, quantityAvailable: summary?.quantityAvailable ?? null };
+    return {
+      ...li,
+      imageUrl: variationImageFor(summary, li.variation),
+      viewItemUrl: summary?.viewItemUrl || null,
+      quantityAvailable: summary?.quantityAvailable ?? null,
+      itemSpecifics: summary?.specifics || {},
+    };
   });
   order.buyer = { ...order.buyer, ...buyerInfo };
   order.earnings = earnings;
+  order.earningsUnavailable = earnings ? null : earningsUnavailable;
   return {
     order,
     source,
@@ -1419,7 +1457,7 @@ function legacyOrderDetail(o) {
   return {
     orderId: o.orderId,
     legacyOrderId: o.orderId,
-    salesRecordReference: null,
+    salesRecordReference: o.salesRecordNumber || null,
     createdAt: o.createdAt,
     lastModified: null,
     paymentStatus: o.checkoutStatus === 'Complete' ? 'PAID' : 'PENDING',
@@ -1428,10 +1466,13 @@ function legacyOrderDetail(o) {
     cancelRequests: [],
     buyer: { username: o.buyerUserId || null },
     buyerCheckoutNotes: null,
-    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: '' } : null,
-    shippingService: null,
+    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: o.buyerEmail || '' } : null,
+    shippingService: (o.lineItems || []).map((li) => li.shippingService).find(Boolean) || null,
     shippingCarrier: null,
-    estimatedDelivery: { min: null, max: null },
+    estimatedDelivery: {
+      min: (o.lineItems || []).map((li) => li.estimatedDeliveryMin).filter(Boolean).sort()[0] || null,
+      max: (o.lineItems || []).map((li) => li.estimatedDeliveryMax).filter(Boolean).sort().slice(-1)[0] || null,
+    },
     pricing: { subtotal: amt(o.subtotal), total: amt(o.total), delivery: amt(o.total && o.subtotal ? { amount: o.total.amount - o.subtotal.amount, currency: o.total.currency } : null), tax: null, discount: null, deliveryDiscount: null, adjustment: null },
     payments: o.paidTime ? [{ method: null, status: 'PAID', amount: amt(o.total), date: o.paidTime, referenceId: null }] : [],
     refunds: [],
@@ -1450,8 +1491,8 @@ function legacyOrderDetail(o) {
       variation: li.variation || [],
       fulfillmentStatus: o.shippedTime ? 'FULFILLED' : 'NOT_STARTED',
       shipByDate: li.handleByTime || o.dispatchByTime || null,
-      minEstimatedDelivery: null,
-      maxEstimatedDelivery: null,
+      minEstimatedDelivery: li.estimatedDeliveryMin || null,
+      maxEstimatedDelivery: li.estimatedDeliveryMax || null,
       promotions: [],
       refunds: [],
       ebayCollectedTax: null,
@@ -1594,14 +1635,15 @@ async function getItemSummariesCached(accessToken, itemIds, siteId) {
   const missing = [];
   for (const itemId of itemIds) {
     const cached = itemSummaryCache.get(itemId);
-    if (cached && now - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) out.set(itemId, cached.summary);
+    // Copies made before variation photos were read are refetched once.
+    if (cached && now - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS && cached.summary?.variationPictures && cached.summary?.specifics) out.set(itemId, cached.summary);
     else missing.push(itemId);
   }
   if (missing.length) {
     const persisted = await mirror.loadItemSummaries(missing).catch(() => new Map());
     for (const itemId of [...missing]) {
       const row = persisted.get(itemId);
-      if (row && now - row.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) {
+      if (row && now - row.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS && row.summary?.variationPictures && row.summary?.specifics) {
         itemSummaryCache.set(itemId, row);
         out.set(itemId, row.summary);
         missing.splice(missing.indexOf(itemId), 1);
@@ -1684,7 +1726,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
       const summary = li.itemId ? summaryByItemId.get(li.itemId) : null;
       return {
         ...li,
-        imageUrl: summary?.imageUrl || null,
+        imageUrl: variationImageFor(summary, li.variation),
         quantityAvailable: summary?.quantityAvailable ?? null,
         viewItemUrl: summary?.viewItemUrl || null,
       };
@@ -1745,6 +1787,7 @@ function pushEnabled(connection) {
 
 module.exports = {
   pushEnabled,
+  variationImageFor,
   canManageOrders,
   getOrderDetail,
   refundOrder,

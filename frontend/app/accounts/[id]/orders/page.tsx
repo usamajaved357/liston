@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Order, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
-import { formatMoney, formatShortDate } from "@/lib/format";
+import { formatMoney, formatShortDate, internationalPhone } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { ListFooter } from "@/components/ListFooter";
@@ -84,19 +84,6 @@ function OrderTableHeader() {
 // International dialling codes for the markets Liston sells on. A buyer's
 // phone comes from eBay as a local number; the account's marketplace says
 // which country that is.
-const DIAL_CODES: Record<string, string> = { GB: "+44", US: "+1", CA: "+1", AU: "+61", DE: "+49", FR: "+33", IT: "+39", ES: "+34", IE: "+353" };
-
-// "07417 352555" on a UK account → "+44 7417352555"; a number that already
-// carries a country code is left alone.
-function internationalPhone(raw: string, country: string | undefined): string {
-  const digits = raw.replace(/[^\d+]/g, "");
-  if (!digits) return raw;
-  if (digits.startsWith("+")) return digits;
-  if (digits.startsWith("00")) return `+${digits.slice(2)}`;
-  const code = country ? DIAL_CODES[country] : undefined;
-  if (!code) return raw;
-  return `${code} ${digits.replace(/^0/, "")}`;
-}
 
 // Who it goes to: name, then the address as eBay gives it, then the phone
 // — each on its own line, so it can be read straight onto a label. The name

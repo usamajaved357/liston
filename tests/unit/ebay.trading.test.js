@@ -113,6 +113,8 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
     subtotal: { amount: 12.5, currency: 'GBP' },
     buyerName: 'Jane Doe',
     buyerUserId: 'janedoe123',
+    buyerEmail: null,
+    salesRecordNumber: null,
     shippingAddress: { name: 'Jane Doe', street1: '1 High Street', street2: 'Flat 2', city: 'Leeds', state: 'West Yorkshire', postalCode: 'LS1 1AA', country: 'United Kingdom', phone: '' },
     itemTitle: 'Widget',
     itemId: '456',
@@ -132,6 +134,9 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
         trackingCarrier: 'Evri',
         trackingNumber: 'TRACK123',
         handleByTime: '2026-01-02T23:59:59.000Z',
+        estimatedDeliveryMin: null,
+        estimatedDeliveryMax: null,
+        shippingService: null,
       },
     ],
   });

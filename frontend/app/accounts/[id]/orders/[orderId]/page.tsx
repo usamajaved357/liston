@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { api, ApiError, Amount, OrderDetail, OrderDetailLine, OrderDetailResponse, OrderEvent, OrderSourcing, SourcingPatch } from "@/lib/api";
+import { api, ApiError, Amount, OrderDetail, OrderDetailLine, OrderDetailResponse, OrderSourcing, SourcingPatch } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
-import { formatPrice, formatDateTime } from "@/lib/format";
+import { formatPrice, formatDateTime, internationalPhone } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 
@@ -313,46 +313,6 @@ function SourcingCard({
   );
 }
 
-// --- timeline -------------------------------------------------------------
-
-function eventText(e: OrderEvent) {
-  const d = e.detail as Record<string, unknown>;
-  const amount = d.amount as Amount | undefined;
-  switch (e.kind) {
-    case "ebay.ordered":
-      return "Order placed on eBay";
-    case "ebay.paid":
-      return `Buyer paid${amount ? ` ${money(amount)}` : ""}`;
-    case "ebay.dispatched":
-      return `Marked dispatched on eBay${d.carrier ? ` · ${d.carrier}` : ""}${d.trackingNumber ? ` ${d.trackingNumber}` : ""}`;
-    case "ebay.dispatched_by_liston":
-      return `Dispatched on eBay from Liston${d.carrier ? ` · ${d.carrier}` : ""}${d.trackingNumber ? ` ${d.trackingNumber}` : ""}`;
-    case "ebay.refunded":
-      return `Refund${amount ? ` of ${money(amount)}` : ""}${d.status ? ` (${String(d.status).toLowerCase()})` : ""}`;
-    case "ebay.cancel_requested":
-      return `Cancellation requested${d.initiator ? ` by ${String(d.initiator).toLowerCase()}` : ""}${d.reason ? ` · ${String(d.reason).replace(/_/g, " ").toLowerCase()}` : ""}`;
-    case "ebay.refunded_by_liston":
-      return `Refund${amount ? ` of ${money(amount)}` : ""} sent from Liston${d.reason ? ` · ${String(d.reason).replace(/_/g, " ").toLowerCase()}` : ""}`;
-    case "ebay.cancelled_by_liston":
-      return `Order cancelled from Liston${d.reason ? ` · ${String(d.reason).replace(/_/g, " ").toLowerCase()}` : ""}`;
-    case "ebay.cancel_approved_by_liston":
-      return "Buyer's cancellation approved from Liston";
-    case "archived":
-      return "Order archived";
-    case "unarchived":
-      return "Order restored from the archive";
-    case "sourcing.ordered":
-      return `Supplier order placed · #${d.sourceOrderNo}`;
-    case "note":
-      return String(d.text || "");
-    default:
-      return e.kind;
-  }
-}
-
-// --- eBay-shaped pieces ---------------------------------------------------
-
-// "24 Sep at 11:59 pm BST", the way Seller Hub states a deadline.
 // Seller Hub shows deadlines in the eBay site's own time zone ("24 Sep at
 // 11.59pm BST"), whatever the viewer's clock says — the same here.
 const SITE_TIMEZONES: Record<string, string> = {
@@ -713,8 +673,6 @@ export default function OrderDetailPage() {
   const [data, setData] = useState<OrderDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [noteText, setNoteText] = useState("");
-  const [addingNote, setAddingNote] = useState(false);
   const [saveNotes, setSaveNotes] = useState<Record<string, { tone: "ok" | "bad"; text: string } | null>>({});
   const [moreOpen, setMoreOpen] = useState(false);
   const [action, setAction] = useState<ActionKind | null>(null);
@@ -785,28 +743,8 @@ export default function OrderDetailPage() {
     });
   }
 
-  async function addNote() {
-    if (!noteText.trim()) return;
-    setAddingNote(true);
-    try {
-      const { event } = await api.addOrderNote(params.id, params.orderId, noteText.trim());
-      setData((current) => (current ? { ...current, events: [{ ...event, actor: { id: user?.id || "", name: user?.name || user?.email || null } }, ...current.events] } : current));
-      setNoteText("");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add the note.");
-    } finally {
-      setAddingNote(false);
-    }
-  }
-
   function scrollTo(id: string) {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function focusNote() {
-    const el = document.getElementById("order-note") as HTMLInputElement | null;
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-    el?.focus();
   }
 
   // Sends the owner through eBay's consent again for THIS account, coming
@@ -883,11 +821,18 @@ export default function OrderDetailPage() {
       user={user}
       header={
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <Link href={`/accounts/${connection.id}/orders`} className="text-[12.5px] font-medium text-[var(--color-primary)] hover:underline print:hidden">
-              ‹ All orders
+          <div className="flex min-w-0 items-center gap-3">
+            <Link
+              href={`/accounts/${connection.id}/orders`}
+              aria-label="Back to orders"
+              title="Back to orders"
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-ink)] print:hidden"
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </Link>
-            <h1 className="mt-0.5 text-[26px] font-extrabold tracking-tight text-[var(--color-ink)]">Order details</h1>
+            <h1 className="mt-1 text-[24px] font-extrabold tracking-tight text-[var(--color-ink)]">Order details</h1>
           </div>
           <button type="button" onClick={() => window.print()} className="btn btn-secondary btn-sm print:hidden">
             <svg viewBox="0 0 20 20" className="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
@@ -909,15 +854,15 @@ export default function OrderDetailPage() {
         <div className="pb-8">
           {/* The item, as Seller Hub heads the page */}
           {firstItem && (
-            <div className="flex items-center gap-4 border-b border-[var(--color-line)] pb-5">
+            <div className="flex items-center gap-3 border-b border-[var(--color-line)] pb-4">
               {firstItem.imageUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={firstItem.imageUrl} alt="" className="h-14 w-14 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-white object-cover" />
+                <img src={firstItem.imageUrl} alt="" className="h-12 w-12 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-white object-cover" />
               ) : (
-                <div className="h-14 w-14 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)]" />
+                <div className="h-12 w-12 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)]" />
               )}
               <div className="min-w-0">
-                <p className="truncate text-[17px] font-bold text-[var(--color-ink)]">{cleanTitle(firstItem.title)}</p>
+                <p className="truncate text-[15px] font-semibold text-[var(--color-ink)]">{cleanTitle(firstItem.title)}</p>
                 <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12.5px] text-[var(--color-muted)] print:hidden">
                   {pay && <Chip text={pay.text} tone={pay.tone} />}
                   {ful && <Chip text={ful.text} tone={ful.tone} />}
@@ -977,16 +922,16 @@ export default function OrderDetailPage() {
                     <h2 className={`text-[20px] font-bold text-[var(--color-ink)] ${deadlineTone}`}>
                       {cancelled ? "Order cancelled" : dispatched ? `Dispatched${shippedAt ? ` on ${formatDayMonthYear(shippedAt)}` : ""}` : dispatchBy ? `Dispatch by ${formatDeadline(dispatchBy, siteTz)}` : "Awaiting dispatch"}
                     </h2>
-                    {!cancelled && !dispatched && (
-                      <p className="mt-1 text-[13px] text-[var(--color-ink)]">
-                        Make sure you send your order within the dispatch time you specified in the listing.
-                        {daysLeft !== null && <span className="ml-1 font-semibold">{daysLeft < 0 ? `${-daysLeft} day${-daysLeft === 1 ? "" : "s"} late.` : daysLeft === 0 ? "Due today." : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left.`}</span>}
-                      </p>
-                    )}
+                    {!cancelled && !dispatched && <p className="mt-1 text-[13px] text-[var(--color-ink)]">Make sure you send your order within the dispatch time you specified in the listing.</p>}
                     {(order.estimatedDelivery.min || order.estimatedDelivery.max) && (
                       <p className="mt-0.5 text-[13px] text-[var(--color-ink)]">
-                        Estimated delivery date shown to buyer: {formatDayMonthYear(order.estimatedDelivery.min, siteTz)}
-                        {order.estimatedDelivery.max ? ` - ${formatDayMonthYear(order.estimatedDelivery.max, siteTz)}` : ""}
+                        Estimated delivery date shown to buyer: {formatDayMonthYear(order.estimatedDelivery.min || order.estimatedDelivery.max, siteTz)}
+                        {order.estimatedDelivery.min && order.estimatedDelivery.max ? ` - ${formatDayMonthYear(order.estimatedDelivery.max, siteTz)}` : ""}
+                      </p>
+                    )}
+                    {!cancelled && !dispatched && daysLeft !== null && (
+                      <p className={`mt-0.5 text-[13px] font-semibold ${daysLeft < 0 ? "text-[var(--color-danger)]" : daysLeft <= 1 ? "text-amber-800" : "text-[var(--color-ink)]"}`}>
+                        {daysLeft < 0 ? `${-daysLeft} day${-daysLeft === 1 ? "" : "s"} late` : daysLeft === 0 ? "Due today" : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`}
                       </p>
                     )}
                   </div>
@@ -1024,7 +969,6 @@ export default function OrderDetailPage() {
                               { label: "Mark as dispatched", run: guarded(() => setAction("dispatched")), disabled: dispatched },
                               { label: "Send refund", run: guarded(() => setAction("refund")), disabled: order.paymentStatus === "FULLY_REFUNDED" },
                               { label: "View payment details", run: () => scrollTo("payment") },
-                              { label: "Add note", run: focusNote },
                               { label: order.cancelRequests.some((r) => r.state === "REQUESTED") ? "Approve cancellation" : "Cancel order", run: guarded(() => setAction("cancel")), disabled: dispatched || cancelled },
                               { label: "Message buyer", href: messageUrl },
                               { label: "Report buyer", href: reportBuyerUrl },
@@ -1089,10 +1033,13 @@ export default function OrderDetailPage() {
                         <p>{connection.marketplace && a.country === connection.marketplace.country ? connection.marketplace.countryName : a.country}</p>
                         {a.phone && (
                           <>
-                            <p className="mt-3 text-[var(--color-muted)]">Phone</p>
+                            <p className="mt-3 flex items-center text-[var(--color-muted)]">
+                              Phone
+                              <CopyIcon text={internationalPhone(a.phone, a.country || connection.marketplace?.country)} title="Copy phone number" />
+                            </p>
                             <p>
-                              <a href={`tel:${a.phone.replace(/\s+/g, "")}`} className="hover:underline">
-                                {a.phone}
+                              <a href={`tel:${internationalPhone(a.phone, a.country || connection.marketplace?.country).replace(/\s+/g, "")}`} className="hover:underline">
+                                {internationalPhone(a.phone, a.country || connection.marketplace?.country)}
                               </a>
                             </p>
                           </>
@@ -1134,7 +1081,6 @@ export default function OrderDetailPage() {
                 <div className="mt-3 divide-y divide-[var(--color-line)]">
                   {order.lineItems.map((li) => {
                     const open = !!specificsOpen[li.sourcingKey];
-                    const cost = li.sourcing?.cost?.value ?? li.priceBreakdown?.totalCost ?? null;
                     return (
                       <div key={li.sourcingKey} className="py-4 first:pt-1 last:pb-0">
                         <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(80px,auto))]">
@@ -1183,38 +1129,16 @@ export default function OrderDetailPage() {
                                 See more item specifics <Chevron open={open} />
                               </button>
                               {open && (
-                                <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[12.5px]">
-                                  <dt className="text-[var(--color-muted)]">Line item</dt>
-                                  <dd className="font-mono">{li.lineItemId || "—"}</dd>
-                                  {li.legacyVariationId && (
-                                    <>
-                                      <dt className="text-[var(--color-muted)]">Variation ID</dt>
-                                      <dd className="font-mono">{li.legacyVariationId}</dd>
-                                    </>
-                                  )}
-                                  <dt className="text-[var(--color-muted)]">Status</dt>
-                                  <dd>{li.fulfillmentStatus === "FULFILLED" ? "Dispatched" : "Awaiting dispatch"}</dd>
-                                  {li.deliveryCost && (
-                                    <>
-                                      <dt className="text-[var(--color-muted)]">Postage charged</dt>
-                                      <dd>{money(li.deliveryCost, currency)}</dd>
-                                    </>
-                                  )}
-                                  {li.ebayCollectedTax && (
-                                    <>
-                                      <dt className="text-[var(--color-muted)]">Tax collected by eBay</dt>
-                                      <dd>{money(li.ebayCollectedTax, currency)}</dd>
-                                    </>
-                                  )}
-                                  {cost !== null && (
-                                    <>
-                                      <dt className="text-[var(--color-muted)]">Supplier cost</dt>
-                                      <dd>
-                                        {formatPrice(cost, currency)}
-                                        {li.sourcing?.cost ? "" : " (est.)"}
-                                      </dd>
-                                    </>
-                                  )}
+                                <dl className="mt-3 grid grid-cols-[minmax(120px,auto)_minmax(0,1fr)] gap-x-10 gap-y-2 text-[13px]">
+                                  {Object.entries(li.itemSpecifics || {})
+                                    .sort(([x], [y]) => x.localeCompare(y))
+                                    .map(([name, values]) => (
+                                      <Fragment key={name}>
+                                        <dt className="text-[var(--color-muted)]">{name}</dt>
+                                        <dd className="text-[var(--color-ink)]">{values.join(", ")}</dd>
+                                      </Fragment>
+                                    ))}
+                                  {Object.keys(li.itemSpecifics || {}).length === 0 && <dd className="col-span-2 text-[var(--color-muted)]">No item specifics on this listing.</dd>}
                                 </dl>
                               )}
                             </div>
@@ -1277,40 +1201,6 @@ export default function OrderDetailPage() {
                 </div>
               </div>
 
-              {/* Timeline */}
-              <div className={`${cardClass} print:hidden`}>
-                <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Timeline</h2>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    id="order-note"
-                    className={inputClass}
-                    placeholder="Add a note for the team…"
-                    value={noteText}
-                    onChange={(e) => setNoteText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addNote();
-                      }
-                    }}
-                  />
-                  <button type="button" onClick={addNote} disabled={addingNote || !noteText.trim()} className="btn btn-secondary btn-sm flex-shrink-0">
-                    Add
-                  </button>
-                </div>
-                <ol className="mt-3 divide-y divide-[var(--color-line)]">
-                  {data.events.map((e) => (
-                    <li key={e.id} className="flex items-start justify-between gap-3 py-2 text-[12.5px]">
-                      <div className="min-w-0">
-                        <p className={`${e.kind === "note" ? "whitespace-pre-wrap text-[var(--color-ink)]" : "text-[var(--color-ink)]"}`}>{eventText(e)}</p>
-                        {e.actor?.name && <p className="text-[11px] text-[var(--color-muted)]">{e.actor.name}</p>}
-                      </div>
-                      <span className="flex-shrink-0 text-[11.5px] text-[var(--color-muted)]">{formatDateTime(e.at)}</span>
-                    </li>
-                  ))}
-                  {data.events.length === 0 && <li className="py-2 text-sm text-[var(--color-muted)]">Nothing yet.</li>}
-                </ol>
-              </div>
             </div>
 
             {/* ---- right column ---- */}
@@ -1357,18 +1247,34 @@ export default function OrderDetailPage() {
                   {contactOpen ? "Hide contact info" : "Show contact info"} <Chevron open={contactOpen} />
                 </button>
                 {contactOpen && (
-                  <div className="mt-2 text-[13px] text-[var(--color-ink)]">
-                    {a?.phone ? (
-                      <p>
-                        Phone:{" "}
-                        <a href={`tel:${a.phone.replace(/\s+/g, "")}`} className="underline">
-                          {a.phone}
-                        </a>
-                      </p>
-                    ) : (
-                      <p className="text-[var(--color-muted)]">No phone on this order.</p>
+                  <div className="mt-2">
+                    {a?.email && (
+                      <Row
+                        label="Email"
+                        value={
+                          <span className="flex items-start justify-between gap-1">
+                            <span className="break-all">{a.email}</span>
+                            <CopyIcon text={a.email} title="Copy email" />
+                          </span>
+                        }
+                      />
                     )}
-                    {a?.email && <p className="break-all">Email: {a.email}</p>}
+                    {a?.phone ? (
+                      <Row
+                        label="Phone"
+                        value={
+                          <span className="flex items-center justify-between gap-1">
+                            <a href={`tel:${internationalPhone(a.phone, a.country || connection.marketplace?.country).replace(/\s+/g, "")}`} className="hover:underline">
+                              {internationalPhone(a.phone, a.country || connection.marketplace?.country)}
+                            </a>
+                            <CopyIcon text={internationalPhone(a.phone, a.country || connection.marketplace?.country)} title="Copy phone number" />
+                          </span>
+                        }
+                      />
+                    ) : (
+                      <p className="text-[13px] text-[var(--color-muted)]">No phone on this order.</p>
+                    )}
+                    {!a?.email && <p className="mt-1 text-[12px] text-[var(--color-muted)]">The buyer&apos;s email comes with the reconnected account.</p>}
                   </div>
                 )}
                 {messageUrl && (
@@ -1399,7 +1305,20 @@ export default function OrderDetailPage() {
                   <div className="mt-3 rounded-xl bg-amber-50 p-3 text-[12.5px] text-amber-900">The buyer hasn&apos;t paid for this order yet.</div>
                 )}
                 {order.paymentStatus === "PAID" && !earnings && (
-                  <div className="mt-3 rounded-xl bg-[var(--color-paper)] p-3 text-[12.5px] text-[var(--color-ink)]">Your buyer has paid for this order. eBay hasn&apos;t recorded the sale in your finances yet, so the fee breakdown below is eBay&apos;s order total.</div>
+                  <div className="mt-3 rounded-xl bg-[var(--color-paper)] p-3 text-[12.5px] text-[var(--color-ink)]">
+                    {order.earningsUnavailable === "scope" ? (
+                      <span className="flex flex-wrap items-center justify-between gap-2">
+                        <span>Fees and earnings need the finances permission this account was linked without. Reconnect once and they show here.</span>
+                        <button type="button" onClick={reconnect} disabled={reconnecting} className="btn btn-secondary btn-sm flex-shrink-0">
+                          {reconnecting ? "Opening eBay…" : "Reconnect"}
+                        </button>
+                      </span>
+                    ) : order.earningsUnavailable === "error" ? (
+                      "eBay's finances couldn't be read just now; the breakdown will fill in on the next load."
+                    ) : (
+                      "Your buyer has paid for this order. eBay hasn't posted the sale to your finances yet, so the fees aren't known — they appear here as soon as it does."
+                    )}
+                  </div>
                 )}
 
                 <div className="mt-3 flex items-start justify-between text-[13px]">
@@ -1442,7 +1361,7 @@ export default function OrderDetailPage() {
                       ) : order.totalMarketplaceFee ? (
                         <MoneyRow label="eBay fees" value={money(order.totalMarketplaceFee, currency)} indent negative />
                       ) : (
-                        <p className="pl-4 text-[12.5px] text-[var(--color-muted)]">Not recorded by eBay yet.</p>
+                        <p className="pl-4 text-[12.5px] text-[var(--color-muted)]">{order.earningsUnavailable === "scope" ? "Reconnect the account to see fees." : "Not posted by eBay yet."}</p>
                       )}
                       <div className="mt-1 border-t border-[var(--color-line)] pt-1">
                         <MoneyRow label="Order earnings" value={netToSeller ? money(netToSeller, currency) : "—"} bold />

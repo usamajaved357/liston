@@ -47,3 +47,32 @@ export function formatDateTime(iso: string | null): string {
     minute: "2-digit",
   })}`;
 }
+
+const DIAL_CODES: Record<string, string> = { GB: "+44", UK: "+44", US: "+1", CA: "+1", AU: "+61", DE: "+49", FR: "+33", IT: "+39", ES: "+34", IE: "+353", NL: "+31", BE: "+32", AT: "+43", CH: "+41", PL: "+48" };
+const COUNTRY_NAMES: Record<string, string> = { "united kingdom": "GB", "great britain": "GB", "united states": "US", canada: "CA", australia: "AU", germany: "DE", france: "FR", italy: "IT", spain: "ES", ireland: "IE", netherlands: "NL", belgium: "BE", austria: "AT", switzerland: "CH", poland: "PL" };
+
+// A phone number the way Seller Hub prints it: with the country code, and
+// the national part split in two ("+44 17683 62328"). "07417 352555" on a UK
+// address → "+44 7417 352555"; a number that already carries a code is
+// kept. `country` may be an ISO code or a country name.
+export function internationalPhone(raw: string, country: string | undefined | null): string {
+  const digits = raw.replace(/[^\d+]/g, "");
+  if (!digits) return raw;
+  let code = "";
+  let national = digits;
+  if (digits.startsWith("+")) {
+    const known = Object.values(DIAL_CODES).sort((a, b) => b.length - a.length).find((c) => digits.startsWith(c));
+    if (!known) return digits;
+    code = known;
+    national = digits.slice(known.length);
+  } else if (digits.startsWith("00")) {
+    return internationalPhone(`+${digits.slice(2)}`, country);
+  } else {
+    const iso = country ? DIAL_CODES[country.toUpperCase()] ? country.toUpperCase() : COUNTRY_NAMES[country.toLowerCase()] : undefined;
+    code = iso ? DIAL_CODES[iso] : "";
+    if (!code) return raw;
+    national = digits.replace(/^0/, "");
+  }
+  const split = national.length >= 9 ? Math.min(5, national.length - 5) : Math.floor(national.length / 2);
+  return `${code} ${national.slice(0, split)} ${national.slice(split)}`.trim();
+}

@@ -164,6 +164,10 @@ function mapLineItem(transaction) {
     trackingCarrier: tracking?.ShippingCarrierUsed || null,
     trackingNumber: tracking?.ShipmentTrackingNumber || null,
     handleByTime: transaction.ShippingServiceSelected?.ShippingPackageInfo?.HandleByTime || null,
+    // The delivery window eBay showed the buyer at checkout.
+    estimatedDeliveryMin: transaction.ShippingServiceSelected?.ShippingPackageInfo?.EstimatedDeliveryTimeMin || null,
+    estimatedDeliveryMax: transaction.ShippingServiceSelected?.ShippingPackageInfo?.EstimatedDeliveryTimeMax || null,
+    shippingService: transaction.ShippingServiceSelected?.ShippingService || null,
   };
 }
 
@@ -205,6 +209,9 @@ function mapOrder(order) {
     subtotal: money(order.Subtotal),
     buyerName: [buyer?.UserFirstName, buyer?.UserLastName].filter(Boolean).join(' ') || null,
     buyerUserId: order.BuyerUserID || null,
+    // eBay's relay address for the buyer, and Seller Hub's sales record no.
+    buyerEmail: buyer?.Email && !/invalid request/i.test(String(buyer.Email)) ? String(buyer.Email) : null,
+    salesRecordNumber: order.ShippingDetails?.SellingManagerSalesRecordNumber ? String(order.ShippingDetails.SellingManagerSalesRecordNumber) : null,
     shippingAddress: mapShippingAddress(order.ShippingAddress),
     itemTitle: firstItem?.Title || null,
     itemId: firstItem?.ItemID ? String(firstItem.ItemID) : null,
@@ -228,13 +235,29 @@ async function getItemSummary(accessToken, itemId, { siteId } = {}) {
     `<OutputSelector>Item.Quantity</OutputSelector>` +
     `<OutputSelector>Item.QuantityAvailable</OutputSelector>` +
     `<OutputSelector>Item.SellingStatus.QuantitySold</OutputSelector>` +
-    `<OutputSelector>Item.ListingDetails.ViewItemURL</OutputSelector>`;
+    `<OutputSelector>Item.ListingDetails.ViewItemURL</OutputSelector>` +
+    `<OutputSelector>Item.Variations.Pictures</OutputSelector>` +
+    `<OutputSelector>Item.ItemSpecifics</OutputSelector>` +
+    `<IncludeItemSpecifics>true</IncludeItemSpecifics>`;
   const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
   const item = res.Item || {};
   const pictures = toArray(item.PictureDetails?.PictureURL);
+  // A multi-variation listing's per-option photos (Colour → picture), so an
+  // order line can show the exact variation the buyer chose, as Seller Hub
+  // does, instead of the listing's main photo.
+  const variationPictures = toArray(item.Variations?.Pictures).map((p) => ({
+    specificName: String(p.VariationSpecificName || ''),
+    byValue: Object.fromEntries(
+      toArray(p.VariationSpecificPictureSet).map((set) => [String(set.VariationSpecificValue ?? ''), toArray(set.PictureURL)[0] || null]).filter(([, url]) => url)
+    ),
+  }));
   return {
     itemId: String(itemId),
     imageUrl: pictures[0] || item.PictureDetails?.GalleryURL || null,
+    variationPictures,
+    // The listing's item specifics, as Seller Hub's "See more item
+    // specifics" lists them under an order line.
+    specifics: specificsFrom(item.ItemSpecifics),
     quantity: item.Quantity !== undefined ? Number(item.Quantity) : null,
     quantityAvailable: item.QuantityAvailable !== undefined ? Number(item.QuantityAvailable) : null,
     quantitySold: item.SellingStatus?.QuantitySold !== undefined ? Number(item.SellingStatus.QuantitySold) : null,
@@ -266,8 +289,13 @@ const GET_ORDERS_FIELDS = [
   'OrderArray.Order.TransactionArray.Transaction.Variation.VariationSpecifics',
   'OrderArray.Order.TransactionArray.Transaction.Buyer.UserFirstName',
   'OrderArray.Order.TransactionArray.Transaction.Buyer.UserLastName',
+  'OrderArray.Order.TransactionArray.Transaction.Buyer.Email',
+  'OrderArray.Order.ShippingDetails.SellingManagerSalesRecordNumber',
   'OrderArray.Order.TransactionArray.Transaction.ShippingDetails.ShipmentTrackingDetails',
   'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.HandleByTime',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.EstimatedDeliveryTimeMin',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.EstimatedDeliveryTimeMax',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingService',
 ];
 
 // createTimeFrom/createTimeTo are ISO 8601 strings; eBay caps this range at

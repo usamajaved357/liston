@@ -291,6 +291,9 @@ export interface OrderDetailLine {
   imageUrl: string | null;
   viewItemUrl: string | null;
   quantityAvailable?: number | null;
+  // The listing's item specifics (Brand, Colour, Material…), as eBay shows
+  // them under "See more item specifics".
+  itemSpecifics?: Record<string, string[]>;
   listingId?: string;
   priceBreakdown?: PriceBreakdown | null;
   sourcing: OrderSourcing | null;
@@ -328,6 +331,9 @@ export interface OrderDetail {
     gross: Amount;
     earnings: Amount;
   } | null;
+  // Why `earnings` is null: the token lacks the finances permission
+  // (reconnect), eBay hasn't posted the sale yet, or the read failed.
+  earningsUnavailable?: "scope" | "pending" | "error" | null;
   lineItems: OrderDetailLine[];
   // Put away from Liston's order list (Seller Hub's "Archive").
   archived?: boolean;
