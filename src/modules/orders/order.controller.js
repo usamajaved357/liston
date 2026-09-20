@@ -47,6 +47,54 @@ async function addNote(req, res, next) {
   }
 }
 
+const dispatchSchema = z.object({
+  trackingNumber: z.string().max(80).optional(),
+  carrier: z.string().max(60).optional(),
+  lineItemIds: z.array(z.string()).optional(),
+});
+
+async function dispatchOrder(req, res, next) {
+  try {
+    const parsed = dispatchSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid dispatch details' });
+    res.status(200).json(await orderService.dispatchOrder(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const refundSchema = z.object({
+  amount: z.union([z.number(), z.string()]).nullable().optional(),
+  reason: z.string().max(60),
+  comment: z.string().max(500).optional(),
+});
+
+async function refundOrder(req, res, next) {
+  try {
+    const parsed = refundSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid refund details' });
+    res.status(200).json(await orderService.refundOrder(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function cancelOrder(req, res, next) {
+  try {
+    res.status(200).json(await orderService.cancelOrder(req.params.id, req.ownerId, req.userId, req.params.orderId, { reason: req.body?.reason }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function setArchived(req, res, next) {
+  try {
+    res.status(200).json(await orderService.setArchived(req.params.id, req.userId, req.params.orderId, req.body?.archived !== false));
+  } catch (err) {
+    next(err);
+  }
+}
+
 const accountSchema = z.object({
   platform: z.string().max(40).optional(),
   label: z.string().trim().min(1, 'Give the account a name').max(80),
@@ -83,4 +131,4 @@ async function updateSourceAccount(req, res, next) {
   }
 }
 
-module.exports = { getOrder, saveSourcing, addNote, listSourceAccounts, createSourceAccount, updateSourceAccount };
+module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, listSourceAccounts, createSourceAccount, updateSourceAccount };

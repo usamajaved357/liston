@@ -14,8 +14,8 @@ function baseUrl() {
   return ebayOauth.isSandbox() ? 'https://apiz.sandbox.ebay.com' : 'https://apiz.ebay.com';
 }
 
-function call(accessToken, method, path, body, marketplaceId) {
-  return request(accessToken, method, `/sell/fulfillment/v1${path}`, body, marketplaceId, { baseUrl: baseUrl() });
+function call(accessToken, method, path, body, marketplaceId, options = {}) {
+  return request(accessToken, method, `/sell/fulfillment/v1${path}`, body, marketplaceId, { baseUrl: baseUrl(), ...options });
 }
 
 function getOrder(accessToken, orderId, marketplaceId) {
@@ -39,17 +39,17 @@ function createShippingFulfillment(accessToken, orderId, { lineItems, shippingCa
   return call(accessToken, 'POST', `/order/${encodeURIComponent(orderId)}/shipping_fulfillment`, body, marketplaceId);
 }
 
-// Refunds part or all of an order. For UK/EU sellers eBay requires a digital
-// signature on this call (Part 8, phase 3); until that lands the call is
-// exposed for the API shape and tests only.
-function issueRefund(accessToken, orderId, { reasonForRefund, comment, refundItems, orderLevelRefundAmount }, marketplaceId) {
+// Refunds part or all of an order. eBay requires a digital signature on
+// this call from UK/EU sellers, so it takes the connection's signing key
+// (see ebay.signature). Returns { refundId, refundStatus }.
+function issueRefund(accessToken, orderId, { reasonForRefund, comment, refundItems, orderLevelRefundAmount }, marketplaceId, signingKey) {
   const body = {
     reasonForRefund,
     ...(comment ? { comment } : {}),
     ...(refundItems?.length ? { refundItems } : {}),
     ...(orderLevelRefundAmount ? { orderLevelRefundAmount } : {}),
   };
-  return call(accessToken, 'POST', `/order/${encodeURIComponent(orderId)}/issue_refund`, body, marketplaceId);
+  return call(accessToken, 'POST', `/order/${encodeURIComponent(orderId)}/issue_refund`, body, marketplaceId, { signingKey });
 }
 
 // --- shape the order detail page renders ---------------------------------

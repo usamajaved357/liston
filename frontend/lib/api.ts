@@ -326,6 +326,8 @@ export interface OrderDetail {
     earnings: Amount;
   } | null;
   lineItems: OrderDetailLine[];
+  // Put away from Liston's order list (Seller Hub's "Archive").
+  archived?: boolean;
   fulfillments: { fulfillmentId: string | null; carrier: string | null; trackingNumber: string | null; shippedDate: string | null; lineItems: { lineItemId: string; quantity: number }[] }[];
 }
 
@@ -344,6 +346,8 @@ export interface OrderDetailResponse {
   source: "fulfillment" | "trading";
   events: OrderEvent[];
   carriers: { code: string; label: string }[];
+  cancelReasons?: { code: string; label: string }[];
+  refundReasons?: { code: string; label: string }[];
 }
 
 export interface SourcingPatch {
@@ -888,7 +892,7 @@ export const api = {
 
   getConnectionOrders: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; page?: number; perPage?: number }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; page?: number; perPage?: number; archived?: boolean }
   ) => {
     const query = new URLSearchParams({
       range: params.range,
@@ -897,6 +901,7 @@ export const api = {
       perPage: String(params.perPage ?? 25),
     });
     if (params.search) query.set("search", params.search);
+    if (params.archived) query.set("archived", "1");
     return request<{
       orders: Order[];
       counts: OrderCounts;
@@ -905,6 +910,7 @@ export const api = {
       syncedAt: string | null;
       page: number;
       perPage: number;
+      archivedCount?: number;
     }>(`/api/connections/${id}/orders?${query.toString()}`);
   },
 
@@ -919,6 +925,15 @@ export const api = {
     ),
   addOrderNote: (connectionId: string, orderId: string, text: string) =>
     request<{ event: OrderEvent }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/notes`, { method: "POST", body: JSON.stringify({ text }) }),
+  // Seller Hub's "More actions", done from Liston.
+  dispatchOrder: (connectionId: string, orderId: string, input: { trackingNumber?: string; carrier?: string; lineItemIds?: string[] }) =>
+    request<{ fulfillmentId: string | null; lines: number }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/dispatch`, { method: "POST", body: JSON.stringify(input) }),
+  refundOrder: (connectionId: string, orderId: string, input: { amount?: string | null; reason: string; comment?: string }) =>
+    request<{ refundId: string | null; status: string | null; amount: Amount | null }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/refund`, { method: "POST", body: JSON.stringify(input) }),
+  cancelOrder: (connectionId: string, orderId: string, input: { reason?: string }) =>
+    request<{ cancelId: string | null; approved: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST", body: JSON.stringify(input) }),
+  archiveOrder: (connectionId: string, orderId: string, archived: boolean) =>
+    request<{ archived: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/archive`, { method: "POST", body: JSON.stringify({ archived }) }),
   listSourceAccounts: (includeArchived = false) => request<{ accounts: SourceAccount[] }>(`/api/source-accounts${includeArchived ? "?archived=1" : ""}`),
   createSourceAccount: (input: { label: string; email: string; password?: string | null; notes?: string | null; platform?: string }) =>
     request<{ account: SourceAccount }>(`/api/source-accounts`, { method: "POST", body: JSON.stringify(input) }),

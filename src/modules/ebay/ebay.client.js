@@ -42,11 +42,21 @@ function localeForMarketplace(marketplaceId) {
   return MARKETPLACE_LOCALES[marketplaceId] || 'en-US';
 }
 
-async function request(accessToken, method, path, body, marketplaceId, { baseUrl } = {}) {
+// Options beyond the usual:
+//  - headers: extra request headers (Post-Order needs the marketplace id);
+//  - authScheme: "Bearer" (REST APIs) or "IAF" (the Post-Order API's name
+//    for the same OAuth user token);
+//  - signingKey: an eBay signing key ({ jwe, privateKey }) to sign the
+//    request with — eBay's digital signatures, which its money-moving calls
+//    (Finances API, refunds, cancellations) demand from UK/EU sellers. The
+//    signature covers the exact body bytes sent, so it is built here.
+async function request(accessToken, method, path, body, marketplaceId, { baseUrl, headers: extraHeaders, authScheme = 'Bearer', signingKey } = {}) {
   const locale = localeForMarketplace(marketplaceId);
+  const url = `${baseUrl || apiBaseUrl()}${path}`;
+  const payload = body ? JSON.stringify(body) : undefined;
   let res;
   try {
-    res = await fetch(`${baseUrl || apiBaseUrl()}${path}`, {
+    res = await fetch(url, {
       method,
       headers: {
         'Content-Type': 'application/json',
@@ -58,13 +68,15 @@ async function request(accessToken, method, path, body, marketplaceId, { baseUrl
         'Content-Language': locale,
         'Accept-Language': locale,
         Accept: 'application/json',
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `${authScheme} ${accessToken}`,
+        ...(extraHeaders || {}),
+        ...(signingKey ? require('./ebay.signature').signatureHeaders({ method, url, body: payload, key: signingKey }) : {}),
       },
       // Without this, a connection that hangs (rather than returning a fast
       // error) under rate-limiting/throttling stalls indefinitely — confirmed
       // live this session (a request sat for 5+ minutes with no response).
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      ...(body ? { body: JSON.stringify(body) } : {}),
+      ...(payload ? { body: payload } : {}),
     });
   } catch (err) {
     if (err.name === 'TimeoutError' || err.name === 'AbortError') {

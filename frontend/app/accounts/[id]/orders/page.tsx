@@ -299,23 +299,27 @@ function AccountOrdersContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Orders the team put away (Seller Hub's "Archive"): shown on their own.
+  const [archived, setArchived] = useState(false);
+  const [archivedCount, setArchivedCount] = useState(0);
 
   useEffect(() => {
     if (!connection) return;
     setLoading(true);
     setError(null);
     api
-      .getConnectionOrders(connection.id, { range, status, search, page, perPage })
+      .getConnectionOrders(connection.id, { range, status, search, page, perPage, archived })
       .then((data) => {
         setOrders(data.orders);
         setCounts(data.counts);
         setTotalPages(data.totalPages);
         setTotalEntries(data.totalEntries);
         setSyncedAt(data.syncedAt);
+        setArchivedCount(data.archivedCount || 0);
       })
       .catch(() => setError("Couldn't load orders from eBay. Try again."))
       .finally(() => setLoading(false));
-  }, [connection, range, status, search, page, perPage, reloadKey]);
+  }, [connection, range, status, search, page, perPage, archived, reloadKey]);
 
   useAccountEvents(connection?.id, (event) => {
     if (event.kind === "orders") setReloadKey((k) => k + 1);
@@ -415,6 +419,19 @@ function AccountOrdersContent() {
           </div>
           <div className="flex min-w-0 items-center gap-2">
             <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
+            {(archivedCount > 0 || archived) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setArchived((v) => !v);
+                  setPage(1);
+                }}
+                className={`btn btn-sm flex-shrink-0 ${archived ? "btn-primary" : "btn-secondary"}`}
+                title={archived ? "Back to current orders" : "Show archived orders"}
+              >
+                Archived{archivedCount ? ` · ${archivedCount}` : ""}
+              </button>
+            )}
             <select value={range} onChange={(e) => changeRange(e.target.value as OrderRange)} className="input input-sm w-auto flex-shrink-0 !pr-8" aria-label="Period">
               {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
                 <option key={key} value={key}>

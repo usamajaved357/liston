@@ -128,7 +128,35 @@ async function listEvents(connectionId, orderId) {
   return result.rows;
 }
 
+// --- archive ---------------------------------------------------------------
+
+async function archiveOrder(connectionId, orderId, actorUserId) {
+  await query(
+    `INSERT INTO archived_orders (connection_id, order_id, archived_by) VALUES ($1, $2, $3)
+     ON CONFLICT (connection_id, order_id) DO UPDATE SET archived_by = EXCLUDED.archived_by, archived_at = now()`,
+    [connectionId, orderId, actorUserId]
+  );
+}
+
+async function unarchiveOrder(connectionId, orderId) {
+  await query(`DELETE FROM archived_orders WHERE connection_id = $1 AND order_id = $2`, [connectionId, orderId]);
+}
+
+async function findArchived(connectionId, orderId) {
+  const result = await query(`SELECT * FROM archived_orders WHERE connection_id = $1 AND order_id = $2`, [connectionId, orderId]);
+  return result.rows[0] || null;
+}
+
+async function listArchivedOrderIds(connectionId) {
+  const result = await query(`SELECT order_id FROM archived_orders WHERE connection_id = $1`, [connectionId]);
+  return result.rows.map((r) => r.order_id);
+}
+
 module.exports = {
+  archiveOrder,
+  unarchiveOrder,
+  findArchived,
+  listArchivedOrderIds,
   listSourceAccounts,
   findSourceAccount,
   createSourceAccount,

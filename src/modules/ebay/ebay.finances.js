@@ -1,7 +1,8 @@
 // eBay's Finances API (REST): the money side of an order the way Seller
 // Hub's order page shows it — each fee eBay took (final value fee, ad fee…)
 // and whether the funds are still processing, available, or paid out.
-// Needs the sell.finances scope on the seller's token (see ebay.oauth).
+// Needs the sell.finances scope on the seller's token (see ebay.oauth) and,
+// for UK/EU sellers, a digital signature on every call (see ebay.signature).
 const { request } = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 
@@ -9,14 +10,14 @@ function baseUrl() {
   return ebayOauth.isSandbox() ? 'https://apiz.sandbox.ebay.com' : 'https://apiz.ebay.com';
 }
 
-function call(accessToken, method, path, body, marketplaceId) {
-  return request(accessToken, method, `/sell/finances/v1${path}`, body, marketplaceId, { baseUrl: baseUrl() });
+function call(accessToken, method, path, body, marketplaceId, signingKey) {
+  return request(accessToken, method, `/sell/finances/v1${path}`, body, marketplaceId, { baseUrl: baseUrl(), signingKey });
 }
 
 // Every transaction eBay recorded against an order: the SALE, and any
 // refund, dispute or credit that followed.
-function getOrderTransactions(accessToken, orderId, marketplaceId) {
-  return call(accessToken, 'GET', `/transaction?filter=orderId:%7B${encodeURIComponent(orderId)}%7D&limit=50`, undefined, marketplaceId);
+function getOrderTransactions(accessToken, orderId, marketplaceId, signingKey) {
+  return call(accessToken, 'GET', `/transaction?filter=orderId:%7B${encodeURIComponent(orderId)}%7D&limit=50`, undefined, marketplaceId, signingKey);
 }
 
 // Seller Hub's names for eBay's fee types. Anything unlisted is shown under

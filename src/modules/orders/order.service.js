@@ -5,6 +5,7 @@ const ebayService = require('../ebay/ebay.service');
 const listingRepository = require('../listings/listing.repository');
 const orderRepository = require('./order.repository');
 const { CARRIERS, detectCarrier } = require('./carriers');
+const { SELLER_CANCEL_REASONS } = require('../ebay/ebay.postorder');
 const logger = require('../../utils/logger');
 
 class OrderError extends Error {
@@ -86,9 +87,10 @@ async function getOrder(connectionId, userId, orderId) {
   const detail = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
     ebayService.getOrderDetail(credentials, { connectionId, orderId })
   );
-  const [sourcingRows, eventRows] = await Promise.all([
+  const [sourcingRows, eventRows, archived] = await Promise.all([
     orderRepository.listSourcingForOrder(connectionId, orderId),
     orderRepository.listEvents(connectionId, orderId),
+    orderRepository.findArchived(connectionId, orderId),
   ]);
   const sourcingByLine = new Map(sourcingRows.map((r) => [r.line_item_id, sourcingView(r)]));
   const lineItems = (await marginFor(connectionId, detail.order.lineItems)).map((li, index) => ({
@@ -100,12 +102,137 @@ async function getOrder(connectionId, userId, orderId) {
   }));
   const events = [...eventRows.map(eventView), ...ebayEvents(detail.order)].sort((a, b) => new Date(b.at) - new Date(a.at));
   return {
-    order: { ...detail.order, lineItems },
+    order: { ...detail.order, lineItems, archived: Boolean(archived) },
     actionsEnabled: detail.actionsEnabled,
     source: detail.source,
     events,
     carriers: CARRIERS.map((c) => ({ code: c.code, label: c.label })),
+    cancelReasons: Object.entries(SELLER_CANCEL_REASONS).map(([code, label]) => ({ code, label })),
+    refundReasons: Object.entries(REFUND_REASONS).map(([code, label]) => ({ code, label })),
   };
+}
+
+// --- order actions (Seller Hub's "More actions") ------------------------------
+
+// The order as eBay's Fulfillment API holds it, for actions that need the
+// line item ids or the legacy order id.
+async function fulfillmentOrder(connectionId, userId, orderId) {
+  const detail = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) => ebayService.getOrderDetail(credentials, { connectionId, orderId }));
+  if (detail.source !== 'fulfillment') throw new OrderError('Reconnect this eBay account (one click from Connections) to act on orders from Liston.', 403);
+  return detail.order;
+}
+
+// Marks the order's undispatched lines dispatched on eBay — with a tracking
+// number ("Add tracking number") or without ("Mark as dispatched"). Lines
+// with a sourcing row get the number recorded there too, so the Source
+// section and the eBay state agree.
+async function dispatchOrder(connectionId, userId, actorId, orderId, { trackingNumber, carrier, lineItemIds }) {
+  const order = await fulfillmentOrder(connectionId, userId, orderId);
+  const tracking = String(trackingNumber || '').replace(/\s+/g, '') || null;
+  const lines = order.lineItems.filter((li) => li.lineItemId && li.fulfillmentStatus !== 'FULFILLED' && (!lineItemIds?.length || lineItemIds.includes(li.lineItemId)));
+  if (!lines.length) throw new OrderError('Every item on this order is already dispatched.', 400);
+  const carrierCode = tracking ? carrier || detectCarrier(tracking) || 'Other' : undefined;
+  const shippedDate = new Date().toISOString();
+  const result = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.dispatchOrder(credentials, {
+      connectionId,
+      orderId,
+      lineItems: lines.map((li) => ({ lineItemId: li.lineItemId, quantity: li.quantity })),
+      carrier: carrierCode,
+      trackingNumber: tracking || undefined,
+      shippedDate,
+    })
+  );
+  for (const li of lines) {
+    await orderRepository.upsertSourcing({
+      connectionId,
+      orderId,
+      lineItemId: li.lineItemId,
+      dispatched_at: shippedDate,
+      dispatched_by: actorId,
+      ebay_fulfillment_id: result.fulfillmentId,
+      status: 'shipped',
+      ...(tracking ? { tracking_number: tracking, carrier: carrierCode } : {}),
+    });
+  }
+  await orderRepository.addEvent({
+    connectionId,
+    orderId,
+    kind: 'ebay.dispatched_by_liston',
+    detail: { carrier: carrierCode || null, trackingNumber: tracking, fulfillmentId: result.fulfillmentId, lines: lines.length },
+    actorUserId: actorId,
+  });
+  return { fulfillmentId: result.fulfillmentId, lines: lines.length };
+}
+
+// eBay's reasons for a refund, with Seller Hub's wording.
+const REFUND_REASONS = {
+  BUYER_CANCEL: 'Buyer cancelled',
+  ITEM_NOT_RECEIVED: 'Item not received',
+  ITEM_NOT_AS_DESCRIBED: 'Item not as described',
+  OTHER_ADJUSTMENT: 'Other adjustment',
+};
+
+async function refundOrder(connectionId, userId, actorId, orderId, { amount, reason, comment }) {
+  if (!REFUND_REASONS[reason]) throw new OrderError('Pick a refund reason.', 400);
+  const order = await fulfillmentOrder(connectionId, userId, orderId);
+  if (order.paymentStatus !== 'PAID' && order.paymentStatus !== 'PARTIALLY_REFUNDED') throw new OrderError("This order hasn't been paid, so there is nothing to refund.", 400);
+  const total = order.pricing.total;
+  const value = amount === undefined || amount === null || amount === '' ? null : Number(amount);
+  if (value !== null && (!Number.isFinite(value) || value <= 0)) throw new OrderError('Enter a refund amount above zero.', 400);
+  if (value !== null && total && value > total.value + 0.005) throw new OrderError(`The refund can't be more than the order total (${total.value.toFixed(2)} ${total.currency}).`, 400);
+  const result = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.refundOrder(credentials, {
+      connectionId,
+      orderId,
+      amount: value !== null && total ? { value: value.toFixed(2), currency: total.currency } : null,
+      reason,
+      comment: String(comment || '').trim().slice(0, 500) || undefined,
+    })
+  );
+  const refunded = value !== null && total ? { value, currency: total.currency } : total;
+  await orderRepository.addEvent({ connectionId, orderId, kind: 'ebay.refunded_by_liston', detail: { amount: refunded, reason, refundId: result.refundId, status: result.refundStatus }, actorUserId: actorId });
+  return { refundId: result.refundId, status: result.refundStatus, amount: refunded };
+}
+
+async function cancelOrder(connectionId, userId, actorId, orderId, { reason }) {
+  const order = await fulfillmentOrder(connectionId, userId, orderId);
+  if (order.cancelState === 'CANCELED') throw new OrderError('This order is already cancelled.', 400);
+  if (order.fulfillmentStatus === 'FULFILLED') throw new OrderError("This order has been dispatched, so it can't be cancelled. Refund the buyer instead.", 400);
+  const pending = order.cancelRequests.find((r) => r.state === 'REQUESTED');
+  if (!pending && !SELLER_CANCEL_REASONS[reason]) throw new OrderError('Pick a reason for cancelling.', 400);
+  const paid = order.paymentStatus === 'PAID';
+  const result = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.cancelOrder(credentials, {
+      connectionId,
+      orderId,
+      legacyOrderId: order.legacyOrderId,
+      reason,
+      pendingCancelId: pending?.id || null,
+      buyerPaid: paid,
+      buyerPaidDate: paid ? order.payments[0]?.date || order.createdAt : null,
+      refundAmount: paid ? order.pricing.total : null,
+    })
+  );
+  await orderRepository.addEvent({
+    connectionId,
+    orderId,
+    kind: result.approved ? 'ebay.cancel_approved_by_liston' : 'ebay.cancelled_by_liston',
+    detail: { reason: pending?.reason || reason, cancelId: result.cancelId },
+    actorUserId: actorId,
+  });
+  return result;
+}
+
+async function setArchived(connectionId, actorId, orderId, archived) {
+  if (archived) await orderRepository.archiveOrder(connectionId, orderId, actorId);
+  else await orderRepository.unarchiveOrder(connectionId, orderId);
+  await orderRepository.addEvent({ connectionId, orderId, kind: archived ? 'archived' : 'unarchived', detail: {}, actorUserId: actorId });
+  return { archived: Boolean(archived) };
+}
+
+async function archivedOrderIds(connectionId) {
+  return orderRepository.listArchivedOrderIds(connectionId);
 }
 
 // --- sourcing --------------------------------------------------------------
@@ -237,4 +364,4 @@ async function sourcingForOrders(connectionId, orderIds) {
   return byOrder;
 }
 
-module.exports = { OrderError, getOrder, saveSourcing, addNote, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, SOURCING_STATUSES };
+module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, SOURCING_STATUSES, REFUND_REASONS };

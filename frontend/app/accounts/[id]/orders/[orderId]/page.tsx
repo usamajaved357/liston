@@ -426,6 +426,16 @@ function eventText(e: OrderEvent) {
       return `Refund${amount ? ` of ${money(amount)}` : ""}${d.status ? ` (${String(d.status).toLowerCase()})` : ""}`;
     case "ebay.cancel_requested":
       return `Cancellation requested${d.initiator ? ` by ${String(d.initiator).toLowerCase()}` : ""}${d.reason ? ` · ${String(d.reason).replace(/_/g, " ").toLowerCase()}` : ""}`;
+    case "ebay.refunded_by_liston":
+      return `Refund${amount ? ` of ${money(amount)}` : ""} sent from Liston${d.reason ? ` · ${String(d.reason).replace(/_/g, " ").toLowerCase()}` : ""}`;
+    case "ebay.cancelled_by_liston":
+      return `Order cancelled from Liston${d.reason ? ` · ${String(d.reason).replace(/_/g, " ").toLowerCase()}` : ""}`;
+    case "ebay.cancel_approved_by_liston":
+      return "Buyer's cancellation approved from Liston";
+    case "archived":
+      return "Order archived";
+    case "unarchived":
+      return "Order restored from the archive";
     case "sourcing.ordered":
       return `Supplier order placed · #${d.sourceOrderNo}`;
     case "note":
@@ -580,6 +590,185 @@ function PostageInstructions() {
   );
 }
 
+// --- action dialogs (Seller Hub's "More actions") ----------------------------
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-md rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-[var(--color-ink)]">{title}</h2>
+          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+            Close
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+type ActionKind = "tracking" | "dispatched" | "refund" | "cancel";
+
+function ActionDialog({
+  kind,
+  connectionId,
+  order,
+  carriers,
+  refundReasons,
+  cancelReasons,
+  currency,
+  onClose,
+  onDone,
+}: {
+  kind: ActionKind;
+  connectionId: string;
+  order: OrderDetail;
+  carriers: { code: string; label: string }[];
+  refundReasons: { code: string; label: string }[];
+  cancelReasons: { code: string; label: string }[];
+  currency: string;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const [tracking, setTracking] = useState("");
+  const [carrier, setCarrier] = useState("");
+  const [amount, setAmount] = useState(order.pricing.total ? order.pricing.total.value.toFixed(2) : "");
+  const [full, setFull] = useState(true);
+  const [reason, setReason] = useState(kind === "refund" ? refundReasons[0]?.code || "" : cancelReasons[0]?.code || "");
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const pendingCancel = order.cancelRequests.find((r) => r.state === "REQUESTED") || null;
+  const undispatched = order.lineItems.filter((li) => li.fulfillmentStatus !== "FULFILLED").length;
+
+  async function run() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (kind === "tracking") {
+        if (!tracking.trim()) throw new ApiError("Enter the tracking number.", 400);
+        const r = await api.dispatchOrder(connectionId, order.orderId, { trackingNumber: tracking.trim(), ...(carrier ? { carrier } : {}) });
+        onDone(`Marked dispatched on eBay with tracking ${tracking.trim()} (${r.lines} item${r.lines === 1 ? "" : "s"}).`);
+      } else if (kind === "dispatched") {
+        const r = await api.dispatchOrder(connectionId, order.orderId, {});
+        onDone(`Marked dispatched on eBay without tracking (${r.lines} item${r.lines === 1 ? "" : "s"}).`);
+      } else if (kind === "refund") {
+        const r = await api.refundOrder(connectionId, order.orderId, { amount: full ? null : amount, reason, comment });
+        onDone(`Refund of ${r.amount ? formatPrice(r.amount.value, r.amount.currency) : "the order"} sent to the buyer${r.status ? ` (${r.status.toLowerCase()})` : ""}.`);
+      } else {
+        const r = await api.cancelOrder(connectionId, order.orderId, { reason });
+        onDone(r.approved ? "The buyer's cancellation was approved; eBay is refunding them." : "The order was cancelled on eBay; eBay is refunding the buyer.");
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Something went wrong. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const titles: Record<ActionKind, string> = { tracking: "Add tracking number", dispatched: "Mark as dispatched", refund: "Send refund", cancel: "Cancel order" };
+
+  return (
+    <Modal title={titles[kind]} onClose={onClose}>
+      <div className="mt-3 space-y-3 text-[13px] text-[var(--color-ink)]">
+        {kind === "tracking" && (
+          <>
+            <p className="text-[var(--color-muted)]">
+              Marks {undispatched === 1 ? "the item" : `all ${undispatched} undispatched items`} dispatched on eBay with this number. The buyer sees it straight away.
+            </p>
+            <div>
+              <label className={labelClass}>Tracking number</label>
+              <input className={`${inputClass} mt-1 font-mono`} value={tracking} onChange={(e) => setTracking(e.target.value)} placeholder="e.g. H06R4A0225077758" autoFocus />
+            </div>
+            <div>
+              <label className={labelClass}>Carrier</label>
+              <select className={`${inputClass} mt-1`} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+                <option value="">Detect from number</option>
+                {carriers.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+        {kind === "dispatched" && (
+          <p>
+            This marks {undispatched === 1 ? "the item" : `all ${undispatched} undispatched items`} dispatched on eBay <span className="font-semibold">without a tracking number</span>. eBay doesn&apos;t recommend it: with no tracking you have no proof of delivery if the buyer opens a case.
+          </p>
+        )}
+        {kind === "refund" && (
+          <>
+            <p className="text-[var(--color-muted)]">eBay takes the refund from your balance and returns it to the buyer&apos;s original payment method.</p>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={full} onChange={() => setFull(true)} /> Full refund{order.pricing.total ? ` (${money(order.pricing.total, currency)})` : ""}
+              </label>
+              <label className="flex items-center gap-1.5">
+                <input type="radio" checked={!full} onChange={() => setFull(false)} /> Partial
+              </label>
+            </div>
+            {!full && (
+              <div>
+                <label className={labelClass}>Amount ({currency})</label>
+                <input type="number" step="0.01" min="0.01" max={order.pricing.total?.value} className={`${inputClass} mt-1`} value={amount} onChange={(e) => setAmount(e.target.value)} />
+              </div>
+            )}
+            <div>
+              <label className={labelClass}>Reason</label>
+              <select className={`${inputClass} mt-1`} value={reason} onChange={(e) => setReason(e.target.value)}>
+                {refundReasons.map((r) => (
+                  <option key={r.code} value={r.code}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Message to buyer (optional)</label>
+              <input className={`${inputClass} mt-1`} value={comment} onChange={(e) => setComment(e.target.value)} maxLength={500} />
+            </div>
+          </>
+        )}
+        {kind === "cancel" && (
+          <>
+            {pendingCancel ? (
+              <p>
+                The buyer asked to cancel this order{pendingCancel.reason ? ` (${pendingCancel.reason.replace(/_/g, " ").toLowerCase()})` : ""}. Approving it cancels the order and eBay refunds them in full.
+              </p>
+            ) : (
+              <>
+                <p className="text-[var(--color-muted)]">Cancelling refunds the buyer in full. Cancelling because you&apos;re out of stock counts against your seller performance.</p>
+                <div>
+                  <label className={labelClass}>Reason</label>
+                  <select className={`${inputClass} mt-1`} value={reason} onChange={(e) => setReason(e.target.value)}>
+                    {cancelReasons.map((r) => (
+                      <option key={r.code} value={r.code}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+          </>
+        )}
+        {error && <p className="font-medium text-[var(--color-danger)]">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="btn btn-secondary btn-sm">
+            Back
+          </button>
+          <button type="button" onClick={run} disabled={busy} className={`btn btn-sm ${kind === "cancel" || kind === "refund" ? "bg-[var(--color-danger)] text-white hover:opacity-90" : "btn-primary"}`}>
+            {busy ? "Working…" : kind === "tracking" ? "Add tracking & dispatch" : kind === "dispatched" ? "Mark as dispatched" : kind === "refund" ? "Send refund" : pendingCancel ? "Approve cancellation" : "Cancel order"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // --- page -----------------------------------------------------------------
 
 export default function OrderDetailPage() {
@@ -594,6 +783,9 @@ export default function OrderDetailPage() {
   const [addingNote, setAddingNote] = useState(false);
   const [saveNotes, setSaveNotes] = useState<Record<string, { tone: "ok" | "bad"; text: string } | null>>({});
   const [moreOpen, setMoreOpen] = useState(false);
+  const [action, setAction] = useState<ActionKind | null>(null);
+  const [actionNote, setActionNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  const [archiving, setArchiving] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
   const [earnedOpen, setEarnedOpen] = useState(true);
   const [specificsOpen, setSpecificsOpen] = useState<Record<string, boolean>>({});
@@ -680,6 +872,30 @@ export default function OrderDetailPage() {
     document.getElementById("source")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function scrollTo(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function focusNote() {
+    const el = document.getElementById("order-note") as HTMLInputElement | null;
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    el?.focus();
+  }
+
+  async function toggleArchived() {
+    if (!order) return;
+    setArchiving(true);
+    try {
+      const r = await api.archiveOrder(params.id, order.orderId, !order.archived);
+      setData((current) => (current ? { ...current, order: { ...current.order, archived: r.archived } } : current));
+      setActionNote({ tone: "ok", text: r.archived ? "Order archived. It's hidden from the order list under Archived." : "Order restored to the order list." });
+    } catch (err) {
+      setActionNote({ tone: "bad", text: err instanceof ApiError ? err.message : "Couldn't archive the order." });
+    } finally {
+      setArchiving(false);
+    }
+  }
+
   if (loadingConnection) return <div className="p-8 text-sm text-[var(--color-muted)]">Loading…</div>;
   if (connectionError || !connection || !user) return <div className="p-8"><Alert>{connectionError || "This account connection doesn't exist, or isn't yours."}</Alert></div>;
 
@@ -700,6 +916,12 @@ export default function OrderDetailPage() {
   const buyerUrl = order?.buyer.username ? `https://${host}/usr/${encodeURIComponent(order.buyer.username)}` : null;
   const messageUrl = order?.buyer.username ? `https://contact.${host.replace(/^www\./, "")}/ws/eBayISAPI.dll?M2MContact&requested=${encodeURIComponent(order.buyer.username)}${firstItem?.itemId ? `&item=${firstItem.itemId}` : ""}` : null;
   const ebayOrderUrl = order ? `https://${host}/mesh/ord/details?orderid=${encodeURIComponent(order.legacyOrderId || order.orderId)}` : null;
+  // The actions that only exist on eBay's own pages open there.
+  const couponUrl = `https://${host}/sh/mkt/couponcodes`;
+  const reportBuyerUrl = order?.buyer.username ? `https://${host}/help/selling/resolving-buyer-issues/reporting-issue-buyer` : null;
+  const relistUrl = firstItem?.itemId ? `https://${host}/sl/sell?mode=Relist&itemId=${firstItem.itemId}` : null;
+  const sellSimilarUrl = firstItem?.itemId ? `https://${host}/sl/sell?mode=SellSimilar&itemId=${firstItem.itemId}` : null;
+  const canAct = !!data?.actionsEnabled && !cancelled;
 
   const deadlineTone = cancelled ? "" : dispatched ? "" : daysLeft !== null && daysLeft < 0 ? "text-[var(--color-danger)]" : daysLeft !== null && daysLeft <= 1 ? "text-amber-800" : "";
 
@@ -754,19 +976,32 @@ export default function OrderDetailPage() {
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 print:hidden">
                   {pay && <Chip text={pay.text} tone={pay.tone} />}
                   {ful && <Chip text={ful.text} tone={ful.tone} />}
+                  {order.archived && <Chip text="Archived" tone="muted" />}
                 </div>
               </div>
             </div>
           )}
 
           <div className="mt-5 space-y-4 print:hidden">
+            {actionNote && <Alert variant={actionNote.tone === "ok" ? "success" : undefined}>{actionNote.text}</Alert>}
             {!data.actionsEnabled && (
               <Alert variant="warning">
                 This account was connected before Liston could act on orders. Reconnect it from Connections (one click) to enable dispatching from here — the order still shows from eBay&apos;s copy.
               </Alert>
             )}
             {order.cancelRequests.some((r) => r.state === "REQUESTED") && (
-              <Alert variant="warning">The buyer has asked to cancel this order. Approve or decline it in Seller Hub for now — handling it here is coming.</Alert>
+              <Alert variant="warning">
+                <span className="flex flex-wrap items-center justify-between gap-2">
+                  <span>The buyer has asked to cancel this order.</span>
+                  {data.actionsEnabled ? (
+                    <button type="button" onClick={() => setAction("cancel")} className="btn btn-secondary btn-sm">
+                      Approve cancellation
+                    </button>
+                  ) : (
+                    <span>Approve or decline it in Seller Hub.</span>
+                  )}
+                </span>
+              </Alert>
             )}
             {order.buyerCheckoutNotes && (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-[13px] text-amber-900">
@@ -801,7 +1036,7 @@ export default function OrderDetailPage() {
                   </div>
                   <div className="flex flex-col items-stretch gap-2 print:hidden">
                     {!cancelled && !dispatched && (
-                      <button type="button" onClick={scrollToSource} className="btn btn-primary">
+                      <button type="button" onClick={() => (data.actionsEnabled ? setAction("tracking") : scrollToSource())} className="btn btn-primary">
                         Add tracking
                       </button>
                     )}
@@ -817,28 +1052,46 @@ export default function OrderDetailPage() {
                         More actions <Chevron open={moreOpen} />
                       </button>
                       {moreOpen && (
-                        <div className="absolute right-0 z-20 mt-1 w-56 overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 text-[13px] shadow-lg">
-                          {ebayOrderUrl && (
-                            <a href={ebayOrderUrl} target="_blank" rel="noreferrer" className="block px-3 py-2 hover:bg-[var(--color-paper)]">
-                              View order on eBay
-                            </a>
+                        <div className="absolute right-0 z-20 mt-1 max-h-[70vh] w-60 overflow-y-auto rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 text-[13px] text-[var(--color-ink)] shadow-lg">
+                          {(
+                            [
+                              { label: "Print invoices and more", run: () => window.print() },
+                              { label: "Print coupon", href: couponUrl },
+                              { label: "Send coupon", href: couponUrl },
+                              { label: "Add tracking number", run: () => setAction("tracking"), disabled: !canAct || dispatched },
+                              { label: "Mark as dispatched", run: () => setAction("dispatched"), disabled: !canAct || dispatched },
+                              { label: "Send refund", run: () => setAction("refund"), disabled: !data.actionsEnabled || order.paymentStatus === "FULLY_REFUNDED" },
+                              { label: "View payment details", run: () => scrollTo("payment") },
+                              { label: "Add note", run: focusNote },
+                              { label: order.cancelRequests.some((r) => r.state === "REQUESTED") ? "Approve cancellation" : "Cancel order", run: () => setAction("cancel"), disabled: !canAct || dispatched },
+                              { label: "Message buyer", href: messageUrl },
+                              { label: "Report buyer", href: reportBuyerUrl },
+                              { label: "Relist", href: relistUrl },
+                              { label: "Sell similar", href: sellSimilarUrl },
+                              { label: order.archived ? "Unarchive" : "Archive", run: toggleArchived, disabled: archiving },
+                            ] as { label: string; run?: () => void; href?: string | null; disabled?: boolean }[]
+                          ).map((item) =>
+                            item.href !== undefined ? (
+                              item.href ? (
+                                <a key={item.label} href={item.href} target="_blank" rel="noreferrer" className="block px-3 py-2 hover:bg-[var(--color-paper)]">
+                                  {item.label}
+                                </a>
+                              ) : null
+                            ) : (
+                              <button
+                                key={item.label}
+                                type="button"
+                                disabled={item.disabled}
+                                onClick={() => {
+                                  setMoreOpen(false);
+                                  item.run?.();
+                                }}
+                                className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)] disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {item.label}
+                              </button>
+                            )
                           )}
-                          {messageUrl && (
-                            <a href={messageUrl} target="_blank" rel="noreferrer" className="block px-3 py-2 hover:bg-[var(--color-paper)]">
-                              Message buyer
-                            </a>
-                          )}
-                          <button type="button" onClick={() => navigator.clipboard.writeText(order.orderId).catch(() => {})} className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)]">
-                            Copy order number
-                          </button>
-                          {addressText && (
-                            <button type="button" onClick={() => navigator.clipboard.writeText(addressText).catch(() => {})} className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)]">
-                              Copy delivery address
-                            </button>
-                          )}
-                          <button type="button" onClick={() => window.print()} className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)]">
-                            Print invoice
-                          </button>
                         </div>
                       )}
                     </div>
@@ -1063,6 +1316,7 @@ export default function OrderDetailPage() {
                 <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Timeline</h2>
                 <div className="mt-2 flex gap-2">
                   <input
+                    id="order-note"
                     className={inputClass}
                     placeholder="Add a note for the team…"
                     value={noteText}
@@ -1159,7 +1413,7 @@ export default function OrderDetailPage() {
               </div>
 
               {/* Payment */}
-              <div className={cardClass}>
+              <div id="payment" className={`${cardClass} scroll-mt-4`}>
                 <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Payment</h2>
                 {order.paymentStatus === "PAID" && earnings && earnings.fundsStatusCode !== "PAYOUT" && earnings.fundsStatusCode !== "COMPLETED" && (
                   <div className="mt-3 flex gap-2.5 rounded-xl bg-[var(--color-paper)] p-3 text-[12.5px] text-[var(--color-ink)]">
@@ -1262,6 +1516,23 @@ export default function OrderDetailPage() {
       )}
 
       {accountsOpen && <SourceAccountsDialog accounts={accounts} onChange={setAccounts} onClose={() => setAccountsOpen(false)} />}
+      {action && order && data && (
+        <ActionDialog
+          kind={action}
+          connectionId={connection.id}
+          order={order}
+          carriers={data.carriers}
+          refundReasons={data.refundReasons || []}
+          cancelReasons={data.cancelReasons || []}
+          currency={currency}
+          onClose={() => setAction(null)}
+          onDone={(message) => {
+            setAction(null);
+            setActionNote({ tone: "ok", text: message });
+            load();
+          }}
+        />
+      )}
     </AccountShell>
   );
 }
