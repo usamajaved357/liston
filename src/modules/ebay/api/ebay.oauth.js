@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const config = require('../../config');
+const config = require('../../../config');
 
 // What a seller consents to when connecting. A token only ever carries the
 // scopes that were in ITS consent link — the developer portal's list is what

@@ -4,7 +4,7 @@ const { mock } = require('node:test');
 require('dotenv').config();
 
 const config = require('../../src/config');
-const ebayOauth = require('../../src/modules/ebay/ebay.oauth');
+const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
 
 // These tests mutate the shared config singleton's ebay block directly —
 // simplest way to exercise "configured" vs "not configured" without adding

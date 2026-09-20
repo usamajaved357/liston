@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const { mock } = require('node:test');
 require('dotenv').config();
 
-const ebayClient = require('../../src/modules/ebay/ebay.client');
+const ebayClient = require('../../src/modules/ebay/api/ebay.client');
 
 function fakeJsonResponse(body, status = 200) {
   return {

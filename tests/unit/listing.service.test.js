@@ -710,7 +710,7 @@ test('removeInactiveListing clears Liston records, deletes eBay inventory object
 
 // --- category, SKU and splitting -------------------------------------------
 
-const ebayTaxonomy = require('../../src/modules/ebay/ebay.taxonomy');
+const ebayTaxonomy = require('../../src/modules/ebay/api/ebay.taxonomy');
 const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
 
 test('publish uses the seller’s own SKU as-is, and numbers variations from it', async () => {

@@ -1,5 +1,5 @@
 const { apiBaseUrl } = require('./ebay.oauth');
-const logger = require('../../utils/logger');
+const logger = require('../../../utils/logger');
 
 class EbayApiError extends Error {
   constructor(message, statusCode, details) {

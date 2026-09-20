@@ -6,7 +6,7 @@ const { mock } = require('node:test');
 // entities in one field; the parser's default anti-bomb cap (1000) used to
 // turn every "Edit" of a branded listing into "Couldn't parse eBay's response".
 test('getItem parses a response whose description carries thousands of escaped entities', async () => {
-  const trading = require('../../src/modules/ebay/ebay.trading');
+  const trading = require('../../src/modules/ebay/api/ebay.trading');
   const html = '<div><p>lorem &amp; ipsum</p></div>'.repeat(400);
   const escaped = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const xml =
@@ -23,7 +23,7 @@ test('getItem parses a response whose description carries thousands of escaped e
 });
 
 test('getStoreCategories treats "not a store subscriber" as no Shop, and anything else as a failure', async () => {
-  const trading = require('../../src/modules/ebay/ebay.trading');
+  const trading = require('../../src/modules/ebay/api/ebay.trading');
   const failure = (msg) =>
     `<?xml version="1.0"?><GetStoreResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Failure</Ack><Errors><ShortMessage>${msg}</ShortMessage><LongMessage>${msg}</LongMessage><ErrorCode>1</ErrorCode></Errors></GetStoreResponse>`;
   let body = failure('You are not a store subscriber.');
@@ -45,7 +45,7 @@ test('getStoreCategories treats "not a store subscriber" as no Shop, and anythin
 });
 
 test('addStoreCategory sends SetStoreCategories and maps the created department', async () => {
-  const trading = require('../../src/modules/ebay/ebay.trading');
+  const trading = require('../../src/modules/ebay/api/ebay.trading');
   let sent = '';
   const fetchMock = mock.method(global, 'fetch', async (url, init) => {
     sent = init.body;
@@ -68,7 +68,7 @@ test('addStoreCategory sends SetStoreCategories and maps the created department'
 });
 
 test('getItemSummary reads per-option variation pictures', async () => {
-  const trading = require('../../src/modules/ebay/ebay.trading');
+  const trading = require('../../src/modules/ebay/api/ebay.trading');
   const xml =
     `<?xml version="1.0"?><GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>1</ItemID>` +
     `<PictureDetails><PictureURL>https://i/main.jpg</PictureURL></PictureDetails><Quantity>3</Quantity>` +

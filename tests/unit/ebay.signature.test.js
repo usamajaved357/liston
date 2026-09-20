@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('crypto');
 
-const { signatureHeaders, verifySignature, contentDigest, isExpired, toPem } = require('../../src/modules/ebay/ebay.signature');
+const { signatureHeaders, verifySignature, contentDigest, isExpired, toPem } = require('../../src/modules/ebay/api/ebay.signature');
 
 // A key pair in the shape eBay's Key Management API returns: bare base64
 // DER, no PEM armour.

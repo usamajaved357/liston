@@ -13,7 +13,7 @@ const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
 const descriptionTemplate = require('./description-template');
-const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const textGenerator = require('../ai-generation/text-generator.service');
 const governor = require('../ebay/request-governor');
 

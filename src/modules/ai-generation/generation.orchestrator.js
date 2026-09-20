@@ -1,5 +1,5 @@
 const ebaySource = require('../sourcing/ebay-listing.source');
-const ebayTaxonomy = require('../ebay/ebay.taxonomy');
+const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const aliexpressSource = require('../sourcing/aliexpress');
 const { capVariants } = require('../scraping/aliexpress-listing.scraper');
 const textGenerator = require('./text-generator.service');

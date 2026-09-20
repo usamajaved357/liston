@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const ebayOauth = require('./ebay.oauth');
+const ebayOauth = require('./api/ebay.oauth');
 const connectionService = require('../connections/connection.service');
 const ebayService = require('./ebay.service');
 const ebayNotifications = require('./ebay.notifications');

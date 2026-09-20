@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { mock } = require('node:test');
 
-const browse = require('../../src/modules/ebay/ebay.browse');
+const browse = require('../../src/modules/ebay/api/ebay.browse');
 const source = require('../../src/modules/sourcing/ebay-listing.source');
 const { ScrapingError } = require('../../src/modules/scraping/scraping.errors');
 
