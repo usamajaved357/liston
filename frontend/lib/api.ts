@@ -303,7 +303,7 @@ export interface OrderDetail {
   fulfillmentStatus: string | null;
   cancelState: string;
   cancelRequests: { id: string; state: string; reason: string; requestedAt: string; completedAt: string | null; initiator: string }[];
-  buyer: { username: string | null };
+  buyer: { username: string | null; feedbackScore?: number | null; feedbackPercent?: string | null; repeatBuyer?: boolean };
   buyerCheckoutNotes: string | null;
   shipTo: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string; email: string } | null;
   shippingService: string | null;
@@ -314,6 +314,17 @@ export interface OrderDetail {
   refunds: { amount: Amount | null; date: string; status: string; referenceId: string | null }[];
   totalDueSeller: Amount | null;
   totalMarketplaceFee: Amount | null;
+  // From eBay's Finances API: what eBay took and where the money is. Null
+  // until eBay has recorded the sale, or without the finances scope.
+  earnings?: {
+    fundsStatus: string;
+    fundsStatusCode: string | null;
+    payoutId: string | null;
+    fees: { code: string; label: string; amount: Amount }[];
+    totalFees: Amount;
+    gross: Amount;
+    earnings: Amount;
+  } | null;
   lineItems: OrderDetailLine[];
   fulfillments: { fulfillmentId: string | null; carrier: string | null; trackingNumber: string | null; shippedDate: string | null; lineItems: { lineItemId: string; quantity: number }[] }[];
 }

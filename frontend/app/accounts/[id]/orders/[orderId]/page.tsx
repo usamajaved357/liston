@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api, ApiError, Amount, OrderDetail, OrderDetailLine, OrderDetailResponse, OrderEvent, OrderSourcing, SourceAccount, SourcingPatch, User } from "@/lib/api";
@@ -9,11 +9,12 @@ import { formatPrice, formatShortDate, formatDateTime } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 
-// One eBay order, the way Seller Hub's order page shows it — header with
-// the state and dispatch-by, the items, who it goes to, the money — plus
-// the part Seller Hub never had: where each item was bought from, by whom,
-// and the supplier's tracking, which dispatches the item on eBay when it is
-// saved.
+// One eBay order, laid out the way Seller Hub's order page is — the
+// dispatch deadline and its paid → dispatched → delivered track, Postage,
+// Item, then Order and Payment (what the buyer paid, what eBay took, what
+// you earned) down the side — plus the part Seller Hub never had: a Source
+// section saying where each item was bought from, by whom, and the
+// supplier's tracking, which dispatches the item on eBay when it is saved.
 
 const labelClass = "text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]";
 const cardClass = "rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5";
@@ -434,6 +435,151 @@ function eventText(e: OrderEvent) {
   }
 }
 
+// --- eBay-shaped pieces ---------------------------------------------------
+
+// "24 Sep at 11:59 pm BST", the way Seller Hub states a deadline.
+function formatDeadline(iso: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} at ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZoneName: "short" }).toLowerCase()}`;
+}
+
+function formatDayMonthYear(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+function formatDayMonth(iso: string | null) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+// Seller Hub's three-step track under the deadline: paid → dispatched → delivered.
+function ProgressTrack({ steps }: { steps: { label: string; date: string; done: boolean }[] }) {
+  const lastDone = steps.reduce((acc, step, i) => (step.done ? i : acc), -1);
+  const progress = steps.length > 1 ? Math.max(0, lastDone) / (steps.length - 1) : 0;
+  const align = (i: number) => (i === 0 ? "text-left" : i === steps.length - 1 ? "text-right" : "text-center");
+  return (
+    <div className="mt-6">
+      <div className="relative flex items-center justify-between">
+        <div className="absolute left-[11px] right-[11px] top-1/2 h-[3px] -translate-y-1/2 rounded bg-[var(--color-line)]" />
+        <div className="absolute left-[11px] top-1/2 h-[3px] -translate-y-1/2 rounded bg-[var(--color-primary)]" style={{ width: `calc((100% - 22px) * ${progress})` }} />
+        {steps.map((step) => (
+          <span key={step.label} className={`relative z-10 flex h-[22px] w-[22px] items-center justify-center rounded-full border-2 ${step.done ? "border-[var(--color-primary)] bg-[var(--color-primary)]" : "border-[var(--color-line)] bg-white"}`}>
+            {step.done && (
+              <svg viewBox="0 0 20 20" className="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 10.5l4 4 8-9" />
+              </svg>
+            )}
+          </span>
+        ))}
+      </div>
+      <div className="mt-2 grid grid-cols-3">
+        {steps.map((step, i) => (
+          <div key={step.label} className={align(i)}>
+            <p className="text-[13px] font-bold text-[var(--color-ink)]">{step.label}</p>
+            <p className="text-[12px] text-[var(--color-muted)]">{step.date}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 py-1.5 text-[13px]">
+      <span className="text-[var(--color-muted)]">{label}</span>
+      <span className="min-w-0 text-[var(--color-ink)]">{value}</span>
+    </div>
+  );
+}
+
+function MoneyRow({ label, value, bold = false, indent = false, negative = false }: { label: string; value: string; bold?: boolean; indent?: boolean; negative?: boolean }) {
+  return (
+    <div className={`flex items-center justify-between py-1 text-[13px] ${bold ? "font-bold text-[var(--color-ink)]" : "text-[var(--color-ink)]"} ${indent ? "pl-4" : ""}`}>
+      <span className={indent ? "underline decoration-dotted underline-offset-2" : ""}>{label}</span>
+      <span>{negative ? `-${value}` : value}</span>
+    </div>
+  );
+}
+
+function CopyIcon({ text, title }: { text: string; title: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      title={done ? "Copied" : title}
+      aria-label={title}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
+        } catch {
+          /* clipboard unavailable */
+        }
+      }}
+      className="ml-1.5 inline-flex h-5 w-5 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
+    >
+      {done ? (
+        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5 text-emerald-600" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M4 10.5l4 4 8-9" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.6}>
+          <rect x="7" y="7" width="10" height="10" rx="1.5" />
+          <path d="M13 7V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13H7" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg viewBox="0 0 20 20" className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 8l5 5 5-5" />
+    </svg>
+  );
+}
+
+// eBay's own guidance under "Postage", as Seller Hub shows it.
+function PostageInstructions() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="rounded-xl bg-[var(--color-paper)] p-4">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center justify-between text-left">
+        <span className="flex items-center gap-2 text-[14px] font-bold text-[var(--color-ink)]">
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z" />
+            <circle cx="7" cy="17.5" r="1.5" />
+            <circle cx="17" cy="17.5" r="1.5" />
+          </svg>
+          Postage instructions
+        </span>
+        <Chevron open={open} />
+      </button>
+      {open && (
+        <div className="mt-3 grid gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
+          <div>
+            <p className="font-bold">Pack your item with care</p>
+            <p className="mt-1">Use a box or envelope that&apos;s slightly larger than your item and cushion it with protective materials like bubble wrap, packing peanuts, foam or tissue paper to keep it secure during transit. If you&apos;re reusing a box, cover any previous labels or branding and reinforce corners with packing tape to ensure your package looks professional.</p>
+          </div>
+          <div>
+            <p className="font-bold">Get your label</p>
+            <p className="mt-1">Choose from a range of services featuring negotiated rates when you purchase a label with eBay. Your label will be pre-filled with the buyer&apos;s details and tracking will be uploaded automatically. Alternatively, you can find your own service and add the supplier&apos;s tracking number under Source below — Liston uploads it to eBay for you.</p>
+          </div>
+          <div>
+            <p className="font-bold">Send on time</p>
+            <p className="mt-1">Meet the required &quot;Dispatch by&quot; date when you drop off your package or schedule collection with the courier. If posting without tracking, mark the order as dispatched, although this method is not recommended as you will not receive proof of delivery. On-time delivery helps maintain your seller rating, feedback score and provides a better buyer experience.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- page -----------------------------------------------------------------
 
 export default function OrderDetailPage() {
@@ -447,6 +593,10 @@ export default function OrderDetailPage() {
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState(false);
   const [saveNotes, setSaveNotes] = useState<Record<string, { tone: "ok" | "bad"; text: string } | null>>({});
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [contactOpen, setContactOpen] = useState(false);
+  const [earnedOpen, setEarnedOpen] = useState(true);
+  const [specificsOpen, setSpecificsOpen] = useState<Record<string, boolean>>({});
 
   const [reloadKey, setReloadKey] = useState(0);
   const load = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -475,6 +625,13 @@ export default function OrderDetailPage() {
       .then((d) => setAccounts(d.accounts))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const close = () => setMoreOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [moreOpen]);
 
   const order = data?.order || null;
   const currency = order?.pricing.total?.currency || connection?.marketplace?.currency || "GBP";
@@ -519,14 +676,32 @@ export default function OrderDetailPage() {
     }
   }
 
+  function scrollToSource() {
+    document.getElementById("source")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   if (loadingConnection) return <div className="p-8 text-sm text-[var(--color-muted)]">Loading…</div>;
   if (connectionError || !connection || !user) return <div className="p-8"><Alert>{connectionError || "This account connection doesn't exist, or isn't yours."}</Alert></div>;
 
+  const host = connection.marketplace?.itemHost || "www.ebay.co.uk";
   const pay = order ? paymentLabel(order.paymentStatus) : null;
   const ful = order ? fulfillmentLabel(order) : null;
   const a = order?.shipTo || null;
   const addressText = a ? [a.name, a.street1, a.street2, [a.city, a.state].filter(Boolean).join(", "), a.postalCode, a.country, a.phone].filter(Boolean).join("\n") : "";
-  const netVsCost = order?.totalDueSeller && totalCost !== null ? order.totalDueSeller.value - totalCost : null;
+  const earnings = order?.earnings || null;
+  const netToSeller = earnings?.earnings || order?.totalDueSeller || null;
+  const netVsCost = netToSeller && totalCost !== null ? netToSeller.value - totalCost : null;
+  const dispatched = order?.fulfillmentStatus === "FULFILLED";
+  const cancelled = !!order && order.cancelState === "CANCELED";
+  const paidAt = order?.payments[0]?.date || null;
+  const shippedAt = order?.fulfillments.find((f) => f.shippedDate)?.shippedDate || null;
+  const firstItem = order?.lineItems[0] || null;
+  const promoted = !!earnings?.fees.some((f) => f.code.startsWith("AD_FEE"));
+  const buyerUrl = order?.buyer.username ? `https://${host}/usr/${encodeURIComponent(order.buyer.username)}` : null;
+  const messageUrl = order?.buyer.username ? `https://contact.${host.replace(/^www\./, "")}/ws/eBayISAPI.dll?M2MContact&requested=${encodeURIComponent(order.buyer.username)}${firstItem?.itemId ? `&item=${firstItem.itemId}` : ""}` : null;
+  const ebayOrderUrl = order ? `https://${host}/mesh/ord/details?orderid=${encodeURIComponent(order.legacyOrderId || order.orderId)}` : null;
+
+  const deadlineTone = cancelled ? "" : dispatched ? "" : daysLeft !== null && daysLeft < 0 ? "text-[var(--color-danger)]" : daysLeft !== null && daysLeft <= 1 ? "text-amber-800" : "";
 
   return (
     <AccountShell
@@ -541,29 +716,17 @@ export default function OrderDetailPage() {
       header={
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <Link href={`/accounts/${connection.id}/orders`} className="text-[12.5px] font-medium text-[var(--color-primary)] hover:underline">
+            <Link href={`/accounts/${connection.id}/orders`} className="text-[12.5px] font-medium text-[var(--color-primary)] hover:underline print:hidden">
               ‹ All orders
             </Link>
-            <div className="mt-1 flex flex-wrap items-center gap-2.5">
-              <h1 className="font-mono text-xl font-extrabold tracking-tight text-[var(--color-ink)]">{params.orderId}</h1>
-              {order && <CopyButton text={order.orderId} label="Copy #" />}
-              {pay && <Chip text={pay.text} tone={pay.tone} />}
-              {ful && <Chip text={ful.text} tone={ful.tone} />}
-            </div>
-            {order && (
-              <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">
-                Placed {formatDateTime(order.createdAt)}
-                {order.salesRecordReference ? ` · Sales record #${order.salesRecordReference}` : ""}
-                {order.buyer.username ? ` · Buyer ${order.buyer.username}` : ""}
-              </p>
-            )}
+            <h1 className="mt-0.5 text-[26px] font-extrabold tracking-tight text-[var(--color-ink)]">Order details</h1>
           </div>
-          {order && order.fulfillmentStatus !== "FULFILLED" && dispatchBy && (
-            <div className={`rounded-xl border px-3 py-2 text-[12.5px] ${daysLeft !== null && daysLeft < 0 ? "border-red-200 bg-red-50 text-[var(--color-danger)]" : daysLeft !== null && daysLeft <= 1 ? "border-amber-200 bg-amber-50 text-amber-800" : "border-[var(--color-line)] bg-[var(--color-paper)] text-[var(--color-ink)]"}`}>
-              <span className="font-semibold">Dispatch by {formatShortDate(dispatchBy)}</span>
-              {daysLeft !== null && <span className="ml-1.5">{daysLeft < 0 ? `· ${-daysLeft}d late` : daysLeft === 0 ? "· today" : `· ${daysLeft}d left`}</span>}
-            </div>
-          )}
+          <button type="button" onClick={() => window.print()} className="btn btn-secondary btn-sm print:hidden">
+            <svg viewBox="0 0 20 20" className="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 7V3h8v4M6 14H4a1 1 0 0 1-1-1V9a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4a1 1 0 0 1-1 1h-2M6 12h8v5H6z" />
+            </svg>
+            Print invoice
+          </button>
         </div>
       }
     >
@@ -575,275 +738,524 @@ export default function OrderDetailPage() {
       {loading && !data && <p className="text-sm text-[var(--color-muted)]">Loading the order from eBay…</p>}
 
       {data && order && (
-        <div className="space-y-4 pb-8">
-          {!data.actionsEnabled && (
-            <Alert variant="warning">
-              This account was connected before Liston could act on orders. Reconnect it from Connections (one click) to enable dispatching from here — the order still shows from eBay&apos;s copy.
-            </Alert>
-          )}
-          {order.cancelRequests.some((r) => r.state === "REQUESTED") && (
-            <Alert variant="warning">The buyer has asked to cancel this order. Approve or decline it in Seller Hub for now — handling it here is coming.</Alert>
-          )}
-          {order.buyerCheckoutNotes && (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-[13px] text-amber-900">
-              <p className={labelClass}>Note from the buyer</p>
-              <p className="mt-1 whitespace-pre-wrap">{order.buyerCheckoutNotes}</p>
+        <div className="pb-8">
+          {/* The item, as Seller Hub heads the page */}
+          {firstItem && (
+            <div className="flex items-center gap-4 border-b border-[var(--color-line)] pb-5">
+              {firstItem.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={firstItem.imageUrl} alt="" className="h-14 w-14 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-white object-cover" />
+              ) : (
+                <div className="h-14 w-14 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)]" />
+              )}
+              <div className="min-w-0">
+                <p className="truncate text-[18px] font-bold text-[var(--color-ink)]">{cleanTitle(firstItem.title)}</p>
+                {order.lineItems.length > 1 && <p className="text-[12.5px] text-[var(--color-muted)]">and {order.lineItems.length - 1} more item{order.lineItems.length > 2 ? "s" : ""}</p>}
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 print:hidden">
+                  {pay && <Chip text={pay.text} tone={pay.tone} />}
+                  {ful && <Chip text={ful.text} tone={ful.tone} />}
+                </div>
+              </div>
             </div>
           )}
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            {/* Items */}
-            <div className={`${cardClass} lg:col-span-2`}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-[15px] font-bold text-[var(--color-ink)]">Items · {order.lineItems.length}</h2>
+          <div className="mt-5 space-y-4 print:hidden">
+            {!data.actionsEnabled && (
+              <Alert variant="warning">
+                This account was connected before Liston could act on orders. Reconnect it from Connections (one click) to enable dispatching from here — the order still shows from eBay&apos;s copy.
+              </Alert>
+            )}
+            {order.cancelRequests.some((r) => r.state === "REQUESTED") && (
+              <Alert variant="warning">The buyer has asked to cancel this order. Approve or decline it in Seller Hub for now — handling it here is coming.</Alert>
+            )}
+            {order.buyerCheckoutNotes && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-[13px] text-amber-900">
+                <p className={labelClass}>Note from the buyer</p>
+                <p className="mt-1 whitespace-pre-wrap">{order.buyerCheckoutNotes}</p>
               </div>
-              <div className="mt-3 divide-y divide-[var(--color-line)]">
-                {order.lineItems.map((li) => {
-                  const lineStatus = li.fulfillmentStatus === "FULFILLED" ? { text: "Dispatched", tone: "ok" } : { text: "Awaiting dispatch", tone: "warn" };
-                  const cost = li.sourcing?.cost?.value ?? li.priceBreakdown?.totalCost ?? null;
-                  return (
-                    <div key={li.sourcingKey} className="flex items-start gap-3 py-3">
-                      {li.imageUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={li.imageUrl} alt="" className="h-16 w-16 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-cover" />
-                      ) : (
-                        <div className="h-16 w-16 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)]" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        {li.viewItemUrl ? (
-                          <a href={li.viewItemUrl} target="_blank" rel="noreferrer" className="text-[13.5px] font-semibold leading-snug text-[var(--color-ink)] hover:text-[var(--color-primary)]">
-                            {cleanTitle(li.title)}
-                          </a>
-                        ) : (
-                          <p className="text-[13.5px] font-semibold leading-snug text-[var(--color-ink)]">{cleanTitle(li.title)}</p>
-                        )}
-                        <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-[var(--color-muted)]">
-                          {li.itemId && <span className="font-mono">#{li.itemId}</span>}
-                          {li.sku && <span className="font-mono">SKU {li.sku}</span>}
-                          {li.variation.map((v) => (
-                            <span key={v.name}>
-                              <span className="font-semibold text-[var(--color-ink)]">{v.name}:</span> {v.value}
-                            </span>
-                          ))}
-                          {li.listingId && (
-                            <Link href={`/accounts/${connection.id}/listings/draft/${li.listingId}`} className="text-[var(--color-primary)] hover:underline">
-                              Liston listing
-                            </Link>
+            )}
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            {/* ---- left column ---- */}
+            <div className="space-y-4 lg:col-span-2">
+              {/* Dispatch */}
+              <div className={cardClass}>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2 className={`text-[20px] font-bold text-[var(--color-ink)] ${deadlineTone}`}>
+                      {cancelled ? "Order cancelled" : dispatched ? `Dispatched${shippedAt ? ` on ${formatDayMonthYear(shippedAt)}` : ""}` : dispatchBy ? `Dispatch by ${formatDeadline(dispatchBy)}` : "Awaiting dispatch"}
+                    </h2>
+                    {!cancelled && !dispatched && (
+                      <p className="mt-1 text-[13px] text-[var(--color-ink)]">
+                        Make sure you send your order within the dispatch time you specified in the listing.
+                        {daysLeft !== null && <span className="ml-1 font-semibold">{daysLeft < 0 ? `${-daysLeft} day${-daysLeft === 1 ? "" : "s"} late.` : daysLeft === 0 ? "Due today." : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left.`}</span>}
+                      </p>
+                    )}
+                    {(order.estimatedDelivery.min || order.estimatedDelivery.max) && (
+                      <p className="mt-0.5 text-[13px] text-[var(--color-ink)]">
+                        Estimated delivery date shown to buyer: {formatDayMonthYear(order.estimatedDelivery.min)}
+                        {order.estimatedDelivery.max ? ` - ${formatDayMonthYear(order.estimatedDelivery.max)}` : ""}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-stretch gap-2 print:hidden">
+                    {!cancelled && !dispatched && (
+                      <button type="button" onClick={scrollToSource} className="btn btn-primary">
+                        Add tracking
+                      </button>
+                    )}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMoreOpen((v) => !v);
+                        }}
+                        className="btn btn-secondary w-full"
+                      >
+                        More actions <Chevron open={moreOpen} />
+                      </button>
+                      {moreOpen && (
+                        <div className="absolute right-0 z-20 mt-1 w-56 overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 text-[13px] shadow-lg">
+                          {ebayOrderUrl && (
+                            <a href={ebayOrderUrl} target="_blank" rel="noreferrer" className="block px-3 py-2 hover:bg-[var(--color-paper)]">
+                              View order on eBay
+                            </a>
                           )}
+                          {messageUrl && (
+                            <a href={messageUrl} target="_blank" rel="noreferrer" className="block px-3 py-2 hover:bg-[var(--color-paper)]">
+                              Message buyer
+                            </a>
+                          )}
+                          <button type="button" onClick={() => navigator.clipboard.writeText(order.orderId).catch(() => {})} className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)]">
+                            Copy order number
+                          </button>
+                          {addressText && (
+                            <button type="button" onClick={() => navigator.clipboard.writeText(addressText).catch(() => {})} className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)]">
+                              Copy delivery address
+                            </button>
+                          )}
+                          <button type="button" onClick={() => window.print()} className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)]">
+                            Print invoice
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <ProgressTrack
+                  steps={[
+                    { label: "Buyer paid", date: formatDayMonth(paidAt || order.createdAt), done: order.paymentStatus === "PAID" || order.paymentStatus === "FULLY_REFUNDED" || order.paymentStatus === "PARTIALLY_REFUNDED" },
+                    { label: dispatched ? "Dispatched" : "Dispatch by", date: formatDayMonth(dispatched ? shippedAt : dispatchBy), done: dispatched },
+                    { label: "Delivery", date: order.estimatedDelivery.max ? `est. ${formatDayMonth(order.estimatedDelivery.max)}` : "", done: false },
+                  ]}
+                />
+              </div>
+
+              {/* Postage */}
+              <div className={cardClass}>
+                <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Postage</h2>
+                <div className="mt-3 print:hidden">
+                  <PostageInstructions />
+                </div>
+                <div className="mt-4 grid gap-5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto]">
+                  <div className="text-[13px] leading-relaxed text-[var(--color-ink)]">
+                    <p className="flex items-center text-[var(--color-muted)]">
+                      Post to
+                      {addressText && <CopyIcon text={addressText} title="Copy address" />}
+                    </p>
+                    {a ? (
+                      <>
+                        <p>{a.name}</p>
+                        {a.street1 && <p>{a.street1}</p>}
+                        {a.street2 && <p>{a.street2}</p>}
+                        <p>{[a.city, a.state, a.postalCode].filter(Boolean).join(", ")}</p>
+                        <p>{connection.marketplace && a.country === connection.marketplace.country ? connection.marketplace.countryName : a.country}</p>
+                        {a.phone && (
+                          <>
+                            <p className="mt-3 text-[var(--color-muted)]">Phone</p>
+                            <p>
+                              <a href={`tel:${a.phone.replace(/\s+/g, "")}`} className="hover:underline">
+                                {a.phone}
+                              </a>
+                            </p>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-[var(--color-muted)]">No delivery address on this order.</p>
+                    )}
+                  </div>
+                  <div className="text-[13px] leading-relaxed text-[var(--color-ink)]">
+                    <p className="text-[var(--color-muted)]">Buyer selected postage service</p>
+                    <p>{order.shippingService ? order.shippingService.replace(/_/g, " ") : "—"}</p>
+                    <p className="mt-3 text-[var(--color-muted)]">Tracking</p>
+                    {order.fulfillments.length ? (
+                      order.fulfillments.map((f, i) => (
+                        <p key={f.fulfillmentId || i}>
+                          {f.trackingNumber ? <span className="font-mono">{f.trackingNumber}</span> : "No tracking"}
+                          {f.carrier ? ` · ${f.carrier}` : ""}
+                          {f.shippedDate ? ` · ${formatDayMonth(f.shippedDate)}` : ""}
                         </p>
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                          <Chip text={lineStatus.text} tone={lineStatus.tone} />
-                          {li.sourcing && <Chip text={(SOURCING_STATUS.find((x) => x.value === li.sourcing!.status) || SOURCING_STATUS[0]).label} tone={(SOURCING_STATUS.find((x) => x.value === li.sourcing!.status) || SOURCING_STATUS[0]).tone} />}
-                          {li.refunds.length > 0 && <Chip text={`Refunded ${money(li.refunds[0].amount)}`} tone="warn" />}
+                      ))
+                    ) : (
+                      <p>--</p>
+                    )}
+                  </div>
+                  {!cancelled && (
+                    <div className="print:hidden">
+                      <button type="button" onClick={scrollToSource} className="btn btn-secondary">
+                        {dispatched ? "Edit tracking" : "Add tracking"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Item */}
+              <div className={cardClass}>
+                <h2 className="text-[20px] font-bold text-[var(--color-ink)]">{order.lineItems.length > 1 ? `Items · ${order.lineItems.length}` : "Item"}</h2>
+                <div className="mt-3 divide-y divide-[var(--color-line)]">
+                  {order.lineItems.map((li) => {
+                    const open = !!specificsOpen[li.sourcingKey];
+                    const cost = li.sourcing?.cost?.value ?? li.priceBreakdown?.totalCost ?? null;
+                    return (
+                      <div key={li.sourcingKey} className="py-4 first:pt-1 last:pb-0">
+                        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(80px,auto))]">
+                          <div className="flex items-start gap-4">
+                            {li.imageUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={li.imageUrl} alt="" className="h-[120px] w-[120px] flex-shrink-0 rounded-md border border-[var(--color-line)] bg-white object-cover" />
+                            ) : (
+                              <div className="h-[120px] w-[120px] flex-shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)]" />
+                            )}
+                            <div className="min-w-0 text-[13px] text-[var(--color-ink)]">
+                              {li.viewItemUrl ? (
+                                <a href={li.viewItemUrl} target="_blank" rel="noreferrer" className="text-[14px] font-medium leading-snug underline hover:text-[var(--color-primary)]">
+                                  {cleanTitle(li.title)}
+                                </a>
+                              ) : (
+                                <p className="text-[14px] font-medium leading-snug">{cleanTitle(li.title)}</p>
+                              )}
+                              {li.variation.length > 0 && <p className="mt-1 text-[var(--color-muted)]">{li.variation.map((v) => `${v.name}: ${v.value}`).join(" · ")}</p>}
+                              {li.sku && (
+                                <p className="mt-2">
+                                  Custom label (SKU): <span className="font-mono">{li.sku}</span>
+                                </p>
+                              )}
+                              {li.itemId && <p className="mt-1.5 text-[var(--color-muted)]">Item ID: {li.itemId}</p>}
+                              {promoted && <p className="mt-1.5 text-[var(--color-muted)]">Sold via Promoted Listings</p>}
+                              {li.promotions.map((p, i) => p.description && (
+                                <p key={i} className="mt-0.5 text-[var(--color-muted)]">
+                                  Sold with {p.description}
+                                </p>
+                              ))}
+                              {li.refunds.length > 0 && <p className="mt-1 text-[var(--color-danger)]">Refunded {money(li.refunds[0].amount, currency)}</p>}
+                              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 print:hidden">
+                                {!cancelled && (
+                                  <button type="button" onClick={scrollToSource} className="text-[var(--color-primary)] underline">
+                                    {li.fulfillmentStatus === "FULFILLED" ? "Edit tracking" : "Add tracking"}
+                                  </button>
+                                )}
+                                {li.listingId && (
+                                  <Link href={`/accounts/${connection.id}/listings/draft/${li.listingId}`} className="text-[var(--color-primary)] underline">
+                                    Open in Liston
+                                  </Link>
+                                )}
+                              </div>
+                              <button type="button" onClick={() => setSpecificsOpen((c) => ({ ...c, [li.sourcingKey]: !open }))} className="mt-3 flex items-center gap-1 text-[var(--color-ink)] underline print:hidden">
+                                See more item specifics <Chevron open={open} />
+                              </button>
+                              {open && (
+                                <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[12.5px]">
+                                  <dt className="text-[var(--color-muted)]">Line item</dt>
+                                  <dd className="font-mono">{li.lineItemId || "—"}</dd>
+                                  {li.legacyVariationId && (
+                                    <>
+                                      <dt className="text-[var(--color-muted)]">Variation ID</dt>
+                                      <dd className="font-mono">{li.legacyVariationId}</dd>
+                                    </>
+                                  )}
+                                  <dt className="text-[var(--color-muted)]">Status</dt>
+                                  <dd>{li.fulfillmentStatus === "FULFILLED" ? "Dispatched" : "Awaiting dispatch"}</dd>
+                                  {li.deliveryCost && (
+                                    <>
+                                      <dt className="text-[var(--color-muted)]">Postage charged</dt>
+                                      <dd>{money(li.deliveryCost, currency)}</dd>
+                                    </>
+                                  )}
+                                  {li.ebayCollectedTax && (
+                                    <>
+                                      <dt className="text-[var(--color-muted)]">Tax collected by eBay</dt>
+                                      <dd>{money(li.ebayCollectedTax, currency)}</dd>
+                                    </>
+                                  )}
+                                  {cost !== null && (
+                                    <>
+                                      <dt className="text-[var(--color-muted)]">Supplier cost</dt>
+                                      <dd>
+                                        {formatPrice(cost, currency)}
+                                        {li.sourcing?.cost ? "" : " (est.)"}
+                                      </dd>
+                                    </>
+                                  )}
+                                </dl>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-[13px] sm:text-center">
+                            <p className="text-[var(--color-muted)]">Quantity</p>
+                            <p className="mt-1 font-semibold text-[var(--color-ink)]">{li.quantity}</p>
+                          </div>
+                          <div className="text-[13px] sm:text-center">
+                            <p className="text-[var(--color-muted)]">Item price</p>
+                            <p className="mt-1 text-[var(--color-ink)]">{money(li.unitPrice, currency)}</p>
+                          </div>
+                          <div className="text-[13px] sm:text-right">
+                            <p className="text-[var(--color-muted)]">Item total</p>
+                            <p className="mt-1 text-[var(--color-ink)]">{money(li.total, currency)}</p>
+                          </div>
                         </div>
                       </div>
-                      <div className="flex-shrink-0 text-right">
-                        <p className="text-[14px] font-bold text-[var(--color-ink)]">{money(li.total, currency)}</p>
-                        <p className="text-[11.5px] text-[var(--color-muted)]">
-                          {li.quantity} × {money(li.unitPrice, currency)}
-                        </p>
-                        {cost !== null && (
-                          <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">
-                            Cost {formatPrice(cost, currency)}
-                            {li.sourcing?.cost ? "" : " (est.)"}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Buyer & delivery */}
-            <div className={cardClass}>
-              <div className="flex items-center justify-between">
-                <h2 className="text-[15px] font-bold text-[var(--color-ink)]">Deliver to</h2>
-                {addressText && <CopyButton text={addressText} label="Copy address" />}
-              </div>
-              {a ? (
-                <div className="mt-2 text-[13px] leading-relaxed text-[var(--color-ink)]">
-                  <p className="font-semibold">{a.name}</p>
-                  {a.street1 && <p>{a.street1}</p>}
-                  {a.street2 && <p>{a.street2}</p>}
-                  <p>{[a.city, a.state].filter(Boolean).join(", ")}</p>
-                  <p>{[a.postalCode, a.country].filter(Boolean).join(" · ")}</p>
-                  {a.phone && (
-                    <p className="mt-1">
-                      <a href={`tel:${a.phone.replace(/\s+/g, "")}`} className="text-[var(--color-primary)] hover:underline">
-                        {a.phone}
-                      </a>
-                    </p>
-                  )}
-                  {a.email && <p className="text-[12px] text-[var(--color-muted)]">{a.email}</p>}
+                    );
+                  })}
                 </div>
-              ) : (
-                <p className="mt-2 text-sm text-[var(--color-muted)]">No delivery address on this order.</p>
-              )}
-              <div className="mt-4 border-t border-[var(--color-line)] pt-3 text-[12.5px] text-[var(--color-muted)]">
-                {order.buyer.username && (
-                  <p>
-                    Buyer <span className="font-medium text-[var(--color-ink)]">{order.buyer.username}</span>
-                  </p>
-                )}
-                {order.shippingService && <p>Service: {order.shippingService.replace(/_/g, " ")}</p>}
-                {(order.estimatedDelivery.min || order.estimatedDelivery.max) && (
-                  <p>
-                    Estimated delivery {order.estimatedDelivery.min ? formatShortDate(order.estimatedDelivery.min) : ""}
-                    {order.estimatedDelivery.max ? ` – ${formatShortDate(order.estimatedDelivery.max)}` : ""}
-                  </p>
-                )}
               </div>
-              {order.fulfillments.length > 0 && (
-                <div className="mt-4 border-t border-[var(--color-line)] pt-3">
-                  <p className={labelClass}>Dispatched on eBay</p>
-                  {order.fulfillments.map((f, i) => (
-                    <p key={f.fulfillmentId || i} className="mt-1 text-[12.5px] text-[var(--color-ink)]">
-                      {f.shippedDate ? formatShortDate(f.shippedDate) : ""}
-                      {f.carrier ? ` · ${f.carrier}` : ""}
-                      {f.trackingNumber ? (
-                        <>
-                          {" · "}
-                          <span className="font-mono">{f.trackingNumber}</span>
-                        </>
-                      ) : (
-                        " · no tracking"
-                      )}
-                    </p>
+
+              {/* Source — the part Seller Hub never had */}
+              <div id="source" className={`${cardClass} scroll-mt-4 print:hidden`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Source</h2>
+                    <p className="text-[12.5px] text-[var(--color-muted)]">Where each item was bought, by whom, and its tracking. Saving a tracking number dispatches the item on eBay.</p>
+                  </div>
+                  <button type="button" onClick={() => setAccountsOpen(true)} className="btn btn-secondary btn-sm">
+                    Source accounts
+                  </button>
+                </div>
+                <div className="mt-3 space-y-3">
+                  {order.lineItems.map((li) => (
+                    <SourcingCard
+                      key={`${li.sourcingKey}-${li.sourcing?.updatedAt || "new"}`}
+                      connectionId={connection.id}
+                      orderId={order.orderId}
+                      line={li}
+                      accounts={accounts}
+                      carriers={data.carriers}
+                      actionsEnabled={data.actionsEnabled}
+                      user={user}
+                      currency={currency}
+                      onSaved={(sourcing, dispatch) => {
+                        applySourcing(sourcing);
+                        if (dispatch?.ok) load();
+                      }}
+                      onManageAccounts={() => setAccountsOpen(true)}
+                      note={saveNotes[li.sourcingKey] || null}
+                      onNote={(n) => setSaveNotes((current) => ({ ...current, [li.sourcingKey]: n }))}
+                    />
                   ))}
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* Sourcing */}
-          <div className={cardClass}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="text-[15px] font-bold text-[var(--color-ink)]">Sourcing</h2>
-                <p className="text-[12px] text-[var(--color-muted)]">Where each item was bought, by whom, and its tracking. A tracking number dispatches the item on eBay.</p>
               </div>
-              <button type="button" onClick={() => setAccountsOpen(true)} className="btn btn-secondary btn-sm">
-                Source accounts
-              </button>
-            </div>
-            <div className="mt-3 space-y-3">
-              {order.lineItems.map((li) => (
-                <SourcingCard
-                  key={`${li.sourcingKey}-${li.sourcing?.updatedAt || "new"}`}
-                  connectionId={connection.id}
-                  orderId={order.orderId}
-                  line={li}
-                  accounts={accounts}
-                  carriers={data.carriers}
-                  actionsEnabled={data.actionsEnabled}
-                  user={user}
-                  currency={currency}
-                  onSaved={(sourcing, dispatch) => {
-                    applySourcing(sourcing);
-                    if (dispatch?.ok) load();
-                  }}
-                  onManageAccounts={() => setAccountsOpen(true)}
-                  note={saveNotes[li.sourcingKey] || null}
-                  onNote={(n) => setSaveNotes((current) => ({ ...current, [li.sourcingKey]: n }))}
-                />
-              ))}
-            </div>
-          </div>
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            {/* Payment */}
-            <div className={cardClass}>
-              <h2 className="text-[15px] font-bold text-[var(--color-ink)]">Payment</h2>
-              <div className="mt-2 space-y-1 text-[13px]">
-                {[
-                  ["Items", order.pricing.subtotal],
-                  ["Postage", order.pricing.delivery],
-                  ["Discount", order.pricing.discount],
-                  ["Tax", order.pricing.tax],
-                  ["Adjustment", order.pricing.adjustment],
-                ]
-                  .filter(([, v]) => v && (v as Amount).value !== 0)
-                  .map(([label, v]) => (
-                    <div key={label as string} className="flex justify-between text-[var(--color-muted)]">
-                      <span>{label as string}</span>
-                      <span>{money(v as Amount, currency)}</span>
-                    </div>
-                  ))}
-                <div className="flex justify-between border-t border-[var(--color-line)] pt-1.5 font-bold text-[var(--color-ink)]">
-                  <span>Buyer paid</span>
-                  <span>{money(order.pricing.total, currency)}</span>
+              {/* Timeline */}
+              <div className={`${cardClass} print:hidden`}>
+                <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Timeline</h2>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className={inputClass}
+                    placeholder="Add a note for the team…"
+                    value={noteText}
+                    onChange={(e) => setNoteText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addNote();
+                      }
+                    }}
+                  />
+                  <button type="button" onClick={addNote} disabled={addingNote || !noteText.trim()} className="btn btn-secondary btn-sm flex-shrink-0">
+                    Add
+                  </button>
                 </div>
-                {order.totalMarketplaceFee && (
-                  <div className="flex justify-between text-[var(--color-muted)]">
-                    <span>eBay fees</span>
-                    <span>−{money(order.totalMarketplaceFee, currency)}</span>
-                  </div>
-                )}
-                {order.totalDueSeller && (
-                  <div className="flex justify-between font-semibold text-[var(--color-ink)]">
-                    <span>Net to you</span>
-                    <span>{money(order.totalDueSeller, currency)}</span>
-                  </div>
-                )}
-                {totalCost !== null && (
-                  <div className="flex justify-between text-[var(--color-muted)]">
-                    <span>Supplier cost</span>
-                    <span>−{formatPrice(totalCost, currency)}</span>
-                  </div>
-                )}
-                {netVsCost !== null && (
-                  <div className={`flex justify-between border-t border-[var(--color-line)] pt-1.5 font-bold ${netVsCost >= 0 ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
-                    <span>Profit</span>
-                    <span>{formatPrice(netVsCost, currency)}</span>
-                  </div>
-                )}
-                {order.refunds.length > 0 && (
-                  <div className="mt-2 border-t border-[var(--color-line)] pt-2">
-                    {order.refunds.map((r, i) => (
-                      <div key={r.referenceId || i} className="flex justify-between text-[var(--color-danger)]">
-                        <span>Refund {r.date ? formatShortDate(r.date) : ""}</span>
-                        <span>−{money(r.amount, currency)}</span>
+                <ol className="mt-3 divide-y divide-[var(--color-line)]">
+                  {data.events.map((e) => (
+                    <li key={e.id} className="flex items-start justify-between gap-3 py-2 text-[12.5px]">
+                      <div className="min-w-0">
+                        <p className={`${e.kind === "note" ? "whitespace-pre-wrap text-[var(--color-ink)]" : "text-[var(--color-ink)]"}`}>{eventText(e)}</p>
+                        {e.actor?.name && <p className="text-[11px] text-[var(--color-muted)]">{e.actor.name}</p>}
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <span className="flex-shrink-0 text-[11.5px] text-[var(--color-muted)]">{formatDateTime(e.at)}</span>
+                    </li>
+                  ))}
+                  {data.events.length === 0 && <li className="py-2 text-sm text-[var(--color-muted)]">Nothing yet.</li>}
+                </ol>
               </div>
-              {order.payments[0]?.date && <p className="mt-3 text-[11.5px] text-[var(--color-muted)]">Paid {formatDateTime(order.payments[0].date)}</p>}
             </div>
 
-            {/* Timeline */}
-            <div className={`${cardClass} lg:col-span-2`}>
-              <h2 className="text-[15px] font-bold text-[var(--color-ink)]">Timeline</h2>
-              <div className="mt-2 flex gap-2">
-                <input
-                  className={inputClass}
-                  placeholder="Add a note for the team…"
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addNote();
+            {/* ---- right column ---- */}
+            <div className="space-y-4">
+              {/* Order */}
+              <div className={cardClass}>
+                <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Order</h2>
+                <div className="mt-2">
+                  <Row
+                    label="Order"
+                    value={
+                      <span className="flex items-center">
+                        <span className="font-mono">{order.legacyOrderId || order.orderId}</span>
+                        <CopyIcon text={order.legacyOrderId || order.orderId} title="Copy order number" />
+                      </span>
                     }
-                  }}
-                />
-                <button type="button" onClick={addNote} disabled={addingNote || !noteText.trim()} className="btn btn-secondary btn-sm flex-shrink-0">
-                  Add
+                  />
+                  {order.salesRecordReference && <Row label="Sales record no." value={order.salesRecordReference} />}
+                  <Row label="Sold" value={formatDayMonthYear(order.createdAt)} />
+                  <Row label="Buyer paid" value={paidAt ? formatDayMonthYear(paidAt) : pay?.text || "—"} />
+                  <Row
+                    label="Buyer"
+                    value={
+                      <span className="block">
+                        {a?.name && <span className="block">{a.name}</span>}
+                        {order.buyer.username && (
+                          <span className="block">
+                            {buyerUrl ? (
+                              <a href={buyerUrl} target="_blank" rel="noreferrer" className="underline hover:text-[var(--color-primary)]">
+                                {order.buyer.username}
+                              </a>
+                            ) : (
+                              order.buyer.username
+                            )}
+                            {order.buyer.feedbackScore != null && <span className="ml-1">({order.buyer.feedbackScore})</span>}
+                          </span>
+                        )}
+                        {order.buyer.repeatBuyer && <span className="block text-[var(--color-muted)]">Repeat buyer</span>}
+                      </span>
+                    }
+                  />
+                </div>
+                <button type="button" onClick={() => setContactOpen((v) => !v)} className="mt-2 flex items-center gap-1 text-[13px] text-[var(--color-ink)] underline print:hidden">
+                  {contactOpen ? "Hide contact info" : "Show contact info"} <Chevron open={contactOpen} />
                 </button>
+                {contactOpen && (
+                  <div className="mt-2 text-[13px] text-[var(--color-ink)]">
+                    {a?.phone ? (
+                      <p>
+                        Phone:{" "}
+                        <a href={`tel:${a.phone.replace(/\s+/g, "")}`} className="underline">
+                          {a.phone}
+                        </a>
+                      </p>
+                    ) : (
+                      <p className="text-[var(--color-muted)]">No phone on this order.</p>
+                    )}
+                    {a?.email && <p className="break-all">Email: {a.email}</p>}
+                  </div>
+                )}
+                {messageUrl && (
+                  <a href={messageUrl} target="_blank" rel="noreferrer" className="btn btn-secondary mt-4 w-full print:hidden">
+                    Message buyer
+                  </a>
+                )}
               </div>
-              <ol className="mt-3 divide-y divide-[var(--color-line)]">
-                {data.events.map((e) => (
-                  <li key={e.id} className="flex items-start justify-between gap-3 py-2 text-[12.5px]">
-                    <div className="min-w-0">
-                      <p className={`${e.kind === "note" ? "whitespace-pre-wrap text-[var(--color-ink)]" : "text-[var(--color-ink)]"}`}>{eventText(e)}</p>
-                      {e.actor?.name && <p className="text-[11px] text-[var(--color-muted)]">{e.actor.name}</p>}
+
+              {/* Payment */}
+              <div className={cardClass}>
+                <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Payment</h2>
+                {order.paymentStatus === "PAID" && earnings && earnings.fundsStatusCode !== "PAYOUT" && earnings.fundsStatusCode !== "COMPLETED" && (
+                  <div className="mt-3 flex gap-2.5 rounded-xl bg-[var(--color-paper)] p-3 text-[12.5px] text-[var(--color-ink)]">
+                    <svg viewBox="0 0 20 20" className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--color-primary)]" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm.75-11.5a.75.75 0 0 0-1.5 0v.5a.75.75 0 0 0 1.5 0v-.5zM10 9a.75.75 0 0 1 .75.75v4a.75.75 0 0 1-1.5 0v-4A.75.75 0 0 1 10 9z" clipRule="evenodd" />
+                    </svg>
+                    <p>
+                      {earnings.fundsStatusCode === "FUNDS_ON_HOLD"
+                        ? "eBay is holding the funds for this order. Once released, they will be available in your eBay balance."
+                        : earnings.fundsStatusCode === "FUNDS_AVAILABLE_FOR_PAYOUT"
+                          ? "Your buyer has paid for this order and the funds are available in your eBay balance."
+                          : "Your buyer has paid for this order and eBay is processing the payment. Once complete, funds will be available in your eBay balance."}
+                    </p>
+                  </div>
+                )}
+                {order.paymentStatus === "PENDING" && (
+                  <div className="mt-3 rounded-xl bg-amber-50 p-3 text-[12.5px] text-amber-900">The buyer hasn&apos;t paid for this order yet.</div>
+                )}
+                {order.paymentStatus === "PAID" && !earnings && (
+                  <div className="mt-3 rounded-xl bg-[var(--color-paper)] p-3 text-[12.5px] text-[var(--color-ink)]">Your buyer has paid for this order. eBay hasn&apos;t recorded the sale in your finances yet, so the fee breakdown below is eBay&apos;s order total.</div>
+                )}
+
+                <div className="mt-3 flex items-start justify-between text-[13px]">
+                  <span className="text-[var(--color-muted)]">Funds status</span>
+                  <span className="text-right">
+                    <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--color-ink)]">
+                      <span className={`inline-block h-2.5 w-2.5 rounded-full ${earnings?.fundsStatusCode === "PAYOUT" || earnings?.fundsStatusCode === "COMPLETED" || earnings?.fundsStatusCode === "FUNDS_AVAILABLE_FOR_PAYOUT" ? "bg-emerald-500" : earnings?.fundsStatusCode === "FUNDS_ON_HOLD" ? "bg-amber-500" : "bg-[var(--color-line)]"}`} />
+                      {earnings ? earnings.fundsStatus : order.paymentStatus === "PAID" ? "Pending" : pay?.text || "—"}
+                    </span>
+                    {earnings?.payoutId && <span className="block text-[11.5px] text-[var(--color-muted)]">Payout {earnings.payoutId}</span>}
+                  </span>
+                </div>
+
+                <div className="mt-4 rounded-xl bg-[var(--color-paper)] p-4">
+                  <p className="text-[14px] font-bold text-[var(--color-ink)]">What your buyer paid</p>
+                  <div className="mt-2">
+                    <MoneyRow label="Subtotal" value={money(order.pricing.subtotal, currency)} indent />
+                    <MoneyRow label="Postage" value={money(order.pricing.delivery || { value: 0, currency }, currency)} indent />
+                    {order.pricing.discount && order.pricing.discount.value !== 0 && <MoneyRow label="Discount" value={money(order.pricing.discount, currency)} indent negative />}
+                    {order.pricing.deliveryDiscount && order.pricing.deliveryDiscount.value !== 0 && <MoneyRow label="Postage discount" value={money(order.pricing.deliveryDiscount, currency)} indent negative />}
+                    {order.pricing.tax && order.pricing.tax.value !== 0 && <MoneyRow label="Tax" value={money(order.pricing.tax, currency)} indent />}
+                    {order.pricing.adjustment && order.pricing.adjustment.value !== 0 && <MoneyRow label="Adjustment" value={money(order.pricing.adjustment, currency)} indent />}
+                    <div className="mt-1 border-t border-[var(--color-line)] pt-1">
+                      <MoneyRow label="Order total" value={money(order.pricing.total, currency)} bold />
                     </div>
-                    <span className="flex-shrink-0 text-[11.5px] text-[var(--color-muted)]">{formatDateTime(e.at)}</span>
-                  </li>
-                ))}
-                {data.events.length === 0 && <li className="py-2 text-sm text-[var(--color-muted)]">Nothing yet.</li>}
-              </ol>
+                  </div>
+                </div>
+
+                <div className="mt-3 rounded-xl bg-[var(--color-paper)] p-4">
+                  <button type="button" onClick={() => setEarnedOpen((v) => !v)} className="flex w-full items-center justify-between text-left">
+                    <span className="text-[14px] font-bold text-[var(--color-ink)]">What you earned</span>
+                    <Chevron open={earnedOpen} />
+                  </button>
+                  {earnedOpen && (
+                    <div className="mt-2">
+                      <MoneyRow label="Order total" value={money(earnings?.gross || order.pricing.total, currency)} bold />
+                      <p className="mt-1 text-[13px] font-semibold text-[var(--color-ink)]">Selling costs</p>
+                      {earnings ? (
+                        earnings.fees.map((f) => <MoneyRow key={f.label} label={f.label} value={money(f.amount, currency)} indent negative />)
+                      ) : order.totalMarketplaceFee ? (
+                        <MoneyRow label="eBay fees" value={money(order.totalMarketplaceFee, currency)} indent negative />
+                      ) : (
+                        <p className="pl-4 text-[12.5px] text-[var(--color-muted)]">Not recorded by eBay yet.</p>
+                      )}
+                      <div className="mt-1 border-t border-[var(--color-line)] pt-1">
+                        <MoneyRow label="Order earnings" value={netToSeller ? money(netToSeller, currency) : "—"} bold />
+                      </div>
+                      {order.refunds.length > 0 && (
+                        <div className="mt-1 border-t border-[var(--color-line)] pt-1">
+                          {order.refunds.map((r, i) => (
+                            <MoneyRow key={r.referenceId || i} label={`Refund${r.date ? ` ${formatDayMonth(r.date)}` : ""}`} value={money(r.amount, currency)} indent negative />
+                          ))}
+                        </div>
+                      )}
+                      {totalCost !== null && (
+                        <div className="mt-2 border-t border-dashed border-[var(--color-line)] pt-2">
+                          <p className="text-[13px] font-semibold text-[var(--color-ink)]">Sourcing</p>
+                          <MoneyRow label="Supplier cost" value={formatPrice(totalCost, currency)} indent negative />
+                          {netVsCost !== null && (
+                            <div className={`flex items-center justify-between py-1 text-[13px] font-bold ${netVsCost >= 0 ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
+                              <span>Profit</span>
+                              <span>{formatPrice(netVsCost, currency)}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {ebayOrderUrl && (
+                        <a href={ebayOrderUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-[13px] text-[var(--color-ink)] underline print:hidden">
+                          View more details
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {paidAt && <p className="mt-3 text-[11.5px] text-[var(--color-muted)]">Paid {formatDateTime(paidAt)}{order.payments[0]?.method ? ` · ${order.payments[0].method.replace(/_/g, " ").toLowerCase()}` : ""}</p>}
+              </div>
             </div>
           </div>
         </div>

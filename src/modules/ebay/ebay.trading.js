@@ -549,9 +549,24 @@ async function getUserProfile(accessToken) {
   };
 }
 
+// Another member's public feedback, as Seller Hub shows beside a buyer's
+// name ("gramoug0 (64)"). GetUser on a user other than the caller returns
+// only public fields; the score is what's wanted.
+async function getMemberFeedback(accessToken, userId, siteId = 0) {
+  const res = await tradingRequest(accessToken, 'GetUser', `<UserID>${xmlEscape(String(userId))}</UserID>`, siteId);
+  const user = res.User || {};
+  return {
+    username: user.UserID || userId,
+    feedbackScore: user.FeedbackScore != null ? Number(user.FeedbackScore) : null,
+    feedbackPercent: user.PositiveFeedbackPercent != null ? String(user.PositiveFeedbackPercent) : null,
+    registeredAt: user.RegistrationDate || null,
+  };
+}
+
 module.exports = {
   EbayTradingError,
   getUserProfile,
+  getMemberFeedback,
   getStoreCategories,
   addStoreCategory,
   isNoStoreError,

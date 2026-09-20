@@ -322,3 +322,18 @@ select:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* "Print invoice" on an order: the page body alone, no navigation, on white. */
+@media print {
+  aside,
+  nav {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .h-screen {
+    height: auto !important;
+    overflow: visible !important;
+  }
+}

@@ -2,6 +2,7 @@ const ebayClient = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 const ebayTrading = require('./ebay.trading');
 const ebayFulfillment = require('./ebay.fulfillment');
+const ebayFinances = require('./ebay.finances');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
@@ -1279,12 +1280,56 @@ async function getOrderDetail(credentials, { connectionId, orderId }) {
     source = 'trading';
   }
   const itemIds = [...new Set(order.lineItems.map((li) => li.itemId).filter(Boolean))];
-  const summaries = await getItemSummariesCached(accessToken, itemIds, siteId);
+  // The rest of what Seller Hub's order page shows, each best-effort: the
+  // fees eBay took and where the funds are (Finances API), the buyer's
+  // feedback score and whether they've bought before (the order list the
+  // account already holds). None of it should keep the order from showing.
+  const [summaries, earnings, buyerInfo] = await Promise.all([
+    getItemSummariesCached(accessToken, itemIds, siteId),
+    ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES)
+      ? ebayFinances
+          .getOrderTransactions(accessToken, orderId, marketplaceId)
+          .then(ebayFinances.mapOrderEarnings)
+          .catch((err) => {
+            logger.warn('Could not load the order earnings from eBay', { orderId, error: err.message });
+            return null;
+          })
+      : Promise.resolve(null),
+    buyerDetails(connectionId, accessToken, siteId, order.buyer?.username),
+  ]);
   order.lineItems = order.lineItems.map((li) => {
     const summary = li.itemId ? summaries.get(li.itemId) : null;
     return { ...li, imageUrl: summary?.imageUrl || null, viewItemUrl: summary?.viewItemUrl || null };
   });
+  order.buyer = { ...order.buyer, ...buyerInfo };
+  order.earnings = earnings;
   return { order, source, actionsEnabled: source === 'fulfillment', credentialsChanged, credentials: refreshedCredentials };
+}
+
+// A buyer's public feedback score is one rationed Trading call, so it is
+// kept for a day per buyer; "repeat buyer" counts their orders in the
+// account's last-90-day list, which is already held.
+const buyerFeedbackCache = new Map(); // username -> { fetchedAt, feedback }
+const BUYER_FEEDBACK_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function buyerDetails(connectionId, accessToken, siteId, username) {
+  if (!username) return {};
+  const [feedback, orders] = await Promise.all([
+    (async () => {
+      const hit = buyerFeedbackCache.get(username);
+      if (hit && Date.now() - hit.fetchedAt < BUYER_FEEDBACK_TTL_MS) return hit.feedback;
+      const feedback = await ebayTrading.getMemberFeedback(accessToken, username, siteId).catch(() => null);
+      if (feedback) buyerFeedbackCache.set(username, { fetchedAt: Date.now(), feedback });
+      return feedback;
+    })(),
+    getOrdersLast90Cached(connectionId, accessToken, siteId, false).catch(() => []),
+  ]);
+  const previousOrders = (orders || []).filter((o) => o.buyerUserId === username).length;
+  return {
+    feedbackScore: feedback?.feedbackScore ?? null,
+    feedbackPercent: feedback?.feedbackPercent ?? null,
+    repeatBuyer: previousOrders > 1,
+  };
 }
 
 // A Trading-shaped order (the list's mirror) in the detail shape, minus
