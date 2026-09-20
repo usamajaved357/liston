@@ -715,6 +715,13 @@ test('buildInventoryItem lifts product identifiers out of the specifics onto pro
   assert.strictEqual(item.product.mpn, 'X-1');
   assert.deepStrictEqual(Object.keys(item.product.aspects).sort(), ['Brand', 'Colour', 'MPN']);
 
+  // Brand without an MPN stays an item specific only: eBay refuses the
+  // product pair half-filled ("<BrandMPN> is invalid or missing").
+  const brandOnly = buildInventoryItem({ title: 'T', description: 'd', imageUrls: [], aspects: { Brand: ['Unbranded'], Colour: ['Black'] }, condition: 'NEW', quantity: 1 });
+  assert.strictEqual(brandOnly.product.brand, undefined);
+  assert.strictEqual(brandOnly.product.mpn, undefined);
+  assert.deepStrictEqual(brandOnly.product.aspects.Brand, ['Unbranded']);
+
   // Explicit identifiers win, e.g. the "Does not apply" a retry adds.
   const none = buildInventoryItem({ title: 'T', description: 'd', imageUrls: [], aspects: {}, condition: 'NEW', quantity: 1, identifiers: { ean: 'Does not apply' } });
   assert.deepStrictEqual(none.product.ean, ['Does not apply']);

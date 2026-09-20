@@ -164,6 +164,15 @@ function splitProductIdentifiers(aspects, identifiers = {}) {
     if (!list.length) continue;
     product[field] = LIST_IDENTIFIERS.has(field) ? list : list[0];
   }
+  // eBay reads product.brand and product.mpn as a pair ("BrandMPN"): one
+  // without the other is refused in categories that check identifiers
+  // ("Input data for tag <BrandMPN> is invalid or missing", seen live with
+  // Brand "Unbranded" and no MPN). Alone, each stays an item specific only,
+  // which eBay accepts as it always has.
+  if (!product.brand || !product.mpn) {
+    delete product.brand;
+    delete product.mpn;
+  }
   return { product, aspects: rest };
 }
 
