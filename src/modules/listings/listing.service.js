@@ -1203,16 +1203,74 @@ async function publishLiveEdit(listing, userId) {
     payload.quantity = draft.quantity;
   }
 
-  const revised = await connectionService.withDecryptedCredentials(listing.connection_id, userId, (credentials) =>
-    ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload)
-  );
+  // A listing Liston published itself lives in eBay's Inventory system, which
+  // the Trading revise refuses to touch; it is revised through the Inventory
+  // API instead. Liston's own record says which; failing that, eBay's answer
+  // to the Trading revise does.
+  const own = await listingRepository.findPublishedByItemId(listing.connection_id, listing.edit_of_item_id);
+  const inventoryRef = inventoryRefFor(own, readied.draft, listing);
+  const storeCategoryNames = draft.storeCategoryNames || own?.generated_data?.storeCategoryNames;
+  const reviseViaInventory = (credentials, ref) =>
+    ebayService.reviseInventoryListing(credentials, {
+      ...ref,
+      draft: { ...readied.draft, sku: ref.sku || readied.draft.sku },
+      listingDescription: html,
+      marketplaceId: draft.marketplaceId,
+      storeCategoryNames,
+    });
+  const revised = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
+    if (inventoryRef) return reviseViaInventory(credentials, inventoryRef);
+    try {
+      return await ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload);
+    } catch (err) {
+      const guessed = ebayService.isInventoryManagedError(err) ? guessInventoryRef(readied.draft, listing) : null;
+      if (!guessed) {
+        if (ebayService.isInventoryManagedError(err)) {
+          throw new ListingError(
+            "This listing was created through eBay's Inventory API by another tool, and eBay only lets that tool revise it. Edit it there, or end it and relist it from Liston.",
+            400
+          );
+        }
+        throw err;
+      }
+      return reviseViaInventory(credentials, guessed);
+    }
+  });
   resyncListings(listing.connection_id, userId);
+  // Liston's record of the published listing follows the edit, so the next
+  // edit starts from what is live and the draft never contradicts eBay.
+  if (own) {
+    const { liveItemId, ...edited } = draft;
+    await listingRepository.updateGeneratedData(own.id, { ...(own.generated_data || {}), ...edited }).catch(() => {});
+  }
   // The edit is now live; the working copy has done its job.
   await listingRepository.deleteById(listing.id);
   // eBay applies what it can and warns about the rest (a description it
   // refused to replace, for one). The seller must hear that, or they trust
   // a preview that never went live.
   return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, warnings: revised.warnings || [] };
+}
+
+// Where on eBay's Inventory system a Liston-published listing lives, from
+// Liston's own record of publishing it: the group key for a variation
+// listing, the offer id (and SKU) for a single one. Null when Liston has no
+// such record — the listing was made some other way.
+function inventoryRefFor(own, draft, listing) {
+  if (!own) return null;
+  if (own.platform_group_key) return { groupKey: own.platform_group_key };
+  if (own.platform_offer_id) return { offerId: own.platform_offer_id, sku: own.sku || own.generated_data?.sku || draft.sku || listing.sku };
+  return null;
+}
+
+// Without a record, Liston's own SKU scheme still gives it away: variation
+// SKUs are "<group key>-<n>", a single one is the offer's SKU.
+function guessInventoryRef(draft, listing) {
+  if (Array.isArray(draft.variants) && draft.variants.length) {
+    const first = draft.variants.find((v) => typeof v.sku === 'string' && /-\d+$/.test(v.sku));
+    return first ? { groupKey: first.sku.replace(/-\d+$/, '') } : null;
+  }
+  const sku = draft.sku || listing.sku;
+  return sku ? { sku } : null;
 }
 
 // Ends a live listing on eBay now. A working copy opened for editing it is

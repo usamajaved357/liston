@@ -575,6 +575,78 @@ test('startLiveEdit resumes an unfinished edit instead of creating a second copy
   assert.strictEqual(create.mock.calls.length, 0);
 });
 
+function liveEditRow(extra = {}) {
+  return {
+    id: 'edit-1',
+    connection_id: CONNECTION_ID,
+    status: 'pending_review',
+    edit_of_item_id: '407000000001',
+    external_product_id: '407000000001',
+    generated_data: {
+      title: 'New title',
+      description: 'New copy',
+      imageUrls: ['https://i.ebayimg.com/1.jpg'],
+      aspects: { Brand: ['Unbranded'] },
+      condition: 'NEW',
+      quantity: 5,
+      price: { value: '12.50', currency: 'GBP' },
+      categoryId: '123',
+      ...extra,
+    },
+  };
+}
+
+test('publish on a live edit of a Liston-published listing revises it through the Inventory API', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => liveEditRow());
+  // Liston's own record of publishing it: an Inventory offer.
+  mock.method(listingRepository, 'findPublishedByItemId', async () => ({ id: 'own-1', platform_offer_id: 'offer-7', sku: 'Liston-1-AB12', generated_data: { title: 'Old', storeCategoryNames: ['/Tech'] } }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  const trading = mock.method(ebayService, 'reviseLiveListing', async () => {
+    throw new Error('should not be used');
+  });
+  const inventory = mock.method(ebayService, 'reviseInventoryListing', async (credentials, input) => {
+    assert.strictEqual(input.offerId, 'offer-7');
+    assert.strictEqual(input.draft.sku, 'Liston-1-AB12');
+    assert.strictEqual(input.draft.title, 'New title');
+    assert.match(input.listingDescription, /New copy/);
+    assert.deepStrictEqual(input.storeCategoryNames, ['/Tech']);
+    return { listingId: '407000000001', warnings: [] };
+  });
+  const updateData = mock.method(listingRepository, 'updateGeneratedData', async () => ({}));
+  const del = mock.method(listingRepository, 'deleteById', async () => {});
+
+  const result = await listingService.publish('edit-1', USER_ID);
+
+  assert.strictEqual(trading.mock.calls.length, 0);
+  assert.strictEqual(inventory.mock.calls.length, 1);
+  // The published record follows the edit.
+  assert.strictEqual(updateData.mock.calls[0].arguments[0], 'own-1');
+  assert.strictEqual(updateData.mock.calls[0].arguments[1].title, 'New title');
+  assert.strictEqual(del.mock.calls[0].arguments[0], 'edit-1');
+  assert.strictEqual(result.deleted, true);
+});
+
+test('publish on a live edit falls back to the Inventory API when eBay says the listing is inventory-managed', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => liveEditRow({ sku: 'Liston-9-ZZ99' }));
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  mock.method(ebayService, 'reviseLiveListing', async () => {
+    throw new Error('Inventory-based listing management is not currently supported by this tool. Please refer to the tool used to create this listing.');
+  });
+  const inventory = mock.method(ebayService, 'reviseInventoryListing', async (credentials, input) => {
+    assert.strictEqual(input.sku, 'Liston-9-ZZ99');
+    return { listingId: '407000000001', warnings: [] };
+  });
+  mock.method(listingRepository, 'deleteById', async () => {});
+
+  await listingService.publish('edit-1', USER_ID);
+  assert.strictEqual(inventory.mock.calls.length, 1);
+});
+
 test('publish on a live edit revises the item in place and removes the working copy', async () => {
   mock.method(listingRepository, 'findByIdForUser', async () => ({
     id: 'edit-1',
@@ -593,6 +665,7 @@ test('publish on a live edit revises the item in place and removes the working c
       categoryId: '123',
     },
   }));
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
   mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
   mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));

@@ -721,3 +721,40 @@ test('buildInventoryItem lifts product identifiers out of the specifics onto pro
   assert.strictEqual(notApplicableText('EBAY_DE'), 'Nicht zutreffend');
   assert.strictEqual(notApplicableText('EBAY_GB'), 'Does not apply');
 });
+
+test('reviseInventoryListing replaces the item and offer, then republishes the offer', async () => {
+  const ebayClient = require('../../src/modules/ebay/ebay.client');
+  const ebayService = require('../../src/modules/ebay/ebay.service');
+  const calls = [];
+  const existing = { offerId: 'offer-7', sku: 'S-1', status: 'PUBLISHED', marketplaceId: 'EBAY_GB', format: 'FIXED_PRICE', availableQuantity: 1, categoryId: '1', listingPolicies: { fulfillmentPolicyId: 'f' }, pricingSummary: { price: { value: '9.95', currency: 'GBP' } }, merchantLocationKey: 'm', listing: { listingId: '407' } };
+  const m = [
+    mock.method(ebayClient, 'getOffer', async () => existing),
+    mock.method(ebayClient, 'createOrReplaceInventoryItem', async (t, sku, item) => calls.push(['item', sku, item])),
+    mock.method(ebayClient, 'updateOffer', async (t, offerId, offer) => calls.push(['offer', offerId, offer])),
+    mock.method(ebayClient, 'publishOffer', async (t, offerId) => {
+      calls.push(['publish', offerId]);
+      return { listingId: '407' };
+    }),
+  ];
+  try {
+    const result = await ebayService.reviseInventoryListing(freshCredentials(), {
+      offerId: 'offer-7',
+      draft: { sku: 'S-1', title: 'T', description: 'd', imageUrls: ['https://i/1.jpg'], aspects: { Brand: ['B'] }, condition: 'NEW', quantity: 3, price: { value: '12.50', currency: 'GBP' }, categoryId: '55' },
+      listingDescription: '<p>html</p>',
+      marketplaceId: 'EBAY_GB',
+    });
+    assert.strictEqual(result.listingId, '407');
+    assert.deepStrictEqual(calls.map((c) => c[0]), ['item', 'offer', 'publish']);
+    const offer = calls[1][2];
+    assert.strictEqual(offer.offerId, undefined);
+    assert.strictEqual(offer.status, undefined);
+    assert.strictEqual(offer.listing, undefined);
+    assert.strictEqual(offer.availableQuantity, 3);
+    assert.strictEqual(offer.categoryId, '55');
+    assert.strictEqual(offer.listingDescription, '<p>html</p>');
+    assert.deepStrictEqual(offer.pricingSummary.price, { value: '12.50', currency: 'GBP' });
+    assert.strictEqual(offer.listingPolicies.fulfillmentPolicyId, 'f');
+  } finally {
+    m.forEach((x) => x.mock.restore());
+  }
+});

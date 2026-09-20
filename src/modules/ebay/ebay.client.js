@@ -172,6 +172,10 @@ function getOffersBySku(accessToken, sku, marketplaceId) {
   return request(accessToken, 'GET', `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${marketplaceId}`, undefined, marketplaceId);
 }
 
+function getOffer(accessToken, offerId) {
+  return request(accessToken, 'GET', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`);
+}
+
 function updateOffer(accessToken, offerId, offer) {
   return request(accessToken, 'PUT', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, offer, offer.marketplaceId);
 }
@@ -249,6 +253,7 @@ module.exports = {
   getInventoryItemGroup,
   createOffer,
   getOffersBySku,
+  getOffer,
   updateOffer,
   publishOffer,
   publishOfferByInventoryItemGroup,

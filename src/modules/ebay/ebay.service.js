@@ -701,6 +701,120 @@ async function reviseLiveListing(credentials, itemId, payload) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// A listing Liston published through the Inventory API can't be revised
+// through the Trading API — eBay answers "Inventory-based listing
+// management is not currently supported by this tool". Such a listing is
+// revised the way it was made: the inventory item(s), the offer(s) and (for
+// variations) the group are replaced, then the offer/group is published
+// again, which pushes the changes to the live item.
+function isInventoryManagedError(err) {
+  return /Inventory-based listing management/i.test(err?.message || '');
+}
+
+const OFFER_READ_ONLY = new Set(['offerId', 'status', 'listing', 'listingStartDate']);
+function editableOffer(existing) {
+  const copy = {};
+  for (const [key, value] of Object.entries(existing || {})) {
+    if (!OFFER_READ_ONLY.has(key)) copy[key] = value;
+  }
+  return copy;
+}
+
+async function publishedOfferFor(accessToken, sku, marketplaceId) {
+  const res = await ebayClient.getOffersBySku(accessToken, sku, marketplaceId).catch(() => ({ offers: [] }));
+  const offers = res.offers || [];
+  return offers.find((o) => o.status === 'PUBLISHED') || offers[0] || null;
+}
+
+async function reviseInventoryListing(credentials, { groupKey, offerId, draft, listingDescription, marketplaceId, storeCategoryNames }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const mp = marketplaceId || draft.marketplaceId || 'EBAY_GB';
+  const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const warnings = [];
+
+  const offerBody = (existing, { price, quantity }) => ({
+    ...editableOffer(existing),
+    availableQuantity: quantity,
+    ...(draft.categoryId ? { categoryId: String(draft.categoryId) } : {}),
+    ...(draft.secondaryCategoryId ? { secondaryCategoryId: String(draft.secondaryCategoryId) } : {}),
+    ...(storeCategoryNames ? { storeCategoryNames } : {}),
+    ...(draft.listingPolicies ? { listingPolicies: { ...(existing.listingPolicies || {}), ...draft.listingPolicies } } : {}),
+    listingDescription,
+    pricingSummary: { ...(existing.pricingSummary || {}), price },
+  });
+
+  if (!isVariation) {
+    const sku = draft.sku;
+    const existing = (offerId && (await ebayClient.getOffer(accessToken, offerId).catch(() => null))) || (await publishedOfferFor(accessToken, sku, mp));
+    if (!existing) throw new EbayError(`Couldn't find the eBay offer behind SKU ${sku} to revise.`, 502);
+    await ebayClient.createOrReplaceInventoryItem(
+      accessToken,
+      existing.sku,
+      buildInventoryItem({ title: draft.title, description: draft.description, imageUrls: draft.imageUrls, aspects: draft.aspects, condition: draft.condition, quantity: draft.quantity, identifiers: draft.identifiers }),
+      mp
+    );
+    await ebayClient.updateOffer(accessToken, existing.offerId, offerBody(existing, { price: draft.price, quantity: draft.quantity }));
+    const published = await ebayClient.publishOffer(accessToken, existing.offerId, mp);
+    return { listingId: published.listingId, warnings, credentialsChanged, credentials: refreshedCredentials };
+  }
+
+  const group = await ebayClient.getInventoryItemGroup(accessToken, groupKey);
+  const existingSkus = group.variantSKUs || [];
+  // Variations added in the editor have no SKU yet; they're numbered on
+  // from the group like a fresh publish would.
+  let next = existingSkus.length;
+  const variants = draft.variants.map((v) => ({ ...v, sku: v.sku || `${groupKey}-${(next += 1)}` }));
+  const template = (await Promise.all(existingSkus.slice(0, 1).map((sku) => publishedOfferFor(accessToken, sku, mp))))[0];
+
+  for (const variant of variants) {
+    await ebayClient.createOrReplaceInventoryItem(
+      accessToken,
+      variant.sku,
+      buildInventoryItem({
+        title: draft.commonTitle,
+        description: draft.commonDescription,
+        imageUrls: variant.imageUrls || draft.imageUrls,
+        aspects: { ...(draft.variesBy?.aspects || {}), ...variant.aspects },
+        condition: variant.condition,
+        quantity: variant.quantity,
+        identifiers: draft.identifiers,
+      }),
+      mp
+    );
+    const existing = await publishedOfferFor(accessToken, variant.sku, mp);
+    if (existing) {
+      await ebayClient.updateOffer(accessToken, existing.offerId, offerBody(existing, { price: variant.price, quantity: variant.quantity }));
+    } else if (template) {
+      await createOfferWithRetry(accessToken, { ...offerBody(template, { price: variant.price, quantity: variant.quantity }), sku: variant.sku, marketplaceId: mp });
+    } else {
+      throw new EbayError(`Couldn't find an existing offer in group ${groupKey} to base the new variation on.`, 502);
+    }
+  }
+
+  // Variations removed in the editor come off the live listing.
+  const keep = new Set(variants.map((v) => v.sku));
+  for (const sku of existingSkus.filter((s) => !keep.has(s))) {
+    const gone = await publishedOfferFor(accessToken, sku, mp);
+    if (gone?.offerId) await ebayClient.withdrawOffer(accessToken, gone.offerId).catch((err) => warnings.push(`Couldn't remove variation ${sku}: ${err.message}`));
+  }
+
+  await ebayClient.createOrReplaceInventoryItemGroup(
+    accessToken,
+    groupKey,
+    {
+      title: draft.commonTitle,
+      description: listingDescription || draft.commonDescription,
+      imageUrls: draft.imageUrls,
+      aspects: draft.variesBy?.aspects || {},
+      variantSKUs: variants.map((v) => v.sku),
+      variesBy: { aspectsImageVariesBy: draft.variesBy?.aspectsImageVariesBy, specifications: draft.variesBy?.specifications },
+    },
+    mp
+  );
+  const published = await ebayClient.publishOfferByInventoryItemGroup(accessToken, groupKey, mp);
+  return { listingId: published.listingId, warnings, credentialsChanged, credentials: refreshedCredentials };
+}
+
 function conditionIdFor(condition) {
   return ebayTrading.CONDITION_IDS[condition] || undefined;
 }
@@ -1396,6 +1510,8 @@ module.exports = {
   deleteInventoryObjects,
   findLiveListingForSku,
   reviseLiveListing,
+  reviseInventoryListing,
+  isInventoryManagedError,
   conditionIdFor,
   listListingsDetailed,
   invalidateListings,
