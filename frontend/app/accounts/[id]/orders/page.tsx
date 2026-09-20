@@ -1,10 +1,11 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Order, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
-import { formatMoney, formatShortDate } from "@/lib/format";
+import { formatMoney, formatShortDate, internationalPhone } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { ListFooter } from "@/components/ListFooter";
@@ -83,19 +84,6 @@ function OrderTableHeader() {
 // International dialling codes for the markets Liston sells on. A buyer's
 // phone comes from eBay as a local number; the account's marketplace says
 // which country that is.
-const DIAL_CODES: Record<string, string> = { GB: "+44", US: "+1", CA: "+1", AU: "+61", DE: "+49", FR: "+33", IT: "+39", ES: "+34", IE: "+353" };
-
-// "07417 352555" on a UK account → "+44 7417352555"; a number that already
-// carries a country code is left alone.
-function internationalPhone(raw: string, country: string | undefined): string {
-  const digits = raw.replace(/[^\d+]/g, "");
-  if (!digits) return raw;
-  if (digits.startsWith("+")) return digits;
-  if (digits.startsWith("00")) return `+${digits.slice(2)}`;
-  const code = country ? DIAL_CODES[country] : undefined;
-  if (!code) return raw;
-  return `${code} ${digits.replace(/^0/, "")}`;
-}
 
 // Who it goes to: name, then the address as eBay gives it, then the phone
 // — each on its own line, so it can be read straight onto a label. The name
@@ -139,8 +127,29 @@ function CustomerCell({ order, country, countryName }: { order: Order; country: 
 // on a quiet first line, then each item as a thumbnail beside a two-line
 // title and its details; the money and dates sit in their columns at the
 // top of the row, where the eye lands.
-function OrderCard({ order, country, countryName }: { order: Order; country: string | undefined; countryName: string | undefined }) {
+const SOURCING_LABELS: Record<string, { text: string; className: string }> = {
+  to_order: { text: "To order", className: "bg-amber-50 text-amber-800 border-amber-200" },
+  ordered: { text: "Ordered", className: "bg-[var(--color-paper)] text-[var(--color-muted)] border-[var(--color-line)]" },
+  shipped: { text: "Shipped", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  delivered: { text: "Delivered", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  problem: { text: "Problem", className: "bg-red-50 text-[var(--color-danger)] border-red-200" },
+};
+
+// The supplier-order state of the whole order, from its lines: the least
+// advanced line wins, so "Shipped" means every item has shipped.
+function sourcingSummary(order: Order) {
+  const rows = order.sourcing || [];
+  if (!rows.length) return null;
+  const rank = ["problem", "to_order", "ordered", "shipped", "delivered"];
+  const lowest = rows.map((r) => r.status).sort((a, b) => rank.indexOf(a) - rank.indexOf(b))[0];
+  const partial = rows.length < order.lineItems.length;
+  return { ...SOURCING_LABELS[lowest], partial };
+}
+
+function OrderCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
+  const router = useRouter();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
+  const sourcing = sourcingSummary(order);
   const shippingCost =
     order.total && order.subtotal ? Math.round((order.total.amount - order.subtotal.amount) * 100) / 100 : null;
   const quantity = order.lineItems.reduce((n, li) => n + (li.quantityPurchased || 0), 0);
@@ -150,17 +159,28 @@ function OrderCard({ order, country, countryName }: { order: Order; country: str
     <div
       className="grid cursor-pointer items-start gap-3 border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 hover:bg-[var(--color-paper)]/40"
       style={{ gridTemplateColumns: ROW_COLUMNS }}
-      title="Order details (coming soon)"
+      title="Open order"
+      onClick={(e) => {
+        // The row opens the order; links and buttons inside keep their own job.
+        if ((e.target as HTMLElement).closest("a, button")) return;
+        router.push(href);
+      }}
     >
-      <p className={`pt-0.5 text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order)}</p>
+      <div className="pt-0.5">
+        <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order)}</p>
+        {sourcing && (
+          <span className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourcing.className}`} title="Supplier order">
+            {sourcing.text}
+            {sourcing.partial ? " (some)" : ""}
+          </span>
+        )}
+      </div>
 
       <div className="min-w-0">
-        {/* A link-in-waiting: the order id (and the row itself) will open the
-            order's own page once there is one. */}
         <p className="mb-2 pt-0.5 text-[12.5px] leading-snug">
-          <button type="button" title="Order details (coming soon)" className="block font-mono text-[12.5px] leading-snug tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
+          <Link href={href} className="block font-mono text-[12.5px] leading-snug tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
             {order.orderId}
-          </button>
+          </Link>
         </p>
         <div className="space-y-2.5">
           {order.lineItems.map((li, i) => (
@@ -266,23 +286,27 @@ function AccountOrdersContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Orders the team put away (Seller Hub's "Archive"): shown on their own.
+  const [archived, setArchived] = useState(false);
+  const [archivedCount, setArchivedCount] = useState(0);
 
   useEffect(() => {
     if (!connection) return;
     setLoading(true);
     setError(null);
     api
-      .getConnectionOrders(connection.id, { range, status, search, page, perPage })
+      .getConnectionOrders(connection.id, { range, status, search, page, perPage, archived })
       .then((data) => {
         setOrders(data.orders);
         setCounts(data.counts);
         setTotalPages(data.totalPages);
         setTotalEntries(data.totalEntries);
         setSyncedAt(data.syncedAt);
+        setArchivedCount(data.archivedCount || 0);
       })
       .catch(() => setError("Couldn't load orders from eBay. Try again."))
       .finally(() => setLoading(false));
-  }, [connection, range, status, search, page, perPage, reloadKey]);
+  }, [connection, range, status, search, page, perPage, archived, reloadKey]);
 
   useAccountEvents(connection?.id, (event) => {
     if (event.kind === "orders") setReloadKey((k) => k + 1);
@@ -382,6 +406,19 @@ function AccountOrdersContent() {
           </div>
           <div className="flex min-w-0 items-center gap-2">
             <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
+            {(archivedCount > 0 || archived) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setArchived((v) => !v);
+                  setPage(1);
+                }}
+                className={`btn btn-sm flex-shrink-0 ${archived ? "btn-primary" : "btn-secondary"}`}
+                title={archived ? "Back to current orders" : "Show archived orders"}
+              >
+                Archived{archivedCount ? ` · ${archivedCount}` : ""}
+              </button>
+            )}
             <select value={range} onChange={(e) => changeRange(e.target.value as OrderRange)} className="input input-sm w-auto flex-shrink-0 !pr-8" aria-label="Period">
               {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
                 <option key={key} value={key}>
@@ -463,7 +500,7 @@ function AccountOrdersContent() {
             <div className="min-w-[980px]">
               <OrderTableHeader />
               {orders.map((order) => (
-                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} />
+                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} />
               ))}
             </div>
           </div>

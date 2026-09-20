@@ -66,3 +66,22 @@ test('addStoreCategory sends SetStoreCategories and maps the created department'
     fetchMock.mock.restore();
   }
 });
+
+test('getItemSummary reads per-option variation pictures', async () => {
+  const trading = require('../../src/modules/ebay/ebay.trading');
+  const xml =
+    `<?xml version="1.0"?><GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>1</ItemID>` +
+    `<PictureDetails><PictureURL>https://i/main.jpg</PictureURL></PictureDetails><Quantity>3</Quantity>` +
+    `<Variations><Pictures><VariationSpecificName>Colour</VariationSpecificName>` +
+    `<VariationSpecificPictureSet><VariationSpecificValue>Black Lace</VariationSpecificValue><PictureURL>https://i/black.jpg</PictureURL><PictureURL>https://i/black2.jpg</PictureURL></VariationSpecificPictureSet>` +
+    `<VariationSpecificPictureSet><VariationSpecificValue>White Lace</VariationSpecificValue><PictureURL>https://i/white.jpg</PictureURL></VariationSpecificPictureSet>` +
+    `</Pictures></Variations></Item></GetItemResponse>`;
+  const fetchMock = mock.method(global, 'fetch', async () => ({ status: 200, text: async () => xml }));
+  try {
+    const summary = await trading.getItemSummary('t', '1', { siteId: 3 });
+    assert.strictEqual(summary.imageUrl, 'https://i/main.jpg');
+    assert.deepStrictEqual(summary.variationPictures, [{ specificName: 'Colour', byValue: { 'Black Lace': 'https://i/black.jpg', 'White Lace': 'https://i/white.jpg' } }]);
+  } finally {
+    fetchMock.mock.restore();
+  }
+});

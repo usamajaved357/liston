@@ -817,3 +817,16 @@ test('addStoreCategory creates the department then serves the refreshed tree', a
     add.mock.restore();
   }
 });
+
+test('variationImageFor picks the photo of the option the buyer chose, loosely matching Colour/Color', () => {
+  const { variationImageFor } = require('../../src/modules/ebay/ebay.service');
+  const summary = {
+    imageUrl: 'https://i/main.jpg',
+    variationPictures: [{ specificName: 'Colour', byValue: { 'Black Lace': 'https://i/black.jpg', 'White Lace': 'https://i/white.jpg' } }],
+  };
+  assert.strictEqual(variationImageFor(summary, [{ name: 'Color', value: 'Black Lace' }, { name: 'Size.', value: 'M' }]), 'https://i/black.jpg');
+  assert.strictEqual(variationImageFor(summary, [{ name: 'Colour', value: 'white lace' }]), 'https://i/white.jpg');
+  // No matching option, or a single-variation listing → the main photo.
+  assert.strictEqual(variationImageFor(summary, [{ name: 'Size', value: 'M' }]), 'https://i/main.jpg');
+  assert.strictEqual(variationImageFor({ imageUrl: 'https://i/main.jpg', variationPictures: [] }, [{ name: 'Colour', value: 'Red' }]), 'https://i/main.jpg');
+});

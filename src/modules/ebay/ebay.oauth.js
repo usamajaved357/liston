@@ -1,10 +1,72 @@
 const jwt = require('jsonwebtoken');
 const config = require('../../config');
 
+// What a seller consents to when connecting. A token only ever carries the
+// scopes that were in ITS consent link — the developer portal's list is what
+// the app may ask for, not what any token has. Connections made before the
+// order scopes were added keep working for listings; order actions on them
+// say "reconnect" (see hasScope).
+const SCOPE_INVENTORY = 'https://api.ebay.com/oauth/api_scope/sell.inventory';
+const SCOPE_ACCOUNT = 'https://api.ebay.com/oauth/api_scope/sell.account';
+const SCOPE_FULFILLMENT = 'https://api.ebay.com/oauth/api_scope/sell.fulfillment';
+const SCOPE_FINANCES = 'https://api.ebay.com/oauth/api_scope/sell.finances';
+const SCOPE_MARKETING = 'https://api.ebay.com/oauth/api_scope/sell.marketing';
+const LEGACY_SCOPES = [SCOPE_INVENTORY, SCOPE_ACCOUNT];
+// Every seller permission eBay offers a keyset like ours, asked for in one
+// consent so an account never has to be reconnected for a feature added
+// later. Verified against eBay's authorize endpoint for the production
+// keyset (an unknown scope there fails with invalid_scope; this list is
+// accepted). Roughly, what each is for:
+//   inventory/account       listings, policies, locations (today)
+//   fulfillment/finances    orders, dispatch, refunds, fees, payouts (today)
+//   payment.dispute         chargebacks
+//   marketing               Promoted Listings campaigns, promotions, coupons
+//   analytics.readonly      traffic and seller-standards reports
+//   reputation              feedback
+//   stores                  Shop categories and settings
+//   notification.subscription  event push subscriptions
+//   identity.readonly       the seller's own user profile
+//   vero / edelivery        VeRO reports, eDelivery (digital goods)
+//   commerce.message        buyer messages (eBay's Messaging API) — the Inbox
+//   commerce.feedback       feedback (newer Feedback API)
+//   sell.listing            newer Listing API
+//   api_scope               public read (Browse etc.) on the user token too
 const SCOPES = [
-  'https://api.ebay.com/oauth/api_scope/sell.inventory',
-  'https://api.ebay.com/oauth/api_scope/sell.account',
+  'https://api.ebay.com/oauth/api_scope',
+  SCOPE_INVENTORY,
+  'https://api.ebay.com/oauth/api_scope/sell.inventory.readonly',
+  SCOPE_ACCOUNT,
+  'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
+  SCOPE_FULFILLMENT,
+  'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly',
+  SCOPE_FINANCES,
+  'https://api.ebay.com/oauth/api_scope/sell.payment.dispute',
+  SCOPE_MARKETING,
+  'https://api.ebay.com/oauth/api_scope/sell.marketing.readonly',
+  'https://api.ebay.com/oauth/api_scope/sell.analytics.readonly',
+  'https://api.ebay.com/oauth/api_scope/sell.reputation',
+  'https://api.ebay.com/oauth/api_scope/sell.reputation.readonly',
+  'https://api.ebay.com/oauth/api_scope/sell.stores',
+  'https://api.ebay.com/oauth/api_scope/sell.stores.readonly',
+  'https://api.ebay.com/oauth/api_scope/commerce.notification.subscription',
+  'https://api.ebay.com/oauth/api_scope/commerce.notification.subscription.readonly',
+  'https://api.ebay.com/oauth/api_scope/commerce.identity.readonly',
+  'https://api.ebay.com/oauth/api_scope/commerce.vero',
+  'https://api.ebay.com/oauth/scope/sell.edelivery',
+  'https://api.ebay.com/oauth/api_scope/commerce.message',
+  'https://api.ebay.com/oauth/api_scope/commerce.feedback',
+  'https://api.ebay.com/oauth/api_scope/sell.listing',
 ];
+
+// The scopes a stored credential set was granted. Older records predate the
+// `scopes` field and were all issued with the legacy pair.
+function grantedScopes(credentials) {
+  return Array.isArray(credentials?.scopes) && credentials.scopes.length ? credentials.scopes : LEGACY_SCOPES;
+}
+
+function hasScope(credentials, scope) {
+  return grantedScopes(credentials).includes(scope);
+}
 
 // The base "public data" scope. Note this identifier is literally api.ebay.com
 // even in sandbox — scopes are names, not endpoints we call.
@@ -139,20 +201,23 @@ async function requestApplicationToken() {
   };
 }
 
-async function refreshAccessToken(refreshToken) {
+// A refresh must ask for the scopes the refresh token was granted — asking
+// for more (say, the order scopes on a pre-orders token) is refused outright.
+async function refreshAccessToken(refreshToken, scopes = LEGACY_SCOPES) {
   const data = await requestToken(
     new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
-      scope: SCOPES.join(' '),
+      scope: scopes.join(' '),
     })
   );
-  return normalizeTokenResponse(data, refreshToken);
+  return { ...normalizeTokenResponse(data, refreshToken), scopes };
 }
 
 function normalizeTokenResponse(data, existingRefreshToken) {
   const now = Date.now();
   return {
+    scopes: SCOPES,
     accessToken: data.access_token,
     accessTokenExpiresAt: now + data.expires_in * 1000,
     // A refresh-token grant doesn't always return a new refresh token — keep
@@ -165,6 +230,13 @@ function normalizeTokenResponse(data, existingRefreshToken) {
 }
 
 module.exports = {
+  SCOPES,
+  LEGACY_SCOPES,
+  SCOPE_FULFILLMENT,
+  SCOPE_FINANCES,
+  SCOPE_MARKETING,
+  grantedScopes,
+  hasScope,
   isSandbox,
   apiBaseUrl,
   signState,

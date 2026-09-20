@@ -1,6 +1,10 @@
 const ebayClient = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 const ebayTrading = require('./ebay.trading');
+const ebayFulfillment = require('./ebay.fulfillment');
+const ebayFinances = require('./ebay.finances');
+const ebaySignature = require('./ebay.signature');
+const ebayPostOrder = require('./ebay.postorder');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
@@ -73,7 +77,7 @@ async function ensureValidAccessToken(credentials) {
     throw new EbayError('This eBay connection has no refresh token. Reconnect the account', 401);
   }
 
-  const refreshed = await ebayOauth.refreshAccessToken(credentials.refreshToken);
+  const refreshed = await ebayOauth.refreshAccessToken(credentials.refreshToken, ebayOauth.grantedScopes(credentials));
   const updatedCredentials = { ...credentials, ...refreshed };
   return { accessToken: refreshed.accessToken, credentials: updatedCredentials, credentialsChanged: true, siteId };
 }
@@ -946,7 +950,7 @@ async function persist(write) {
 }
 
 // Bump when mapOrder gains a field, so every mirrored order is re-read once.
-const ORDER_SHAPE = 2;
+const ORDER_SHAPE = 4; // 4: buyer email and sales record number; 3: delivery window and service
 
 function ordersHorizon(now = new Date()) {
   return new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
@@ -1240,6 +1244,447 @@ async function enableNotifications(credentials, applicationUrl) {
   return { username: profile.username, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// --- one order, in full ----------------------------------------------------
+
+// Whether this connection's token can use the Fulfillment API. Tokens issued
+// before the order scopes were added can't, until the seller reconnects.
+function canManageOrders(credentials) {
+  return ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FULFILLMENT);
+}
+
+function scopeMissingError() {
+  const err = new EbayError('Order actions need eBay permissions this connection was linked without. Reconnect the account from Connections (one click) to enable them.', 403);
+  err.code = 'EBAY_SCOPE_MISSING';
+  return err;
+}
+
+
+// The photo for the variation a buyer chose (Colour: Black Lace → that
+// swatch's picture), falling back to the listing's main photo. Names and
+// values are compared loosely: the order's "Color" and the listing's
+// "Colour" are the same axis.
+function variationImageFor(summary, variation) {
+  if (!summary) return null;
+  const norm = (v) => String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const chosen = (variation || []).map((v) => ({ name: norm(v.name), value: norm(v.value) }));
+  for (const set of summary.variationPictures || []) {
+    const axis = norm(set.specificName);
+    const match = chosen.find((c) => c.name === axis || c.name.replace('colour', 'color') === axis.replace('colour', 'color'));
+    if (!match) continue;
+    const entry = Object.entries(set.byValue || {}).find(([value]) => norm(value) === match.value);
+    if (entry) return entry[1];
+  }
+  return summary.imageUrl || null;
+}
+
+// The order as eBay's Fulfillment API returns it, with each line's photo
+// and listing link. Without the scope, the Trading copy the order list
+// already holds is returned instead (no line-item ids → no actions), so the
+// page still renders and can say why the actions are off.
+async function getOrderDetail(credentials, { connectionId, orderId }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  let order;
+  let source;
+  if (canManageOrders(credentials)) {
+    const [raw, shipments] = await Promise.all([
+      ebayFulfillment.getOrder(accessToken, orderId, marketplaceId),
+      ebayFulfillment.getShippingFulfillments(accessToken, orderId, marketplaceId).catch(() => ({ fulfillments: [] })),
+    ]);
+    order = ebayFulfillment.mapOrder(raw, shipments?.fulfillments || []);
+    source = 'fulfillment';
+  } else {
+    const all = await getOrdersLast90Cached(connectionId, accessToken, siteId, false).catch(() => []);
+    const legacy = all.find((o) => o.orderId === orderId);
+    if (!legacy) throw new EbayError('Order not found in the last 90 days of this account.', 404);
+    order = legacyOrderDetail(legacy);
+    source = 'trading';
+  }
+  const itemIds = [...new Set(order.lineItems.map((li) => li.itemId).filter(Boolean))];
+  // The rest of what Seller Hub's order page shows, each best-effort: the
+  // fees eBay took and where the funds are (Finances API), the buyer's
+  // feedback score and whether they've bought before (the order list the
+  // account already holds). None of it should keep the order from showing.
+  // Why the fee breakdown may be missing, so the page can say the right
+  // thing: 'scope' (token predates the finances permission → reconnect),
+  // 'pending' (eBay hasn't posted the sale to Finances yet), 'error'.
+  let earningsUnavailable = null;
+  const hasFinancesScope = ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES);
+  if (!hasFinancesScope) earningsUnavailable = 'scope';
+  const signed = hasFinancesScope
+    ? await ensureSigningKey({ ...refreshedCredentials, marketplaceId }, accessToken).catch((err) => {
+        logger.warn('Could not get an eBay signing key for the order earnings', { orderId, error: err.message });
+        earningsUnavailable = 'error';
+        return null;
+      })
+    : null;
+  const [summaries, earnings, buyerInfo] = await Promise.all([
+    getItemSummariesCached(accessToken, itemIds, siteId),
+    signed
+      ? ebayFinances
+          .getOrderTransactions(accessToken, orderId, marketplaceId, signed.key)
+          .then((res) => {
+            const mapped = ebayFinances.mapOrderEarnings(res);
+            if (!mapped) earningsUnavailable = 'pending';
+            return mapped;
+          })
+          .catch((err) => {
+            logger.warn('Could not load the order earnings from eBay', { orderId, error: err.message });
+            earningsUnavailable = 'error';
+            return null;
+          })
+      : Promise.resolve(null),
+    buyerDetails(connectionId, accessToken, siteId, order.buyer?.username),
+  ]);
+  order.lineItems = order.lineItems.map((li) => {
+    const summary = li.itemId ? summaries.get(li.itemId) : null;
+    return {
+      ...li,
+      imageUrl: variationImageFor(summary, li.variation),
+      viewItemUrl: summary?.viewItemUrl || null,
+      quantityAvailable: summary?.quantityAvailable ?? null,
+      itemSpecifics: summary?.specifics || {},
+    };
+  });
+  order.buyer = { ...order.buyer, ...buyerInfo };
+  order.earnings = earnings;
+  order.earningsUnavailable = earnings ? null : earningsUnavailable;
+  return {
+    order,
+    source,
+    actionsEnabled: source === 'fulfillment',
+    credentialsChanged: credentialsChanged || Boolean(signed?.credentialsChanged),
+    credentials: signed?.credentials || refreshedCredentials,
+  };
+}
+
+// The connection's eBay signing key (see ebay.signature), made on first
+// use and kept with the tokens. Returns { key, credentials,
+// credentialsChanged } so the caller persists a new key the usual way.
+async function ensureSigningKey(credentials, accessToken) {
+  const current = credentials.signingKey;
+  if (current?.jwe && current?.privateKey && !ebaySignature.isExpired(current)) {
+    return { key: current, credentials, credentialsChanged: false };
+  }
+  const key = await ebaySignature.createSigningKey(accessToken, credentials.marketplaceId || 'EBAY_GB');
+  logger.info('Created an eBay signing key for the connection', { keyId: key.id, expiresAt: key.expiresAt });
+  return { key, credentials: { ...credentials, signingKey: key }, credentialsChanged: true };
+}
+
+// Refunds the buyer, in full or in part. eBay takes the money from the
+// seller's balance and answers with the refund's id and state.
+async function refundOrder(credentials, { connectionId, orderId, amount, reason, comment }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  const signed = await ensureSigningKey({ ...refreshedCredentials, marketplaceId }, accessToken);
+  const result = await ebayFulfillment.issueRefund(
+    accessToken,
+    orderId,
+    {
+      reasonForRefund: reason,
+      comment,
+      ...(amount ? { orderLevelRefundAmount: { value: String(amount.value), currency: amount.currency } } : {}),
+    },
+    marketplaceId,
+    signed.key
+  );
+  ordersCache.markStale(String(connectionId));
+  return {
+    refundId: result?.refundId || null,
+    refundStatus: result?.refundStatus || null,
+    credentialsChanged: credentialsChanged || signed.credentialsChanged,
+    credentials: signed.credentials,
+  };
+}
+
+// Cancels an order: approves the buyer's open request when there is one,
+// otherwise opens a seller cancellation for the given reason. eBay refunds
+// the buyer either way.
+async function cancelOrder(credentials, { connectionId, orderId, legacyOrderId, reason, pendingCancelId, buyerPaid, buyerPaidDate, refundAmount }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  const signed = await ensureSigningKey({ ...refreshedCredentials, marketplaceId }, accessToken);
+  let cancelId = pendingCancelId || null;
+  if (cancelId) {
+    await ebayPostOrder.approveCancellation(accessToken, cancelId, marketplaceId, signed.key);
+  } else {
+    const result = await ebayPostOrder.createCancellation(
+      accessToken,
+      { legacyOrderId: legacyOrderId || orderId, cancelReason: reason, buyerPaid, buyerPaidDate, refundAmount },
+      marketplaceId,
+      signed.key
+    );
+    cancelId = result?.cancelId || null;
+  }
+  ordersCache.markStale(String(connectionId));
+  return { cancelId, approved: Boolean(pendingCancelId), credentialsChanged: credentialsChanged || signed.credentialsChanged, credentials: signed.credentials };
+}
+
+// --- post-sale cases: returns, item-not-received, payment disputes ---------
+
+function amountOf(node) {
+  if (!node || node.value === undefined) return null;
+  return { value: Number(node.value), currency: node.currency };
+}
+
+function mapReturn(r) {
+  const info = r.creationInfo || {};
+  return {
+    id: String(r.returnId),
+    state: r.state || null, // e.g. RETURN_REQUESTED, RETURN_REQUESTED_TIMEOUT, ITEM_SHIPPED, ITEM_DELIVERED, CLOSED
+    status: r.status || null,
+    type: info.type || r.currentType || null,
+    reason: info.reason || null,
+    buyerComment: info.comments?.content || null,
+    itemId: info.item?.itemId ? String(info.item.itemId) : null,
+    quantity: info.item?.returnQuantity ?? null,
+    openedAt: r.creationInfo?.creationDate?.value || null,
+    respondBy: r.sellerResponseDue?.respondByDate?.value || r.sellerResponseDue?.respondByDate || null,
+    refundAmount: amountOf(r.actualRefundAmount || r.sellerTotalRefund?.actualRefundAmount || r.buyerTotalRefund?.estimatedRefundAmount),
+    tracking: r.shipmentTracking?.trackingNumber || null,
+    carrier: r.shipmentTracking?.carrierUsed || null,
+    closed: /CLOSED|REFUNDED|ESCALATED_CLOSED/i.test(String(r.state || '')),
+  };
+}
+
+function mapInquiry(i) {
+  return {
+    id: String(i.inquiryId),
+    state: i.state || null, // e.g. OPEN, WAITING_FOR_SELLER_RESPONSE, CLOSED
+    status: i.status || null,
+    itemId: i.itemId ? String(i.itemId) : null,
+    openedAt: i.creationDate?.value || i.creationDate || null,
+    respondBy: i.sellerResponseDue?.respondByDate?.value || i.respondByDate?.value || null,
+    claimAmount: amountOf(i.claimAmount),
+    closed: /CLOSED/i.test(String(i.state || '')),
+  };
+}
+
+function mapDispute(d) {
+  return {
+    id: String(d.paymentDisputeId),
+    status: d.paymentDisputeStatus || null, // OPEN, ACTION_NEEDED, CLOSED …
+    reason: d.reason || null,
+    amount: amountOf(d.amount),
+    openedAt: d.openDate || null,
+    respondBy: d.respondByDate || null,
+    closed: /CLOSED/i.test(String(d.paymentDisputeStatus || '')),
+  };
+}
+
+// Every open case on an order, best-effort: none of them may keep the
+// order page from showing, so a failed read is an empty list plus a note.
+async function getOrderCases(credentials, { orderId, legacyOrderId }) {
+  if (!canManageOrders(credentials)) return { returns: [], inquiries: [], disputes: [], unavailable: 'scope' };
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  const id = legacyOrderId || orderId;
+  const quiet = (label, p) =>
+    p.catch((err) => {
+      logger.warn(`Could not read the order's ${label}`, { orderId, error: err.message });
+      return null;
+    });
+  const [returns, inquiries, disputes] = await Promise.all([
+    quiet('returns', ebayPostOrder.searchReturns(accessToken, { orderId: id }, marketplaceId)),
+    quiet('inquiries', ebayPostOrder.searchInquiries(accessToken, { orderId: id }, marketplaceId)),
+    quiet('payment disputes', ebayFulfillment.getPaymentDisputeSummaries(accessToken, { orderId }, marketplaceId)),
+  ]);
+  return {
+    returns: (returns?.members || []).map(mapReturn),
+    inquiries: (inquiries?.members || []).map(mapInquiry),
+    disputes: (disputes?.paymentDisputeSummaries || []).map(mapDispute),
+    unavailable: returns === null && inquiries === null && disputes === null ? 'error' : null,
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
+// Declines a buyer's cancellation request (no refund, order stands).
+async function declineCancellation(credentials, { connectionId, cancelId }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  await ebayPostOrder.rejectCancellation(accessToken, cancelId, credentials.marketplaceId || 'EBAY_GB');
+  ordersCache.markStale(String(connectionId));
+  return { credentialsChanged, credentials: refreshedCredentials };
+}
+
+// One seller action on a return: accept / decline the request, mark the
+// item received, refund (full or partial), or message the buyer. Money
+// moves on decide+refund, so those are signed.
+async function respondToReturn(credentials, { returnId, action, comment, declineReason, amount }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  let creds = refreshedCredentials;
+  let changed = credentialsChanged;
+  const signedKey = async () => {
+    const signed = await ensureSigningKey({ ...creds, marketplaceId }, accessToken);
+    creds = signed.credentials;
+    changed = changed || signed.credentialsChanged;
+    return signed.key;
+  };
+  switch (action) {
+    case 'accept':
+      await ebayPostOrder.decideReturn(accessToken, returnId, { decision: 'ACCEPT', comment }, marketplaceId, await signedKey());
+      break;
+    case 'decline':
+      await ebayPostOrder.decideReturn(accessToken, returnId, { decision: 'DECLINE', comment, declineReason }, marketplaceId, await signedKey());
+      break;
+    case 'received':
+      await ebayPostOrder.markReturnReceived(accessToken, returnId, { comment }, marketplaceId);
+      break;
+    case 'refund':
+      await ebayPostOrder.issueReturnRefund(accessToken, returnId, { amount, comment }, marketplaceId, await signedKey());
+      break;
+    case 'message':
+      await ebayPostOrder.sendReturnMessage(accessToken, returnId, comment, marketplaceId);
+      break;
+    default:
+      throw new EbayError('Unknown return action', 400);
+  }
+  return { credentialsChanged: changed, credentials: creds };
+}
+
+// One seller action on an item-not-received inquiry.
+async function respondToInquiry(credentials, { inquiryId, action, carrier, trackingNumber, shippedDate, message }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  switch (action) {
+    case 'shipment':
+      await ebayPostOrder.provideInquiryShipmentInfo(accessToken, inquiryId, { carrier, trackingNumber, shippedDate, message }, marketplaceId);
+      return { credentialsChanged, credentials: refreshedCredentials };
+    case 'refund': {
+      const signed = await ensureSigningKey({ ...refreshedCredentials, marketplaceId }, accessToken);
+      await ebayPostOrder.issueInquiryRefund(accessToken, inquiryId, { comment: message }, marketplaceId, signed.key);
+      return { credentialsChanged: credentialsChanged || signed.credentialsChanged, credentials: signed.credentials };
+    }
+    case 'message':
+      await ebayPostOrder.sendInquiryMessage(accessToken, inquiryId, message, marketplaceId);
+      return { credentialsChanged, credentials: refreshedCredentials };
+    default:
+      throw new EbayError('Unknown inquiry action', 400);
+  }
+}
+
+// Accept or contest a payment dispute. Contesting uses whatever evidence is
+// already on the dispute (eBay adds the seller's tracking itself; anything
+// more is uploaded on eBay's page).
+async function respondToDispute(credentials, { disputeId, action, returnAddress }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  if (action === 'accept') {
+    await ebayFulfillment.acceptPaymentDispute(accessToken, disputeId, { returnAddress }, marketplaceId);
+  } else if (action === 'contest') {
+    const dispute = await ebayFulfillment.getPaymentDispute(accessToken, disputeId, marketplaceId);
+    await ebayFulfillment.contestPaymentDispute(accessToken, disputeId, { revision: dispute?.revision ?? 0, returnAddress }, marketplaceId);
+  } else {
+    throw new EbayError('Unknown dispute action', 400);
+  }
+  return { credentialsChanged, credentials: refreshedCredentials };
+}
+
+// A buyer's public feedback score is one rationed Trading call, so it is
+// kept for a day per buyer; "repeat buyer" counts their orders in the
+// account's last-90-day list, which is already held.
+const buyerFeedbackCache = new Map(); // username -> { fetchedAt, feedback }
+const BUYER_FEEDBACK_TTL_MS = 24 * 60 * 60 * 1000;
+
+async function buyerDetails(connectionId, accessToken, siteId, username) {
+  if (!username) return {};
+  const [feedback, orders] = await Promise.all([
+    (async () => {
+      const hit = buyerFeedbackCache.get(username);
+      if (hit && Date.now() - hit.fetchedAt < BUYER_FEEDBACK_TTL_MS) return hit.feedback;
+      const feedback = await ebayTrading.getMemberFeedback(accessToken, username, siteId).catch(() => null);
+      if (feedback) buyerFeedbackCache.set(username, { fetchedAt: Date.now(), feedback });
+      return feedback;
+    })(),
+    getOrdersLast90Cached(connectionId, accessToken, siteId, false).catch(() => []),
+  ]);
+  const previousOrders = (orders || []).filter((o) => o.buyerUserId === username).length;
+  return {
+    feedbackScore: feedback?.feedbackScore ?? null,
+    feedbackPercent: feedback?.feedbackPercent ?? null,
+    repeatBuyer: previousOrders > 1,
+  };
+}
+
+// A Trading-shaped order (the list's mirror) in the detail shape, minus
+// what Trading doesn't carry.
+function legacyOrderDetail(o) {
+  const status = classifyOrderStatus(o);
+  // Trading money is { amount, currency }; the detail shape is { value, currency }.
+  const amt = (m) => (m && m.amount !== undefined ? { value: Number(m.amount), currency: m.currency } : null);
+  return {
+    orderId: o.orderId,
+    legacyOrderId: o.orderId,
+    salesRecordReference: o.salesRecordNumber || null,
+    createdAt: o.createdAt,
+    lastModified: null,
+    paymentStatus: o.checkoutStatus === 'Complete' ? 'PAID' : 'PENDING',
+    fulfillmentStatus: o.shippedTime ? 'FULFILLED' : 'NOT_STARTED',
+    cancelState: status === 'cancelled' ? 'CANCELED' : 'NONE_REQUESTED',
+    cancelRequests: [],
+    buyer: { username: o.buyerUserId || null },
+    buyerCheckoutNotes: null,
+    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: o.buyerEmail || '' } : null,
+    shippingService: (o.lineItems || []).map((li) => li.shippingService).find(Boolean) || null,
+    shippingCarrier: null,
+    estimatedDelivery: {
+      min: (o.lineItems || []).map((li) => li.estimatedDeliveryMin).filter(Boolean).sort()[0] || null,
+      max: (o.lineItems || []).map((li) => li.estimatedDeliveryMax).filter(Boolean).sort().slice(-1)[0] || null,
+    },
+    pricing: { subtotal: amt(o.subtotal), total: amt(o.total), delivery: amt(o.total && o.subtotal ? { amount: o.total.amount - o.subtotal.amount, currency: o.total.currency } : null), tax: null, discount: null, deliveryDiscount: null, adjustment: null },
+    payments: o.paidTime ? [{ method: null, status: 'PAID', amount: amt(o.total), date: o.paidTime, referenceId: null }] : [],
+    refunds: [],
+    totalDueSeller: null,
+    totalMarketplaceFee: null,
+    lineItems: (o.lineItems || []).map((li, index) => ({
+      lineItemId: null,
+      itemId: li.itemId,
+      legacyVariationId: null,
+      sku: null,
+      title: li.title,
+      quantity: li.quantityPurchased,
+      unitPrice: amt(li.price),
+      total: li.price ? { value: Math.round(Number(li.price.amount) * li.quantityPurchased * 100) / 100, currency: li.price.currency } : null,
+      deliveryCost: null,
+      variation: li.variation || [],
+      fulfillmentStatus: o.shippedTime ? 'FULFILLED' : 'NOT_STARTED',
+      shipByDate: li.handleByTime || o.dispatchByTime || null,
+      minEstimatedDelivery: li.estimatedDeliveryMin || null,
+      maxEstimatedDelivery: li.estimatedDeliveryMax || null,
+      promotions: [],
+      refunds: [],
+      ebayCollectedTax: null,
+      index,
+    })),
+    fulfillments: o.shippedTime
+      ? [{ fulfillmentId: null, carrier: o.lineItems?.[0]?.trackingCarrier || null, trackingNumber: o.lineItems?.[0]?.trackingNumber || null, shippedDate: o.shippedTime, lineItems: [] }]
+      : [],
+  };
+}
+
+// Marks line items dispatched on eBay, with tracking. Returns the new
+// fulfillment id. The order list's copy is marked stale so it re-reads.
+async function dispatchOrder(credentials, { connectionId, orderId, lineItems, carrier, trackingNumber, shippedDate }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  const result = await ebayFulfillment.createShippingFulfillment(
+    accessToken,
+    orderId,
+    { lineItems, shippingCarrierCode: carrier, trackingNumber, shippedDate },
+    marketplaceId
+  );
+  ordersCache.markStale(String(connectionId));
+  return { fulfillmentId: result?.fulfillmentId || null, credentialsChanged, credentials: refreshedCredentials };
+}
+
 // Marks an account's copies stale without reading anything.
 function markAccountStale(connectionId) {
   invalidateListings(connectionId);
@@ -1355,14 +1800,15 @@ async function getItemSummariesCached(accessToken, itemIds, siteId) {
   const missing = [];
   for (const itemId of itemIds) {
     const cached = itemSummaryCache.get(itemId);
-    if (cached && now - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) out.set(itemId, cached.summary);
+    // Copies made before variation photos were read are refetched once.
+    if (cached && now - cached.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS && cached.summary?.variationPictures && cached.summary?.specifics) out.set(itemId, cached.summary);
     else missing.push(itemId);
   }
   if (missing.length) {
     const persisted = await mirror.loadItemSummaries(missing).catch(() => new Map());
     for (const itemId of [...missing]) {
       const row = persisted.get(itemId);
-      if (row && now - row.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS) {
+      if (row && now - row.fetchedAt < ITEM_SUMMARY_CACHE_TTL_MS && row.summary?.variationPictures && row.summary?.specifics) {
         itemSummaryCache.set(itemId, row);
         out.set(itemId, row.summary);
         missing.splice(missing.indexOf(itemId), 1);
@@ -1402,12 +1848,17 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
  * picture + live quantity from GetItem, so we're not fetching images for
  * orders the page never shows.
  */
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25, push = false }) {
+// `archivedOrderIds` are the orders the team put away: left out unless
+// `archived` asks for exactly those.
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
 
-  const tagged = rawOrders.map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order) }));
+  const archivedSet = new Set(archivedOrderIds);
+  const tagged = rawOrders
+    .filter((order) => archivedSet.has(order.orderId) === Boolean(archived))
+    .map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order), archived: archivedSet.has(order.orderId) }));
 
   const counts = { all: tagged.length };
   for (const key of ORDER_STATUS_FILTERS) {
@@ -1440,7 +1891,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
       const summary = li.itemId ? summaryByItemId.get(li.itemId) : null;
       return {
         ...li,
-        imageUrl: summary?.imageUrl || null,
+        imageUrl: variationImageFor(summary, li.variation),
         quantityAvailable: summary?.quantityAvailable ?? null,
         viewItemUrl: summary?.viewItemUrl || null,
       };
@@ -1501,6 +1952,18 @@ function pushEnabled(connection) {
 
 module.exports = {
   pushEnabled,
+  getOrderCases,
+  declineCancellation,
+  respondToReturn,
+  respondToInquiry,
+  respondToDispute,
+  variationImageFor,
+  canManageOrders,
+  getOrderDetail,
+  refundOrder,
+  cancelOrder,
+  ensureSigningKey,
+  dispatchOrder,
   EbayError,
   ensureValidAccessToken,
   createOfferWithRetry,

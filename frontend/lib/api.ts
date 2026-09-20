@@ -234,6 +234,202 @@ export interface Order {
   dispatchByTime: string | null;
   lineItems: OrderLineItem[];
   derivedStatus?: OrderStatusFilter;
+  // Liston's supplier-order rows for this order (one per line item).
+  sourcing?: OrderSourcing[];
+}
+
+// --- one order in full (Fulfillment API shape) + Liston's sourcing --------
+
+export interface Amount {
+  value: number;
+  currency: string;
+}
+
+export interface OrderSourcing {
+  id: string;
+  lineItemId: string;
+  status: "to_order" | "ordered" | "shipped" | "delivered" | "problem";
+  sourcePlatform: string;
+  sourceAccountId: string | null;
+  sourceAccountLabel: string | null;
+  sourceAccountEmail: string | null;
+  sourceEmail: string | null;
+  sourcePassword: string | null;
+  sourceOrderNo: string | null;
+  placedAt: string | null;
+  placedBy: { id: string; name: string | null } | null;
+  cardLabel: string | null;
+  cost: Amount | null;
+  trackingNumber: string | null;
+  carrier: string | null;
+  notes: string | null;
+  dispatchedAt: string | null;
+  dispatchedBy: { id: string; name: string | null } | null;
+  ebayFulfillmentId: string | null;
+  updatedAt: string;
+}
+
+export interface OrderDetailLine {
+  lineItemId: string | null;
+  sourcingKey: string;
+  itemId: string | null;
+  legacyVariationId: string | null;
+  sku: string | null;
+  title: string | null;
+  quantity: number;
+  unitPrice: Amount | null;
+  total: Amount | null;
+  deliveryCost: Amount | null;
+  variation: { name: string; value: string }[];
+  fulfillmentStatus: string | null;
+  shipByDate: string | null;
+  minEstimatedDelivery: string | null;
+  maxEstimatedDelivery: string | null;
+  promotions: { description: string | null; discount: Amount | null }[];
+  refunds: { amount: Amount | null; date: string; referenceId: string | null }[];
+  ebayCollectedTax: Amount | null;
+  imageUrl: string | null;
+  viewItemUrl: string | null;
+  quantityAvailable?: number | null;
+  // The listing's item specifics (Brand, Colour, Material…), as eBay shows
+  // them under "See more item specifics".
+  itemSpecifics?: Record<string, string[]>;
+  listingId?: string;
+  priceBreakdown?: PriceBreakdown | null;
+  sourcing: OrderSourcing | null;
+}
+
+export interface OrderDetail {
+  orderId: string;
+  legacyOrderId: string | null;
+  salesRecordReference: string | null;
+  createdAt: string;
+  lastModified: string | null;
+  paymentStatus: string | null;
+  fulfillmentStatus: string | null;
+  cancelState: string;
+  cancelRequests: { id: string; state: string; reason: string; requestedAt: string; completedAt: string | null; initiator: string }[];
+  buyer: { username: string | null; feedbackScore?: number | null; feedbackPercent?: string | null; repeatBuyer?: boolean };
+  buyerCheckoutNotes: string | null;
+  shipTo: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string; email: string } | null;
+  shippingService: string | null;
+  shippingCarrier: string | null;
+  estimatedDelivery: { min: string | null; max: string | null };
+  pricing: { subtotal: Amount | null; discount: Amount | null; delivery: Amount | null; deliveryDiscount: Amount | null; tax: Amount | null; adjustment: Amount | null; total: Amount | null };
+  payments: { method: string | null; status: string; amount: Amount | null; date: string; referenceId: string | null }[];
+  refunds: { amount: Amount | null; date: string; status: string; referenceId: string | null }[];
+  totalDueSeller: Amount | null;
+  totalMarketplaceFee: Amount | null;
+  // From eBay's Finances API: what eBay took and where the money is. Null
+  // until eBay has recorded the sale, or without the finances scope.
+  earnings?: {
+    fundsStatus: string;
+    fundsStatusCode: string | null;
+    payoutId: string | null;
+    fees: { code: string; label: string; amount: Amount }[];
+    totalFees: Amount;
+    gross: Amount;
+    earnings: Amount;
+  } | null;
+  // Why `earnings` is null: the token lacks the finances permission
+  // (reconnect), eBay hasn't posted the sale yet, or the read failed.
+  earningsUnavailable?: "scope" | "pending" | "error" | null;
+  lineItems: OrderDetailLine[];
+  // Put away from Liston's order list (Seller Hub's "Archive").
+  archived?: boolean;
+  fulfillments: { fulfillmentId: string | null; carrier: string | null; trackingNumber: string | null; shippedDate: string | null; lineItems: { lineItemId: string; quantity: number }[] }[];
+}
+
+export interface OrderReturn {
+  id: string;
+  state: string | null;
+  status: string | null;
+  type: string | null;
+  reason: string | null;
+  buyerComment: string | null;
+  itemId: string | null;
+  quantity: number | null;
+  openedAt: string | null;
+  respondBy: string | null;
+  refundAmount: Amount | null;
+  tracking: string | null;
+  carrier: string | null;
+  closed: boolean;
+}
+
+export interface OrderInquiry {
+  id: string;
+  state: string | null;
+  status: string | null;
+  itemId: string | null;
+  openedAt: string | null;
+  respondBy: string | null;
+  claimAmount: Amount | null;
+  closed: boolean;
+}
+
+export interface OrderDispute {
+  id: string;
+  status: string | null;
+  reason: string | null;
+  amount: Amount | null;
+  openedAt: string | null;
+  respondBy: string | null;
+  closed: boolean;
+}
+
+export interface OrderCases {
+  returns: OrderReturn[];
+  inquiries: OrderInquiry[];
+  disputes: OrderDispute[];
+  unavailable: "scope" | "error" | null;
+  returnDeclineReasons: { code: string; label: string }[];
+}
+
+export interface OrderEvent {
+  id: string;
+  kind: string;
+  lineItemId?: string | null;
+  detail: Record<string, unknown>;
+  actor: { id: string; name: string | null } | null;
+  at: string;
+}
+
+export interface OrderDetailResponse {
+  order: OrderDetail;
+  actionsEnabled: boolean;
+  source: "fulfillment" | "trading";
+  events: OrderEvent[];
+  carriers: { code: string; label: string }[];
+  cancelReasons?: { code: string; label: string }[];
+  refundReasons?: { code: string; label: string }[];
+}
+
+export interface SourcingPatch {
+  status?: OrderSourcing["status"];
+  sourceAccountId?: string | null;
+  sourceEmail?: string;
+  sourcePassword?: string;
+  sourceOrderNo?: string;
+  placedAt?: string | null;
+  placedBy?: string | null;
+  cardLabel?: string;
+  cost?: { value: string | number; currency: string } | null;
+  trackingNumber?: string;
+  carrier?: string;
+  notes?: string;
+  quantity?: number;
+  dispatchOnEbay?: boolean;
+}
+
+export interface SourceAccount {
+  id: string;
+  platform: string;
+  label: string;
+  email: string;
+  password: string | null;
+  notes: string | null;
+  archived: boolean;
 }
 
 export interface OrderCounts {
@@ -732,6 +928,11 @@ export const api = {
 
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: "DELETE" }),
 
+  // Re-runs eBay's consent for an existing account so its token gains the
+  // scopes added since it was linked (order actions). Same connection id.
+  reauthorizeConnection: (id: string, returnTo?: string) =>
+    request<{ authorizeUrl: string }>(`/api/connections/${id}/reauthorize`, { method: "POST", body: JSON.stringify({ returnTo }) }),
+
   updateAvatar: (avatarUrl: string) =>
     request<{ message: string }>("/api/users/me/avatar", {
       method: "PATCH",
@@ -753,7 +954,7 @@ export const api = {
 
   getConnectionOrders: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; page?: number; perPage?: number }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; page?: number; perPage?: number; archived?: boolean }
   ) => {
     const query = new URLSearchParams({
       range: params.range,
@@ -762,6 +963,7 @@ export const api = {
       perPage: String(params.perPage ?? 25),
     });
     if (params.search) query.set("search", params.search);
+    if (params.archived) query.set("archived", "1");
     return request<{
       orders: Order[];
       counts: OrderCounts;
@@ -770,8 +972,47 @@ export const api = {
       syncedAt: string | null;
       page: number;
       perPage: number;
+      archivedCount?: number;
     }>(`/api/connections/${id}/orders?${query.toString()}`);
   },
+
+  getOrder: (connectionId: string, orderId: string) =>
+    request<OrderDetailResponse>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}`),
+  // Saves one line's supplier-order details; a new tracking number also
+  // dispatches the line on eBay (see `dispatch` in the response).
+  saveOrderSourcing: (connectionId: string, orderId: string, lineKey: string, patch: SourcingPatch) =>
+    request<{ sourcing: OrderSourcing; dispatch: { ok: boolean; fulfillmentId?: string | null; reason?: string; code?: string | null } | null }>(
+      `/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/sourcing/${encodeURIComponent(lineKey)}`,
+      { method: "PUT", body: JSON.stringify(patch) }
+    ),
+  addOrderNote: (connectionId: string, orderId: string, text: string) =>
+    request<{ event: OrderEvent }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/notes`, { method: "POST", body: JSON.stringify({ text }) }),
+  // Seller Hub's "More actions", done from Liston.
+  dispatchOrder: (connectionId: string, orderId: string, input: { trackingNumber?: string; carrier?: string; lineItemIds?: string[] }) =>
+    request<{ fulfillmentId: string | null; lines: number }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/dispatch`, { method: "POST", body: JSON.stringify(input) }),
+  refundOrder: (connectionId: string, orderId: string, input: { amount?: string | null; reason: string; comment?: string }) =>
+    request<{ refundId: string | null; status: string | null; amount: Amount | null }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/refund`, { method: "POST", body: JSON.stringify(input) }),
+  cancelOrder: (connectionId: string, orderId: string, input: { reason?: string }) =>
+    request<{ cancelId: string | null; approved: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST", body: JSON.stringify(input) }),
+  // Post-sale cases on an order (returns, item-not-received inquiries,
+  // payment disputes) and the seller's answers to them.
+  getOrderCases: (connectionId: string, orderId: string) =>
+    request<OrderCases>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cases`),
+  declineCancellation: (connectionId: string, orderId: string) =>
+    request<{ declined: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cancel/decline`, { method: "POST" }),
+  respondToReturn: (connectionId: string, orderId: string, input: { returnId: string; action: "accept" | "decline" | "received" | "refund" | "message"; comment?: string; declineReason?: string; amount?: string | null }) =>
+    request<{ ok: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/returns`, { method: "POST", body: JSON.stringify(input) }),
+  respondToInquiry: (connectionId: string, orderId: string, input: { inquiryId: string; action: "shipment" | "refund" | "message"; carrier?: string; trackingNumber?: string; message?: string }) =>
+    request<{ ok: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/inquiries`, { method: "POST", body: JSON.stringify(input) }),
+  respondToDispute: (connectionId: string, orderId: string, input: { disputeId: string; action: "accept" | "contest" }) =>
+    request<{ ok: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/disputes`, { method: "POST", body: JSON.stringify(input) }),
+  archiveOrder: (connectionId: string, orderId: string, archived: boolean) =>
+    request<{ archived: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/archive`, { method: "POST", body: JSON.stringify({ archived }) }),
+  listSourceAccounts: (includeArchived = false) => request<{ accounts: SourceAccount[] }>(`/api/source-accounts${includeArchived ? "?archived=1" : ""}`),
+  createSourceAccount: (input: { label: string; email: string; password?: string | null; notes?: string | null; platform?: string }) =>
+    request<{ account: SourceAccount }>(`/api/source-accounts`, { method: "POST", body: JSON.stringify(input) }),
+  updateSourceAccount: (id: string, patch: Partial<{ label: string; email: string; password: string | null; notes: string | null; archived: boolean }>) =>
+    request<{ account: SourceAccount }>(`/api/source-accounts/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });

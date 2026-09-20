@@ -35,22 +35,10 @@ export function ConfirmDialog({
         <h2 className="text-lg font-semibold text-[var(--color-ink)]">{title}</h2>
         <p className="mt-2 text-sm text-[var(--color-muted)]">{description}</p>
         <div className="mt-6 flex justify-end gap-3">
-          <button
-            onClick={onCancel}
-            disabled={loading}
-            className="rounded-md px-4 py-2 text-sm font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)] disabled:opacity-60 transition-colors"
-          >
+          <button type="button" onClick={onCancel} disabled={loading} className="btn btn-ghost">
             Cancel
           </button>
-          <button
-            onClick={onConfirm}
-            disabled={loading}
-            className={`rounded-md px-4 py-2 text-sm font-medium text-white disabled:opacity-60 transition-colors ${
-              danger
-                ? "bg-[var(--color-danger)] hover:bg-red-700"
-                : "bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)]"
-            }`}
-          >
+          <button type="button" onClick={onConfirm} disabled={loading} className={`btn ${danger ? "btn-danger" : "btn-primary"}`}>
             {loading ? "Please wait" : confirmLabel}
           </button>
         </div>

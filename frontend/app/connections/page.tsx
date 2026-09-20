@@ -61,6 +61,23 @@ function AccountRow({ connection, onRemove }: { connection: Connection; onRemove
         </div>
       </Link>
       <StatusPill status={connection.status} />
+      {connection.platform_key === "ebay" && (
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              const { authorizeUrl } = await api.reauthorizeConnection(connection.id, "/connections");
+              window.location.href = authorizeUrl;
+            } catch {
+              /* the row stays; nothing to undo */
+            }
+          }}
+          className="btn btn-ghost btn-sm"
+          title="Re-run eBay's consent for this account (same account, fresh permissions)"
+        >
+          Reconnect
+        </button>
+      )}
       <button type="button" onClick={onRemove} className="btn btn-danger-ghost btn-icon -mr-2" title="Remove this account" aria-label="Remove this account">
         {TrashIcon}
       </button>

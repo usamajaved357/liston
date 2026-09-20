@@ -1,0 +1,198 @@
+const { z } = require('zod');
+const orderService = require('./order.service');
+
+const moneySchema = z.object({ value: z.union([z.number(), z.string()]), currency: z.string().min(3).max(3) }).nullable();
+
+const sourcingSchema = z.object({
+  status: z.enum(['to_order', 'ordered', 'shipped', 'delivered', 'problem']).optional(),
+  sourcePlatform: z.string().max(40).optional(),
+  sourceAccountId: z.string().uuid().nullable().optional(),
+  sourceEmail: z.string().max(200).optional(),
+  sourcePassword: z.string().max(200).optional(),
+  sourceOrderNo: z.string().max(80).optional(),
+  placedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  placedBy: z.string().uuid().nullable().optional(),
+  cardLabel: z.string().max(80).optional(),
+  cost: moneySchema.optional(),
+  trackingNumber: z.string().max(80).optional(),
+  carrier: z.string().max(60).optional(),
+  notes: z.string().max(4000).optional(),
+  quantity: z.number().int().positive().optional(),
+  dispatchOnEbay: z.boolean().optional(),
+});
+
+async function getOrder(req, res, next) {
+  try {
+    res.status(200).json(await orderService.getOrder(req.params.id, req.ownerId, req.params.orderId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function saveSourcing(req, res, next) {
+  try {
+    const parsed = sourcingSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid sourcing details' });
+    const result = await orderService.saveSourcing(req.params.id, req.ownerId, req.userId, req.params.orderId, req.params.lineKey, parsed.data);
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function addNote(req, res, next) {
+  try {
+    const event = await orderService.addNote(req.params.id, req.userId, req.params.orderId, req.body?.text);
+    res.status(201).json({ event });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const dispatchSchema = z.object({
+  trackingNumber: z.string().max(80).optional(),
+  carrier: z.string().max(60).optional(),
+  lineItemIds: z.array(z.string()).optional(),
+});
+
+async function dispatchOrder(req, res, next) {
+  try {
+    const parsed = dispatchSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid dispatch details' });
+    res.status(200).json(await orderService.dispatchOrder(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const refundSchema = z.object({
+  amount: z.union([z.number(), z.string()]).nullable().optional(),
+  reason: z.string().max(60),
+  comment: z.string().max(500).optional(),
+});
+
+async function refundOrder(req, res, next) {
+  try {
+    const parsed = refundSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid refund details' });
+    res.status(200).json(await orderService.refundOrder(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function cancelOrder(req, res, next) {
+  try {
+    res.status(200).json(await orderService.cancelOrder(req.params.id, req.ownerId, req.userId, req.params.orderId, { reason: req.body?.reason }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getCases(req, res, next) {
+  try {
+    res.status(200).json(await orderService.getOrderCases(req.params.id, req.ownerId, req.params.orderId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function declineCancellation(req, res, next) {
+  try {
+    res.status(200).json(await orderService.declineCancellation(req.params.id, req.ownerId, req.userId, req.params.orderId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const returnSchema = z.object({
+  returnId: z.string().min(1),
+  action: z.enum(['accept', 'decline', 'received', 'refund', 'message']),
+  comment: z.string().max(1000).optional(),
+  declineReason: z.string().max(60).optional(),
+  amount: z.union([z.number(), z.string()]).nullable().optional(),
+});
+async function respondToReturn(req, res, next) {
+  try {
+    const parsed = returnSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid return action' });
+    res.status(200).json(await orderService.respondToReturn(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const inquirySchema = z.object({
+  inquiryId: z.string().min(1),
+  action: z.enum(['shipment', 'refund', 'message']),
+  carrier: z.string().max(60).optional(),
+  trackingNumber: z.string().max(80).optional(),
+  shippedDate: z.string().max(40).optional(),
+  message: z.string().max(1000).optional(),
+});
+async function respondToInquiry(req, res, next) {
+  try {
+    const parsed = inquirySchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid inquiry action' });
+    res.status(200).json(await orderService.respondToInquiry(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const disputeSchema = z.object({ disputeId: z.string().min(1), action: z.enum(['accept', 'contest']) });
+async function respondToDispute(req, res, next) {
+  try {
+    const parsed = disputeSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid dispute action' });
+    res.status(200).json(await orderService.respondToDispute(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function setArchived(req, res, next) {
+  try {
+    res.status(200).json(await orderService.setArchived(req.params.id, req.userId, req.params.orderId, req.body?.archived !== false));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const accountSchema = z.object({
+  platform: z.string().max(40).optional(),
+  label: z.string().trim().min(1, 'Give the account a name').max(80),
+  email: z.string().trim().min(1, 'Email is required').max(200),
+  password: z.string().max(200).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+});
+
+async function listSourceAccounts(req, res, next) {
+  try {
+    res.status(200).json({ accounts: await orderService.listSourceAccounts(req.ownerId, { includeArchived: req.query.archived === '1' }) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function createSourceAccount(req, res, next) {
+  try {
+    const parsed = accountSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid account' });
+    res.status(201).json({ account: await orderService.createSourceAccount(req.ownerId, parsed.data) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateSourceAccount(req, res, next) {
+  try {
+    const parsed = accountSchema.partial().extend({ archived: z.boolean().optional() }).safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid account' });
+    res.status(200).json({ account: await orderService.updateSourceAccount(req.ownerId, req.params.accountId, parsed.data) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, getCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, listSourceAccounts, createSourceAccount, updateSourceAccount };
