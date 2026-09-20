@@ -6,6 +6,7 @@ import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { PasswordField } from "@/components/PasswordField";
 import { AuthLayout } from "@/components/AuthLayout";
+import { LinesSkeleton } from "@/components/Skeleton";
 import { Alert } from "@/components/Alert";
 
 function ResetPasswordForm() {
@@ -102,7 +103,7 @@ export default function ResetPasswordPage() {
         </Link>
       }
     >
-      <Suspense fallback={<p className="text-sm text-[var(--color-muted)]">Loading…</p>}>
+      <Suspense fallback={<LinesSkeleton count={3} />}>
         <ResetPasswordForm />
       </Suspense>
     </AuthLayout>

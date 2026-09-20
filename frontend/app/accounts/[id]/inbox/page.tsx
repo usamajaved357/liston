@@ -4,17 +4,14 @@ import { useParams } from "next/navigation";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
+import { AccountPageSkeleton } from "@/components/Skeleton";
 
 export default function AccountInboxPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
 
   if (loading) {
-    return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
-      </main>
-    );
+    return <AccountPageSkeleton />;
   }
 
   if (error || !connection || !user) {

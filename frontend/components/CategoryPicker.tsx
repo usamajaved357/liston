@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, CategoryNode, CategorySuggestion, StoreCategory } from "@/lib/api";
+import { LinesSkeleton } from "@/components/Skeleton";
 
 // The category dialog, laid out the way eBay's own is: an item category
 // (required) and an optional second one, then up to two Shop categories for
@@ -177,7 +178,7 @@ function CategoryBrowser({
               ))}
             </div>
             {loadingChildren ? (
-              <p className="px-3 py-2 text-sm text-[var(--color-muted)]">Loading…</p>
+              <LinesSkeleton />
             ) : (
               children.map((c) => (
                 <button
