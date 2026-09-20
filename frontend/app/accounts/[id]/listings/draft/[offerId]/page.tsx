@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { EditorSkeleton } from "@/components/Skeleton";
 import {
   api,
   ApiError,
@@ -2312,11 +2313,7 @@ export default function DraftEditorPage() {
   }
 
   if (loading) {
-    return (
-      <main className="flex h-screen items-center justify-center">
-        <p className="text-sm text-[var(--color-muted)]">Loading…</p>
-      </main>
-    );
+    return <EditorSkeleton />;
   }
 
   if (!listing || !content) {

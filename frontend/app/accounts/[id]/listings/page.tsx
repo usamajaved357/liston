@@ -9,6 +9,7 @@ import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { ListFooter } from "@/components/ListFooter";
 import { Alert } from "@/components/Alert";
+import { ListSkeleton } from "@/components/Skeleton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
@@ -156,23 +157,6 @@ function DraftRow({ draft, connectionId, onDelete }: { draft: DraftListing; conn
         {TrashIcon}
       </button>
     </li>
-  );
-}
-
-function SkeletonRows({ count = 6 }: { count?: number }) {
-  return (
-    <ul className="divide-y divide-[var(--color-line)]" aria-busy="true">
-      {Array.from({ length: count }).map((_, i) => (
-        <li key={i} className="flex items-center gap-4 px-5 py-3.5">
-          <div className="h-14 w-14 animate-pulse rounded-xl bg-[var(--color-paper)]" />
-          <div className="flex-1 space-y-2">
-            <div className="h-3.5 w-2/3 animate-pulse rounded-full bg-[var(--color-line)]" />
-            <div className="h-3 w-1/3 animate-pulse rounded-full bg-[var(--color-paper)]" />
-          </div>
-          <div className="h-4 w-14 animate-pulse rounded-full bg-[var(--color-line)]" />
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -353,7 +337,7 @@ export default function AccountListingsPage() {
         <div className="mx-auto max-w-5xl">
           <div className="mb-4 h-6 w-32 animate-pulse rounded-full bg-[var(--color-line)]" />
           <div className="card overflow-hidden">
-            <SkeletonRows />
+            <ListSkeleton />
           </div>
         </div>
       </main>
@@ -485,7 +469,7 @@ export default function AccountListingsPage() {
 
       <div className="card overflow-hidden">
         {loading ? (
-          <SkeletonRows />
+          <ListSkeleton />
         ) : filter === "draft" ? (
           visibleDrafts.length === 0 ? (
             <div className="px-6 py-14 text-center">

@@ -32,6 +32,7 @@ import {
 import { SourcingCard } from "@/components/orders/SourcingCard";
 import { ActionDialog, type ActionKind } from "@/components/orders/ActionDialog";
 import { CaseDialog, CasesPanel, type CaseAction } from "@/components/orders/CaseDialogs";
+import { AccountPageSkeleton, OrderDetailSkeleton } from "@/components/Skeleton";
 
 // One eBay order, laid out the way Seller Hub's order page is — the
 // dispatch deadline and its paid → dispatched → delivered track, Postage,
@@ -188,7 +189,7 @@ export default function OrderDetailPage() {
     }
   }
 
-  if (loadingConnection) return <div className="p-8 text-sm text-[var(--color-muted)]">Loading…</div>;
+  if (loadingConnection) return <AccountPageSkeleton rows={4} />;
   if (connectionError || !connection || !user) return <div className="p-8"><Alert>{connectionError || "This account connection doesn't exist, or isn't yours."}</Alert></div>;
 
   const host = connection.marketplace?.itemHost || "www.ebay.co.uk";
@@ -256,7 +257,7 @@ export default function OrderDetailPage() {
           <Alert>{error}</Alert>
         </div>
       )}
-      {loading && !data && <p className="text-sm text-[var(--color-muted)]">Loading the order from eBay…</p>}
+      {loading && !data && <OrderDetailSkeleton />}
 
       {data && order && (
         <div className="pb-8">

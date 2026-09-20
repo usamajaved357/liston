@@ -8,6 +8,7 @@ import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate, internationalPhone } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
+import { AccountPageSkeleton, ListSkeleton } from "@/components/Skeleton";
 import { ListFooter } from "@/components/ListFooter";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
@@ -355,11 +356,7 @@ function AccountOrdersContent() {
   }
 
   if (loadingConnection) {
-    return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-[var(--color-muted)] text-sm">Loading…</p>
-      </main>
-    );
+    return <AccountPageSkeleton />;
   }
 
   if (connectionError || !connection || !user) {
@@ -487,7 +484,7 @@ function AccountOrdersContent() {
           </div>
         )}
 
-        {!error && loading && <p className="px-5 py-10 text-center text-sm text-[var(--color-muted)]">Loading…</p>}
+        {!error && loading && <ListSkeleton count={8} />}
 
         {!error && !loading && orders.length === 0 && (
           <p className="px-5 py-10 text-center text-sm text-[var(--color-muted)]">

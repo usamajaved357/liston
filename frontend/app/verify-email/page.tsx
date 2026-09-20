@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
 import { AuthLayout } from "@/components/AuthLayout";
+import { LinesSkeleton } from "@/components/Skeleton";
 import { Alert } from "@/components/Alert";
 
 function VerifyEmailStatus() {
@@ -60,7 +61,7 @@ export default function VerifyEmailPage() {
         </Link>
       }
     >
-      <Suspense fallback={<p className="text-sm text-[var(--color-muted)]">Loading…</p>}>
+      <Suspense fallback={<LinesSkeleton count={3} />}>
         <VerifyEmailStatus />
       </Suspense>
     </AuthLayout>
