@@ -78,6 +78,19 @@ test('dispatchOrder without tracking ("Mark as dispatched") sends no carrier or 
 test('dispatchOrder refuses when everything is already dispatched, and on a connection without order scopes', async () => {
   stubOrder(fulfillmentOrder({ lineItems: [{ lineItemId: 'li-1', quantity: 1, fulfillmentStatus: 'FULFILLED' }] }));
   await assert.rejects(() => orderService.dispatchOrder(CONNECTION, USER, 'actor', 'o', {}), /already dispatched/);
+  // …but a NEW tracking number on a dispatched order is an edit: eBay takes
+  // a further fulfillment for the same items and shows the latest number.
+  let sent;
+  mock.method(ebayService, 'dispatchOrder', async (credentials, input) => {
+    sent = input;
+    return { fulfillmentId: 'f-2' };
+  });
+  mock.method(orderRepository, 'upsertSourcing', async (row) => row);
+  mock.method(orderRepository, 'addEvent', async (e) => e);
+  const edited = await orderService.dispatchOrder(CONNECTION, USER, 'actor', 'o', { trackingNumber: 'RB123456789GB' });
+  assert.strictEqual(edited.lines, 1);
+  assert.deepStrictEqual(sent.lineItems, [{ lineItemId: 'li-1', quantity: 1 }]);
+  assert.strictEqual(sent.carrier, 'Royal Mail');
   mock.restoreAll();
   stubOrder({ ...fulfillmentOrder(), source: 'trading' });
   await assert.rejects(() => orderService.dispatchOrder(CONNECTION, USER, 'actor', 'o', {}), /Reconnect this eBay account/);

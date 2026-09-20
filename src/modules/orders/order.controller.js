@@ -7,6 +7,8 @@ const sourcingSchema = z.object({
   status: z.enum(['to_order', 'ordered', 'shipped', 'delivered', 'problem']).optional(),
   sourcePlatform: z.string().max(40).optional(),
   sourceAccountId: z.string().uuid().nullable().optional(),
+  sourceEmail: z.string().max(200).optional(),
+  sourcePassword: z.string().max(200).optional(),
   sourceOrderNo: z.string().max(80).optional(),
   placedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   placedBy: z.string().uuid().nullable().optional(),

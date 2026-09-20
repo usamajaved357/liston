@@ -120,3 +120,16 @@ test('an eBay dispatch failure is reported without losing the saved tracking', a
     dispatchMock.mock.restore();
   }
 });
+
+test('sourcing keeps the supplier login on the line itself', async () => {
+  const { userId, connectionId } = await fixture();
+  const { sourcing } = await orderService.saveSourcing(connectionId, userId, userId, '14-9', '10077', {
+    sourceEmail: 'buyer@example.com',
+    sourcePassword: 'Welcome123.',
+    sourceOrderNo: '3075',
+    cardLabel: 'tide',
+  });
+  assert.strictEqual(sourcing.sourceEmail, 'buyer@example.com');
+  assert.strictEqual(sourcing.sourcePassword, 'Welcome123.');
+  assert.strictEqual(sourcing.status, 'ordered');
+});

@@ -253,6 +253,8 @@ export interface OrderSourcing {
   sourceAccountId: string | null;
   sourceAccountLabel: string | null;
   sourceAccountEmail: string | null;
+  sourceEmail: string | null;
+  sourcePassword: string | null;
   sourceOrderNo: string | null;
   placedAt: string | null;
   placedBy: { id: string; name: string | null } | null;
@@ -288,6 +290,7 @@ export interface OrderDetailLine {
   ebayCollectedTax: Amount | null;
   imageUrl: string | null;
   viewItemUrl: string | null;
+  quantityAvailable?: number | null;
   listingId?: string;
   priceBreakdown?: PriceBreakdown | null;
   sourcing: OrderSourcing | null;
@@ -353,6 +356,8 @@ export interface OrderDetailResponse {
 export interface SourcingPatch {
   status?: OrderSourcing["status"];
   sourceAccountId?: string | null;
+  sourceEmail?: string;
+  sourcePassword?: string;
   sourceOrderNo?: string;
   placedAt?: string | null;
   placedBy?: string | null;
@@ -870,6 +875,11 @@ export const api = {
     }),
 
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: "DELETE" }),
+
+  // Re-runs eBay's consent for an existing account so its token gains the
+  // scopes added since it was linked (order actions). Same connection id.
+  reauthorizeConnection: (id: string, returnTo?: string) =>
+    request<{ authorizeUrl: string }>(`/api/connections/${id}/reauthorize`, { method: "POST", body: JSON.stringify({ returnTo }) }),
 
   updateAvatar: (avatarUrl: string) =>
     request<{ message: string }>("/api/users/me/avatar", {

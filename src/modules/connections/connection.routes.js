@@ -13,6 +13,7 @@ router.get('/platforms', requireAuth, connectionController.listPlatforms);
 // policies/shipping location, are always admin-only — never delegable.
 router.post('/ebay/authorize', requireAuth, requireOwner, connectionController.startEbayAuth);
 router.get('/:id', requireAuth, requireAnyFeature(KNOWN_FEATURES), connectionController.getOne);
+router.post('/:id/reauthorize', requireAuth, requireAnyFeature(KNOWN_FEATURES), connectionController.reauthorizeEbay);
 router.delete('/:id', requireAuth, requireOwner, connectionController.remove);
 router.get('/:id/listings', requireAuth, requireFeature('listings'), connectionController.getListings);
 router.get('/:id/orders', requireAuth, requireFeature('orders'), connectionController.getOrders);

@@ -78,7 +78,7 @@ async function listSourcingForOrders(connectionId, orderIds) {
   return result.rows;
 }
 
-const SOURCING_FIELDS = ['status', 'source_platform', 'source_account_id', 'source_order_no', 'placed_at', 'placed_by', 'card_label', 'cost_value', 'cost_currency', 'tracking_number', 'carrier', 'notes', 'dispatched_at', 'dispatched_by', 'ebay_fulfillment_id'];
+const SOURCING_FIELDS = ['status', 'source_platform', 'source_account_id', 'source_email', 'source_password', 'source_order_no', 'placed_at', 'placed_by', 'card_label', 'cost_value', 'cost_currency', 'tracking_number', 'carrier', 'notes', 'dispatched_at', 'dispatched_by', 'ebay_fulfillment_id'];
 
 // Creates or updates the one row for this line item.
 async function upsertSourcing({ connectionId, orderId, lineItemId, ...patch }) {

@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { api, ApiError, Amount, OrderDetail, OrderDetailLine, OrderDetailResponse, OrderEvent, OrderSourcing, SourceAccount, SourcingPatch, User } from "@/lib/api";
+import { useParams, useSearchParams } from "next/navigation";
+import { api, ApiError, Amount, OrderDetail, OrderDetailLine, OrderDetailResponse, OrderEvent, OrderSourcing, SourcingPatch } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
-import { formatPrice, formatShortDate, formatDateTime } from "@/lib/format";
+import { formatPrice, formatDateTime } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 
@@ -56,15 +56,22 @@ function fulfillmentLabel(order: OrderDetail) {
   }
 }
 
-const TONES: Record<string, string> = {
-  ok: "bg-emerald-50 text-emerald-700 border-emerald-200",
-  warn: "bg-amber-50 text-amber-800 border-amber-200",
-  bad: "bg-red-50 text-[var(--color-danger)] border-red-200",
-  muted: "bg-[var(--color-paper)] text-[var(--color-muted)] border-[var(--color-line)]",
+// Status as Seller Hub writes it: a coloured dot and plain text, no pill.
+const DOTS: Record<string, string> = {
+  ok: "bg-emerald-500",
+  warn: "bg-amber-500",
+  bad: "bg-[var(--color-danger)]",
+  muted: "bg-[var(--color-line-strong)]",
+  info: "bg-[var(--color-primary)]",
 };
 
 function Chip({ text, tone }: { text: string; tone: string }) {
-  return <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[12px] font-semibold ${TONES[tone] || TONES.muted}`}>{text}</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[var(--color-ink)]">
+      <span className={`h-2 w-2 flex-shrink-0 rounded-full ${DOTS[tone] || DOTS.muted}`} aria-hidden />
+      {text}
+    </span>
+  );
 }
 
 function daysUntil(iso: string | null) {
@@ -76,69 +83,65 @@ function cleanTitle(title: string | null) {
   return (title || "").replace(/\[[^[\]]*\]\s*$/, "").trim();
 }
 
-function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setDone(true);
-          setTimeout(() => setDone(false), 1500);
-        } catch {
-          /* clipboard unavailable */
-        }
-      }}
-      className="btn btn-ghost btn-sm"
-    >
-      {done ? "Copied" : label}
-    </button>
-  );
-}
-
 const SOURCING_STATUS: { value: OrderSourcing["status"]; label: string; tone: string }[] = [
-  { value: "to_order", label: "To order", tone: "warn" },
-  { value: "ordered", label: "Ordered", tone: "muted" },
+  { value: "to_order", label: "To order", tone: "muted" },
+  { value: "ordered", label: "Ordered", tone: "info" },
   { value: "shipped", label: "Shipped", tone: "ok" },
   { value: "delivered", label: "Delivered", tone: "ok" },
   { value: "problem", label: "Problem", tone: "bad" },
 ];
 
-// --- sourcing card (one per line item) -----------------------------------
+// --- source card (one per line item) --------------------------------------
+// The team's spreadsheet row, on the order: the supplier login used, the
+// supplier order number, who placed it and when, which card, what it cost,
+// and the supplier's tracking. Collapsed it reads as one line; open, every
+// field is editable. Saving a new tracking number dispatches the item on
+// eBay.
+
+function EyeIcon({ open }: { open: boolean }) {
+  return open ? (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+      <path d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 function SourcingCard({
   connectionId,
   orderId,
   line,
-  accounts,
   carriers,
   actionsEnabled,
-  user,
   currency,
   onSaved,
-  onManageAccounts,
   note,
   onNote,
+  defaultOpen,
 }: {
   connectionId: string;
   orderId: string;
   line: OrderDetailLine;
-  accounts: SourceAccount[];
   carriers: { code: string; label: string }[];
   actionsEnabled: boolean;
-  user: User;
   currency: string;
   onSaved: (sourcing: OrderSourcing, dispatch: { ok: boolean; reason?: string } | null) => void;
-  onManageAccounts: () => void;
   // Kept by the parent: the card remounts on each save (it is keyed by the
   // saved row) and the message must outlive that.
   note: { tone: "ok" | "bad"; text: string } | null;
   onNote: (note: { tone: "ok" | "bad"; text: string } | null) => void;
+  defaultOpen: boolean;
 }) {
   const s = line.sourcing;
+  const [open, setOpen] = useState(defaultOpen);
   const [status, setStatus] = useState<OrderSourcing["status"]>(s?.status || "to_order");
-  const [sourceAccountId, setSourceAccountId] = useState(s?.sourceAccountId || "");
+  const [email, setEmail] = useState(s?.sourceEmail || "");
+  const [password, setPassword] = useState(s?.sourcePassword || "");
+  const [showPassword, setShowPassword] = useState(false);
   const [sourceOrderNo, setSourceOrderNo] = useState(s?.sourceOrderNo || "");
   const [placedAt, setPlacedAt] = useState(s?.placedAt ? String(s.placedAt).slice(0, 10) : "");
   const [cardLabel, setCardLabel] = useState(s?.cardLabel || "");
@@ -148,13 +151,12 @@ function SourcingCard({
   const [notes, setNotes] = useState(s?.notes || "");
   const [saving, setSaving] = useState(false);
   const setNote = onNote;
-  const [showPassword, setShowPassword] = useState(false);
 
-  const account = accounts.find((a) => a.id === sourceAccountId) || null;
   const trackingChanged = tracking.replace(/\s+/g, "") !== (s?.trackingNumber || "");
   const dirty =
     status !== (s?.status || "to_order") ||
-    sourceAccountId !== (s?.sourceAccountId || "") ||
+    email !== (s?.sourceEmail || "") ||
+    password !== (s?.sourcePassword || "") ||
     sourceOrderNo !== (s?.sourceOrderNo || "") ||
     placedAt !== (s?.placedAt ? String(s.placedAt).slice(0, 10) : "") ||
     cardLabel !== (s?.cardLabel || "") ||
@@ -167,10 +169,11 @@ function SourcingCard({
     setSaving(true);
     setNote(null);
     const patch: SourcingPatch = {
-      sourceAccountId: sourceAccountId || null,
-      sourceOrderNo,
+      sourceEmail: email.trim(),
+      sourcePassword: password,
+      sourceOrderNo: sourceOrderNo.trim(),
       placedAt: placedAt || null,
-      cardLabel,
+      cardLabel: cardLabel.trim(),
       cost: cost.trim() ? { value: cost.trim(), currency } : null,
       trackingNumber: tracking,
       notes,
@@ -195,215 +198,117 @@ function SourcingCard({
   }
 
   const statusMeta = SOURCING_STATUS.find((x) => x.value === (s?.status || "to_order")) || SOURCING_STATUS[0];
+  const summary = [
+    s?.sourceOrderNo ? `#${s.sourceOrderNo}` : null,
+    s?.sourceEmail || null,
+    s?.placedAt ? formatDayMonth(String(s.placedAt)) : null,
+    s?.placedBy?.name ? `by ${s.placedBy.name}` : null,
+    s?.cardLabel || null,
+    s?.cost ? formatPrice(s.cost.value, s.cost.currency) : null,
+    s?.trackingNumber ? `${s.carrier ? `${s.carrier} ` : ""}${s.trackingNumber}` : null,
+  ].filter(Boolean);
+  const fieldClass = `${inputClass} mt-1`;
 
   return (
-    <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]/60 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-3">
-          {line.imageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={line.imageUrl} alt="" className="h-10 w-10 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-cover" />
-          ) : (
-            <div className="h-10 w-10 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white" />
-          )}
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-semibold text-[var(--color-ink)]">{cleanTitle(line.title)}</p>
-            <p className="text-[11.5px] text-[var(--color-muted)]">
-              × {line.quantity}
-              {line.variation.map((v) => (
-                <span key={v.name}>
-                  {" · "}
-                  {v.name}: {v.value}
-                </span>
-              ))}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Chip text={statusMeta.label} tone={statusMeta.tone} />
-          {s?.dispatchedAt && <span className="text-[11.5px] text-[var(--color-muted)]">Dispatched on eBay {formatShortDate(s.dispatchedAt)}{s.dispatchedBy?.name ? ` by ${s.dispatchedBy.name}` : ""}</span>}
-        </div>
-      </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <div>
-          <label className={labelClass}>Source account</label>
-          <div className="mt-1 flex gap-1.5">
-            <select className={inputClass} value={sourceAccountId} onChange={(e) => setSourceAccountId(e.target.value)}>
-              <option value="">—</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.label} · {a.email}
-                </option>
-              ))}
-            </select>
-            <button type="button" onClick={onManageAccounts} className="btn btn-secondary btn-sm flex-shrink-0" title="Manage source accounts">
-              +
-            </button>
-          </div>
-          {account && (
-            <p className="mt-1 flex items-center gap-2 text-[11.5px] text-[var(--color-muted)]">
-              <span className="truncate">{account.email}</span>
-              {account.password && (
-                <>
-                  <span className="font-mono">{showPassword ? account.password : "••••••••"}</span>
-                  <button type="button" onClick={() => setShowPassword((v) => !v)} className="text-[var(--color-primary)] hover:underline" aria-label={showPassword ? "Hide password" : "Show password"}>
-                    {showPassword ? "hide" : "show"}
-                  </button>
-                  <CopyButton text={account.password} label="copy" />
-                </>
-              )}
-            </p>
-          )}
-        </div>
-        <div>
-          <label className={labelClass}>Source order #</label>
-          <input className={`${inputClass} mt-1 font-mono`} value={sourceOrderNo} onChange={(e) => setSourceOrderNo(e.target.value)} placeholder="e.g. 3075828642684994" />
-        </div>
-        <div>
-          <label className={labelClass}>Placing date</label>
-          <input type="date" className={`${inputClass} mt-1`} value={placedAt} onChange={(e) => setPlacedAt(e.target.value)} />
-          {s?.placedBy?.name && <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">Placed by {s.placedBy.name}</p>}
-        </div>
-        <div>
-          <label className={labelClass}>Card</label>
-          <input className={`${inputClass} mt-1`} value={cardLabel} onChange={(e) => setCardLabel(e.target.value)} placeholder="e.g. tide" />
-        </div>
-        <div>
-          <label className={labelClass}>Cost paid ({currency})</label>
-          <input type="number" step="0.01" min="0" className={`${inputClass} mt-1`} value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0.00" />
-        </div>
-        <div>
-          <label className={labelClass}>Status</label>
-          <select className={`${inputClass} mt-1`} value={status} onChange={(e) => setStatus(e.target.value as OrderSourcing["status"])}>
-            {SOURCING_STATUS.map((x) => (
-              <option key={x.value} value={x.value}>
-                {x.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="sm:col-span-2">
-          <label className={labelClass}>Tracking number</label>
-          <input className={`${inputClass} mt-1 font-mono`} value={tracking} onChange={(e) => setTracking(e.target.value)} placeholder="Paste the supplier's tracking number" />
-          <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">
-            {actionsEnabled ? "Saving a new tracking number marks this item dispatched on eBay." : "eBay dispatch is off for this account until it is reconnected; the number is still saved."}
+    <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)]">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-3 px-4 py-3 text-left" aria-expanded={open}>
+        {line.imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={line.imageUrl} alt="" className="h-10 w-10 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-white object-cover" />
+        ) : (
+          <div className="h-10 w-10 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)]" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[13.5px] font-semibold text-[var(--color-ink)]">
+            {cleanTitle(line.title)}
+            <span className="ml-2 font-normal text-[var(--color-muted)]">× {line.quantity}</span>
           </p>
+          <p className="mt-0.5 truncate text-[12px] text-[var(--color-muted)]">{summary.length ? summary.join(" · ") : "No supplier order yet — open to add the details."}</p>
         </div>
-        <div>
-          <label className={labelClass}>Carrier</label>
-          <select className={`${inputClass} mt-1`} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
-            <option value="">Detect from number</option>
-            {carriers.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="sm:col-span-2 lg:col-span-3">
-          <label className={labelClass}>Notes</label>
-          <input className={`${inputClass} mt-1`} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything the team should know about this supplier order" />
-        </div>
-      </div>
+        <span className="flex-shrink-0">
+          <Chip text={statusMeta.label} tone={statusMeta.tone} />
+        </span>
+        <Chevron open={open} />
+      </button>
 
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <p className={`text-[12px] ${note?.tone === "bad" ? "font-medium text-[var(--color-danger)]" : "text-emerald-700"}`}>{note?.text || ""}</p>
-        <button type="button" onClick={save} disabled={saving || !dirty} className="btn btn-primary btn-sm">
-          {saving ? "Saving…" : trackingChanged && tracking.trim() && actionsEnabled ? "Save & dispatch on eBay" : "Save"}
-        </button>
-      </div>
-      <p className="mt-1 text-[11px] text-[var(--color-muted)]">Signed in as {user.name || user.email}.</p>
-    </div>
-  );
-}
-
-// --- source accounts dialog ----------------------------------------------
-
-function SourceAccountsDialog({ accounts, onChange, onClose }: { accounts: SourceAccount[]; onChange: (accounts: SourceAccount[]) => void; onClose: () => void }) {
-  const [label, setLabel] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [shown, setShown] = useState<Record<string, boolean>>({});
-
-  async function create() {
-    if (!label.trim() || !email.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const { account } = await api.createSourceAccount({ label: label.trim(), email: email.trim(), password: password || null });
-      onChange([...accounts, account].sort((a, b) => a.label.localeCompare(b.label)));
-      setLabel("");
-      setEmail("");
-      setPassword("");
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add the account.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function archive(id: string) {
-    try {
-      await api.updateSourceAccount(id, { archived: true });
-      onChange(accounts.filter((a) => a.id !== id));
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't remove the account.");
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-xl rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-[var(--color-ink)]">Source accounts</h2>
-          <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
-            Close
-          </button>
-        </div>
-        <p className="mt-1 text-xs text-[var(--color-muted)]">The supplier buying accounts the team orders from. Shared with every team member.</p>
-        {error && <p className="mt-2 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
-        <div className="mt-3 max-h-64 divide-y divide-[var(--color-line)] overflow-y-auto">
-          {accounts.length === 0 && <p className="py-3 text-sm text-[var(--color-muted)]">No accounts yet.</p>}
-          {accounts.map((a) => (
-            <div key={a.id} className="flex items-center justify-between gap-3 py-2.5">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-[var(--color-ink)]">{a.label}</p>
-                <p className="truncate text-[12px] text-[var(--color-muted)]">
-                  {a.email}
-                  {a.password && (
-                    <>
-                      {" · "}
-                      <span className="font-mono">{shown[a.id] ? a.password : "••••••••"}</span>{" "}
-                      <button type="button" onClick={() => setShown((v) => ({ ...v, [a.id]: !v[a.id] }))} className="text-[var(--color-primary)] hover:underline">
-                        {shown[a.id] ? "hide" : "show"}
-                      </button>
-                    </>
-                  )}
-                </p>
-              </div>
-              <button type="button" onClick={() => archive(a.id)} className="btn btn-ghost btn-sm text-[var(--color-danger)]">
-                Remove
-              </button>
+      {open && (
+        <div className="border-t border-[var(--color-line)] px-4 pb-4 pt-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label className={labelClass}>Email</label>
+              <input className={fieldClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Supplier account email" autoComplete="off" />
             </div>
-          ))}
-        </div>
-        <div className="mt-4 rounded-xl border border-dashed border-[var(--color-line)] p-3">
-          <p className={labelClass}>Add an account</p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <input className={inputClass} placeholder="Label (e.g. AE main)" value={label} onChange={(e) => setLabel(e.target.value)} />
-            <input className={inputClass} placeholder="Email / login" value={email} onChange={(e) => setEmail(e.target.value)} />
-            <input className={inputClass} placeholder="Password (optional)" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <div>
+              <label className={labelClass}>Password</label>
+              <div className="relative mt-1">
+                <input type={showPassword ? "text" : "password"} className={`${inputClass} pr-10`} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Supplier account password" autoComplete="new-password" />
+                <button type="button" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? "Hide password" : "Show password"} className="absolute inset-y-0 right-0 flex items-center px-3 text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+                  <EyeIcon open={showPassword} />
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className={labelClass}>Placing date</label>
+              <input type="date" className={fieldClass} value={placedAt} onChange={(e) => setPlacedAt(e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>Tracking</label>
+              <input className={`${fieldClass} font-mono`} value={tracking} onChange={(e) => setTracking(e.target.value)} placeholder="Supplier's tracking number" />
+            </div>
+            <div>
+              <label className={labelClass}>Carrier</label>
+              <select className={fieldClass} value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+                <option value="">Detect from number</option>
+                {carriers.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>AE order #</label>
+              <input className={`${fieldClass} font-mono`} value={sourceOrderNo} onChange={(e) => setSourceOrderNo(e.target.value)} placeholder="e.g. 3075828642684994" />
+            </div>
+            <div>
+              <label className={labelClass}>Card</label>
+              <input className={fieldClass} value={cardLabel} onChange={(e) => setCardLabel(e.target.value)} placeholder="e.g. tide" />
+            </div>
+            <div>
+              <label className={labelClass}>Placer</label>
+              <input className={fieldClass} value={s?.placedBy?.name || ""} readOnly placeholder="Set when the AE order # is saved" />
+            </div>
+            <div>
+              <label className={labelClass}>Cost paid ({currency})</label>
+              <input type="number" step="0.01" min="0" className={fieldClass} value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0.00" />
+            </div>
+            <div>
+              <label className={labelClass}>Status</label>
+              <select className={fieldClass} value={status} onChange={(e) => setStatus(e.target.value as OrderSourcing["status"])}>
+                {SOURCING_STATUS.map((x) => (
+                  <option key={x.value} value={x.value}>
+                    {x.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Notes</label>
+              <input className={fieldClass} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything the team should know about this supplier order" />
+            </div>
           </div>
-          <div className="mt-2 flex justify-end">
-            <button type="button" onClick={create} disabled={busy || !label.trim() || !email.trim()} className="btn btn-secondary btn-sm">
-              {busy ? "Adding…" : "Add"}
+          <p className="mt-2 text-[11.5px] text-[var(--color-muted)]">
+            {actionsEnabled ? "Saving a new tracking number marks this item dispatched on eBay with it." : "eBay dispatch is off for this account until it is reconnected; the details are still saved."}
+            {s?.dispatchedAt ? ` Dispatched on eBay ${formatDayMonth(s.dispatchedAt)}${s.dispatchedBy?.name ? ` by ${s.dispatchedBy.name}` : ""}.` : ""}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className={`text-[12px] ${note?.tone === "bad" ? "font-medium text-[var(--color-danger)]" : "text-emerald-700"}`}>{note?.text || ""}</p>
+            <button type="button" onClick={save} disabled={saving || !dirty} className="btn btn-primary btn-sm">
+              {saving ? "Saving…" : trackingChanged && tracking.trim() && actionsEnabled ? "Save & dispatch on eBay" : "Save"}
             </button>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -448,20 +353,51 @@ function eventText(e: OrderEvent) {
 // --- eBay-shaped pieces ---------------------------------------------------
 
 // "24 Sep at 11:59 pm BST", the way Seller Hub states a deadline.
-function formatDeadline(iso: string | null) {
-  if (!iso) return "—";
+// Seller Hub shows deadlines in the eBay site's own time zone ("24 Sep at
+// 11.59pm BST"), whatever the viewer's clock says — the same here.
+const SITE_TIMEZONES: Record<string, string> = {
+  EBAY_GB: "Europe/London",
+  EBAY_IE: "Europe/Dublin",
+  EBAY_US: "America/Los_Angeles",
+  EBAY_CA: "America/Toronto",
+  EBAY_AU: "Australia/Sydney",
+  EBAY_DE: "Europe/Berlin",
+  EBAY_AT: "Europe/Vienna",
+  EBAY_CH: "Europe/Zurich",
+  EBAY_FR: "Europe/Paris",
+  EBAY_IT: "Europe/Rome",
+  EBAY_ES: "Europe/Madrid",
+  EBAY_NL: "Europe/Amsterdam",
+  EBAY_BE: "Europe/Brussels",
+  EBAY_PL: "Europe/Warsaw",
+};
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// Day/month/year of an instant in a time zone (the site's, when given).
+function partsIn(iso: string, timeZone?: string) {
   const d = new Date(iso);
-  return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} at ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZoneName: "short" }).toLowerCase()}`;
+  const parts = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short", timeZone }).formatToParts(d);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || "";
+  return { day: Number(get("day")), month: Number(get("month")) - 1, year: get("year"), hour: get("hour"), minute: get("minute"), dayPeriod: get("dayPeriod").toLowerCase(), zone: get("timeZoneName") };
 }
 
-function formatDayMonthYear(iso: string | null) {
+function formatDeadline(iso: string | null, timeZone?: string) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  const p = partsIn(iso, timeZone);
+  return `${p.day} ${MONTHS[p.month]} at ${p.hour}.${p.minute}${p.dayPeriod} ${p.zone}`;
 }
 
-function formatDayMonth(iso: string | null) {
+function formatDayMonthYear(iso: string | null, timeZone?: string) {
+  if (!iso) return "—";
+  const p = partsIn(iso, timeZone);
+  return `${p.day} ${MONTHS[p.month]} ${p.year}`;
+}
+
+function formatDayMonth(iso: string | null, timeZone?: string) {
   if (!iso) return "";
-  return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  const p = partsIn(iso, timeZone);
+  return `${p.day} ${MONTHS[p.month]}`;
 }
 
 // Seller Hub's three-step track under the deadline: paid → dispatched → delivered.
@@ -775,10 +711,8 @@ export default function OrderDetailPage() {
   const params = useParams<{ id: string; orderId: string }>();
   const { connection, user, loading: loadingConnection, error: connectionError } = useConnection(params.id);
   const [data, setData] = useState<OrderDetailResponse | null>(null);
-  const [accounts, setAccounts] = useState<SourceAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [accountsOpen, setAccountsOpen] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState(false);
   const [saveNotes, setSaveNotes] = useState<Record<string, { tone: "ok" | "bad"; text: string } | null>>({});
@@ -789,6 +723,10 @@ export default function OrderDetailPage() {
   const [contactOpen, setContactOpen] = useState(false);
   const [earnedOpen, setEarnedOpen] = useState(true);
   const [specificsOpen, setSpecificsOpen] = useState<Record<string, boolean>>({});
+  const [reconnectPrompt, setReconnectPrompt] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const searchParams = useSearchParams();
+  const justReconnected = searchParams.get("reconnected") === "1";
 
   const [reloadKey, setReloadKey] = useState(0);
   const load = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -810,13 +748,6 @@ export default function OrderDetailPage() {
       cancelled = true;
     };
   }, [params.id, params.orderId, reloadKey]);
-
-  useEffect(() => {
-    api
-      .listSourceAccounts()
-      .then((d) => setAccounts(d.accounts))
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -868,10 +799,6 @@ export default function OrderDetailPage() {
     }
   }
 
-  function scrollToSource() {
-    document.getElementById("source")?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   function scrollTo(id: string) {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -880,6 +807,25 @@ export default function OrderDetailPage() {
     const el = document.getElementById("order-note") as HTMLInputElement | null;
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
     el?.focus();
+  }
+
+  // Sends the owner through eBay's consent again for THIS account, coming
+  // back here; the token then carries the order scopes.
+  async function reconnect() {
+    setReconnecting(true);
+    try {
+      const { authorizeUrl } = await api.reauthorizeConnection(params.id, `/accounts/${params.id}/orders/${encodeURIComponent(params.orderId)}`);
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setReconnecting(false);
+      setActionNote({ tone: "bad", text: err instanceof ApiError ? err.message : "Couldn't start the eBay reconnect." });
+    }
+  }
+
+  // Order actions need the reconnected token; until then, each one explains
+  // that instead of being greyed out.
+  function guarded(fn: () => void) {
+    return () => (data?.actionsEnabled ? fn() : setReconnectPrompt(true));
   }
 
   async function toggleArchived() {
@@ -921,8 +867,8 @@ export default function OrderDetailPage() {
   const reportBuyerUrl = order?.buyer.username ? `https://${host}/help/selling/resolving-buyer-issues/reporting-issue-buyer` : null;
   const relistUrl = firstItem?.itemId ? `https://${host}/sl/sell?mode=Relist&itemId=${firstItem.itemId}` : null;
   const sellSimilarUrl = firstItem?.itemId ? `https://${host}/sl/sell?mode=SellSimilar&itemId=${firstItem.itemId}` : null;
-  const canAct = !!data?.actionsEnabled && !cancelled;
 
+  const siteTz = SITE_TIMEZONES[connection.marketplace?.id || ""];
   const deadlineTone = cancelled ? "" : dispatched ? "" : daysLeft !== null && daysLeft < 0 ? "text-[var(--color-danger)]" : daysLeft !== null && daysLeft <= 1 ? "text-amber-800" : "";
 
   return (
@@ -971,23 +917,33 @@ export default function OrderDetailPage() {
                 <div className="h-14 w-14 flex-shrink-0 rounded-md border border-[var(--color-line)] bg-[var(--color-paper)]" />
               )}
               <div className="min-w-0">
-                <p className="truncate text-[18px] font-bold text-[var(--color-ink)]">{cleanTitle(firstItem.title)}</p>
-                {order.lineItems.length > 1 && <p className="text-[12.5px] text-[var(--color-muted)]">and {order.lineItems.length - 1} more item{order.lineItems.length > 2 ? "s" : ""}</p>}
-                <div className="mt-1 flex flex-wrap items-center gap-1.5 print:hidden">
+                <p className="truncate text-[17px] font-bold text-[var(--color-ink)]">{cleanTitle(firstItem.title)}</p>
+                <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[12.5px] text-[var(--color-muted)] print:hidden">
                   {pay && <Chip text={pay.text} tone={pay.tone} />}
                   {ful && <Chip text={ful.text} tone={ful.tone} />}
                   {order.archived && <Chip text="Archived" tone="muted" />}
-                </div>
+                  {order.lineItems.length > 1 && <span>+ {order.lineItems.length - 1} more item{order.lineItems.length > 2 ? "s" : ""}</span>}
+                </p>
               </div>
             </div>
           )}
 
           <div className="mt-5 space-y-4 print:hidden">
             {actionNote && <Alert variant={actionNote.tone === "ok" ? "success" : undefined}>{actionNote.text}</Alert>}
+            {justReconnected && data.actionsEnabled && <Alert variant="success">eBay account reconnected — dispatch, refunds and cancellations now work from here.</Alert>}
             {!data.actionsEnabled && (
-              <Alert variant="warning">
-                This account was connected before Liston could act on orders. Reconnect it from Connections (one click) to enable dispatching from here — the order still shows from eBay&apos;s copy.
-              </Alert>
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-2.5 text-[12.5px] text-[var(--color-ink)]">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="h-2 w-2 flex-shrink-0 rounded-full bg-amber-500" aria-hidden />
+                  <span>
+                    <span className="font-semibold">Order actions are off for this account</span>
+                    <span className="text-[var(--color-muted)]"> — it was linked before eBay order permissions existed. Reconnect once to send tracking, refunds and cancellations from here.</span>
+                  </span>
+                </span>
+                <button type="button" onClick={reconnect} disabled={reconnecting} className="btn btn-secondary btn-sm flex-shrink-0">
+                  {reconnecting ? "Opening eBay…" : "Reconnect"}
+                </button>
+              </div>
             )}
             {order.cancelRequests.some((r) => r.state === "REQUESTED") && (
               <Alert variant="warning">
@@ -1016,10 +972,10 @@ export default function OrderDetailPage() {
             <div className="space-y-4 lg:col-span-2">
               {/* Dispatch */}
               <div className={cardClass}>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1 basis-[320px]">
                     <h2 className={`text-[20px] font-bold text-[var(--color-ink)] ${deadlineTone}`}>
-                      {cancelled ? "Order cancelled" : dispatched ? `Dispatched${shippedAt ? ` on ${formatDayMonthYear(shippedAt)}` : ""}` : dispatchBy ? `Dispatch by ${formatDeadline(dispatchBy)}` : "Awaiting dispatch"}
+                      {cancelled ? "Order cancelled" : dispatched ? `Dispatched${shippedAt ? ` on ${formatDayMonthYear(shippedAt)}` : ""}` : dispatchBy ? `Dispatch by ${formatDeadline(dispatchBy, siteTz)}` : "Awaiting dispatch"}
                     </h2>
                     {!cancelled && !dispatched && (
                       <p className="mt-1 text-[13px] text-[var(--color-ink)]">
@@ -1029,16 +985,21 @@ export default function OrderDetailPage() {
                     )}
                     {(order.estimatedDelivery.min || order.estimatedDelivery.max) && (
                       <p className="mt-0.5 text-[13px] text-[var(--color-ink)]">
-                        Estimated delivery date shown to buyer: {formatDayMonthYear(order.estimatedDelivery.min)}
-                        {order.estimatedDelivery.max ? ` - ${formatDayMonthYear(order.estimatedDelivery.max)}` : ""}
+                        Estimated delivery date shown to buyer: {formatDayMonthYear(order.estimatedDelivery.min, siteTz)}
+                        {order.estimatedDelivery.max ? ` - ${formatDayMonthYear(order.estimatedDelivery.max, siteTz)}` : ""}
                       </p>
                     )}
                   </div>
-                  <div className="flex flex-col items-stretch gap-2 print:hidden">
-                    {!cancelled && !dispatched && (
-                      <button type="button" onClick={() => (data.actionsEnabled ? setAction("tracking") : scrollToSource())} className="btn btn-primary">
-                        Add tracking
-                      </button>
+                  {/* Seller Hub's pair: a filled "Get postage label" over an
+                      outlined "More actions", both 245px, the menu hanging
+                      under the second at the same width. Labels are bought
+                      on eBay itself (no label API for UK sellers), so the
+                      first opens eBay's page for this order. */}
+                  <div className="flex w-[200px] flex-col items-stretch gap-2 print:hidden">
+                    {!cancelled && !dispatched && ebayOrderUrl && (
+                      <a href={ebayOrderUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm rounded-full">
+                        Get postage label
+                      </a>
                     )}
                     <div className="relative">
                       <button
@@ -1047,23 +1008,24 @@ export default function OrderDetailPage() {
                           e.stopPropagation();
                           setMoreOpen((v) => !v);
                         }}
-                        className="btn btn-secondary w-full"
+                        className="btn btn-secondary btn-sm w-full rounded-full border-[var(--color-primary)] text-[var(--color-primary)]"
+                        aria-expanded={moreOpen}
                       >
                         More actions <Chevron open={moreOpen} />
                       </button>
                       {moreOpen && (
-                        <div className="absolute right-0 z-20 mt-1 max-h-[70vh] w-60 overflow-y-auto rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 text-[13px] text-[var(--color-ink)] shadow-lg">
+                        <div className="absolute left-0 z-20 mt-1 max-h-[360px] w-[200px] overflow-y-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] py-1 text-[13px] text-[var(--color-ink)] shadow-[0_6px_20px_rgba(0,0,0,0.12)]" onClick={(e) => e.stopPropagation()}>
                           {(
                             [
                               { label: "Print invoices and more", run: () => window.print() },
                               { label: "Print coupon", href: couponUrl },
                               { label: "Send coupon", href: couponUrl },
-                              { label: "Add tracking number", run: () => setAction("tracking"), disabled: !canAct || dispatched },
-                              { label: "Mark as dispatched", run: () => setAction("dispatched"), disabled: !canAct || dispatched },
-                              { label: "Send refund", run: () => setAction("refund"), disabled: !data.actionsEnabled || order.paymentStatus === "FULLY_REFUNDED" },
+                              { label: dispatched ? "Edit tracking number" : "Add tracking number", run: guarded(() => setAction("tracking")) },
+                              { label: "Mark as dispatched", run: guarded(() => setAction("dispatched")), disabled: dispatched },
+                              { label: "Send refund", run: guarded(() => setAction("refund")), disabled: order.paymentStatus === "FULLY_REFUNDED" },
                               { label: "View payment details", run: () => scrollTo("payment") },
                               { label: "Add note", run: focusNote },
-                              { label: order.cancelRequests.some((r) => r.state === "REQUESTED") ? "Approve cancellation" : "Cancel order", run: () => setAction("cancel"), disabled: !canAct || dispatched },
+                              { label: order.cancelRequests.some((r) => r.state === "REQUESTED") ? "Approve cancellation" : "Cancel order", run: guarded(() => setAction("cancel")), disabled: dispatched || cancelled },
                               { label: "Message buyer", href: messageUrl },
                               { label: "Report buyer", href: reportBuyerUrl },
                               { label: "Relist", href: relistUrl },
@@ -1073,7 +1035,7 @@ export default function OrderDetailPage() {
                           ).map((item) =>
                             item.href !== undefined ? (
                               item.href ? (
-                                <a key={item.label} href={item.href} target="_blank" rel="noreferrer" className="block px-3 py-2 hover:bg-[var(--color-paper)]">
+                                <a key={item.label} href={item.href} target="_blank" rel="noreferrer" className="block px-3.5 py-2 leading-5 hover:bg-[var(--color-paper)]">
                                   {item.label}
                                 </a>
                               ) : null
@@ -1086,7 +1048,7 @@ export default function OrderDetailPage() {
                                   setMoreOpen(false);
                                   item.run?.();
                                 }}
-                                className="block w-full px-3 py-2 text-left hover:bg-[var(--color-paper)] disabled:cursor-not-allowed disabled:opacity-40"
+                                className="block w-full px-3.5 py-2 text-left leading-5 hover:bg-[var(--color-paper)] disabled:cursor-not-allowed disabled:text-[var(--color-muted)]"
                               >
                                 {item.label}
                               </button>
@@ -1099,9 +1061,9 @@ export default function OrderDetailPage() {
                 </div>
                 <ProgressTrack
                   steps={[
-                    { label: "Buyer paid", date: formatDayMonth(paidAt || order.createdAt), done: order.paymentStatus === "PAID" || order.paymentStatus === "FULLY_REFUNDED" || order.paymentStatus === "PARTIALLY_REFUNDED" },
-                    { label: dispatched ? "Dispatched" : "Dispatch by", date: formatDayMonth(dispatched ? shippedAt : dispatchBy), done: dispatched },
-                    { label: "Delivery", date: order.estimatedDelivery.max ? `est. ${formatDayMonth(order.estimatedDelivery.max)}` : "", done: false },
+                    { label: "Buyer paid", date: formatDayMonth(paidAt || order.createdAt, siteTz), done: order.paymentStatus === "PAID" || order.paymentStatus === "FULLY_REFUNDED" || order.paymentStatus === "PARTIALLY_REFUNDED" },
+                    { label: dispatched ? "Dispatched" : "Dispatch by", date: formatDayMonth(dispatched ? shippedAt : dispatchBy, siteTz), done: dispatched },
+                    { label: "Delivery", date: order.estimatedDelivery.max ? `est. ${formatDayMonth(order.estimatedDelivery.max, siteTz)}` : "", done: false },
                   ]}
                 />
               </div>
@@ -1158,7 +1120,7 @@ export default function OrderDetailPage() {
                   </div>
                   {!cancelled && (
                     <div className="print:hidden">
-                      <button type="button" onClick={scrollToSource} className="btn btn-secondary">
+                      <button type="button" onClick={guarded(() => setAction("tracking"))} className="btn btn-secondary btn-sm rounded-full border-[var(--color-primary)] text-[var(--color-primary)]">
                         {dispatched ? "Edit tracking" : "Add tracking"}
                       </button>
                     </div>
@@ -1207,7 +1169,7 @@ export default function OrderDetailPage() {
                               {li.refunds.length > 0 && <p className="mt-1 text-[var(--color-danger)]">Refunded {money(li.refunds[0].amount, currency)}</p>}
                               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 print:hidden">
                                 {!cancelled && (
-                                  <button type="button" onClick={scrollToSource} className="text-[var(--color-primary)] underline">
+                                  <button type="button" onClick={guarded(() => setAction("tracking"))} className="text-[var(--color-primary)] underline">
                                     {li.fulfillmentStatus === "FULFILLED" ? "Edit tracking" : "Add tracking"}
                                   </button>
                                 )}
@@ -1260,6 +1222,7 @@ export default function OrderDetailPage() {
                           <div className="text-[13px] sm:text-center">
                             <p className="text-[var(--color-muted)]">Quantity</p>
                             <p className="mt-1 font-semibold text-[var(--color-ink)]">{li.quantity}</p>
+                            {li.quantityAvailable !== null && li.quantityAvailable !== undefined && <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">({li.quantityAvailable} available)</p>}
                           </div>
                           <div className="text-[13px] sm:text-center">
                             <p className="text-[var(--color-muted)]">Item price</p>
@@ -1279,13 +1242,18 @@ export default function OrderDetailPage() {
               {/* Source — the part Seller Hub never had */}
               <div id="source" className={`${cardClass} scroll-mt-4 print:hidden`}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Source</h2>
-                    <p className="text-[12.5px] text-[var(--color-muted)]">Where each item was bought, by whom, and its tracking. Saving a tracking number dispatches the item on eBay.</p>
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-paper)] text-[var(--color-primary)]" aria-hidden>
+                      <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                        <path d="M3 7l9-4 9 4-9 4-9-4z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                        <path d="M3 7v10l9 4 9-4V7M12 11v10" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                      </svg>
+                    </span>
+                    <div>
+                      <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Source</h2>
+                      <p className="text-[12.5px] text-[var(--color-muted)]">Supplier order for each item — a saved tracking number dispatches it on eBay.</p>
+                    </div>
                   </div>
-                  <button type="button" onClick={() => setAccountsOpen(true)} className="btn btn-secondary btn-sm">
-                    Source accounts
-                  </button>
                 </div>
                 <div className="mt-3 space-y-3">
                   {order.lineItems.map((li) => (
@@ -1294,16 +1262,14 @@ export default function OrderDetailPage() {
                       connectionId={connection.id}
                       orderId={order.orderId}
                       line={li}
-                      accounts={accounts}
                       carriers={data.carriers}
                       actionsEnabled={data.actionsEnabled}
-                      user={user}
                       currency={currency}
                       onSaved={(sourcing, dispatch) => {
                         applySourcing(sourcing);
                         if (dispatch?.ok) load();
                       }}
-                      onManageAccounts={() => setAccountsOpen(true)}
+                      defaultOpen={!li.sourcing || (li.sourcing.status !== "shipped" && li.sourcing.status !== "delivered")}
                       note={saveNotes[li.sourcingKey] || null}
                       onNote={(n) => setSaveNotes((current) => ({ ...current, [li.sourcingKey]: n }))}
                     />
@@ -1515,7 +1481,21 @@ export default function OrderDetailPage() {
         </div>
       )}
 
-      {accountsOpen && <SourceAccountsDialog accounts={accounts} onChange={setAccounts} onClose={() => setAccountsOpen(false)} />}
+      {reconnectPrompt && (
+        <Modal title="Reconnect this eBay account" onClose={() => setReconnectPrompt(false)}>
+          <p className="mt-3 text-[13px] text-[var(--color-ink)]">
+            This account was linked before Liston asked eBay for order permissions, so eBay won&apos;t accept tracking, refunds or cancellations from here yet. Reconnecting re-runs eBay&apos;s consent for the same account — one click, nothing else changes — and brings you straight back to this order.
+          </p>
+          <div className="mt-5 flex justify-end gap-3">
+            <button type="button" onClick={() => setReconnectPrompt(false)} className="btn btn-ghost">
+              Not now
+            </button>
+            <button type="button" onClick={reconnect} disabled={reconnecting} className="btn btn-primary">
+              {reconnecting ? "Opening eBay…" : "Reconnect now"}
+            </button>
+          </div>
+        </Modal>
+      )}
       {action && order && data && (
         <ActionDialog
           kind={action}

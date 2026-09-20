@@ -25,6 +25,8 @@ function sourcingView(row) {
     sourceAccountId: row.source_account_id,
     sourceAccountLabel: row.source_account_label || null,
     sourceAccountEmail: row.source_account_email || null,
+    sourceEmail: row.source_email || null,
+    sourcePassword: row.source_password || null,
     sourceOrderNo: row.source_order_no,
     placedAt: row.placed_at,
     placedBy: row.placed_by ? { id: row.placed_by, name: row.placed_by_name || row.placed_by_email || null } : null,
@@ -129,7 +131,11 @@ async function fulfillmentOrder(connectionId, userId, orderId) {
 async function dispatchOrder(connectionId, userId, actorId, orderId, { trackingNumber, carrier, lineItemIds }) {
   const order = await fulfillmentOrder(connectionId, userId, orderId);
   const tracking = String(trackingNumber || '').replace(/\s+/g, '') || null;
-  const lines = order.lineItems.filter((li) => li.lineItemId && li.fulfillmentStatus !== 'FULFILLED' && (!lineItemIds?.length || lineItemIds.includes(li.lineItemId)));
+  const wanted = order.lineItems.filter((li) => li.lineItemId && (!lineItemIds?.length || lineItemIds.includes(li.lineItemId)));
+  let lines = wanted.filter((li) => li.fulfillmentStatus !== 'FULFILLED');
+  // Editing the tracking of a dispatched order: eBay takes a further
+  // fulfillment for the same items and shows the buyer the latest number.
+  if (!lines.length && tracking) lines = wanted;
   if (!lines.length) throw new OrderError('Every item on this order is already dispatched.', 400);
   const carrierCode = tracking ? carrier || detectCarrier(tracking) || 'Other' : undefined;
   const shippedDate = new Date().toISOString();
@@ -251,6 +257,8 @@ async function saveSourcing(connectionId, userId, actorId, orderId, lineKey, inp
   }
   for (const [from, to] of [
     ['sourceAccountId', 'source_account_id'],
+    ['sourceEmail', 'source_email'],
+    ['sourcePassword', 'source_password'],
     ['sourceOrderNo', 'source_order_no'],
     ['placedAt', 'placed_at'],
     ['cardLabel', 'card_label'],

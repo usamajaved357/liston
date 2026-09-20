@@ -1307,7 +1307,7 @@ async function getOrderDetail(credentials, { connectionId, orderId }) {
   ]);
   order.lineItems = order.lineItems.map((li) => {
     const summary = li.itemId ? summaries.get(li.itemId) : null;
-    return { ...li, imageUrl: summary?.imageUrl || null, viewItemUrl: summary?.viewItemUrl || null };
+    return { ...li, imageUrl: summary?.imageUrl || null, viewItemUrl: summary?.viewItemUrl || null, quantityAvailable: summary?.quantityAvailable ?? null };
   });
   order.buyer = { ...order.buyer, ...buyerInfo };
   order.earnings = earnings;

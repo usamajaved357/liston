@@ -13,6 +13,22 @@ const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
 });
 
+// Re-runs eBay's consent for an EXISTING connection, so the new token (with
+// the current scopes — the order ones, for accounts linked before they were
+// asked for) replaces the old one in place. Nothing else about the account
+// changes: same id, listings, drafts, orders, sourcing.
+async function reauthorizeEbay(req, res, next) {
+  try {
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+    if (connection.platform_key !== 'ebay') return res.status(400).json({ error: 'Only eBay accounts can be reconnected this way.' });
+    const returnTo = typeof req.body?.returnTo === 'string' && req.body.returnTo.startsWith('/') ? req.body.returnTo.slice(0, 300) : `/accounts/${connection.id}`;
+    const state = ebayOauth.signState({ userId: req.ownerId, label: connection.label, connectionId: connection.id, returnTo });
+    res.status(200).json({ authorizeUrl: ebayOauth.buildAuthorizeUrl(state) });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function startEbayAuth(req, res, next) {
   try {
     const parsed = startEbayAuthSchema.safeParse(req.body);
@@ -612,6 +628,7 @@ module.exports = {
   getOne,
   remove,
   startEbayAuth,
+  reauthorizeEbay,
   getListings,
   getOrders,
   getEarnings,

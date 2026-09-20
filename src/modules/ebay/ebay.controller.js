@@ -31,6 +31,16 @@ async function oauthCallback(req, res) {
 
   try {
     const tokens = await ebayOauth.exchangeCodeForToken(String(code));
+    if (statePayload.connectionId) {
+      // A reconnect: the fresh token replaces the old one on the same
+      // connection; everything else it holds (marketplace, signing key…)
+      // is kept.
+      const existing = await connectionService.getConnectionWithDecryptedCredentials(statePayload.connectionId, statePayload.userId);
+      await connectionService.updateConnectionCredentials(existing.id, { ...(existing.credentials || {}), ...tokens });
+      const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') ? statePayload.returnTo : `/accounts/${existing.id}`;
+      const joiner = returnTo.includes('?') ? '&' : '?';
+      return res.redirect(`${config.frontendUrl}${returnTo}${joiner}reconnected=1`);
+    }
     const created = await connectionService.createConnection(statePayload.userId, {
       platformKey: 'ebay',
       label: statePayload.label,
