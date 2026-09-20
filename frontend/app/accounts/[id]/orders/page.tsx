@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import Link from "next/link";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Order, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
@@ -139,8 +140,29 @@ function CustomerCell({ order, country, countryName }: { order: Order; country: 
 // on a quiet first line, then each item as a thumbnail beside a two-line
 // title and its details; the money and dates sit in their columns at the
 // top of the row, where the eye lands.
-function OrderCard({ order, country, countryName }: { order: Order; country: string | undefined; countryName: string | undefined }) {
+const SOURCING_LABELS: Record<string, { text: string; className: string }> = {
+  to_order: { text: "To order", className: "bg-amber-50 text-amber-800 border-amber-200" },
+  ordered: { text: "Ordered", className: "bg-[var(--color-paper)] text-[var(--color-muted)] border-[var(--color-line)]" },
+  shipped: { text: "Shipped", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  delivered: { text: "Delivered", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  problem: { text: "Problem", className: "bg-red-50 text-[var(--color-danger)] border-red-200" },
+};
+
+// The supplier-order state of the whole order, from its lines: the least
+// advanced line wins, so "Shipped" means every item has shipped.
+function sourcingSummary(order: Order) {
+  const rows = order.sourcing || [];
+  if (!rows.length) return null;
+  const rank = ["problem", "to_order", "ordered", "shipped", "delivered"];
+  const lowest = rows.map((r) => r.status).sort((a, b) => rank.indexOf(a) - rank.indexOf(b))[0];
+  const partial = rows.length < order.lineItems.length;
+  return { ...SOURCING_LABELS[lowest], partial };
+}
+
+function OrderCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
+  const router = useRouter();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
+  const sourcing = sourcingSummary(order);
   const shippingCost =
     order.total && order.subtotal ? Math.round((order.total.amount - order.subtotal.amount) * 100) / 100 : null;
   const quantity = order.lineItems.reduce((n, li) => n + (li.quantityPurchased || 0), 0);
@@ -150,17 +172,28 @@ function OrderCard({ order, country, countryName }: { order: Order; country: str
     <div
       className="grid cursor-pointer items-start gap-3 border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 hover:bg-[var(--color-paper)]/40"
       style={{ gridTemplateColumns: ROW_COLUMNS }}
-      title="Order details (coming soon)"
+      title="Open order"
+      onClick={(e) => {
+        // The row opens the order; links and buttons inside keep their own job.
+        if ((e.target as HTMLElement).closest("a, button")) return;
+        router.push(href);
+      }}
     >
-      <p className={`pt-0.5 text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order)}</p>
+      <div className="pt-0.5">
+        <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order)}</p>
+        {sourcing && (
+          <span className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourcing.className}`} title="Supplier order">
+            {sourcing.text}
+            {sourcing.partial ? " (some)" : ""}
+          </span>
+        )}
+      </div>
 
       <div className="min-w-0">
-        {/* A link-in-waiting: the order id (and the row itself) will open the
-            order's own page once there is one. */}
         <p className="mb-2 pt-0.5 text-[12.5px] leading-snug">
-          <button type="button" title="Order details (coming soon)" className="block font-mono text-[12.5px] leading-snug tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
+          <Link href={href} className="block font-mono text-[12.5px] leading-snug tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
             {order.orderId}
-          </button>
+          </Link>
         </p>
         <div className="space-y-2.5">
           {order.lineItems.map((li, i) => (
@@ -463,7 +496,7 @@ function AccountOrdersContent() {
             <div className="min-w-[980px]">
               <OrderTableHeader />
               {orders.map((order) => (
-                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} />
+                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} />
               ))}
             </div>
           </div>

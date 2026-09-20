@@ -139,8 +139,14 @@ async function getOrders(req, res, next) {
       return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage, push: ebayService.pushEnabled(connection) });
     });
 
+    // Each row's supplier-order state, so the list can show it and take a
+    // tracking number without opening the order.
+    const sourcingByOrder = await require('../orders/order.service')
+      .sourcingForOrders(req.params.id, result.orders.map((o) => o.orderId))
+      .catch(() => ({}));
+
     res.status(200).json({
-      orders: result.orders,
+      orders: result.orders.map((o) => ({ ...o, sourcing: sourcingByOrder[o.orderId] || [] })),
       counts: result.counts,
       totalEntries: result.totalEntries,
       totalPages: result.totalPages,

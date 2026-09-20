@@ -42,11 +42,11 @@ function localeForMarketplace(marketplaceId) {
   return MARKETPLACE_LOCALES[marketplaceId] || 'en-US';
 }
 
-async function request(accessToken, method, path, body, marketplaceId) {
+async function request(accessToken, method, path, body, marketplaceId, { baseUrl } = {}) {
   const locale = localeForMarketplace(marketplaceId);
   let res;
   try {
-    res = await fetch(`${apiBaseUrl()}${path}`, {
+    res = await fetch(`${baseUrl || apiBaseUrl()}${path}`, {
       method,
       headers: {
         'Content-Type': 'application/json',
@@ -87,7 +87,12 @@ async function request(accessToken, method, path, body, marketplaceId) {
       status: res.status,
       errors: (data.errors || []).map((e) => ({ errorId: e.errorId, message: e.message, longMessage: e.longMessage, parameters: e.parameters })),
     });
-    throw new EbayApiError(describeErrors(data.errors, res.status), 502, data.errors);
+    // 403 with eBay's "insufficient permissions" (errorId 1100) means the
+    // token lacks the scope this API needs: the seller has to reconnect.
+    const scopeMissing = res.status === 403 && (data.errors || []).some((e) => e.errorId === 1100 || /insufficient permissions|scope/i.test(`${e.message} ${e.longMessage}`));
+    const err = new EbayApiError(describeErrors(data.errors, res.status), scopeMissing ? 403 : 502, data.errors);
+    if (scopeMissing) err.code = 'EBAY_SCOPE_MISSING';
+    throw err;
   }
   return data;
 }
@@ -248,6 +253,7 @@ function getReturnPolicies(accessToken, marketplaceId) {
 
 module.exports = {
   EbayApiError,
+  request,
   createOrReplaceInventoryItem,
   createOrReplaceInventoryItemGroup,
   getInventoryItemGroup,

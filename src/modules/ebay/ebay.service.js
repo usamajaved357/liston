@@ -1,6 +1,7 @@
 const ebayClient = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 const ebayTrading = require('./ebay.trading');
+const ebayFulfillment = require('./ebay.fulfillment');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
@@ -73,7 +74,7 @@ async function ensureValidAccessToken(credentials) {
     throw new EbayError('This eBay connection has no refresh token. Reconnect the account', 401);
   }
 
-  const refreshed = await ebayOauth.refreshAccessToken(credentials.refreshToken);
+  const refreshed = await ebayOauth.refreshAccessToken(credentials.refreshToken, ebayOauth.grantedScopes(credentials));
   const updatedCredentials = { ...credentials, ...refreshed };
   return { accessToken: refreshed.accessToken, credentials: updatedCredentials, credentialsChanged: true, siteId };
 }
@@ -1240,6 +1241,121 @@ async function enableNotifications(credentials, applicationUrl) {
   return { username: profile.username, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// --- one order, in full ----------------------------------------------------
+
+// Whether this connection's token can use the Fulfillment API. Tokens issued
+// before the order scopes were added can't, until the seller reconnects.
+function canManageOrders(credentials) {
+  return ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FULFILLMENT);
+}
+
+function scopeMissingError() {
+  const err = new EbayError('Order actions need eBay permissions this connection was linked without. Reconnect the account from Connections (one click) to enable them.', 403);
+  err.code = 'EBAY_SCOPE_MISSING';
+  return err;
+}
+
+// The order as eBay's Fulfillment API returns it, with each line's photo
+// and listing link. Without the scope, the Trading copy the order list
+// already holds is returned instead (no line-item ids → no actions), so the
+// page still renders and can say why the actions are off.
+async function getOrderDetail(credentials, { connectionId, orderId }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  let order;
+  let source;
+  if (canManageOrders(credentials)) {
+    const [raw, shipments] = await Promise.all([
+      ebayFulfillment.getOrder(accessToken, orderId, marketplaceId),
+      ebayFulfillment.getShippingFulfillments(accessToken, orderId, marketplaceId).catch(() => ({ fulfillments: [] })),
+    ]);
+    order = ebayFulfillment.mapOrder(raw, shipments?.fulfillments || []);
+    source = 'fulfillment';
+  } else {
+    const all = await getOrdersLast90Cached(connectionId, accessToken, siteId, false).catch(() => []);
+    const legacy = all.find((o) => o.orderId === orderId);
+    if (!legacy) throw new EbayError('Order not found in the last 90 days of this account.', 404);
+    order = legacyOrderDetail(legacy);
+    source = 'trading';
+  }
+  const itemIds = [...new Set(order.lineItems.map((li) => li.itemId).filter(Boolean))];
+  const summaries = await getItemSummariesCached(accessToken, itemIds, siteId);
+  order.lineItems = order.lineItems.map((li) => {
+    const summary = li.itemId ? summaries.get(li.itemId) : null;
+    return { ...li, imageUrl: summary?.imageUrl || null, viewItemUrl: summary?.viewItemUrl || null };
+  });
+  return { order, source, actionsEnabled: source === 'fulfillment', credentialsChanged, credentials: refreshedCredentials };
+}
+
+// A Trading-shaped order (the list's mirror) in the detail shape, minus
+// what Trading doesn't carry.
+function legacyOrderDetail(o) {
+  const status = classifyOrderStatus(o);
+  // Trading money is { amount, currency }; the detail shape is { value, currency }.
+  const amt = (m) => (m && m.amount !== undefined ? { value: Number(m.amount), currency: m.currency } : null);
+  return {
+    orderId: o.orderId,
+    legacyOrderId: o.orderId,
+    salesRecordReference: null,
+    createdAt: o.createdAt,
+    lastModified: null,
+    paymentStatus: o.checkoutStatus === 'Complete' ? 'PAID' : 'PENDING',
+    fulfillmentStatus: o.shippedTime ? 'FULFILLED' : 'NOT_STARTED',
+    cancelState: status === 'cancelled' ? 'CANCELED' : 'NONE_REQUESTED',
+    cancelRequests: [],
+    buyer: { username: o.buyerUserId || null },
+    buyerCheckoutNotes: null,
+    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: '' } : null,
+    shippingService: null,
+    shippingCarrier: null,
+    estimatedDelivery: { min: null, max: null },
+    pricing: { subtotal: amt(o.subtotal), total: amt(o.total), delivery: amt(o.total && o.subtotal ? { amount: o.total.amount - o.subtotal.amount, currency: o.total.currency } : null), tax: null, discount: null, deliveryDiscount: null, adjustment: null },
+    payments: o.paidTime ? [{ method: null, status: 'PAID', amount: amt(o.total), date: o.paidTime, referenceId: null }] : [],
+    refunds: [],
+    totalDueSeller: null,
+    totalMarketplaceFee: null,
+    lineItems: (o.lineItems || []).map((li, index) => ({
+      lineItemId: null,
+      itemId: li.itemId,
+      legacyVariationId: null,
+      sku: null,
+      title: li.title,
+      quantity: li.quantityPurchased,
+      unitPrice: amt(li.price),
+      total: li.price ? { value: Math.round(Number(li.price.amount) * li.quantityPurchased * 100) / 100, currency: li.price.currency } : null,
+      deliveryCost: null,
+      variation: li.variation || [],
+      fulfillmentStatus: o.shippedTime ? 'FULFILLED' : 'NOT_STARTED',
+      shipByDate: li.handleByTime || o.dispatchByTime || null,
+      minEstimatedDelivery: null,
+      maxEstimatedDelivery: null,
+      promotions: [],
+      refunds: [],
+      ebayCollectedTax: null,
+      index,
+    })),
+    fulfillments: o.shippedTime
+      ? [{ fulfillmentId: null, carrier: o.lineItems?.[0]?.trackingCarrier || null, trackingNumber: o.lineItems?.[0]?.trackingNumber || null, shippedDate: o.shippedTime, lineItems: [] }]
+      : [],
+  };
+}
+
+// Marks line items dispatched on eBay, with tracking. Returns the new
+// fulfillment id. The order list's copy is marked stale so it re-reads.
+async function dispatchOrder(credentials, { connectionId, orderId, lineItems, carrier, trackingNumber, shippedDate }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  const result = await ebayFulfillment.createShippingFulfillment(
+    accessToken,
+    orderId,
+    { lineItems, shippingCarrierCode: carrier, trackingNumber, shippedDate },
+    marketplaceId
+  );
+  ordersCache.markStale(String(connectionId));
+  return { fulfillmentId: result?.fulfillmentId || null, credentialsChanged, credentials: refreshedCredentials };
+}
+
 // Marks an account's copies stale without reading anything.
 function markAccountStale(connectionId) {
   invalidateListings(connectionId);
@@ -1501,6 +1617,9 @@ function pushEnabled(connection) {
 
 module.exports = {
   pushEnabled,
+  canManageOrders,
+  getOrderDetail,
+  dispatchOrder,
   EbayError,
   ensureValidAccessToken,
   createOfferWithRetry,

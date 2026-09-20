@@ -234,6 +234,130 @@ export interface Order {
   dispatchByTime: string | null;
   lineItems: OrderLineItem[];
   derivedStatus?: OrderStatusFilter;
+  // Liston's supplier-order rows for this order (one per line item).
+  sourcing?: OrderSourcing[];
+}
+
+// --- one order in full (Fulfillment API shape) + Liston's sourcing --------
+
+export interface Amount {
+  value: number;
+  currency: string;
+}
+
+export interface OrderSourcing {
+  id: string;
+  lineItemId: string;
+  status: "to_order" | "ordered" | "shipped" | "delivered" | "problem";
+  sourcePlatform: string;
+  sourceAccountId: string | null;
+  sourceAccountLabel: string | null;
+  sourceAccountEmail: string | null;
+  sourceOrderNo: string | null;
+  placedAt: string | null;
+  placedBy: { id: string; name: string | null } | null;
+  cardLabel: string | null;
+  cost: Amount | null;
+  trackingNumber: string | null;
+  carrier: string | null;
+  notes: string | null;
+  dispatchedAt: string | null;
+  dispatchedBy: { id: string; name: string | null } | null;
+  ebayFulfillmentId: string | null;
+  updatedAt: string;
+}
+
+export interface OrderDetailLine {
+  lineItemId: string | null;
+  sourcingKey: string;
+  itemId: string | null;
+  legacyVariationId: string | null;
+  sku: string | null;
+  title: string | null;
+  quantity: number;
+  unitPrice: Amount | null;
+  total: Amount | null;
+  deliveryCost: Amount | null;
+  variation: { name: string; value: string }[];
+  fulfillmentStatus: string | null;
+  shipByDate: string | null;
+  minEstimatedDelivery: string | null;
+  maxEstimatedDelivery: string | null;
+  promotions: { description: string | null; discount: Amount | null }[];
+  refunds: { amount: Amount | null; date: string; referenceId: string | null }[];
+  ebayCollectedTax: Amount | null;
+  imageUrl: string | null;
+  viewItemUrl: string | null;
+  listingId?: string;
+  priceBreakdown?: PriceBreakdown | null;
+  sourcing: OrderSourcing | null;
+}
+
+export interface OrderDetail {
+  orderId: string;
+  legacyOrderId: string | null;
+  salesRecordReference: string | null;
+  createdAt: string;
+  lastModified: string | null;
+  paymentStatus: string | null;
+  fulfillmentStatus: string | null;
+  cancelState: string;
+  cancelRequests: { id: string; state: string; reason: string; requestedAt: string; completedAt: string | null; initiator: string }[];
+  buyer: { username: string | null };
+  buyerCheckoutNotes: string | null;
+  shipTo: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string; email: string } | null;
+  shippingService: string | null;
+  shippingCarrier: string | null;
+  estimatedDelivery: { min: string | null; max: string | null };
+  pricing: { subtotal: Amount | null; discount: Amount | null; delivery: Amount | null; deliveryDiscount: Amount | null; tax: Amount | null; adjustment: Amount | null; total: Amount | null };
+  payments: { method: string | null; status: string; amount: Amount | null; date: string; referenceId: string | null }[];
+  refunds: { amount: Amount | null; date: string; status: string; referenceId: string | null }[];
+  totalDueSeller: Amount | null;
+  totalMarketplaceFee: Amount | null;
+  lineItems: OrderDetailLine[];
+  fulfillments: { fulfillmentId: string | null; carrier: string | null; trackingNumber: string | null; shippedDate: string | null; lineItems: { lineItemId: string; quantity: number }[] }[];
+}
+
+export interface OrderEvent {
+  id: string;
+  kind: string;
+  lineItemId?: string | null;
+  detail: Record<string, unknown>;
+  actor: { id: string; name: string | null } | null;
+  at: string;
+}
+
+export interface OrderDetailResponse {
+  order: OrderDetail;
+  actionsEnabled: boolean;
+  source: "fulfillment" | "trading";
+  events: OrderEvent[];
+  carriers: { code: string; label: string }[];
+}
+
+export interface SourcingPatch {
+  status?: OrderSourcing["status"];
+  sourceAccountId?: string | null;
+  sourceOrderNo?: string;
+  placedAt?: string | null;
+  placedBy?: string | null;
+  cardLabel?: string;
+  cost?: { value: string | number; currency: string } | null;
+  trackingNumber?: string;
+  carrier?: string;
+  notes?: string;
+  quantity?: number;
+  dispatchOnEbay?: boolean;
+}
+
+export interface SourceAccount {
+  id: string;
+  platform: string;
+  label: string;
+  email: string;
+  password: string | null;
+  notes: string | null;
+  archived: boolean;
 }
 
 export interface OrderCounts {
@@ -772,6 +896,23 @@ export const api = {
       perPage: number;
     }>(`/api/connections/${id}/orders?${query.toString()}`);
   },
+
+  getOrder: (connectionId: string, orderId: string) =>
+    request<OrderDetailResponse>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}`),
+  // Saves one line's supplier-order details; a new tracking number also
+  // dispatches the line on eBay (see `dispatch` in the response).
+  saveOrderSourcing: (connectionId: string, orderId: string, lineKey: string, patch: SourcingPatch) =>
+    request<{ sourcing: OrderSourcing; dispatch: { ok: boolean; fulfillmentId?: string | null; reason?: string; code?: string | null } | null }>(
+      `/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/sourcing/${encodeURIComponent(lineKey)}`,
+      { method: "PUT", body: JSON.stringify(patch) }
+    ),
+  addOrderNote: (connectionId: string, orderId: string, text: string) =>
+    request<{ event: OrderEvent }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/notes`, { method: "POST", body: JSON.stringify({ text }) }),
+  listSourceAccounts: (includeArchived = false) => request<{ accounts: SourceAccount[] }>(`/api/source-accounts${includeArchived ? "?archived=1" : ""}`),
+  createSourceAccount: (input: { label: string; email: string; password?: string | null; notes?: string | null; platform?: string }) =>
+    request<{ account: SourceAccount }>(`/api/source-accounts`, { method: "POST", body: JSON.stringify(input) }),
+  updateSourceAccount: (id: string, patch: Partial<{ label: string; email: string; password: string | null; notes: string | null; archived: boolean }>) =>
+    request<{ account: SourceAccount }>(`/api/source-accounts/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });

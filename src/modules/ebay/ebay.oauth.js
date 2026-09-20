@@ -1,10 +1,27 @@
 const jwt = require('jsonwebtoken');
 const config = require('../../config');
 
-const SCOPES = [
-  'https://api.ebay.com/oauth/api_scope/sell.inventory',
-  'https://api.ebay.com/oauth/api_scope/sell.account',
-];
+// What a seller consents to when connecting. A token only ever carries the
+// scopes that were in ITS consent link — the developer portal's list is what
+// the app may ask for, not what any token has. Connections made before the
+// order scopes were added keep working for listings; order actions on them
+// say "reconnect" (see hasScope).
+const SCOPE_INVENTORY = 'https://api.ebay.com/oauth/api_scope/sell.inventory';
+const SCOPE_ACCOUNT = 'https://api.ebay.com/oauth/api_scope/sell.account';
+const SCOPE_FULFILLMENT = 'https://api.ebay.com/oauth/api_scope/sell.fulfillment';
+const SCOPE_FINANCES = 'https://api.ebay.com/oauth/api_scope/sell.finances';
+const LEGACY_SCOPES = [SCOPE_INVENTORY, SCOPE_ACCOUNT];
+const SCOPES = [SCOPE_INVENTORY, SCOPE_ACCOUNT, SCOPE_FULFILLMENT, SCOPE_FINANCES];
+
+// The scopes a stored credential set was granted. Older records predate the
+// `scopes` field and were all issued with the legacy pair.
+function grantedScopes(credentials) {
+  return Array.isArray(credentials?.scopes) && credentials.scopes.length ? credentials.scopes : LEGACY_SCOPES;
+}
+
+function hasScope(credentials, scope) {
+  return grantedScopes(credentials).includes(scope);
+}
 
 // The base "public data" scope. Note this identifier is literally api.ebay.com
 // even in sandbox — scopes are names, not endpoints we call.
@@ -139,20 +156,23 @@ async function requestApplicationToken() {
   };
 }
 
-async function refreshAccessToken(refreshToken) {
+// A refresh must ask for the scopes the refresh token was granted — asking
+// for more (say, the order scopes on a pre-orders token) is refused outright.
+async function refreshAccessToken(refreshToken, scopes = LEGACY_SCOPES) {
   const data = await requestToken(
     new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
-      scope: SCOPES.join(' '),
+      scope: scopes.join(' '),
     })
   );
-  return normalizeTokenResponse(data, refreshToken);
+  return { ...normalizeTokenResponse(data, refreshToken), scopes };
 }
 
 function normalizeTokenResponse(data, existingRefreshToken) {
   const now = Date.now();
   return {
+    scopes: SCOPES,
     accessToken: data.access_token,
     accessTokenExpiresAt: now + data.expires_in * 1000,
     // A refresh-token grant doesn't always return a new refresh token — keep
@@ -165,6 +185,12 @@ function normalizeTokenResponse(data, existingRefreshToken) {
 }
 
 module.exports = {
+  SCOPES,
+  LEGACY_SCOPES,
+  SCOPE_FULFILLMENT,
+  SCOPE_FINANCES,
+  grantedScopes,
+  hasScope,
   isSandbox,
   apiBaseUrl,
   signState,

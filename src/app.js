@@ -61,6 +61,7 @@ function createApp() {
   app.use('/api/ebay', ebayRoutes);
   app.use('/api/listings', requireAuth, requireAccess, listingRoutes);
   app.use('/api/team', requireAuth, requireAccess, teamRoutes);
+  app.use('/api/source-accounts', requireAuth, requireAccess, require('./modules/orders/source-account.routes'));
   app.use('/api/overview', overviewRoutes);
 
   app.use((req, res) => {
