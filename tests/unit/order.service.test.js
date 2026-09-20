@@ -161,3 +161,49 @@ test('cancelOrder refuses a dispatched order', async () => {
   stubOrder(fulfillmentOrder({ fulfillmentStatus: 'FULFILLED' }));
   await assert.rejects(() => orderService.cancelOrder(CONNECTION, USER, 'actor', 'o', { reason: 'ADDRESS_ISSUES' }), /has been dispatched/);
 });
+
+test('declineCancellation rejects the open request and refuses when there is none', async () => {
+  stubOrder(fulfillmentOrder({ cancelRequests: [{ id: 'c-1', state: 'REQUESTED', reason: 'ORDER_MISTAKE' }] }));
+  let declined;
+  mock.method(ebayService, 'declineCancellation', async (credentials, input) => {
+    declined = input.cancelId;
+    return {};
+  });
+  const events = mock.method(orderRepository, 'addEvent', async (e) => e);
+  const out = await orderService.declineCancellation(CONNECTION, USER, 'actor', 'o');
+  assert.strictEqual(declined, 'c-1');
+  assert.strictEqual(out.declined, true);
+  assert.strictEqual(events.mock.calls[0].arguments[0].kind, 'ebay.cancel_declined_by_liston');
+  mock.restoreAll();
+  stubOrder(fulfillmentOrder({ cancelRequests: [] }));
+  await assert.rejects(() => orderService.declineCancellation(CONNECTION, USER, 'actor', 'o'), /no open cancellation request/);
+});
+
+test('respondToReturn validates the decline reason and caps a partial refund at the order total', async () => {
+  stubOrder(fulfillmentOrder());
+  await assert.rejects(() => orderService.respondToReturn(CONNECTION, USER, 'actor', 'o', { returnId: 'r-1', action: 'decline', declineReason: 'NOPE' }), /reason for declining/);
+  await assert.rejects(() => orderService.respondToReturn(CONNECTION, USER, 'actor', 'o', { returnId: 'r-1', action: 'refund', amount: '999' }), /can't be more than the order total/);
+  let sent;
+  mock.method(ebayService, 'respondToReturn', async (credentials, input) => {
+    sent = input;
+    return {};
+  });
+  mock.method(orderRepository, 'addEvent', async (e) => e);
+  await orderService.respondToReturn(CONNECTION, USER, 'actor', 'o', { returnId: 'r-1', action: 'refund', amount: '2.5', comment: ' Sorry ' });
+  assert.deepStrictEqual(sent.amount, { value: '2.50', currency: 'GBP' });
+  assert.strictEqual(sent.comment, 'Sorry');
+});
+
+test('respondToInquiry sends the tracking with a detected carrier', async () => {
+  stubOrder(fulfillmentOrder());
+  let sent;
+  mock.method(ebayService, 'respondToInquiry', async (credentials, input) => {
+    sent = input;
+    return {};
+  });
+  mock.method(orderRepository, 'addEvent', async (e) => e);
+  await orderService.respondToInquiry(CONNECTION, USER, 'actor', 'o', { inquiryId: 'i-1', action: 'shipment', trackingNumber: 'JJD 0002 2352 5115 8835' });
+  assert.strictEqual(sent.trackingNumber, 'JJD0002235251158835');
+  assert.strictEqual(sent.carrier, 'Yodel');
+  await assert.rejects(() => orderService.respondToInquiry(CONNECTION, USER, 'actor', 'o', { inquiryId: 'i-1', action: 'shipment', trackingNumber: '' }), /tracking number/);
+});

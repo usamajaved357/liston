@@ -89,6 +89,68 @@ async function cancelOrder(req, res, next) {
   }
 }
 
+async function getCases(req, res, next) {
+  try {
+    res.status(200).json(await orderService.getOrderCases(req.params.id, req.ownerId, req.params.orderId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function declineCancellation(req, res, next) {
+  try {
+    res.status(200).json(await orderService.declineCancellation(req.params.id, req.ownerId, req.userId, req.params.orderId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const returnSchema = z.object({
+  returnId: z.string().min(1),
+  action: z.enum(['accept', 'decline', 'received', 'refund', 'message']),
+  comment: z.string().max(1000).optional(),
+  declineReason: z.string().max(60).optional(),
+  amount: z.union([z.number(), z.string()]).nullable().optional(),
+});
+async function respondToReturn(req, res, next) {
+  try {
+    const parsed = returnSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid return action' });
+    res.status(200).json(await orderService.respondToReturn(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const inquirySchema = z.object({
+  inquiryId: z.string().min(1),
+  action: z.enum(['shipment', 'refund', 'message']),
+  carrier: z.string().max(60).optional(),
+  trackingNumber: z.string().max(80).optional(),
+  shippedDate: z.string().max(40).optional(),
+  message: z.string().max(1000).optional(),
+});
+async function respondToInquiry(req, res, next) {
+  try {
+    const parsed = inquirySchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid inquiry action' });
+    res.status(200).json(await orderService.respondToInquiry(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const disputeSchema = z.object({ disputeId: z.string().min(1), action: z.enum(['accept', 'contest']) });
+async function respondToDispute(req, res, next) {
+  try {
+    const parsed = disputeSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid dispute action' });
+    res.status(200).json(await orderService.respondToDispute(req.params.id, req.ownerId, req.userId, req.params.orderId, parsed.data));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function setArchived(req, res, next) {
   try {
     res.status(200).json(await orderService.setArchived(req.params.id, req.userId, req.params.orderId, req.body?.archived !== false));
@@ -133,4 +195,4 @@ async function updateSourceAccount(req, res, next) {
   }
 }
 
-module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, listSourceAccounts, createSourceAccount, updateSourceAccount };
+module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, getCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, listSourceAccounts, createSourceAccount, updateSourceAccount };

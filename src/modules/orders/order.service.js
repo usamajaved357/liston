@@ -230,6 +230,76 @@ async function cancelOrder(connectionId, userId, actorId, orderId, { reason }) {
   return result;
 }
 
+// eBay's reasons for declining a return request, with Seller Hub's wording.
+const RETURN_DECLINE_REASONS = {
+  ITEM_NOT_RECEIVED: "I haven't received the item back",
+  ITEM_DAMAGED_BY_BUYER: 'The item was damaged by the buyer',
+  RETURN_NOT_ELIGIBLE: "The item isn't eligible for return",
+  OTHER: 'Other',
+};
+
+async function getOrderCases(connectionId, userId, orderId) {
+  const order = await fulfillmentOrder(connectionId, userId, orderId).catch(() => null);
+  const cases = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.getOrderCases(credentials, { orderId, legacyOrderId: order?.legacyOrderId })
+  );
+  return { returns: cases.returns, inquiries: cases.inquiries, disputes: cases.disputes, unavailable: cases.unavailable, returnDeclineReasons: Object.entries(RETURN_DECLINE_REASONS).map(([code, label]) => ({ code, label })) };
+}
+
+async function declineCancellation(connectionId, userId, actorId, orderId) {
+  const order = await fulfillmentOrder(connectionId, userId, orderId);
+  const pending = order.cancelRequests.find((r) => r.state === 'REQUESTED');
+  if (!pending) throw new OrderError('There is no open cancellation request on this order.', 400);
+  await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) => ebayService.declineCancellation(credentials, { connectionId, cancelId: pending.id }));
+  await orderRepository.addEvent({ connectionId, orderId, kind: 'ebay.cancel_declined_by_liston', detail: { cancelId: pending.id, reason: pending.reason }, actorUserId: actorId });
+  return { declined: true, cancelId: pending.id };
+}
+
+async function respondToReturn(connectionId, userId, actorId, orderId, { returnId, action, comment, declineReason, amount }) {
+  if (!returnId) throw new OrderError('Which return?', 400);
+  if (action === 'decline' && !RETURN_DECLINE_REASONS[declineReason]) throw new OrderError('Pick a reason for declining.', 400);
+  if (action === 'message' && !String(comment || '').trim()) throw new OrderError('Write the message first.', 400);
+  let refund = null;
+  if (action === 'refund' && amount !== undefined && amount !== null && amount !== '') {
+    const order = await fulfillmentOrder(connectionId, userId, orderId);
+    const value = Number(amount);
+    if (!Number.isFinite(value) || value <= 0) throw new OrderError('Enter a refund amount above zero.', 400);
+    if (order.pricing.total && value > order.pricing.total.value + 0.005) throw new OrderError(`The refund can't be more than the order total (${order.pricing.total.value.toFixed(2)} ${order.pricing.total.currency}).`, 400);
+    refund = { value: value.toFixed(2), currency: order.pricing.total?.currency || 'GBP' };
+  }
+  await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.respondToReturn(credentials, { returnId, action, comment: String(comment || '').trim().slice(0, 1000) || undefined, declineReason, amount: refund })
+  );
+  await orderRepository.addEvent({ connectionId, orderId, kind: `ebay.return_${action}_by_liston`, detail: { returnId, declineReason: declineReason || null, amount: refund }, actorUserId: actorId });
+  return { ok: true };
+}
+
+async function respondToInquiry(connectionId, userId, actorId, orderId, { inquiryId, action, carrier, trackingNumber, shippedDate, message }) {
+  if (!inquiryId) throw new OrderError('Which inquiry?', 400);
+  const tracking = String(trackingNumber || '').replace(/\s+/g, '');
+  if (action === 'shipment' && !tracking) throw new OrderError('Enter the tracking number you sent it with.', 400);
+  if (action === 'message' && !String(message || '').trim()) throw new OrderError('Write the message first.', 400);
+  await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
+    ebayService.respondToInquiry(credentials, {
+      inquiryId,
+      action,
+      carrier: action === 'shipment' ? carrier || detectCarrier(tracking) || 'Other' : undefined,
+      trackingNumber: action === 'shipment' ? tracking : undefined,
+      shippedDate,
+      message: String(message || '').trim().slice(0, 1000) || undefined,
+    })
+  );
+  await orderRepository.addEvent({ connectionId, orderId, kind: `ebay.inquiry_${action}_by_liston`, detail: { inquiryId, trackingNumber: tracking || null }, actorUserId: actorId });
+  return { ok: true };
+}
+
+async function respondToDispute(connectionId, userId, actorId, orderId, { disputeId, action }) {
+  if (!disputeId) throw new OrderError('Which dispute?', 400);
+  await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) => ebayService.respondToDispute(credentials, { disputeId, action }));
+  await orderRepository.addEvent({ connectionId, orderId, kind: `ebay.dispute_${action}_by_liston`, detail: { disputeId }, actorUserId: actorId });
+  return { ok: true };
+}
+
 async function setArchived(connectionId, actorId, orderId, archived) {
   if (archived) await orderRepository.archiveOrder(connectionId, orderId, actorId);
   else await orderRepository.unarchiveOrder(connectionId, orderId);
@@ -372,4 +442,4 @@ async function sourcingForOrders(connectionId, orderIds) {
   return byOrder;
 }
 
-module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, SOURCING_STATUSES, REFUND_REASONS };
+module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };

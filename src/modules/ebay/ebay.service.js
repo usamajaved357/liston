@@ -1422,6 +1422,171 @@ async function cancelOrder(credentials, { connectionId, orderId, legacyOrderId, 
   return { cancelId, approved: Boolean(pendingCancelId), credentialsChanged: credentialsChanged || signed.credentialsChanged, credentials: signed.credentials };
 }
 
+// --- post-sale cases: returns, item-not-received, payment disputes ---------
+
+function amountOf(node) {
+  if (!node || node.value === undefined) return null;
+  return { value: Number(node.value), currency: node.currency };
+}
+
+function mapReturn(r) {
+  const info = r.creationInfo || {};
+  return {
+    id: String(r.returnId),
+    state: r.state || null, // e.g. RETURN_REQUESTED, RETURN_REQUESTED_TIMEOUT, ITEM_SHIPPED, ITEM_DELIVERED, CLOSED
+    status: r.status || null,
+    type: info.type || r.currentType || null,
+    reason: info.reason || null,
+    buyerComment: info.comments?.content || null,
+    itemId: info.item?.itemId ? String(info.item.itemId) : null,
+    quantity: info.item?.returnQuantity ?? null,
+    openedAt: r.creationInfo?.creationDate?.value || null,
+    respondBy: r.sellerResponseDue?.respondByDate?.value || r.sellerResponseDue?.respondByDate || null,
+    refundAmount: amountOf(r.actualRefundAmount || r.sellerTotalRefund?.actualRefundAmount || r.buyerTotalRefund?.estimatedRefundAmount),
+    tracking: r.shipmentTracking?.trackingNumber || null,
+    carrier: r.shipmentTracking?.carrierUsed || null,
+    closed: /CLOSED|REFUNDED|ESCALATED_CLOSED/i.test(String(r.state || '')),
+  };
+}
+
+function mapInquiry(i) {
+  return {
+    id: String(i.inquiryId),
+    state: i.state || null, // e.g. OPEN, WAITING_FOR_SELLER_RESPONSE, CLOSED
+    status: i.status || null,
+    itemId: i.itemId ? String(i.itemId) : null,
+    openedAt: i.creationDate?.value || i.creationDate || null,
+    respondBy: i.sellerResponseDue?.respondByDate?.value || i.respondByDate?.value || null,
+    claimAmount: amountOf(i.claimAmount),
+    closed: /CLOSED/i.test(String(i.state || '')),
+  };
+}
+
+function mapDispute(d) {
+  return {
+    id: String(d.paymentDisputeId),
+    status: d.paymentDisputeStatus || null, // OPEN, ACTION_NEEDED, CLOSED …
+    reason: d.reason || null,
+    amount: amountOf(d.amount),
+    openedAt: d.openDate || null,
+    respondBy: d.respondByDate || null,
+    closed: /CLOSED/i.test(String(d.paymentDisputeStatus || '')),
+  };
+}
+
+// Every open case on an order, best-effort: none of them may keep the
+// order page from showing, so a failed read is an empty list plus a note.
+async function getOrderCases(credentials, { orderId, legacyOrderId }) {
+  if (!canManageOrders(credentials)) return { returns: [], inquiries: [], disputes: [], unavailable: 'scope' };
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  const id = legacyOrderId || orderId;
+  const quiet = (label, p) =>
+    p.catch((err) => {
+      logger.warn(`Could not read the order's ${label}`, { orderId, error: err.message });
+      return null;
+    });
+  const [returns, inquiries, disputes] = await Promise.all([
+    quiet('returns', ebayPostOrder.searchReturns(accessToken, { orderId: id }, marketplaceId)),
+    quiet('inquiries', ebayPostOrder.searchInquiries(accessToken, { orderId: id }, marketplaceId)),
+    quiet('payment disputes', ebayFulfillment.getPaymentDisputeSummaries(accessToken, { orderId }, marketplaceId)),
+  ]);
+  return {
+    returns: (returns?.members || []).map(mapReturn),
+    inquiries: (inquiries?.members || []).map(mapInquiry),
+    disputes: (disputes?.paymentDisputeSummaries || []).map(mapDispute),
+    unavailable: returns === null && inquiries === null && disputes === null ? 'error' : null,
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
+// Declines a buyer's cancellation request (no refund, order stands).
+async function declineCancellation(credentials, { connectionId, cancelId }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  await ebayPostOrder.rejectCancellation(accessToken, cancelId, credentials.marketplaceId || 'EBAY_GB');
+  ordersCache.markStale(String(connectionId));
+  return { credentialsChanged, credentials: refreshedCredentials };
+}
+
+// One seller action on a return: accept / decline the request, mark the
+// item received, refund (full or partial), or message the buyer. Money
+// moves on decide+refund, so those are signed.
+async function respondToReturn(credentials, { returnId, action, comment, declineReason, amount }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  let creds = refreshedCredentials;
+  let changed = credentialsChanged;
+  const signedKey = async () => {
+    const signed = await ensureSigningKey({ ...creds, marketplaceId }, accessToken);
+    creds = signed.credentials;
+    changed = changed || signed.credentialsChanged;
+    return signed.key;
+  };
+  switch (action) {
+    case 'accept':
+      await ebayPostOrder.decideReturn(accessToken, returnId, { decision: 'ACCEPT', comment }, marketplaceId, await signedKey());
+      break;
+    case 'decline':
+      await ebayPostOrder.decideReturn(accessToken, returnId, { decision: 'DECLINE', comment, declineReason }, marketplaceId, await signedKey());
+      break;
+    case 'received':
+      await ebayPostOrder.markReturnReceived(accessToken, returnId, { comment }, marketplaceId);
+      break;
+    case 'refund':
+      await ebayPostOrder.issueReturnRefund(accessToken, returnId, { amount, comment }, marketplaceId, await signedKey());
+      break;
+    case 'message':
+      await ebayPostOrder.sendReturnMessage(accessToken, returnId, comment, marketplaceId);
+      break;
+    default:
+      throw new EbayError('Unknown return action', 400);
+  }
+  return { credentialsChanged: changed, credentials: creds };
+}
+
+// One seller action on an item-not-received inquiry.
+async function respondToInquiry(credentials, { inquiryId, action, carrier, trackingNumber, shippedDate, message }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  switch (action) {
+    case 'shipment':
+      await ebayPostOrder.provideInquiryShipmentInfo(accessToken, inquiryId, { carrier, trackingNumber, shippedDate, message }, marketplaceId);
+      return { credentialsChanged, credentials: refreshedCredentials };
+    case 'refund': {
+      const signed = await ensureSigningKey({ ...refreshedCredentials, marketplaceId }, accessToken);
+      await ebayPostOrder.issueInquiryRefund(accessToken, inquiryId, { comment: message }, marketplaceId, signed.key);
+      return { credentialsChanged: credentialsChanged || signed.credentialsChanged, credentials: signed.credentials };
+    }
+    case 'message':
+      await ebayPostOrder.sendInquiryMessage(accessToken, inquiryId, message, marketplaceId);
+      return { credentialsChanged, credentials: refreshedCredentials };
+    default:
+      throw new EbayError('Unknown inquiry action', 400);
+  }
+}
+
+// Accept or contest a payment dispute. Contesting uses whatever evidence is
+// already on the dispute (eBay adds the seller's tracking itself; anything
+// more is uploaded on eBay's page).
+async function respondToDispute(credentials, { disputeId, action, returnAddress }) {
+  if (!canManageOrders(credentials)) throw scopeMissingError();
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  if (action === 'accept') {
+    await ebayFulfillment.acceptPaymentDispute(accessToken, disputeId, { returnAddress }, marketplaceId);
+  } else if (action === 'contest') {
+    const dispute = await ebayFulfillment.getPaymentDispute(accessToken, disputeId, marketplaceId);
+    await ebayFulfillment.contestPaymentDispute(accessToken, disputeId, { revision: dispute?.revision ?? 0, returnAddress }, marketplaceId);
+  } else {
+    throw new EbayError('Unknown dispute action', 400);
+  }
+  return { credentialsChanged, credentials: refreshedCredentials };
+}
+
 // A buyer's public feedback score is one rationed Trading call, so it is
 // kept for a day per buyer; "repeat buyer" counts their orders in the
 // account's last-90-day list, which is already held.
@@ -1787,6 +1952,11 @@ function pushEnabled(connection) {
 
 module.exports = {
   pushEnabled,
+  getOrderCases,
+  declineCancellation,
+  respondToReturn,
+  respondToInquiry,
+  respondToDispute,
   variationImageFor,
   canManageOrders,
   getOrderDetail,

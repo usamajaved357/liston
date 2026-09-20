@@ -340,6 +340,52 @@ export interface OrderDetail {
   fulfillments: { fulfillmentId: string | null; carrier: string | null; trackingNumber: string | null; shippedDate: string | null; lineItems: { lineItemId: string; quantity: number }[] }[];
 }
 
+export interface OrderReturn {
+  id: string;
+  state: string | null;
+  status: string | null;
+  type: string | null;
+  reason: string | null;
+  buyerComment: string | null;
+  itemId: string | null;
+  quantity: number | null;
+  openedAt: string | null;
+  respondBy: string | null;
+  refundAmount: Amount | null;
+  tracking: string | null;
+  carrier: string | null;
+  closed: boolean;
+}
+
+export interface OrderInquiry {
+  id: string;
+  state: string | null;
+  status: string | null;
+  itemId: string | null;
+  openedAt: string | null;
+  respondBy: string | null;
+  claimAmount: Amount | null;
+  closed: boolean;
+}
+
+export interface OrderDispute {
+  id: string;
+  status: string | null;
+  reason: string | null;
+  amount: Amount | null;
+  openedAt: string | null;
+  respondBy: string | null;
+  closed: boolean;
+}
+
+export interface OrderCases {
+  returns: OrderReturn[];
+  inquiries: OrderInquiry[];
+  disputes: OrderDispute[];
+  unavailable: "scope" | "error" | null;
+  returnDeclineReasons: { code: string; label: string }[];
+}
+
 export interface OrderEvent {
   id: string;
   kind: string;
@@ -948,6 +994,18 @@ export const api = {
     request<{ refundId: string | null; status: string | null; amount: Amount | null }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/refund`, { method: "POST", body: JSON.stringify(input) }),
   cancelOrder: (connectionId: string, orderId: string, input: { reason?: string }) =>
     request<{ cancelId: string | null; approved: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST", body: JSON.stringify(input) }),
+  // Post-sale cases on an order (returns, item-not-received inquiries,
+  // payment disputes) and the seller's answers to them.
+  getOrderCases: (connectionId: string, orderId: string) =>
+    request<OrderCases>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cases`),
+  declineCancellation: (connectionId: string, orderId: string) =>
+    request<{ declined: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cancel/decline`, { method: "POST" }),
+  respondToReturn: (connectionId: string, orderId: string, input: { returnId: string; action: "accept" | "decline" | "received" | "refund" | "message"; comment?: string; declineReason?: string; amount?: string | null }) =>
+    request<{ ok: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/returns`, { method: "POST", body: JSON.stringify(input) }),
+  respondToInquiry: (connectionId: string, orderId: string, input: { inquiryId: string; action: "shipment" | "refund" | "message"; carrier?: string; trackingNumber?: string; message?: string }) =>
+    request<{ ok: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/inquiries`, { method: "POST", body: JSON.stringify(input) }),
+  respondToDispute: (connectionId: string, orderId: string, input: { disputeId: string; action: "accept" | "contest" }) =>
+    request<{ ok: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/disputes`, { method: "POST", body: JSON.stringify(input) }),
   archiveOrder: (connectionId: string, orderId: string, archived: boolean) =>
     request<{ archived: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/archive`, { method: "POST", body: JSON.stringify({ archived }) }),
   listSourceAccounts: (includeArchived = false) => request<{ accounts: SourceAccount[] }>(`/api/source-accounts${includeArchived ? "?archived=1" : ""}`),

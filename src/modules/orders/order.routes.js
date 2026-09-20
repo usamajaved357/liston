@@ -14,5 +14,10 @@ router.post('/:orderId/dispatch', requireAuth, requireFeature('orders'), orderCo
 router.post('/:orderId/refund', requireAuth, requireFeature('orders'), orderController.refundOrder);
 router.post('/:orderId/cancel', requireAuth, requireFeature('orders'), orderController.cancelOrder);
 router.post('/:orderId/archive', requireAuth, requireFeature('orders'), orderController.setArchived);
+router.get('/:orderId/cases', requireAuth, requireFeature('orders'), orderController.getCases);
+router.post('/:orderId/cancel/decline', requireAuth, requireFeature('orders'), orderController.declineCancellation);
+router.post('/:orderId/returns', requireAuth, requireFeature('orders'), orderController.respondToReturn);
+router.post('/:orderId/inquiries', requireAuth, requireFeature('orders'), orderController.respondToInquiry);
+router.post('/:orderId/disputes', requireAuth, requireFeature('orders'), orderController.respondToDispute);
 
 module.exports = router;

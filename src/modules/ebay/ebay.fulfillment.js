@@ -52,6 +52,31 @@ function issueRefund(accessToken, orderId, { reasonForRefund, comment, refundIte
   return call(accessToken, 'POST', `/order/${encodeURIComponent(orderId)}/issue_refund`, body, marketplaceId, { signingKey });
 }
 
+// --- payment disputes (chargebacks) ----------------------------------------
+
+function getPaymentDisputeSummaries(accessToken, { orderId } = {}, marketplaceId) {
+  const params = new URLSearchParams();
+  if (orderId) params.set('order_id', orderId);
+  params.set('limit', '50');
+  return call(accessToken, 'GET', `/payment_dispute_summary?${params.toString()}`, undefined, marketplaceId);
+}
+
+function getPaymentDispute(accessToken, disputeId, marketplaceId) {
+  return call(accessToken, 'GET', `/payment_dispute/${encodeURIComponent(disputeId)}`, undefined, marketplaceId);
+}
+
+// Accepts the dispute: the buyer keeps the money. `returnAddress` lets the
+// seller ask for the item back.
+function acceptPaymentDispute(accessToken, disputeId, { returnAddress } = {}, marketplaceId) {
+  return call(accessToken, 'POST', `/payment_dispute/${encodeURIComponent(disputeId)}/accept`, returnAddress ? { returnAddress } : {}, marketplaceId);
+}
+
+// Contests it with the evidence already attached to the dispute; eBay
+// requires the dispute's current revision number.
+function contestPaymentDispute(accessToken, disputeId, { revision, returnAddress }, marketplaceId) {
+  return call(accessToken, 'POST', `/payment_dispute/${encodeURIComponent(disputeId)}/contest`, { revision, ...(returnAddress ? { returnAddress } : {}) }, marketplaceId);
+}
+
 // --- shape the order detail page renders ---------------------------------
 
 function amount(node) {
@@ -153,4 +178,4 @@ function mapOrder(o, fulfillments = []) {
   };
 }
 
-module.exports = { getOrder, getShippingFulfillments, createShippingFulfillment, issueRefund, mapOrder, mapLineItem, baseUrl };
+module.exports = { getOrder, getShippingFulfillments, createShippingFulfillment, issueRefund, getPaymentDisputeSummaries, getPaymentDispute, acceptPaymentDispute, contestPaymentDispute, mapOrder, mapLineItem, baseUrl };
