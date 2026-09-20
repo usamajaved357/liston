@@ -995,9 +995,9 @@ export default function OrderDetailPage() {
                       under the second at the same width. Labels are bought
                       on eBay itself (no label API for UK sellers), so the
                       first opens eBay's page for this order. */}
-                  <div className="flex w-[200px] flex-col items-stretch gap-2 print:hidden">
+                  <div className="flex w-[160px] flex-col items-stretch gap-1.5 print:hidden">
                     {!cancelled && !dispatched && ebayOrderUrl && (
-                      <a href={ebayOrderUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm rounded-full">
+                      <a href={ebayOrderUrl} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm rounded-full !h-8 !px-3 !text-[12.5px]">
                         Get postage label
                       </a>
                     )}
@@ -1008,13 +1008,13 @@ export default function OrderDetailPage() {
                           e.stopPropagation();
                           setMoreOpen((v) => !v);
                         }}
-                        className="btn btn-secondary btn-sm w-full rounded-full border-[var(--color-primary)] text-[var(--color-primary)]"
+                        className="btn btn-secondary btn-sm w-full rounded-full border-[var(--color-primary)] !h-8 !px-3 !text-[12.5px] text-[var(--color-primary)]"
                         aria-expanded={moreOpen}
                       >
                         More actions <Chevron open={moreOpen} />
                       </button>
                       {moreOpen && (
-                        <div className="absolute left-0 z-20 mt-1 max-h-[360px] w-[200px] overflow-y-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] py-1 text-[13px] text-[var(--color-ink)] shadow-[0_6px_20px_rgba(0,0,0,0.12)]" onClick={(e) => e.stopPropagation()}>
+                        <div className="absolute right-0 z-20 mt-1 max-h-[300px] w-[176px] overflow-y-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] py-1 text-[12.5px] text-[var(--color-ink)] shadow-[0_6px_20px_rgba(0,0,0,0.12)]" onClick={(e) => e.stopPropagation()}>
                           {(
                             [
                               { label: "Print invoices and more", run: () => window.print() },
@@ -1035,7 +1035,7 @@ export default function OrderDetailPage() {
                           ).map((item) =>
                             item.href !== undefined ? (
                               item.href ? (
-                                <a key={item.label} href={item.href} target="_blank" rel="noreferrer" className="block px-3.5 py-2 leading-5 hover:bg-[var(--color-paper)]">
+                                <a key={item.label} href={item.href} target="_blank" rel="noreferrer" className="block px-3 py-1.5 leading-5 hover:bg-[var(--color-paper)]">
                                   {item.label}
                                 </a>
                               ) : null
@@ -1048,7 +1048,7 @@ export default function OrderDetailPage() {
                                   setMoreOpen(false);
                                   item.run?.();
                                 }}
-                                className="block w-full px-3.5 py-2 text-left leading-5 hover:bg-[var(--color-paper)] disabled:cursor-not-allowed disabled:text-[var(--color-muted)]"
+                                className="block w-full px-3 py-1.5 text-left leading-5 hover:bg-[var(--color-paper)] disabled:cursor-not-allowed disabled:text-[var(--color-muted)]"
                               >
                                 {item.label}
                               </button>
@@ -1120,7 +1120,7 @@ export default function OrderDetailPage() {
                   </div>
                   {!cancelled && (
                     <div className="print:hidden">
-                      <button type="button" onClick={guarded(() => setAction("tracking"))} className="btn btn-secondary btn-sm rounded-full border-[var(--color-primary)] text-[var(--color-primary)]">
+                      <button type="button" onClick={guarded(() => setAction("tracking"))} className="btn btn-secondary btn-sm rounded-full border-[var(--color-primary)] !h-8 !px-3 !text-[12.5px] text-[var(--color-primary)]">
                         {dispatched ? "Edit tracking" : "Add tracking"}
                       </button>
                     </div>
