@@ -7,11 +7,10 @@
 const { request } = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 
-// The Fulfillment API is served from apiz.ebay.com (eBay's docs give that
-// host for every method); api.ebay.com answers too, but the documented one
-// is used.
+// The Fulfillment API answers on api.ebay.com (apiz.ebay.com is the
+// Finances API's host — confirmed live: the order route is 404 there).
 function baseUrl() {
-  return ebayOauth.isSandbox() ? 'https://apiz.sandbox.ebay.com' : 'https://apiz.ebay.com';
+  return ebayOauth.isSandbox() ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com';
 }
 
 function call(accessToken, method, path, body, marketplaceId, options = {}) {

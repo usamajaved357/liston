@@ -51,7 +51,7 @@ test('mapOrder turns a Fulfillment order into the detail shape', () => {
   assert.strictEqual(order.fulfillments[0].trackingNumber, 'JJD1');
 });
 
-test('createShippingFulfillment posts the line items with carrier and tracking to apiz', async () => {
+test('createShippingFulfillment posts the line items with carrier and tracking to api.ebay.com', async () => {
   let captured;
   const fetchMock = mock.method(global, 'fetch', async (url, init) => {
     captured = { url, body: JSON.parse(init.body) };
@@ -60,7 +60,7 @@ test('createShippingFulfillment posts the line items with carrier and tracking t
   try {
     const res = await ebayFulfillment.createShippingFulfillment('tok', '14-1', { lineItems: [{ lineItemId: '1', quantity: 1 }], shippingCarrierCode: 'Evri', trackingNumber: 'H06R4A0218426976' }, 'EBAY_GB');
     assert.strictEqual(res.fulfillmentId, 'ful-9');
-    assert.match(captured.url, /^https:\/\/apiz\.(sandbox\.)?ebay\.com\/sell\/fulfillment\/v1\/order\/14-1\/shipping_fulfillment$/);
+    assert.match(captured.url, /^https:\/\/api\.(sandbox\.)?ebay\.com\/sell\/fulfillment\/v1\/order\/14-1\/shipping_fulfillment$/);
     assert.deepStrictEqual(captured.body, { lineItems: [{ lineItemId: '1', quantity: 1 }], shippingCarrierCode: 'Evri', trackingNumber: 'H06R4A0218426976' });
   } finally {
     fetchMock.mock.restore();
