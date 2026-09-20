@@ -758,3 +758,55 @@ test('reviseInventoryListing replaces the item and offer, then republishes the o
     m.forEach((x) => x.mock.restore());
   }
 });
+
+test('getStoreCategoriesCached reports a failed read instead of caching it as "no departments"', async () => {
+  const ebayTrading = require('../../src/modules/ebay/ebay.trading');
+  const ebayService = require('../../src/modules/ebay/ebay.service');
+  let calls = 0;
+  const m = mock.method(ebayTrading, 'getStoreCategories', async () => {
+    calls += 1;
+    if (calls === 1) throw new Error('eBay is having a moment');
+    return { categories: [{ id: '1', name: 'Tech', children: [] }], hasStore: true };
+  });
+  try {
+    const first = await ebayService.getStoreCategoriesCached(freshCredentials(), 'conn-sc-1');
+    assert.deepStrictEqual(first.categories, []);
+    assert.strictEqual(first.hasStore, null);
+    assert.match(first.unavailable, /Couldn't read this account's Shop departments/);
+    // Not cached: the next read goes to eBay again and succeeds.
+    const second = await ebayService.getStoreCategoriesCached(freshCredentials(), 'conn-sc-1');
+    assert.strictEqual(second.categories[0].name, 'Tech');
+    assert.strictEqual(second.hasStore, true);
+    assert.strictEqual(second.unavailable, null);
+    // A seller without a Shop is a plain no, cached like any other answer.
+    m.mock.mockImplementation(async () => ({ categories: [], hasStore: false }));
+    const none = await ebayService.getStoreCategoriesCached(freshCredentials(), 'conn-sc-2');
+    assert.strictEqual(none.hasStore, false);
+    assert.strictEqual(none.unavailable, null);
+  } finally {
+    m.mock.restore();
+  }
+});
+
+test('addStoreCategory creates the department then serves the refreshed tree', async () => {
+  const ebayTrading = require('../../src/modules/ebay/ebay.trading');
+  const ebayService = require('../../src/modules/ebay/ebay.service');
+  const tree = [{ id: '1', name: 'Tech', children: [] }];
+  const get = mock.method(ebayTrading, 'getStoreCategories', async () => ({ categories: tree, hasStore: true }));
+  const add = mock.method(ebayTrading, 'addStoreCategory', async (token, input) => {
+    assert.strictEqual(input.name, 'Bathroom');
+    tree.push({ id: '2', name: 'Bathroom', children: [] });
+    return { status: 'Complete', category: { id: '2', name: 'Bathroom', children: [] }, warnings: [] };
+  });
+  try {
+    await ebayService.getStoreCategoriesCached(freshCredentials(), 'conn-sc-3');
+    const result = await ebayService.addStoreCategory(freshCredentials(), 'conn-sc-3', { name: 'Bathroom' });
+    assert.strictEqual(add.mock.calls.length, 1);
+    assert.strictEqual(get.mock.calls.length, 2); // cache was dropped and re-read
+    assert.deepStrictEqual(result.categories.map((c) => c.name), ['Tech', 'Bathroom']);
+    assert.strictEqual(result.created.name, 'Bathroom');
+  } finally {
+    get.mock.restore();
+    add.mock.restore();
+  }
+});

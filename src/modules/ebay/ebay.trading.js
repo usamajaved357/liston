@@ -339,18 +339,44 @@ async function reviseDescription(accessToken, itemId, descriptionHtml, { siteId 
 // The seller's Shop categories (only sellers with an eBay Shop subscription
 // have any): the custom departments a listing can be filed under, two levels
 // deep. Returned as a tree of { id, name, children }.
-async function getStoreCategories(accessToken, { siteId } = {}) {
-  const res = await tradingRequest(accessToken, 'GetStore', '<CategoryStructureOnly>true</CategoryStructureOnly>', siteId).catch((err) => {
-    // "not a store subscriber" is a plain no, not a failure.
-    if (err.statusCode === 429) throw err;
-    return null;
-  });
-  const map = (node) => ({
+// eBay's answer to GetStore for an account without a Shop subscription.
+function isNoStoreError(err) {
+  const texts = [err?.message, ...((err?.details || []).flatMap((e) => [e.LongMessage, e.ShortMessage, String(e.ErrorCode ?? '')]))];
+  return texts.some((t) => /not (a )?store subscriber|no (ebay )?(store|shop) subscription|store subscription|not subscribed to (an )?(ebay )?(store|shop)/i.test(String(t || '')));
+}
+
+function mapStoreCategory(node) {
+  return {
     id: String(node.CategoryID),
     name: String(node.Name),
-    children: toArray(node.ChildCategory).map(map),
-  });
-  return toArray(res?.Store?.CustomCategories?.CustomCategory).map(map);
+    children: toArray(node.ChildCategory).map(mapStoreCategory),
+  };
+}
+
+// Returns { categories, hasStore }. A seller without a Shop subscription
+// has no departments (hasStore false) — a plain no. Any other failure is
+// thrown, so it is never mistaken for "no departments".
+async function getStoreCategories(accessToken, { siteId } = {}) {
+  let res;
+  try {
+    res = await tradingRequest(accessToken, 'GetStore', '<CategoryStructureOnly>true</CategoryStructureOnly>', siteId);
+  } catch (err) {
+    if (isNoStoreError(err)) return { categories: [], hasStore: false };
+    throw err;
+  }
+  return { categories: toArray(res?.Store?.CustomCategories?.CustomCategory).map(mapStoreCategory), hasStore: true };
+}
+
+// Adds a department to the seller's Shop (top level, or under `parentId`).
+// eBay may run this as a background task; the caller re-reads the tree.
+async function addStoreCategory(accessToken, { name, parentId }, { siteId } = {}) {
+  const body =
+    `<Action>Add</Action>` +
+    (parentId ? `<DestinationParentCategoryID>${xmlEscape(parentId)}</DestinationParentCategoryID>` : '') +
+    `<StoreCategories><CustomCategory><Name>${xmlEscape(name)}</Name></CustomCategory></StoreCategories>`;
+  const res = await tradingRequest(accessToken, 'SetStoreCategories', body, siteId);
+  const created = toArray(res.CustomCategory)[0];
+  return { status: String(res.Status || 'Complete'), category: created ? mapStoreCategory(created) : null, warnings: res._warnings || [] };
 }
 
 // Feedback buyers left for this seller: the genuine reviews a description
@@ -527,6 +553,8 @@ module.exports = {
   EbayTradingError,
   getUserProfile,
   getStoreCategories,
+  addStoreCategory,
+  isNoStoreError,
   getSellerFeedback,
   setNotificationPreferences,
   CONDITION_IDS,

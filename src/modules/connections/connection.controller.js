@@ -553,14 +553,45 @@ async function categoryDetail(req, res, next) {
   }
 }
 
+function storeCategoriesResponse(result) {
+  return {
+    categories: result.categories,
+    hasStore: result.hasStore ?? null,
+    ...(result.unavailable ? { unavailable: result.unavailable } : {}),
+    ...(result.created ? { created: result.created } : {}),
+    ...(result.warnings?.length ? { warnings: result.warnings } : {}),
+  };
+}
+
 async function storeCategories(req, res, next) {
   try {
     const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
-    if (connection.platform_key !== 'ebay') return res.status(200).json({ categories: [] });
+    if (connection.platform_key !== 'ebay') return res.status(200).json({ categories: [], hasStore: false });
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
-      ebayService.getStoreCategoriesCached(credentials, req.params.id)
+      ebayService.getStoreCategoriesCached(credentials, req.params.id, { refresh })
     );
-    res.status(200).json({ categories: result.categories, ...(result.unavailable ? { unavailable: result.unavailable } : {}) });
+    res.status(200).json(storeCategoriesResponse(result));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const addStoreCategorySchema = z.object({
+  name: z.string().trim().min(1, 'Give the department a name').max(35, 'eBay allows up to 35 characters'),
+  parentId: z.string().trim().min(1).optional(),
+});
+
+async function addStoreCategory(req, res, next) {
+  try {
+    const parsed = addStoreCategorySchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid department' });
+    const connection = await connectionService.getConnectionSummary(req.params.id, req.ownerId);
+    if (connection.platform_key !== 'ebay') return res.status(400).json({ error: 'Only eBay accounts have Shop departments.' });
+    const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
+      ebayService.addStoreCategory(credentials, req.params.id, parsed.data)
+    );
+    res.status(201).json(storeCategoriesResponse(result));
   } catch (err) {
     next(err);
   }
@@ -591,4 +622,5 @@ module.exports = {
   categoryChildren,
   categoryDetail,
   storeCategories,
+  addStoreCategory,
 };

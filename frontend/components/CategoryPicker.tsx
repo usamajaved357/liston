@@ -301,19 +301,73 @@ export function shopCategoryLabel(path: string) {
 export function ShopCategoryPicker({
   value,
   categories,
+  hasStore,
   note,
   onApply,
   onClose,
+  onRefresh,
+  onCreate,
 }: {
   value: string[];
   categories: StoreCategory[];
+  // false: no eBay Shop subscription; null: the read failed (see `note`).
+  hasStore: boolean | null;
   note: string | null;
   onApply: (names: string[]) => void;
   onClose: () => void;
+  onRefresh: () => Promise<void>;
+  onCreate: (input: { name: string; parentId?: string }) => Promise<StoreCategory | null>;
 }) {
   const [names, setNames] = useState<string[]>(value);
+  const [refreshing, setRefreshing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newParent, setNewParent] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const options = useMemo(() => storePaths(categories), [categories]);
+  const topLevel = useMemo(() => categories.map((c) => ({ id: c.id, name: c.name })), [categories]);
   const rowClass = "flex items-center justify-between gap-4 border-b border-[var(--color-line)] py-3";
+
+  const status = note
+    ? note
+    : hasStore === false
+      ? "This account has no eBay Shop subscription, so it has no departments. Departments need a Shop (Seller Hub › Subscriptions)."
+      : options.length
+        ? "File the listing under your own eBay Shop departments, so buyers browsing your Shop find it."
+        : "This Shop has no departments yet. Create the first one below.";
+
+  async function refresh() {
+    setRefreshing(true);
+    setError(null);
+    try {
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't reach eBay. Try again.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function create() {
+    const name = newName.trim();
+    if (!name) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const created = await onCreate({ name, ...(newParent ? { parentId: newParent } : {}) });
+      setNewName("");
+      // The new department is selected in the first free slot straight away.
+      if (created) {
+        const parent = newParent ? categories.find((c) => c.id === newParent) : null;
+        const path = `${parent ? `/${parent.name}` : ""}/${created.name}`;
+        setNames((current) => (current.length < 2 && !current.includes(path) ? [...current, path] : current));
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "eBay didn't accept that department. Try again.");
+    } finally {
+      setCreating(false);
+    }
+  }
 
   function select(index: 0 | 1) {
     const current = names[index] || "";
@@ -348,9 +402,13 @@ export function ShopCategoryPicker({
             Close
           </button>
         </div>
-        <p className="mt-1 text-xs text-[var(--color-muted)]">
-          {note || (options.length ? "File the listing under your own eBay Shop departments, so buyers browsing your Shop find it." : "This account has no eBay Shop departments to file under.")}
-        </p>
+        <div className="mt-1 flex items-start justify-between gap-3">
+          <p className="text-xs text-[var(--color-muted)]">{status}</p>
+          <button type="button" onClick={refresh} disabled={refreshing} className="btn btn-ghost btn-sm flex-shrink-0" title="Re-read the departments from eBay">
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+        {error && <p className="mt-2 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
         <div className="mt-2">
           <div className={rowClass}>
             <p className="text-sm font-semibold text-[var(--color-ink)]">First category</p>
@@ -361,6 +419,39 @@ export function ShopCategoryPicker({
             {select(1)}
           </div>
         </div>
+        {hasStore !== false && (
+          <div className="mt-4 rounded-xl border border-dashed border-[var(--color-line)] p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">New department</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={newName}
+                maxLength={35}
+                placeholder="e.g. Bathroom"
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    create();
+                  }
+                }}
+                className="input input-sm min-w-0 flex-1"
+              />
+              <select className="input input-sm max-w-[45%]" value={newParent} onChange={(e) => setNewParent(e.target.value)} title="Where to put it">
+                <option value="">Top level</option>
+                {topLevel.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    Under {c.name}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={create} disabled={creating || !newName.trim()} className="btn btn-secondary btn-sm">
+                {creating ? "Creating…" : "Create"}
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-[var(--color-muted)]">Created in your eBay Shop itself, so it shows on eBay too.</p>
+          </div>
+        )}
         <div className="mt-6 flex justify-end gap-3">
           <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
             Cancel

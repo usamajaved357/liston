@@ -359,6 +359,16 @@ export interface StoreCategory {
   children: StoreCategory[];
 }
 
+export interface StoreCategoriesResponse {
+  categories: StoreCategory[];
+  // true: the account has an eBay Shop; false: no Shop subscription, so no
+  // departments can exist; null: eBay couldn't be read (see `unavailable`).
+  hasStore: boolean | null;
+  unavailable?: string;
+  created?: StoreCategory;
+  warnings?: string[];
+}
+
 export interface SingleDraftContent {
   title: string;
   description: string;
@@ -873,8 +883,12 @@ export const api = {
     ),
   getCategory: (connectionId: string, categoryId: string) =>
     request<DraftCategoryInfo>(`/api/connections/${connectionId}/categories/${encodeURIComponent(categoryId)}`),
-  getStoreCategories: (connectionId: string) =>
-    request<{ categories: StoreCategory[]; unavailable?: string }>(`/api/connections/${connectionId}/store-categories`),
+  getStoreCategories: (connectionId: string, options?: { refresh?: boolean }) =>
+    request<StoreCategoriesResponse>(`/api/connections/${connectionId}/store-categories${options?.refresh ? "?refresh=1" : ""}`),
+  // Creates a department in the seller's eBay Shop (top level, or under
+  // `parentId`) and returns the refreshed tree.
+  addStoreCategory: (connectionId: string, input: { name: string; parentId?: string }) =>
+    request<StoreCategoriesResponse>(`/api/connections/${connectionId}/store-categories`, { method: "POST", body: JSON.stringify(input) }),
 
   publishDraftListing: (listingId: string) =>
     request<{ listing: DraftListing; warnings?: string[] }>(`/api/listings/${listingId}/publish`, { method: "POST" }),

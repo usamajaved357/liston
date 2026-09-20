@@ -607,8 +607,17 @@ async function deleteInventoryObjects(credentials, { offerId, groupKey, skus = [
 // departments. Sellers without an eBay Shop simply have none.
 async function getStoreCategories(credentials) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  const categories = await ebayTrading.getStoreCategories(accessToken, { siteId });
-  return { categories, credentialsChanged, credentials: refreshedCredentials };
+  const { categories, hasStore } = await ebayTrading.getStoreCategories(accessToken, { siteId });
+  return { categories, hasStore, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// Creates a Shop department and returns the refreshed tree.
+async function addStoreCategory(credentials, connectionId, { name, parentId }) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.addStoreCategory(accessToken, { name, parentId }, { siteId });
+  storeCategoryCache.delete(String(connectionId));
+  const fresh = await getStoreCategoriesCached(credentials, connectionId);
+  return { ...fresh, created: result.category, status: result.status, warnings: result.warnings };
 }
 
 // The Shop's departments change rarely and the Trading call behind them is
@@ -617,17 +626,19 @@ async function getStoreCategories(credentials) {
 // categories is a valid state.
 const storeCategoryCache = new Map(); // connectionId -> { categories, expiresAt }
 const STORE_CATEGORY_TTL_MS = 60 * 60 * 1000;
-async function getStoreCategoriesCached(credentials, connectionId) {
+async function getStoreCategoriesCached(credentials, connectionId, { refresh = false } = {}) {
   const id = String(connectionId);
   const cached = storeCategoryCache.get(id);
-  if (cached && cached.expiresAt > Date.now()) return { categories: cached.categories, unavailable: null };
+  if (!refresh && cached && cached.expiresAt > Date.now()) return { categories: cached.categories, hasStore: cached.hasStore, unavailable: null };
   try {
-    const { categories } = await getStoreCategories(credentials);
-    storeCategoryCache.set(id, { categories, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
-    return { categories, unavailable: null };
+    const { categories, hasStore } = await getStoreCategories(credentials);
+    storeCategoryCache.set(id, { categories, hasStore, expiresAt: Date.now() + STORE_CATEGORY_TTL_MS });
+    return { categories, hasStore, unavailable: null };
   } catch (err) {
-    if (err.statusCode === 429 || err.code === 'EBAY_BUDGET') return { categories: [], unavailable: err.message };
-    throw err;
+    // A failed read is reported as such — never cached, never shown as
+    // "no departments".
+    const reason = err.statusCode === 429 || err.code === 'EBAY_BUDGET' ? err.message : `Couldn't read this account's Shop departments from eBay (${err.message}). Try again.`;
+    return { categories: [], hasStore: null, unavailable: reason };
   }
 }
 
@@ -1506,6 +1517,7 @@ module.exports = {
   detectMarketplace,
   getStoreCategories,
   getStoreCategoriesCached,
+  addStoreCategory,
   createMerchantLocation,
   deleteInventoryObjects,
   findLiveListingForSku,

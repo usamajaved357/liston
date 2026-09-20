@@ -36,6 +36,7 @@ router.get('/:id/categories/search', requireAuth, requireFeature('listings'), co
 router.get('/:id/categories/children', requireAuth, requireFeature('listings'), connectionController.categoryChildren);
 router.get('/:id/categories/:categoryId', requireAuth, requireFeature('listings'), connectionController.categoryDetail);
 router.get('/:id/store-categories', requireAuth, requireFeature('listings'), connectionController.storeCategories);
+router.post('/:id/store-categories', requireAuth, requireFeature('listings'), connectionController.addStoreCategory);
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
 router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
 router.post('/:id/listings/:itemId/end', requireAuth, requireFeature('listings'), listingController.endLive);

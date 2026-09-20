@@ -1467,7 +1467,7 @@ export default function DraftEditorPage() {
   const [shopPickerOpen, setShopPickerOpen] = useState(false);
   // The Shop's departments, read once per page (cached server-side): for
   // the Shop category dialog and so the AI knows what it may file under.
-  const [storeCategories, setStoreCategories] = useState<{ categories: StoreCategory[]; note: string | null } | null>(null);
+  const [storeCategories, setStoreCategories] = useState<{ categories: StoreCategory[]; hasStore: boolean | null; note: string | null } | null>(null);
   const [refitting, setRefitting] = useState(false);
   const [showOptionalSpecifics, setShowOptionalSpecifics] = useState(false);
   const [splitting, setSplitting] = useState<number | null>(null);
@@ -1582,12 +1582,23 @@ export default function DraftEditorPage() {
     if (descMode === "preview") loadDescriptionPreview(listingId);
   }
 
+  const loadStoreCategories = useCallback(
+    (refresh = false) =>
+      api
+        .getStoreCategories(params.id, { refresh })
+        .then((data) => {
+          setStoreCategories({ categories: data.categories, hasStore: data.hasStore ?? null, note: data.unavailable || null });
+        })
+        .catch((err) => {
+          // A failed read is said so, never shown as "no departments".
+          setStoreCategories({ categories: [], hasStore: null, note: err instanceof ApiError ? err.message : "Couldn't read this account's Shop departments. Try again." });
+          if (refresh) throw err;
+        }),
+    [params.id]
+  );
   useEffect(() => {
-    api
-      .getStoreCategories(params.id)
-      .then((data) => setStoreCategories({ categories: data.categories, note: data.unavailable || null }))
-      .catch(() => setStoreCategories({ categories: [], note: null }));
-  }, [params.id]);
+    loadStoreCategories().catch(() => {});
+  }, [loadStoreCategories]);
 
   useEffect(() => {
     api
@@ -2537,9 +2548,11 @@ export default function DraftEditorPage() {
                       <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
                         {storeCategories?.note
                           ? storeCategories.note
-                          : storeCategories && storeCategories.categories.length === 0
-                            ? "No eBay Shop departments on this account."
-                            : "Not filed under a Shop department."}
+                          : storeCategories?.hasStore === false
+                            ? "No eBay Shop on this account."
+                            : storeCategories && storeCategories.categories.length === 0
+                              ? "No Shop departments yet — add one."
+                              : "Not filed under a Shop department."}
                       </p>
                     )}
                   </div>
@@ -2900,12 +2913,19 @@ export default function DraftEditorPage() {
         <ShopCategoryPicker
           value={storeCategoryNames}
           categories={storeCategories.categories}
+          hasStore={storeCategories.hasStore}
           note={storeCategories.note}
           onApply={(names) => {
             setStoreCategoryNames(names);
             setShopPickerOpen(false);
           }}
           onClose={() => setShopPickerOpen(false)}
+          onRefresh={() => loadStoreCategories(true)}
+          onCreate={async (input) => {
+            const data = await api.addStoreCategory(params.id, input);
+            setStoreCategories({ categories: data.categories, hasStore: data.hasStore ?? true, note: data.unavailable || null });
+            return data.created ?? null;
+          }}
         />
       )}
       <ConfirmDialog
