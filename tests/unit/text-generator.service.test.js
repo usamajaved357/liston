@@ -301,3 +301,58 @@ test('generateListingContent tells the model to write around eBay’s hazardous-
   assert.match(warning, /"petrol" in the description/);
   assert.match(warning, /"lighter" in the description/);
 });
+
+// Every drafted description follows one layout: a bold headline, an intro,
+// **Key Features** as emoji lines, sizes only for variation listings, then
+// suitability, package contents, an optional caution and a closing line.
+test('generateListingContent tells the model the description layout', async () => {
+  config.anthropicApiKey = 'test-key';
+  delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+  let prompt;
+  mock.method(messagesProto, 'create', async (args) => {
+    if (!prompt) prompt = args.messages[0].content;
+    return toolResultResponse({ title: 'x'.repeat(72), description: 'd', condition: 'NEW', aspects: {} });
+  });
+
+  await textGenerator.generateListingContent({
+    competitor: null,
+    source: { title: 'Mat', variants: [], specifics: {}, categoryBreadcrumb: [] },
+    costPrice: 5,
+    sellPrice: 15,
+    currency: 'GBP',
+  });
+
+  assert.match(prompt, /DESCRIPTION FORMAT/);
+  assert.match(prompt, /\*\*Key Features\*\*: 5 to 7 lines/);
+  assert.match(prompt, /ONLY for a listing with variations/);
+  assert.match(prompt, /\*\*Package Includes\*\*/);
+  assert.match(prompt, /never invent/);
+  assert.match(prompt, /no emoji/, 'the title rule forbids emoji');
+});
+
+test('generateListingContent puts the default bullets on bare list sections and rewrites dashes', async () => {
+  config.anthropicApiKey = 'test-key';
+  delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
+  const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
+
+  mock.method(messagesProto, 'create', async () =>
+    toolResultResponse({
+      title: 'x'.repeat(72),
+      description: '**Rack – Storage**\n\n**Suitable For**\nKitchens\n\n**Package Includes**\n1 × Rack',
+      condition: 'NEW',
+      aspects: {},
+    })
+  );
+
+  const result = await textGenerator.generateListingContent({
+    competitor: null,
+    source: { title: 'Rack', variants: [], specifics: {}, categoryBreadcrumb: [] },
+    costPrice: 5,
+    sellPrice: 15,
+    currency: 'GBP',
+  });
+
+  assert.strictEqual(result.description, '**Rack: Storage**\n\n**Suitable For**\n✓ Kitchens\n\n**Package Includes**\n• 1 × Rack');
+});

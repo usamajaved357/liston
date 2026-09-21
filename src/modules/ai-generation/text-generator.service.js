@@ -83,11 +83,12 @@ const VARIATION_TOOL = {
 // eBay's title limit is 80 characters and search rewards using it: a short
 // title leaves keywords buyers type on the table.
 const policyWords = require('../listings/policy-words');
+const descriptionFormat = require('./description-format');
 
 const TITLE_RULE =
   `TITLE RULE: the title MUST be between 70 and 80 characters long (count them). Pack it with the words buyers ` +
   `search for: product type, key feature, use, compatibility, size or pack count, colour if fixed. No filler ` +
-  `words, no ALL CAPS, no "wow"/"L@@K", no seller name.\n`;
+  `words, no ALL CAPS, no emoji, no "wow"/"L@@K", no seller name.\n`;
 
 // How the variation axis and its options should be named. With a
 // competitor that has variations, buyers already know that seller's
@@ -140,6 +141,7 @@ function buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspec
     `import, or any supplier in the title, description or item specifics.\n` +
     TITLE_RULE +
     policyWords.PROMPT_GUIDANCE +
+    descriptionFormat.PROMPT_GUIDANCE +
     `\nThe seller pays ${currency} ${costPrice} per unit and will sell at ${currency} ${sellPrice}.\n\n` +
     (competitor ? `--- Competitor's eBay listing ---\n${summarizeListing(competitor)}\n\n` : '') +
     (categoryPath?.length ? `--- eBay category this will be listed in ---\n${categoryPath.join(' > ')}\n\n` : '') +
@@ -282,6 +284,11 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
     );
   }
 
+  // The list sections take the editor's default bullets even when the model
+  // leaves them off, and any dash it used as punctuation is rewritten.
+  const descKey = hasVariants ? 'commonDescription' : 'description';
+  content[descKey] = descriptionFormat.cleanDashes(descriptionFormat.applyDefaultBullets(content[descKey]));
+
   // The schema says maxLength 80 but the model doesn't always honour it (an
   // 89-character camera title came back and blocked Save). Trim at a word
   // boundary rather than mid-word.
@@ -351,7 +358,8 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
         content:
           `An eBay seller has moved their draft listing to a different category. Rewrite the title, description ` +
           `and item specifics so they fit the NEW category, keeping every product fact the same. Keep the ` +
-          `description's structure and tone; change wording only where the category angle calls for it.\n` +
+          `description's structure and tone; change wording only where the category angle calls for it. Never ` +
+          `use a dash as punctuation in the description (no "–", "—" or " - "): use a colon or comma.\n` +
           `The seller is a UK business dispatching from the UK. Never mention China, AliExpress, overseas shipping, ` +
           `import, or any supplier.\n` +
           TITLE_RULE +
@@ -389,7 +397,7 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
     warnings.push(`eBay requires ${missing.join(', ')} in this category and the draft has no value yet — fill ${missing.length === 1 ? 'it' : 'them'} in item specifics before publishing.`);
   }
   const finalTitle = await ensureTitleLength(anthropic, trimTitle(content.title), source ? summarizeListing(source) : null);
-  return { title: finalTitle, description: content.description, aspects: validated, warnings };
+  return { title: finalTitle, description: descriptionFormat.cleanDashes(content.description), aspects: validated, warnings };
 }
 
 module.exports = { generateListingContent, refitContentForCategory };

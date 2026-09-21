@@ -1069,6 +1069,10 @@ function htmlToText(html) {
   text = text.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, '');
   text = text.replace(/<(strong|b)>([\s\S]*?)<\/\1>/gi, '**$2**');
   text = text.replace(/<mark[^>]*>([\s\S]*?)<\/mark>/gi, '==$1==');
+  // Liston's styled lists carry their own marker (✓, ★, 1. …): keep it.
+  text = text.replace(/<li[^>]*>\s*<span class="eb-b">([^<]*)<\/span>/gi, '$1 ');
+  // A section heading sits directly above its content, with no blank line.
+  text = text.replace(/(<p class="eb-h">[\s\S]*?<\/p>)\s*<p>/gi, '$1');
   text = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n').replace(/<\/(ul|ol)>/gi, '\n\n').replace(/<p[^>]*>/gi, '\n').replace(/<li[^>]*>/gi, '• ');
   text = text.replace(/<[^>]+>/g, '');
   text = text.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");

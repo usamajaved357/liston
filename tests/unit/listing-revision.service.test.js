@@ -171,6 +171,20 @@ test('reviseText works from the editor’s unsaved state when it is given', asyn
   assert.deepStrictEqual(changes.price, { value: '12.00', currency: 'GBP' });
 });
 
+// "Rewrite the description" produces the same layout a fresh draft has; a
+// small edit keeps whatever layout the description already has.
+test('reviseText gives the model the description layout for rewrites', async () => {
+  process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key';
+  mockModel({ summary: 'Rewritten', description: '**Mat**\nNew.' });
+  await revision.reviseText({
+    draft: { title: 'Mat', description: 'Old.', price: { value: '9.00', currency: 'GBP' }, quantity: 1 },
+    instruction: 'rewrite the description',
+  });
+  const prompt = mockModel.lastRequest.messages[0].content;
+  assert.match(prompt, /For a small change, edit the description in place and keep its layout/);
+  assert.match(prompt, /DESCRIPTION FORMAT/);
+});
+
 test('reviseText reports what it cannot do instead of inventing a change', async () => {
   process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key';
   mockModel({ summary: 'n/a', cannotDo: 'Photos are edited from the gallery, not here.' });

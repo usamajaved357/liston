@@ -263,6 +263,7 @@ function GalleryGrid({
   selected,
   onSelect,
   onSetMain,
+  onMove,
   onDelete,
   onUpload,
   onReplace,
@@ -274,6 +275,7 @@ function GalleryGrid({
   selected: number;
   onSelect: (index: number) => void;
   onSetMain: (index: number) => void;
+  onMove: (from: number, to: number) => void;
   onDelete: (index: number) => void;
   onUpload: (files: File[]) => void;
   onReplace: (index: number, file: File) => void;
@@ -283,6 +285,13 @@ function GalleryGrid({
 }) {
   const count = images.length;
   const current = images[selected];
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
+  const canDrag = !disabled && count > 1;
+  function endDrag() {
+    setDragFrom(null);
+    setDragOver(null);
+  }
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -327,10 +336,42 @@ function GalleryGrid({
         </div>
       ) : (
         <>
-          {/* Selected image, large */}
-          <div className="relative mt-3 aspect-square rounded-xl border border-[var(--color-line)] bg-white">
+          {/* Selected image, large. Dropping a thumbnail here makes it the main photo. */}
+          <div
+            className={`relative mt-3 aspect-square rounded-xl border bg-white transition-all ${
+              dragOver === -1 ? "border-2 border-dashed border-[var(--color-primary)] ring-4 ring-[var(--color-primary-soft)]" : "border-[var(--color-line)]"
+            }`}
+            onDragOver={(e) => {
+              if (dragFrom === null || dragFrom === 0) return; // already the main photo
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (dragOver !== -1) setDragOver(-1);
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver((o) => (o === -1 ? null : o));
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragFrom !== null) onSetMain(dragFrom);
+              endDrag();
+            }}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={current} alt="" className="h-full w-full rounded-xl object-contain" />
+            <img src={current} alt="" draggable={false} className="h-full w-full rounded-xl object-contain" />
+            {dragFrom !== null && dragFrom !== 0 && (
+              <div
+                className={`pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl transition-colors ${
+                  dragOver === -1 ? "bg-[var(--color-primary)]/15" : "bg-white/60"
+                }`}
+              >
+                <span className="flex items-center gap-1.5 rounded-full bg-[var(--color-primary)] px-3 py-1.5 text-xs font-semibold text-white shadow-md">
+                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
+                    <path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.9L12 16.9l-5.3 2.8 1.1-5.9-4.3-4.1 5.9-.8L12 3.5z" />
+                  </svg>
+                  Drop to set as main photo
+                </span>
+              </div>
+            )}
             {selected === 0 && (
               <span title="Main photo" className="absolute left-3 top-3 flex h-6 w-6 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-sm">
                 <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor">
@@ -394,19 +435,43 @@ function GalleryGrid({
             </div>
           </div>
 
-          {/* Every image */}
+          {/* Every image — drag one onto another frame to move it there */}
           <div className="mt-2.5 grid grid-cols-5 gap-1.5 sm:grid-cols-6">
             {images.map((url, i) => (
               <button
                 key={`${url}-${i}`}
                 type="button"
                 onClick={() => onSelect(i)}
-                className={`group relative aspect-square overflow-hidden rounded-lg border-2 bg-white transition-all ${
-                  i === selected ? "border-[var(--color-primary)] shadow-sm" : "border-[var(--color-line)] hover:border-[var(--color-muted)]"
-                }`}
+                draggable={canDrag}
+                title={canDrag ? "Drag to reorder" : undefined}
+                onDragStart={(e) => {
+                  setDragFrom(i);
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", String(i));
+                }}
+                onDragOver={(e) => {
+                  if (dragFrom === null) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (dragOver !== i) setDragOver(i);
+                }}
+                onDragLeave={() => setDragOver((o) => (o === i ? null : o))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragFrom !== null) onMove(dragFrom, i);
+                  endDrag();
+                }}
+                onDragEnd={endDrag}
+                className={`group relative aspect-square overflow-hidden rounded-lg border-2 bg-white transition-all ${canDrag ? "cursor-grab active:cursor-grabbing" : ""} ${
+                  dragOver === i && dragFrom !== i
+                    ? "scale-105 border-dashed border-[var(--color-primary)] ring-2 ring-[var(--color-primary-soft)]"
+                    : i === selected
+                      ? "border-[var(--color-primary)] shadow-sm"
+                      : "border-[var(--color-line)] hover:border-[var(--color-muted)]"
+                } ${dragFrom === i ? "opacity-40" : ""}`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={url} alt="" className="h-full w-full object-contain" />
+                <img src={url} alt="" draggable={false} className="pointer-events-none h-full w-full object-contain" />
                 <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-bold text-white">{i + 1}</span>
                 {i === 0 && (
                   <span title="Main photo" className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-sm">
@@ -2083,8 +2148,19 @@ export default function DraftEditorPage() {
   }
 
   function setMain(index: number) {
-    setImages((imgs) => [imgs[index], ...imgs.filter((_, i) => i !== index)]);
-    setSelectedImage(0);
+    moveImage(index, 0);
+  }
+  // Drag-and-drop reorder, the way eBay's photo grid does it: the dragged
+  // photo takes the target slot and the ones in between shift by one.
+  function moveImage(from: number, to: number) {
+    if (from === to) return;
+    setImages((imgs) => {
+      const next = [...imgs];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+    setSelectedImage(to);
   }
   function deleteImage(index: number) {
     setImages((imgs) => imgs.filter((_, i) => i !== index));
@@ -2441,6 +2517,7 @@ export default function DraftEditorPage() {
                 selected={selectedImage}
                 onSelect={setSelectedImage}
                 onSetMain={setMain}
+                onMove={moveImage}
                 onDelete={deleteImage}
                 onUpload={(files) => uploadFiles(files)}
                 onReplace={(i, file) => uploadFiles([file], { replaces: images[i] })}

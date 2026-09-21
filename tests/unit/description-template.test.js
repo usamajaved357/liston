@@ -89,7 +89,106 @@ test('textToHtml renders inline formatting markers and nothing else', () => {
 
 test('textToHtml treats a bold-only line as a heading without doubling the tags', () => {
   const { textToHtml } = require('../../src/modules/listings/description-template');
-  assert.strictEqual(textToHtml('**Key Features:**\n• A'), '<p><strong>Key Features</strong></p><ul><li>A</li></ul>');
+  assert.strictEqual(textToHtml('**Key Features:**\n• A'), '<p class="eb-h"><strong>Key Features</strong></p><ul><li>A</li></ul>');
+});
+
+// The editor's bullet library and numbering keep the seller's own marker,
+// rendered as a real list with a hanging indent; plain "•" stays a plain <ul>.
+test('textToHtml renders styled bullets and numbering as lists that keep their marker', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  assert.strictEqual(
+    textToHtml('✓ **Steel** strap\n✓ Fits 20mm'),
+    '<ul class="eb-list"><li><span class="eb-b">✓</span><strong>Steel</strong> strap</li><li><span class="eb-b">✓</span>Fits 20mm</li></ul>'
+  );
+  assert.strictEqual(
+    textToHtml('1. Open\n2) Fit'),
+    '<ul class="eb-list eb-num"><li><span class="eb-b">1.</span>Open</li><li><span class="eb-b">2)</span>Fit</li></ul>'
+  );
+});
+
+test('textToHtml keeps mixed lines in order, one list per kind of marker', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  const html = textToHtml('Specs:\n• A\n★ B\n1. C\nAfter');
+  assert.strictEqual(
+    html,
+    '<p>Specs:</p><ul><li>A</li></ul><ul class="eb-list"><li><span class="eb-b">★</span>B</li></ul>' +
+      '<ul class="eb-list eb-num"><li><span class="eb-b">1.</span>C</li></ul><p>After</p>'
+  );
+});
+
+test('textToHtml does not mistake ordinary lines for lists', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  assert.strictEqual(textToHtml('1x Strap\n**Bold** start\n2024 model'), '<p>1x Strap<br/><strong>Bold</strong> start<br/>2024 model</p>');
+});
+
+test('the template styles the marker lists in the accent colour', () => {
+  const html = renderDescription({ template: base, productName: 'P', description: '✓ A' });
+  assert.match(html, /\.eb-desc ul\.eb-list\{list-style:none/);
+  assert.match(html, /\.eb-desc \.eb-b\{[^}]*color:/);
+  assert.match(html, /<span class="eb-b">✓<\/span>A/);
+});
+
+// The AI's description layout: **Heading** lines over their content, emoji-
+// led Key Features lines, blank lines between sections.
+const LAYOUT =
+  '**Pet Cooling Mat For Dogs & Cats – Summer Heat Relief**\nKeep your pet cool.\n\n' +
+  '**Key Features**\n❄️ Cooling Comfort – Helps.\n🛏️ Comfortable Resting Area – Beds.\n\n' +
+  '**Available Sizes**\nXS / S / M\n\nPlease select your required size.\n\n' +
+  '**Suitable For**\nDogs\nCats\n\n**Package Includes**\n1 × Pet Cooling Mat\n\n' +
+  '**Important:** Check sizes.\n\nGive your pet a cool place.';
+
+test('textToHtml renders the description layout: headings, emoji features, sections', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  assert.strictEqual(
+    textToHtml(LAYOUT),
+    '<p class="eb-h"><strong>Pet Cooling Mat For Dogs &amp; Cats – Summer Heat Relief</strong></p><p>Keep your pet cool.</p>' +
+      '<p class="eb-h"><strong>Key Features</strong></p><ul class="eb-list"><li><span class="eb-b">❄️</span>Cooling Comfort – Helps.</li>' +
+      '<li><span class="eb-b">🛏️</span>Comfortable Resting Area – Beds.</li></ul>' +
+      '<p class="eb-h"><strong>Available Sizes</strong></p><p>XS / S / M</p><p>Please select your required size.</p>' +
+      '<p class="eb-h"><strong>Suitable For</strong></p><p>Dogs<br/>Cats</p>' +
+      '<p class="eb-h"><strong>Package Includes</strong></p><p>1 × Pet Cooling Mat</p>' +
+      '<p class="eb-note"><strong>Important:</strong> Check sizes.</p><p>Give your pet a cool place.</p>'
+  );
+});
+
+test('textToHtml takes emoji sequences as one marker, and never © ® ™', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  assert.strictEqual(textToHtml('👩‍⚕️ Vet approved'), '<ul class="eb-list"><li><span class="eb-b">👩‍⚕️</span>Vet approved</li></ul>');
+  assert.strictEqual(textToHtml('© 2026 Brand\n® Mark'), '<p>© 2026 Brand<br/>® Mark</p>');
+});
+
+test('htmlToText reads the description layout back exactly as it was written', () => {
+  const { htmlToText } = require('../../src/modules/listings/listing.service');
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  assert.strictEqual(htmlToText(`<div class="eb-desc">${textToHtml(LAYOUT)}</div>\n  </div>`), LAYOUT);
+});
+
+// "Important:", "Note:", "Warning:" … lines stand out as a highlighted
+// callout on eBay, whoever wrote them; look-alikes and list items don't.
+test('textToHtml renders note lines as a highlighted callout', () => {
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  assert.strictEqual(
+    textToHtml('Closing.\n**Important:** Measure first.\n\nNote: fragile\nNotebook sleeve fits\n\n✓ Note: a list item'),
+    '<p>Closing.</p><p class="eb-note"><strong>Important:</strong> Measure first.</p><p class="eb-note">Note: fragile</p>' +
+      '<p>Notebook sleeve fits</p><ul class="eb-list"><li><span class="eb-b">✓</span>Note: a list item</li></ul>'
+  );
+  for (const label of ['**Please note:**', '**Warning**:', 'Caution:', 'ATTENTION:']) {
+    assert.match(textToHtml(`${label} x`), /^<p class="eb-note">/, label);
+  }
+});
+
+test('the template styles the note callout', () => {
+  const html = renderDescription({ template: base, productName: 'P', description: '**Important:** Check.' });
+  assert.match(html, /\.eb-desc p\.eb-note\{background:#FFF7E6;[^}]*border-left:4px solid #F59E0B/);
+  assert.match(html, /<p class="eb-note"><strong>Important:<\/strong> Check\.<\/p>/);
+});
+
+// Reading a live listing back into the editor keeps the styled markers.
+test('htmlToText keeps a styled list marker instead of a plain bullet', () => {
+  const { htmlToText } = require('../../src/modules/listings/listing.service');
+  const { textToHtml } = require('../../src/modules/listings/description-template');
+  const text = htmlToText(`<div class="eb-desc">${textToHtml('✓ Steel\n✓ Light\n\n1. Open\n2. Fit\n\n• Plain')}</div>\n  </div>`);
+  assert.strictEqual(text, '✓ Steel\n✓ Light\n\n1. Open\n2. Fit\n\n• Plain');
 });
 
 // A chosen typeface reaches the CSS as a stack of fonts buyers already have

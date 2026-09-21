@@ -87,32 +87,72 @@ function inline(text) {
     .replace(/\[size=(sm|lg|xl)\]([\s\S]+?)\[\/size\]/g, (_, size, inner) => `<span style="font-size:${SIZE_PX[size]}">${inner}</span>`);
 }
 
+// A list line starts with a marker and a space. "•", "-" and "*" are the
+// model's plain bullets and render as an ordinary <ul>; the editor's bullet
+// library (○ ▪ ◆ ➤ ✓ ✔ ★ –), numbering (1. / 1)) and the emoji that lead each
+// Key Features line (❄️ 🐶 …) keep the seller's exact marker, with a hanging
+// indent (symbols and numbers in the store's accent colour). © ® ™ are not
+// markers. The editor (frontend/components/RichTextEditor.tsx) uses the same
+// pattern.
+const EMOJI = '(?![©®™])\\p{Extended_Pictographic}[\\uFE0F\\u{1F3FB}-\\u{1F3FF}]?(?:\\u200D\\p{Extended_Pictographic}[\\uFE0F\\u{1F3FB}-\\u{1F3FF}]?)*';
+const LIST_ITEM = new RegExp(`^([•●○◦▪■◆◇➤►▸→✓✔☑★☆–\\-*]|\\d{1,3}[.)]|${EMOJI})[ \\u00a0]+(.*)$`, 'u');
+
+function listItem(line) {
+  const m = line.match(LIST_ITEM);
+  if (!m) return null;
+  const marker = m[1];
+  const kind = /^[•\-*]$/.test(marker) ? 'plain' : /\d/.test(marker) ? 'num' : 'sym';
+  return { kind, marker, body: m[2] };
+}
+
+function listHtml(kind, items) {
+  if (kind === 'plain') return `<ul>${items.map((it) => `<li>${inline(it.body)}</li>`).join('')}</ul>`;
+  const cls = kind === 'num' ? 'eb-list eb-num' : 'eb-list';
+  return `<ul class="${cls}">${items.map((it) => `<li><span class="eb-b">${escapeHtml(it.marker)}</span>${inline(it.body)}</li>`).join('')}</ul>`;
+}
+
+// A note the buyer must not miss ("**Important:** …", "Note: …", "Warning: …")
+// renders as a highlighted callout, whoever wrote it. The editor highlights
+// the same lines (frontend/components/RichTextEditor.tsx, NOTE_RE).
+const NOTE_LINE = /^(?:\*\*)?(?:important|please note|note|warning|caution|attention)(?:\s*:\s*\*\*|\s*\*\*\s*:|\s*:)/i;
+const isNoteLine = (line) => NOTE_LINE.test(line);
+
 // The model writes plain text — paragraphs separated by blank lines, bullet
 // lines starting with "•" or "-", and short ALL-CAPS lines as headings.
 // Turned into the HTML the template's styles expect, with everything escaped.
 function textToHtml(text) {
   const blocks = String(text || '').split(/\n\s*\n/);
+  // "**Key Features:**" — a bold-only line — is a heading too.
+  const isHeading = (line) => /^[A-Z0-9 &:\-–]{4,60}:?$/.test(line) || /^\*\*[^*]{2,90}\*\*:?$/.test(line);
+  const headingHtml = (line) => `<p class="eb-h"><strong>${inline(line.replace(/^\*\*|\*\*:?$/g, '').replace(/:$/, ''))}</strong></p>`;
   return blocks
     .map((block) => {
       const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
       if (!lines.length) return '';
-      const bullets = lines.filter((l) => /^[•\-*]\s+/.test(l));
-      if (bullets.length === lines.length) {
-        return `<ul>${lines.map((l) => `<li>${inline(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
+      // Runs of consecutive lines: list items of one kind become one list;
+      // other lines become a paragraph — or a heading when a lone line looks
+      // like one ("KEY FEATURES:" straight into its list is how the model
+      // writes it).
+      const runs = [];
+      for (const line of lines) {
+        const item = listItem(line);
+        const kind = item ? item.kind : isNoteLine(line) ? 'note' : 'text';
+        const last = runs[runs.length - 1];
+        if (last && last.kind === kind) last.items.push(item || line);
+        else runs.push({ kind, items: [item || line] });
       }
-      // "**Key Features:**" — a bold-only line — is a heading too.
-      const isHeading = (line) => /^[A-Z0-9 &:\-–]{4,60}:?$/.test(line) || /^\*\*[^*]{2,60}\*\*:?$/.test(line);
-      const headingHtml = (line) => `<p><strong>${inline(line.replace(/^\*\*|\*\*:?$/g, '').replace(/:$/, ''))}</strong></p>`;
-      if (lines.length === 1 && isHeading(lines[0])) return headingHtml(lines[0]);
-      // A block mixing a lead line with bullets — "KEY FEATURES:" straight
-      // into its list is how the model writes it. The lead renders as a
-      // heading when it looks like one, otherwise as a paragraph.
-      if (bullets.length) {
-        const lead = lines.filter((l) => !/^[•\-*]\s+/.test(l));
-        const leadHtml = lead.length === 1 && isHeading(lead[0]) ? headingHtml(lead[0]) : lead.length ? `<p>${lead.map(inline).join('<br/>')}</p>` : '';
-        return leadHtml + `<ul>${bullets.map((l) => `<li>${inline(l.replace(/^[•\-*]\s+/, ''))}</li>`).join('')}</ul>`;
-      }
-      return `<p>${lines.map(inline).join('<br/>')}</p>`;
+      return runs
+        .map((run) => {
+          if (run.kind === 'note') return `<p class="eb-note">${run.items.map(inline).join('<br/>')}</p>`;
+          if (run.kind !== 'text') return listHtml(run.kind, run.items);
+          // A heading line with its section's content straight below it
+          // ("**Suitable For**" then "Dogs", "Cats") renders as a heading
+          // followed by that content.
+          const [first, ...rest] = run.items;
+          if (!isHeading(first)) return `<p>${run.items.map(inline).join('<br/>')}</p>`;
+          return headingHtml(first) + (rest.length ? `<p>${rest.map(inline).join('<br/>')}</p>` : '');
+        })
+        .join('');
     })
     .join('');
 }
@@ -146,8 +186,16 @@ function styles(t) {
 .eb-stitle::after{content:'';flex:1;height:1.5px;background:#F0F0F0}
 .eb-desc{font-size:16px;color:#2D2D2D;line-height:1.8}
 .eb-desc p{margin:0 0 10px}
+.eb-desc p.eb-h{font-size:18px;margin:18px 0 6px}
+.eb-desc p.eb-h:first-child{margin-top:0}
+.eb-desc p.eb-note{background:#FFF7E6;border:1px solid #FCD9A0;border-left:4px solid #F59E0B;border-radius:8px;padding:12px 16px;margin:14px 0;color:#7C2D12;font-weight:600}
+.eb-desc p.eb-note strong{color:#B45309}
 .eb-desc ul{padding-left:18px;margin:0 0 10px}
 .eb-desc li{margin-bottom:5px}
+.eb-desc ul.eb-list{list-style:none;padding-left:0}
+.eb-desc ul.eb-list li{position:relative;padding-left:1.6em}
+.eb-desc ul.eb-num li{padding-left:2em}
+.eb-desc .eb-b{position:absolute;left:0;top:0;color:${a};font-weight:800}
 .eb-desc strong{color:${d};font-weight:700}
 .eb-trust{background:${d};padding:18px 24px;display:flex;gap:6px;flex-wrap:wrap}
 .eb-tbadge{flex:1;min-width:100px;background:rgba(255,255,255,0.06);border:1px solid ${a}33;border-radius:10px;padding:10px 8px;text-align:center}
@@ -391,4 +439,4 @@ function renderTemplateSource({ template, marketplaceId }) {
     .replace(/\{\{Condition\}\}/g, '{{condition}}');
 }
 
-module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };
+module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, listItem, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };

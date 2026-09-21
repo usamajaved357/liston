@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const policyWords = require('./policy-words');
+const descriptionFormat = require('../ai-generation/description-format');
 const Anthropic = require('@anthropic-ai/sdk');
 const sharp = require('sharp');
 const config = require('../../config');
@@ -34,7 +35,7 @@ const TEXT_TOOL = {
     type: 'object',
     properties: {
       title: { type: 'string', maxLength: 80, description: 'New listing title (eBay allows 80 characters).' },
-      description: { type: 'string', description: 'New full description text. Plain text; **bold** is allowed.' },
+      description: { type: 'string', description: 'New full description text, plain text in the description layout: **Heading** lines, emoji-led Key Features lines, blank lines between sections.' },
       aspects: {
         type: 'object',
         description: 'Item specifics to set or replace, as { name: [value] }. Only the ones that change.',
@@ -146,6 +147,11 @@ async function reviseText({ draft, instruction, current: given, options = {} }) 
           `When the seller asks for a word to be removed or replaced, remove it from EVERYWHERE it appears — title, description, ` +
           `item specifics and option names — without exception, even if it describes the product accurately; rephrase so the ` +
           `meaning survives.\n` +
+          `Descriptions follow the layout below. For a small change, edit the description in place and keep its ` +
+          `layout; when the seller asks for the description to be rewritten, restructured or reformatted, use this ` +
+          `layout exactly.\n` +
+          descriptionFormat.PROMPT_GUIDANCE +
+          `\n` +
           `Refer to variations by their index and to options by their exact current names. Photos and the eBay ` +
           `category cannot be changed here: if asked, fill in cannotDo and change nothing.\n\n` +
           `Current listing:\n${describeCurrent(current, options)}\n\n` +
