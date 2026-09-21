@@ -125,6 +125,14 @@ const config = {
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || null,
   },
 
+  // Listing analytics (eBay's traffic report). The allowance is eBay's
+  // default unless it has granted more; the daily read can be switched off
+  // on a machine that shares production's eBay keys (a dev laptop), since
+  // every read counts against the same app-wide allowance.
+  analytics: {
+    dailyLimit: parseInt(process.env.EBAY_ANALYTICS_DAILY_LIMIT || '100', 10),
+    schedulerEnabled: process.env.ANALYTICS_SCHEDULER !== 'off',
+  },
   ebay: {
     clientId: process.env.EBAY_CLIENT_ID || null,
     clientSecret: process.env.EBAY_CLIENT_SECRET || null,

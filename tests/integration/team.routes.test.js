@@ -102,6 +102,7 @@ test('granting a global default feature makes the connection visible with resolv
   assert.deepStrictEqual(list.data.connections[0].permissions, {
     orders: true,
     listings: false,
+    analytics: false,
     inbox: false,
     campaigns: false,
   });

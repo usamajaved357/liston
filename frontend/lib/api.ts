@@ -78,6 +78,34 @@ export interface EbayUsage {
   notificationsUrl: string | null;
   inFlight: number;
   waiting: number;
+  // eBay's traffic report has its own, much smaller allowance.
+  analytics: AnalyticsUsage;
+}
+
+export interface AnalyticsUsage {
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAt: string | null;
+  exhausted: boolean;
+  lastSyncedWithEbay: string | null;
+  ceilings: { backfill: number; sync: number; refresh: number };
+  paused: { backfill: boolean; sync: boolean };
+  byKind: { backfill: number; sync: number; refresh: number };
+  refreshesPerAccount: number;
+  nextSyncAt: string;
+  byAccount: {
+    connectionId: string;
+    label: string;
+    calls: number;
+    finalThrough: string | null;
+    listingDays: number;
+    listingDaysTotal: number;
+    refreshesToday: number;
+    lastSyncedAt: string | null;
+    status: "ok" | "reconnect" | "unsupported" | "error";
+    lastError: string | null;
+  }[];
 }
 
 export interface AccessRequest {
@@ -129,6 +157,7 @@ export interface EbaySettings {
 export interface ConnectionPermissions {
   orders: boolean;
   listings: boolean;
+  analytics: boolean;
   inbox: boolean;
   campaigns: boolean;
   [feature: string]: boolean;
@@ -847,6 +876,127 @@ export interface DraftListing {
 export type ListingStatusFilter = "active" | "inactive";
 export type OrderRange = "7d" | "30d" | "90d";
 export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "cancelled";
+// ---- listing analytics ---------------------------------------------------------
+// Days are eBay's reporting days (US Pacific), "YYYY-MM-DD".
+
+export type AnalyticsRange = "today" | "7d" | "30d" | "this_month" | "last_month" | "90d";
+
+// Traffic figures are null where eBay's figures aren't stored yet; sales
+// always come from the orders.
+export interface AnalyticsMetrics {
+  impressions: number | null;
+  views: number | null;
+  ctr: number | null; // 0..1
+  sold: number | null;
+  orders: number | null;
+  sales: number | null;
+  conversion: number | null; // 0..1
+}
+export type AnalyticsChanges = Record<keyof AnalyticsMetrics, number | null>; // fraction, e.g. 0.12 = +12%
+
+export interface AnalyticsDay {
+  day: string;
+  impressions: number | null;
+  views: number | null;
+  ctr: number | null;
+  sold: number | null; // null before the 90 days of orders Liston keeps
+  sales: number | null;
+  partial: boolean; // eBay's day still running
+}
+
+export interface AnalyticsSource {
+  key: "search" | "store" | "direct" | "other_ebay" | "off_ebay";
+  label: string;
+  views: number;
+}
+
+export interface AnalyticsHint {
+  kind: "no_impressions" | "low_ctr" | "no_sales" | "converting";
+  label: string;
+  detail: string;
+}
+
+export interface AnalyticsRangeInfo {
+  key: AnalyticsRange;
+  from: string;
+  to: string;
+  days: number;
+  previous: { from: string; to: string };
+}
+
+export interface ListingAnalyticsRow extends AnalyticsMetrics {
+  itemId: string;
+  title: string;
+  imageUrl: string | null;
+  url: string | null;
+  price: Money | null;
+  quantityAvailable: number | null;
+  changes: AnalyticsChanges;
+  hint: AnalyticsHint | null;
+}
+
+export type AnalyticsStatus = "ok" | "reconnect" | "unsupported";
+
+export interface AccountAnalytics {
+  status: AnalyticsStatus;
+  range: AnalyticsRangeInfo;
+  currency: string | null;
+  totals: AnalyticsMetrics;
+  previous: AnalyticsMetrics;
+  changes: AnalyticsChanges;
+  series: AnalyticsDay[];
+  previousSeries: AnalyticsDay[]; // the comparison period, day by day
+  sources: AnalyticsSource[];
+  listings: ListingAnalyticsRow[];
+  coverage: { account: boolean; listingsFrom: string | null; listingsComplete: boolean; listingDaysDone: number; listingDaysTotal: number };
+  sync: {
+    lastSyncedAt: string | null;
+    lastError: string | null;
+    finalThrough: string | null;
+    nextSyncAt: string;
+    todayUpdatedAt: string | null;
+    todayListingsUpdatedAt: string | null;
+    refreshesLeft: number;
+    refreshLimit: number;
+    syncing: boolean;
+  };
+  listingsSyncedAt: number | null;
+}
+
+export interface ListingAnalytics {
+  status: AnalyticsStatus;
+  listing: {
+    itemId: string;
+    title: string;
+    imageUrl: string | null;
+    url: string | null;
+    price: Money | null;
+    quantityAvailable: number | null;
+    quantitySold: number | null;
+    startTime: string | null;
+  };
+  range: AnalyticsRangeInfo;
+  currency: string | null;
+  totals: AnalyticsMetrics;
+  previous: AnalyticsMetrics | null;
+  changes: AnalyticsChanges;
+  series: AnalyticsDay[];
+  previousSeries: AnalyticsDay[];
+  sources: AnalyticsSource[];
+  hint: AnalyticsHint | null;
+  coverage: { listingsFrom: string | null; listingsComplete: boolean };
+  sync: { finalThrough: string | null; todayListingsUpdatedAt: string | null };
+}
+
+export interface ListingAnalyticsSummaries {
+  status: "ok" | "reconnect";
+  from: string;
+  to: string;
+  viewsFrom: string | null; // views cover from here (later than `from` while history fills in)
+  complete: boolean;
+  items: Record<string, { views: number; impressions: number; sold: number }>;
+}
+
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
 
 export const api = {
@@ -1013,6 +1163,13 @@ export const api = {
     request<{ account: SourceAccount }>(`/api/source-accounts`, { method: "POST", body: JSON.stringify(input) }),
   updateSourceAccount: (id: string, patch: Partial<{ label: string; email: string; password: string | null; notes: string | null; archived: boolean }>) =>
     request<{ account: SourceAccount }>(`/api/source-accounts/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+
+  // Listing analytics: eBay traffic (stored daily) + sales from orders.
+  getAnalytics: (id: string, range: AnalyticsRange) => request<AccountAnalytics>(`/api/connections/${id}/analytics?range=${range}`),
+  refreshAnalyticsToday: (id: string) => request<{ refreshesLeft: number }>(`/api/connections/${id}/analytics/refresh`, { method: "POST" }),
+  getListingAnalytics: (id: string, itemId: string, range: AnalyticsRange) =>
+    request<ListingAnalytics>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}?range=${range}`),
+  getListingAnalyticsSummaries: (id: string) => request<ListingAnalyticsSummaries>(`/api/connections/${id}/analytics/listings/summary`),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });

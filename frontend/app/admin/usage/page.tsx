@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError, EbayUsage, User } from "@/lib/api";
+import { AnalyticsUsage, api, ApiError, EbayUsage, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
@@ -24,6 +24,124 @@ function Tile({ label, value, sub }: { label: string; value: string; sub?: strin
       <p className="mt-1 text-2xl font-bold text-[var(--color-ink)]">{value}</p>
       {sub && <p className="text-xs text-[var(--color-muted)]">{sub}</p>}
     </div>
+  );
+}
+
+function UsageBar({ used, limit, marks, exhausted }: { used: number; limit: number; marks: { at: number; title: string }[]; exhausted: boolean }) {
+  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const colour = exhausted || pct >= 92 ? "bg-[var(--color-danger)]" : pct >= 80 ? "bg-[var(--color-warning)]" : "bg-[var(--color-accent)]";
+  return (
+    <div className="relative mt-3 h-3 overflow-hidden rounded-full bg-[var(--color-line)]">
+      <div className={`h-full rounded-full ${colour}`} style={{ width: `${pct}%` }} />
+      {marks.map((m) => (
+        <div key={m.at} className="absolute inset-y-0 w-px bg-[var(--color-ink)]/30" style={{ left: `${m.at}%` }} title={m.title} />
+      ))}
+    </div>
+  );
+}
+
+const ANALYTICS_STATUS: Record<AnalyticsUsage["byAccount"][number]["status"], { label: string; className: string }> = {
+  ok: { label: "Up to date", className: "chip chip-accent" },
+  reconnect: { label: "Needs reconnect", className: "chip chip-warning" },
+  unsupported: { label: "Site not covered", className: "chip" },
+  error: { label: "Stopped early", className: "chip chip-warning" },
+};
+
+// The traffic report's own allowance: far smaller than Trading's, so each
+// account's traffic is read once a day and kept (see analytics-budget).
+function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">eBay traffic data (Analytics API)</h2>
+        <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">
+          A separate allowance of {usage.limit.toLocaleString()} calls a day for impressions and views, shared by every account. Each account is read once a day, next at{" "}
+          {fmtTime(usage.nextSyncAt)}; resets {fmtTime(usage.resetAt)}.
+        </p>
+      </div>
+      <div className="card px-5 py-4">
+        <div className="flex items-baseline justify-between">
+          <p className="text-sm font-semibold text-[var(--color-ink)]">
+            {usage.used.toLocaleString()} of {usage.limit.toLocaleString()} traffic calls used today
+          </p>
+          <p className="text-xs text-[var(--color-muted)]">{usage.lastSyncedWithEbay ? `Confirmed with eBay ${fmtTime(usage.lastSyncedWithEbay)}` : "Counted by Liston"}</p>
+        </div>
+        <UsageBar
+          used={usage.used}
+          limit={usage.limit}
+          exhausted={usage.exhausted}
+          marks={[
+            { at: 60, title: "Filling in older days pauses here" },
+            { at: 90, title: "The daily update pauses here" },
+          ]}
+        />
+        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
+          <span>60% · filling in older days pauses{usage.paused.backfill ? " (paused now)" : ""}</span>
+          <span>90% · daily update pauses{usage.paused.sync ? " (paused now)" : ""}</span>
+          <span>Last 10% · kept for &quot;Refresh today&quot; ({usage.refreshesPerAccount} per account a day)</span>
+        </div>
+        {usage.exhausted && <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further traffic calls today. Analytics pages keep showing their stored history.</p>}
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="traffic calls until reset" />
+        <Tile label="Daily updates" value={usage.byKind.sync.toLocaleString()} sub="yesterday's figures per account" />
+        <Tile label="Filling in history" value={usage.byKind.backfill.toLocaleString()} sub="older days, from spare allowance" />
+        <Tile label="Refresh today" value={usage.byKind.refresh.toLocaleString()} sub="pressed by sellers" />
+      </div>
+
+      <section className="card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-[var(--color-paper)] text-left text-[11px] uppercase tracking-wide text-[var(--color-muted)]">
+            <tr>
+              <th className="px-5 py-2.5 font-semibold">Account</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Calls today</th>
+              <th className="px-3 py-2.5 font-semibold">Per-listing history</th>
+              <th className="px-3 py-2.5 font-semibold">Complete to</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Refreshes</th>
+              <th className="px-5 py-2.5 font-semibold">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--color-line)]">
+            {usage.byAccount.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-5 py-6 text-center text-[var(--color-muted)]">
+                  No account has been read yet. The first read happens at the next daily update or when someone opens Analytics.
+                </td>
+              </tr>
+            )}
+            {usage.byAccount.map((a) => {
+              const status = ANALYTICS_STATUS[a.status];
+              return (
+                <tr key={a.connectionId}>
+                  <td className="px-5 py-2.5 text-[var(--color-ink)]">{a.label}</td>
+                  <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-[var(--color-ink)]">{a.calls.toLocaleString()}</td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--color-line)]">
+                        <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.min(100, (a.listingDays / a.listingDaysTotal) * 100)}%` }} />
+                      </div>
+                      <span className="text-xs tabular-nums text-[var(--color-muted)]">
+                        {a.listingDays}/{a.listingDaysTotal} days
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 text-[var(--color-muted)]">{a.finalThrough ? new Date(`${a.finalThrough}T12:00:00Z`).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" }) : "—"}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-muted)]">
+                    {a.refreshesToday}/{usage.refreshesPerAccount}
+                  </td>
+                  <td className="px-5 py-2.5">
+                    <span className={status.className} title={a.lastError || undefined}>
+                      {status.label}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </section>
+    </section>
   );
 }
 
@@ -109,6 +227,7 @@ export default function EbayUsagePage() {
         <PageSkeleton rows={2} />
       ) : (
         <div className="space-y-6">
+          <h2 className="-mb-2 text-[15px] font-semibold text-[var(--color-ink)]">Trading API</h2>
           <div className="card px-5 py-4">
             <div className="flex items-baseline justify-between">
               <p className="text-sm font-semibold text-[var(--color-ink)]">
@@ -177,6 +296,8 @@ export default function EbayUsagePage() {
               </ul>
             </section>
           </div>
+
+          {usage.analytics && <AnalyticsUsageSection usage={usage.analytics} />}
         </div>
       )}
     </AppShell>

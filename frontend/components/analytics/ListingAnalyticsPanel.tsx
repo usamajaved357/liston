@@ -1,0 +1,188 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { api, ApiError, AnalyticsRange, ListingAnalytics } from "@/lib/api";
+import { formatMoney, formatShortDate } from "@/lib/format";
+import { useAccountEvents } from "@/lib/useAccountEvents";
+import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { BarList } from "@/components/charts/BarList";
+import { dayLabel, dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
+import { MetricsBoard } from "./MetricsBoard";
+import { Funnel } from "./Funnel";
+import { HintChip } from "./ListingsTable";
+import { RANGE_OPTIONS } from "./metrics";
+
+// One listing's analytics in a panel that slides over the page: its
+// figures for a range, the change from the period before, the day-by-day
+// chart, where its views came from and a suggestion when there is one.
+// Opened from the Analytics tab and from each live listing on the Listings
+// tab, so neither has to leave its page.
+
+export function ListingAnalyticsPanel({
+  connectionId,
+  itemId,
+  initialRange = "30d",
+  onClose,
+}: {
+  connectionId: string;
+  itemId: string;
+  initialRange?: AnalyticsRange;
+  onClose: () => void;
+}) {
+  const [range, setRange] = useState<AnalyticsRange>(initialRange);
+  const [byKey, setByKey] = useState<Record<string, ListingAnalytics | { error: string }>>({});
+  const [reload, setReload] = useState(0);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const key = `${itemId}:${range}`;
+  const loaded = byKey[key];
+  const data = loaded && !("error" in loaded) ? loaded : null;
+  const error = loaded && "error" in loaded ? loaded.error : null;
+  // Keep the last figures on screen (dimmed) while another range loads.
+  const [shown, setShown] = useState<ListingAnalytics | null>(null);
+  const view = data || (shown?.listing.itemId === itemId ? shown : null);
+
+  useAccountEvents(connectionId, (event) => {
+    if (event.kind === "analytics" || event.kind === "orders") {
+      setByKey({});
+      setReload((n) => n + 1);
+    }
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getListingAnalytics(connectionId, itemId, range)
+      .then((d) => {
+        if (cancelled) return;
+        setByKey((m) => ({ ...m, [key]: d }));
+        setShown(d);
+      })
+      .catch((err) => !cancelled && setByKey((m) => ({ ...m, [key]: { error: err instanceof ApiError ? err.message : "Couldn't load this listing's figures." } })));
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId, itemId, range, key, reload]);
+
+  useEffect(() => {
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+
+  const listing = view?.listing;
+  const rangeLabel = view ? dayRangeLabel(view.range.from, view.range.to) : "";
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Listing analytics">
+      <div className="absolute inset-0 bg-[var(--color-ink)]/30 backdrop-blur-[1px] animate-[fadeIn_150ms_ease-out]" onClick={onClose} aria-hidden />
+      <div className="relative flex h-full w-full max-w-[760px] flex-col bg-[var(--color-paper)] shadow-2xl animate-[slideIn_200ms_ease-out]">
+        <header className="border-b border-[var(--color-line)] bg-[var(--color-panel)] px-6 py-4">
+          <div className="flex items-start gap-4">
+            {listing?.imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={listing.imageUrl} alt="" className="h-14 w-14 flex-shrink-0 rounded-xl border border-[var(--color-line)] bg-white object-contain" />
+            ) : (
+              <div className="h-14 w-14 flex-shrink-0 animate-pulse rounded-xl bg-[var(--color-line)]" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-primary)]">Listing analytics</p>
+              {listing ? (
+                <h2 className="mt-0.5 line-clamp-2 text-[15px] font-semibold leading-snug text-[var(--color-ink)]">{listing.title}</h2>
+              ) : (
+                <div className="mt-1.5 h-4 w-3/4 animate-pulse rounded bg-[var(--color-line)]" />
+              )}
+              {listing && (
+                <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-muted)]">
+                  <span className="font-medium text-[var(--color-ink)]">{formatMoney(listing.price)}</span>
+                  {listing.quantityAvailable != null && <span>{listing.quantityAvailable} in stock</span>}
+                  {listing.quantitySold != null && <span>{fullNumber(listing.quantitySold)} sold in total</span>}
+                  {listing.startTime && <span>Listed {formatShortDate(listing.startTime)}</span>}
+                  <span className="font-mono text-[11px]">#{listing.itemId}</span>
+                </p>
+              )}
+            </div>
+            <div className="flex flex-shrink-0 items-center gap-1.5">
+              {listing?.url && (
+                <a href={listing.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
+                  View on eBay
+                  <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
+                    <path d="M14 5h5v5M19 5l-8 8M10 5H6a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </a>
+              )}
+              <button ref={closeRef} type="button" onClick={onClose} className="btn btn-ghost btn-icon" aria-label="Close">
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+                  <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+            <SegmentedControl label="Date range" value={range} onChange={setRange} options={RANGE_OPTIONS.map((r) => ({ key: r.key, label: r.label }))} />
+            {view && <span className="text-[12px] text-[var(--color-muted)]">{rangeLabel}</span>}
+          </div>
+        </header>
+
+        <div className={`flex-1 space-y-4 overflow-y-auto px-6 py-5 transition-opacity ${view && !data ? "opacity-60" : ""}`}>
+          {error && <div className="notice notice-danger">{error}</div>}
+          {view?.status === "reconnect" && <div className="notice notice-warning">Reconnect this eBay account to see its traffic. Sales below are from your orders.</div>}
+
+          {view?.hint && (
+            <div className="flex items-start gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
+              <HintChip hint={view.hint} size="md" />
+              <p className="text-[13px] leading-relaxed text-[var(--color-ink)]">{view.hint.detail}</p>
+            </div>
+          )}
+
+          <MetricsBoard
+            compact
+            totals={view?.totals ?? null}
+            changes={view?.changes ?? null}
+            series={view?.series ?? []}
+            previousSeries={view?.previousSeries ?? null}
+            currency={view?.currency ?? null}
+            range={range}
+            rangeLabel={rangeLabel}
+            previousRange={view?.previous ? view.range.previous : null}
+            loading={!view && !error}
+            trafficUnavailable={view?.status === "reconnect" || !view?.coverage.listingsFrom}
+          />
+
+          {view && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <section className="card p-5">
+                <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">From shown to sold</h3>
+                <div className="mt-3">
+                  <Funnel impressions={view.totals.impressions} views={view.totals.views} sold={view.totals.sold} ctr={view.totals.ctr} />
+                </div>
+              </section>
+              <section className="card p-5">
+                <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">Where views came from</h3>
+                <div className="mt-3">
+                  <BarList items={view.sources.map((s) => ({ key: s.key, label: s.label, value: s.views }))} format={fullNumber} empty="No views recorded in this range." />
+                </div>
+              </section>
+            </div>
+          )}
+
+          {view && (
+            <p className="text-[11.5px] leading-relaxed text-[var(--color-muted)]">
+              {view.coverage.listingsFrom
+                ? view.coverage.listingsComplete
+                  ? "Traffic from eBay's Analytics API, updated daily at 10:00 UK time."
+                  : `This listing's traffic is stored from ${dayLabel(view.coverage.listingsFrom)}; earlier days are still filling in.`
+                : "This listing's traffic appears after the first daily update."}{" "}
+              Sales are from your orders and include today. Days follow eBay&apos;s reporting day, which ends at 08:00 UK time.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

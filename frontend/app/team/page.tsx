@@ -12,6 +12,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 const FEATURE_LABELS: Record<string, string> = {
   orders: "Orders",
   listings: "Listings",
+  analytics: "Analytics",
   inbox: "Inbox",
   campaigns: "Campaigns",
 };

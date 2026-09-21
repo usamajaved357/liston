@@ -5,6 +5,8 @@ const ebayService = require('./ebay.service');
 const ebayNotifications = require('./ebay.notifications');
 const connectionRepository = require('../connections/connection.repository');
 const governor = require('./request-governor');
+const analyticsBudget = require('./analytics-budget');
+const analyticsService = require('../analytics/analytics.service');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
@@ -156,7 +158,7 @@ async function platformNotification(req, res) {
 // totals, what is paused, per call and per account (with labels).
 async function usage(req, res, next) {
   try {
-    if (req.query.sync === '1') await governor.syncWithEbay();
+    if (req.query.sync === '1') await Promise.all([governor.syncWithEbay(), analyticsBudget.syncWithEbay()]);
     const snap = governor.snapshot();
     const accounts = await connectionRepository.findAllEbay();
     const labels = new Map(accounts.map((a) => [String(a.id), a.label]));
@@ -166,7 +168,15 @@ async function usage(req, res, next) {
     const byCall = Object.entries(snap.byCall)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count);
-    res.status(200).json({ ...snap, byAccount, byCall, accountsTotal: accounts.length, notificationsUrl: config.ebay.notificationsUrl || null });
+    res.status(200).json({
+      ...snap,
+      byAccount,
+      byCall,
+      accountsTotal: accounts.length,
+      notificationsUrl: config.ebay.notificationsUrl || null,
+      // The traffic report's separate allowance (see analytics-budget).
+      analytics: await analyticsService.adminUsage(labels),
+    });
   } catch (err) {
     next(err);
   }

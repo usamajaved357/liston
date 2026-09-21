@@ -4,6 +4,8 @@ const logger = require('./utils/logger');
 const { pool } = require('./db/client');
 const aliexpressApi = require('./modules/sourcing/aliexpress/ds-api');
 const governor = require('./modules/ebay/request-governor');
+const analyticsBudget = require('./modules/ebay/analytics-budget');
+const analyticsScheduler = require('./modules/analytics/analytics.scheduler');
 
 const app = createApp();
 
@@ -12,6 +14,10 @@ const server = app.listen(config.port, () => {
   aliexpressApi.startTokenKeepAlive();
   // Loads today's eBay usage and keeps it in step with eBay's own figure.
   governor.start();
+  // The traffic report's own allowance, and the daily read of every
+  // account's traffic (02:00 Pacific, 10:00 UK).
+  analyticsBudget.start();
+  analyticsScheduler.start();
 });
 
 async function shutdown(signal) {

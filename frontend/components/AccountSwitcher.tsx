@@ -79,7 +79,7 @@ export function AccountSwitcher({
     // Same section, other account. /accounts/<id>/orders?x -> /accounts/<other>/orders
     const rest = pathname.replace(/^\/accounts\/[^/]+/, "");
     const section = rest.split("/")[1] || "";
-    const keep = ["listings", "orders", "campaigns", "inbox", "settings"].includes(section) ? `/${section}` : "";
+    const keep = ["listings", "orders", "analytics", "campaigns", "inbox", "settings"].includes(section) ? `/${section}` : "";
     setOpen(false);
     setQuery("");
     router.push(`/accounts/${target.id}${keep}`);

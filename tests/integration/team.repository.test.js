@@ -138,5 +138,5 @@ test('getResolvedPermissions returns a flat map across every known feature', asy
   await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'orders', allowed: true });
 
   const resolved = await teamRepository.getResolvedPermissions(member.id, connectionId);
-  assert.deepStrictEqual(resolved, { orders: true, listings: false, inbox: false, campaigns: false });
+  assert.deepStrictEqual(resolved, { orders: true, listings: false, analytics: false, inbox: false, campaigns: false });
 });

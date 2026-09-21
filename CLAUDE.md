@@ -17,7 +17,7 @@ Multi-tenant SaaS for eBay dropshipping teams: AI-drafted listings from a compet
 
 - `src/modules/<feature>/` with `*.routes.js` → `*.controller.js` (req/res + Zod) → `*.service.js` (rules) → `*.repository.js` (DB only). Pure helpers sit beside them.
 - Platform adapters: `src/modules/ebay/` (with `api/` holding one thin client per eBay API) and `src/modules/sourcing/aliexpress/`. Nothing else calls an external API.
-- Frontend pages in `app/` stay thin; reusable UI in `components/`, per-area subfolders (`components/orders/`).
+- Frontend pages in `app/` stay thin; reusable UI in `components/`, per-area subfolders (`components/orders/`, `components/analytics/`). Charts use the kit in `components/charts/` (one axis, brand indigo for the current period, dashed slate for the previous).
 - Errors: throw `Error` with `.statusCode`; `errorHandler.middleware.js` responds. Never log bodies or credentials. Credentials encrypted via `credentials.encryption.js`, used only inside `withDecryptedCredentials`.
 
 ## Commands
@@ -35,6 +35,6 @@ Frontend (`/frontend`): `npm run dev -- -p 3001` · `npm run build` (typecheck +
 
 ## Current state (update as phases land)
 
-**Built:** auth + team/member permissions; eBay connect/reconnect with all 24 seller scopes; AI listing drafts (Browse + AliExpress DS + Taxonomy + Anthropic + pricing + image pipeline), draft editor with autosave, publish with unique SKUs / identifiers / policy-word handling, live-listing editing; orders list + order page matching Seller Hub (variation photo, specifics, fees/earnings, buyer contact), sourcing panel with auto-dispatch, dispatch/refund/cancel/decline, returns, item-not-received, payment disputes, archive; Shop categories incl. creating departments.
+**Built:** auth + team/member permissions; eBay connect/reconnect with all 24 seller scopes; AI listing drafts (Browse + AliExpress DS + Taxonomy + Anthropic + pricing + image pipeline), draft editor with autosave, publish with unique SKUs / identifiers / policy-word handling, live-listing editing; orders list + order page matching Seller Hub (variation photo, specifics, fees/earnings, buyer contact), sourcing panel with auto-dispatch, dispatch/refund/cancel/decline, returns, item-not-received, payment disputes, archive; Shop categories incl. creating departments; listing analytics (eBay traffic stored daily at 10:00 UK within its ~100/day allowance, sales from orders; Analytics tab, per-listing panel from Listings, admin usage); description editor with bullet/numbering library and the AI description layout.
 
 **Next (ARCHITECTURE.md §9):** Inbox (messaging), Campaigns (Promoted Listings), inline sourcing on the order list, AliExpress order automation, `ebay.service.js` split, background jobs, Stripe, TikTok Shop.

@@ -1122,6 +1122,30 @@ function seededShuffle(list, seed) {
   return out;
 }
 
+// What listing analytics needs from this account: a valid token for the
+// traffic report, whether the token carries eBay's analytics scope, and the
+// cached live listings and 90 days of orders (sales are counted from these,
+// so they cost no traffic calls). Both come from the local copies, read
+// from eBay only when stale, exactly as the Listings and Orders tabs do.
+async function analyticsInputs(credentials, connectionId, { push = false } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const [items, orders] = await Promise.all([
+    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }).catch(() => []),
+    getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
+  ]);
+  return {
+    accessToken,
+    marketplaceId: credentials.marketplaceId || marketplaces.DEFAULT_ID,
+    hasAnalyticsScope: ebayOauth.grantedScopes(credentials).some((scope) => /sell\.analytics/.test(scope)),
+    items: items || [],
+    orders: orders || [],
+    listingsSyncedAt: listingsCache.syncedAt(listingsKey(id, 'active')),
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
 async function bestSellingListings(credentials, connectionId, { exclude, count = 12, push = false, seed = null } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const id = String(connectionId);
@@ -1966,6 +1990,7 @@ module.exports = {
   dispatchOrder,
   EbayError,
   ensureValidAccessToken,
+  analyticsInputs,
   createOfferWithRetry,
   buildInventoryItem,
   splitProductIdentifiers,
