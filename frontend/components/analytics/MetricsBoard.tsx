@@ -43,6 +43,8 @@ export function MetricsBoard({
   const compared = comparedFor(range);
   const points = trendPoints(series, previousSeries, def);
   const single = series.length <= 1;
+  const hasPrevious = points.some((p) => p.previous != null);
+  const salesMetric = selected === "sold" || selected === "sales";
 
   return (
     <div className={compact ? "space-y-4" : "space-y-5"}>
@@ -72,7 +74,8 @@ export function MetricsBoard({
             <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">{def.label} by day</h2>
             <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
               {rangeLabel}
-              {previousRange && <> · compared with {dayRangeLabel(previousRange.from, previousRange.to)}</>}
+              {previousRange && hasPrevious && <> · compared with {dayRangeLabel(previousRange.from, previousRange.to)}</>}
+              {previousRange && !hasPrevious && salesMetric && <> · no earlier period to compare: eBay keeps 90 days of orders</>}
             </p>
           </div>
           <SegmentedControl

@@ -33,7 +33,7 @@ export function KpiTile({
   const body = (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1 text-[12.5px] font-medium text-[var(--color-muted)]">
+        <span className="flex min-w-0 items-center gap-1 whitespace-nowrap text-[12.5px] font-medium text-[var(--color-muted)]">
           {label}
           {info && (
             <span title={info} className="cursor-help text-[var(--color-line-strong)] hover:text-[var(--color-muted)]" aria-label={info}>
@@ -56,8 +56,8 @@ export function KpiTile({
       )}
     </>
   );
-  const base = "relative rounded-[var(--radius-card)] border bg-[var(--color-panel)] p-4 text-left transition-all";
-  if (!onSelect) return <div className={`${base} border-[var(--color-line)] shadow-[var(--shadow-card)]`}>{body}</div>;
+  const base = "relative rounded-[var(--radius-card)] border p-4 text-left transition-colors";
+  if (!onSelect) return <div className={`${base} border-[var(--color-line)] bg-[var(--color-panel)] shadow-[var(--shadow-card)]`}>{body}</div>;
   return (
     <button
       type="button"
@@ -65,10 +65,9 @@ export function KpiTile({
       aria-selected={selected}
       onClick={onSelect}
       className={`${base} w-full shadow-[var(--shadow-card)] ${
-        selected ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15" : "border-[var(--color-line)] hover:border-[var(--color-line-strong)]"
+        selected ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)]" : "border-[var(--color-line)] bg-[var(--color-panel)] hover:border-[var(--color-line-strong)]"
       }`}
     >
-      {selected && <span className="absolute inset-x-4 top-0 h-[3px] rounded-b-full bg-[var(--color-primary)]" aria-hidden />}
       {body}
     </button>
   );

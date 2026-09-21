@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AnalyticsUsage, api, ApiError, EbayUsage, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -53,10 +53,9 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
   return (
     <section className="space-y-4">
       <div>
-        <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">eBay traffic data (Analytics API)</h2>
-        <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">
-          A separate allowance of {usage.limit.toLocaleString()} calls a day for impressions and views, shared by every account. Each account is read once a day, next at{" "}
-          {fmtTime(usage.nextSyncAt)}; resets {fmtTime(usage.resetAt)}.
+        <p className="text-[12.5px] text-[var(--color-muted)]">
+          A separate allowance of {usage.limit.toLocaleString()} calls a day for impressions and views, shared by every account. Each account is read once a day, next at {fmtTime(usage.nextSyncAt)};
+          resets {fmtTime(usage.resetAt)}.
         </p>
       </div>
       <div className="card px-5 py-4">
@@ -145,8 +144,23 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
   );
 }
 
-export default function EbayUsagePage() {
+type UsageTab = "trading" | "traffic";
+const USAGE_TABS: { key: UsageTab; label: string }[] = [
+  { key: "trading", label: "Trading API" },
+  { key: "traffic", label: "Traffic API" },
+];
+
+function EbayUsageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // One allowance per tab; the tab lives in the URL so a reload keeps it.
+  const [tab, setTab] = useState<UsageTab>(searchParams.get("tab") === "traffic" ? "traffic" : "trading");
+  function changeTab(next: UsageTab) {
+    setTab(next);
+    router.replace(`/admin/usage${next === "traffic" ? "?tab=traffic" : ""}`, {
+      scroll: false,
+    });
+  }
   const cachedUser = useCachedUser();
   const [liveUser, setUser] = useState<User | null>(null);
   const user = liveUser ?? cachedUser;
@@ -207,13 +221,32 @@ export default function EbayUsagePage() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">eBay usage</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-              One daily allowance shared by every account on Liston. Resets {usage ? fmtTime(usage.resetAt) : "…"}.
-            </p>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">eBay&apos;s daily call allowances, each shared by every account on Liston.</p>
           </div>
           <button type="button" onClick={syncNow} disabled={syncing} className="btn btn-secondary btn-sm">
             {syncing ? "Asking eBay…" : "Check with eBay"}
           </button>
+        </div>
+      }
+      subheader={
+        <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+          {USAGE_TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => changeTab(t.key)}
+              className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
+                tab === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+              }`}
+            >
+              {t.label}
+              {usage && (
+                <span className={tab === t.key ? "text-white/70" : "text-[var(--color-muted)]/70"}>
+                  {t.key === "trading" ? `${Math.round((usage.used / usage.limit) * 100)}%` : usage.analytics ? `${Math.round((usage.analytics.used / usage.analytics.limit) * 100)}%` : ""}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
       }
     >
@@ -225,33 +258,43 @@ export default function EbayUsagePage() {
 
       {loading || !usage ? (
         <PageSkeleton rows={2} />
+      ) : tab === "traffic" ? (
+        usage.analytics ? (
+          <AnalyticsUsageSection usage={usage.analytics} />
+        ) : (
+          <Alert>Traffic figures aren&apos;t available from this server yet.</Alert>
+        )
       ) : (
         <div className="space-y-6">
-          <h2 className="-mb-2 text-[15px] font-semibold text-[var(--color-ink)]">Trading API</h2>
-          <div className="card px-5 py-4">
-            <div className="flex items-baseline justify-between">
-              <p className="text-sm font-semibold text-[var(--color-ink)]">
-                {usage.used.toLocaleString()} of {usage.limit.toLocaleString()} calls used today
-              </p>
-              <p className="text-xs text-[var(--color-muted)]">
-                {usage.lastSyncedWithEbay ? `Confirmed with eBay ${fmtTime(usage.lastSyncedWithEbay)}` : "Not yet confirmed with eBay"}
-              </p>
+          <div className="space-y-4">
+            <p className="text-[12.5px] text-[var(--color-muted)]">Listings, orders and publishing, shared by every account. Resets {fmtTime(usage.resetAt)}.</p>
+            <div className="card px-5 py-4">
+              <div className="flex items-baseline justify-between">
+                <p className="text-sm font-semibold text-[var(--color-ink)]">
+                  {usage.used.toLocaleString()} of {usage.limit.toLocaleString()} calls used today
+                </p>
+                <p className="text-xs text-[var(--color-muted)]">{usage.lastSyncedWithEbay ? `Confirmed with eBay ${fmtTime(usage.lastSyncedWithEbay)}` : "Not yet confirmed with eBay"}</p>
+              </div>
+              <div className="relative mt-3 h-3 overflow-hidden rounded-full bg-[var(--color-line)]">
+                <div className={`h-full rounded-full ${barColour}`} style={{ width: `${pct}%` }} />
+                <div className="absolute inset-y-0 w-px bg-[var(--color-ink)]/30" style={{ left: "80%" }} title="Background re-reads pause here" />
+                <div className="absolute inset-y-0 w-px bg-[var(--color-ink)]/30" style={{ left: "92%" }} title="eBay-push re-reads pause here" />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
+                <span>
+                  80% · background re-reads pause
+                  {usage.paused.background ? " (paused now)" : ""}
+                </span>
+                <span>
+                  92% · push re-reads pause
+                  {usage.paused.push ? " (paused now)" : ""}
+                </span>
+                <span>Last 8% · kept for publishing and manual refresh</span>
+              </div>
+              {usage.exhausted && (
+                <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further calls for today. Pages keep showing their last copy until the reset.</p>
+              )}
             </div>
-            <div className="relative mt-3 h-3 overflow-hidden rounded-full bg-[var(--color-line)]">
-              <div className={`h-full rounded-full ${barColour}`} style={{ width: `${pct}%` }} />
-              <div className="absolute inset-y-0 w-px bg-[var(--color-ink)]/30" style={{ left: "80%" }} title="Background re-reads pause here" />
-              <div className="absolute inset-y-0 w-px bg-[var(--color-ink)]/30" style={{ left: "92%" }} title="eBay-push re-reads pause here" />
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
-              <span>80% · background re-reads pause{usage.paused.background ? " (paused now)" : ""}</span>
-              <span>92% · push re-reads pause{usage.paused.push ? " (paused now)" : ""}</span>
-              <span>Last 8% · kept for publishing and manual refresh</span>
-            </div>
-            {usage.exhausted && (
-              <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">
-                eBay has refused further calls for today. Pages keep showing their last copy until the reset.
-              </p>
-            )}
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -296,10 +339,17 @@ export default function EbayUsagePage() {
               </ul>
             </section>
           </div>
-
-          {usage.analytics && <AnalyticsUsageSection usage={usage.analytics} />}
         </div>
       )}
     </AppShell>
+  );
+}
+
+// useSearchParams (the tab is in the URL) needs a Suspense boundary above it.
+export default function EbayUsagePage() {
+  return (
+    <Suspense fallback={null}>
+      <EbayUsageInner />
+    </Suspense>
   );
 }

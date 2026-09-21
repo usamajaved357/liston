@@ -7,6 +7,9 @@ import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 interface AppShellProps {
   children: React.ReactNode;
   header?: React.ReactNode;
+  // A row under the title (tabs, say) that stays put while the page
+  // scrolls — the same slot AccountShell has.
+  subheader?: React.ReactNode;
   connectionsUsed: number;
   maxConnections: number;
   planName: string;
@@ -19,7 +22,7 @@ interface AppShellProps {
 
 // connectionsUsed / maxConnections / planName are accepted for compatibility
 // with existing pages; the sidebar no longer shows plan usage.
-export function AppShell({ children, header, role, isAdmin }: AppShellProps) {
+export function AppShell({ children, header, subheader, role, isAdmin }: AppShellProps) {
   const pathname = usePathname();
 
   return (
@@ -110,7 +113,10 @@ export function AppShell({ children, header, role, isAdmin }: AppShellProps) {
 
       <div className="flex-1 min-w-0 h-screen flex flex-col">
         {header && (
-          <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">{header}</div>
+          <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
+            {header}
+            {subheader && <div className="mt-5">{subheader}</div>}
+          </div>
         )}
         <div className={`flex-1 min-h-0 overflow-y-auto px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
       </div>

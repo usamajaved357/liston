@@ -107,10 +107,12 @@ export function TrendChart({
 
   // Label every few days so labels never collide (~64px each).
   const labelEvery = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(innerW / 64))));
+  // The last day is always labelled; a regular label too close to it
+  // (in pixels) gives way.
   const xLabels = points
     .map((p, i) => ({ i, day: p.day }))
     .filter(({ i }) => i % labelEvery === 0 || i === n - 1)
-    .filter(({ i }, k, arr) => !(i === n - 1 && k > 0 && i - arr[k - 1].i < labelEvery * 0.6));
+    .filter(({ i }) => i === n - 1 || x(n - 1) - x(i) >= 64);
 
   function indexFromPointer(clientX: number, target: SVGRectElement) {
     const rect = target.getBoundingClientRect();
