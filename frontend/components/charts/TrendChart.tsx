@@ -25,7 +25,12 @@ export interface TrendPoint {
 }
 
 const HEIGHT = 248;
-const M = { top: 16, right: 16, bottom: 28, left: 52 };
+// The plot runs to the box's right edge and its axis labels start at the
+// left edge, so a chart lines up with its card's heading on both sides.
+// The left margin fits the widest axis label.
+const M = { top: 16, right: 1, bottom: 28 };
+const AXIS_GAP = 12;
+const labelWidth = (text: string) => text.length * 6.4;
 
 
 export function TrendChart({
@@ -55,7 +60,6 @@ export function TrendChart({
   const gradientId = useId().replace(/:/g, "");
 
   const hasPrevious = showPrevious && points.some((p) => p.previous != null);
-  const innerW = width - M.left - M.right;
   const innerH = HEIGHT - M.top - M.bottom;
   const n = points.length;
 
@@ -64,10 +68,12 @@ export function TrendChart({
     const t = niceTicks(Math.max(0, ...values), 4);
     return { ticks: t, yMax: t[t.length - 1] || 1 };
   }, [points, hasPrevious]);
+  const left = Math.ceil(Math.max(...ticks.map((t) => labelWidth(axisFormat(t))), 8)) + AXIS_GAP;
+  const innerW = width - left - M.right;
 
   // Bars sit in slots; lines run edge to edge.
   const slot = n > 0 ? innerW / n : innerW;
-  const x = (i: number) => (variant === "bars" ? M.left + slot * (i + 0.5) : M.left + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW));
+  const x = (i: number) => (variant === "bars" ? left + slot * (i + 0.5) : left + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW));
   const y = (v: number) => M.top + innerH - (v / yMax) * innerH;
 
   // Smooth runs between gaps: a monotone curve through each day's figure,
@@ -162,8 +168,8 @@ export function TrendChart({
         {/* Recessive grid and y-axis labels. */}
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={M.left} x2={width - M.right} y1={y(t)} y2={y(t)} stroke="var(--color-line)" strokeWidth={1} strokeDasharray={t === 0 ? undefined : "2 4"} />
-            <text x={M.left - 10} y={y(t)} dy="0.32em" textAnchor="end" className="fill-[var(--color-muted)] text-[11px] tabular-nums">
+            <line x1={left} x2={width - M.right} y1={y(t)} y2={y(t)} stroke="var(--color-line)" strokeWidth={1} strokeDasharray={t === 0 ? undefined : "2 4"} />
+            <text x={0} y={y(t)} dy="0.32em" textAnchor="start" className="fill-[var(--color-muted)] text-[11px] tabular-nums">
               {axisFormat(t)}
             </text>
           </g>
@@ -247,7 +253,7 @@ export function TrendChart({
 
         {/* Hit area: the whole plot, so the pointer only has to be near a day. */}
         <rect
-          x={M.left}
+          x={left}
           y={M.top}
           width={innerW}
           height={innerH}

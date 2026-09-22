@@ -109,8 +109,8 @@ test('each night reads the day just ended for every listing; older days only fro
   let state = await repo.getSyncState(connectionId);
   assert.deepStrictEqual([state.time_zone, state.account_through], [UK, lastFinal]);
   const acct = await repo.accountDays(connectionId, days.addDays(today, -179), today);
-  assert.strictEqual(acct.length, 180);
-  assert.strictEqual(acct.find((r) => r.day === today).final, false, 'today is kept as partial');
+  assert.strictEqual(acct.length, days.dayCount(days.addDays(today, -179), lastFinal), 'complete days only');
+  assert.ok(acct.every((r) => r.day <= lastFinal && r.final), 'a running day is never stored: a few hours would read as a collapse');
   assert.ok(calls.every((u) => /T00:00:00\.000\+0[01]:00/.test(u.searchParams.get('filter'))), 'every range is sent at UK midnight');
 
   // The nightly read on its own (as a page view catches it up): the day
@@ -180,10 +180,6 @@ test('the Analytics tab: every range, and its comparison, is added up from store
   const listedDays = days.dayCount(days.dayOf(SMALL_STORE[0].startTime, UK), lastFinal);
   assert.strictEqual(views['30d'].listings.find((l) => l.itemId === '111').views, listedDays * 6, 'every day since it was listed');
   assert.strictEqual(views['7d'].leadInSeries, null, 'a range of days charts itself');
-  const today = (await service.getAnalytics(connectionId, userId, { range: 'today' })).data;
-  assert.strictEqual(today.series.length, 1);
-  assert.deepStrictEqual(today.leadInSeries.map((p) => p.day), days.daysBetween(days.addDays(today.range.to, -13), today.range.to), 'Today: charted after the 13 days before it');
-  assert.strictEqual(today.leadInSeries.find((p) => p.day === lastFinal).views, 100, 'the complete days, from stored days');
   const panel = await service.getListingAnalytics(connectionId, userId, '222', { range: '30d' });
   assert.strictEqual(panel.data.traffic, 'measured');
   assert.strictEqual(panel.data.dailyTrafficDays, 30, 'a figure every day: zero before it was listed');
@@ -227,7 +223,7 @@ test('filters never read eBay: a store over 1,000 while its history fills, then 
   // History still filling: every filter answers from what's stored.
   before = calls.length;
   let { data } = await service.getAnalytics(connectionId, userId, { range: '30d' });
-  for (const range of ['7d', 'this_month', 'last_month', '90d', 'today']) await service.getAnalytics(connectionId, userId, { range });
+  for (const range of ['7d', 'this_month', 'last_month', '90d']) await service.getAnalytics(connectionId, userId, { range });
   assert.strictEqual(calls.length - before, 0, 'no filter reads eBay');
   assert.ok(data.listings.every((l) => l.traffic === 'pending' && l.impressions === null));
   assert.strictEqual(data.totals.impressions, 30 * 70000, 'account figures are complete from day one');
@@ -263,22 +259,19 @@ test('filters never read eBay: a store over 1,000 while its history fills, then 
   assert.strictEqual(data.listingReport.scope, 'all');
 });
 
-test('Today costs nothing extra: its account totals come with the nightly read, sales are live, and nothing reads eBay on request', async () => {
+test('there is no Today: every range is complete days, so traffic and sales always cover the same days', async () => {
   const { userId, connectionId } = await fixture();
   const now = new Date();
-  const today = days.today(UK, now);
+  const lastFinal = days.lastFinalDay(UK, now);
   mockInputs({ orders: [{ createdAt: now.toISOString(), lineItems: [{ itemId: '111', quantityPurchased: 1, price: { amount: 4.5, currency: 'GBP' } }] }] });
-  const calls = mockTrafficReports();
+  mockTrafficReports();
   budget._reset({ limit: 100 });
   await service.syncAccount(connectionId, userId, { mode: 'essential', now });
   await syncUntilDone(connectionId, userId, now);
-  const before = calls.length;
   const { data } = await service.getAnalytics(connectionId, userId, { range: 'today' });
-  assert.strictEqual(calls.length - before, 0);
-  assert.deepStrictEqual([data.range.from, data.range.partial], [today, true]);
-  assert.strictEqual(data.totals.views, 100, 'today so far, as of the nightly read');
-  assert.deepStrictEqual([data.totals.sold, data.totals.sales], [1, 4.5], 'sales from orders, live');
-  assert.strictEqual(data.sync.refreshesLeft, undefined, 'no "Refresh today"');
+  assert.deepStrictEqual([data.range.key, data.range.to, data.range.partial], ['30d', lastFinal, false], 'an old "today" link opens 30 days');
+  assert.strictEqual(data.totals.sold, 0, 'a sale today counts once the day is complete');
+  assert.strictEqual(data.leadInSeries, null);
 });
 
 test('an account without the analytics scope makes no traffic calls and asks to reconnect', async () => {

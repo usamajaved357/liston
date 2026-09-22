@@ -20,13 +20,9 @@ import { RANGE_OPTIONS, comparedFor } from "@/components/analytics/metrics";
 // (impressions, views, click-through) is eBay's, stored daily by the
 // backend because eBay allows ~100 traffic calls a day for the whole app;
 // sales are counted from the orders and include today. Nothing here calls
-// eBay on its own: today's traffic so far comes with the nightly update.
+// eBay on its own; traffic arrives each day once eBay closes it.
 
 const RANGE_KEYS = RANGE_OPTIONS.map((r) => r.key);
-
-function timeOfDay(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-}
 
 // On the right of the ranges, as plain text: the last complete day the
 // figures reach, with a dot (green when up to date, pulsing while
@@ -35,7 +31,7 @@ function Freshness({ data }: { data: AccountAnalytics }) {
   const { sync } = data;
   const details = [
     sync.finalThrough && `Complete to ${dayLabelLong(sync.finalThrough)}.`,
-    sync.todayUpdatedAt && `Today so far as of ${timeOfDay(sync.todayUpdatedAt)}, read with the nightly update; sales are live.`,
+    "Today's traffic arrives once eBay closes the day; sales are live.",
     `Next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}.`,
     sync.history && !sync.history.complete && `Listing history: ${sync.history.stored} of ${sync.history.needed} days stored.`,
     `Days follow ${data.timeZone.replace("_", " ")} time. Last read from eBay ${timeAgo(sync.lastSyncedAt)}.`,

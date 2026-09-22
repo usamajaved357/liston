@@ -57,7 +57,9 @@ export function MetricsBoard({
   const salesMetric = selected === "sold" || selected === "sales";
   const drawn = !(loading && !shown.length) && points.some((p) => p.value != null);
   const note = leadIn
-    ? "Today so far, after the 13 days before it"
+    ? salesMetric
+      ? "Today so far (live), after the 13 days before it"
+      : "The 13 days before today · today’s traffic arrives once eBay closes the day"
     : hasPrevious
       ? "Each day against the same day of the previous period"
       : previousRange && salesMetric

@@ -21,7 +21,8 @@
 //     traffic once its days are in; eBay is read for a range only when
 //     someone presses "Load all" or reads one listing, each labelled with
 //     its cost;
-//   - "Refresh today": today so far, 3 times per account per day.
+//   - no "today so far": every range is complete days (a running day's
+//     traffic would read as a collapse against a whole one).
 // Every day is the seller's own calendar day, as in Seller Hub.
 const connectionService = require('../connections/connection.service');
 const ebayService = require('../ebay/ebay.service');
@@ -182,7 +183,7 @@ function blockedStatus(inputs) {
  *              ended, then (with `fill`) older listing days from what the
  *              reserve for other accounts' nightly reads leaves
  *   essential  account totals only (a first visit waits for this much)
- * Account totals come with today so far as of the read, at no extra call.
+ * Traffic is stored for complete days only; today's arrives once it ends.
  * One sync per account at a time: a second caller shares the first's.
  */
 function syncAccount(connectionId, ownerId, { mode = 'auto', now = new Date(), fill = true } = {}) {
@@ -253,8 +254,9 @@ async function runSync(connectionId, ownerId, { mode, now, fill }) {
       const accountFrom = state.account_through ? d.addDays(state.account_through, 1) : d.addDays(today, -(d.ACCOUNT_HISTORY_DAYS - 1));
       if (accountFrom <= lastFinal) {
         const rows = await traffic.fetchAccountDays(inputs.accessToken, { ...ctx, segments: accountSegments(accountFrom, today, timeZone), kind: 'sync' });
+        // Only complete days: a few hours of today would read as a collapse
+        // against yesterday's whole day.
         await repo.upsertTraffic(connectionId, rows.filter((r) => r.day <= lastFinal), { final: true });
-        await repo.upsertTraffic(connectionId, rows.filter((r) => r.day > lastFinal), { final: false });
         await repo.saveSyncState(connectionId, { time_zone: timeZone, account_through: lastFinal });
       }
 
@@ -482,14 +484,16 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
     const totals = d.metricsFrom(d.sumTraffic(inRange(win.from, win.to)), salesCurrent);
     const previous = d.metricsFrom(d.sumTraffic(inRange(win.previous.from, win.previous.to)), salesPrevious || { units: 0, amount: 0, orders: 0 });
     if (!salesPrevious) Object.assign(previous, { sold: null, orders: null, sales: null, conversion: null });
-    if (!hasTraffic) {
+    // Today (a running day) has no traffic yet: eBay's figures come once the
+    // day is complete. Its sales are live.
+    if (!hasTraffic || win.partial) {
       Object.assign(totals, { impressions: null, views: null, ctr: null, conversion: null });
       Object.assign(previous, { impressions: null, views: null, ctr: null, conversion: null });
     }
 
     const dayPoint = (day) => {
       const row = rowsByDay.get(day);
-      const known = hasTraffic && Boolean(row || day <= state.account_through);
+      const known = hasTraffic && day <= lastFinal && Boolean(row || day <= state.account_through);
       const t = row || d.emptyTraffic();
       const salesKnown = day >= ordersFrom;
       const s = d.salesWithin(sales.byDay, day, day);
@@ -592,7 +596,6 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
           waitingForAllowance: state.last_error === WAITING,
           finalThrough: state.account_through,
           nextSyncAt: d.nextSyncAt(timeZone, now).toISOString(),
-          todayUpdatedAt: rowsByDay.get(today)?.fetched_at || null,
           history: status === 'ok' ? historyProgress(state, timeZone, now) : null,
           syncing: running.has(String(connectionId)),
         },
@@ -611,7 +614,7 @@ async function loadAllListings(connectionId, ownerId, { range = '30d' } = {}) {
     const timeZone = d.timeZoneFor(inputs.marketplaceId);
     const { today, lastFinal } = contextFor(timeZone);
     const win = d.rangeWindow(range, { today, lastFinal });
-    if (win.partial) throw new AnalyticsError("Today's listing figures come from Refresh today.", 400);
+    if (win.partial) throw new AnalyticsError("A listing's traffic for today arrives once eBay closes the day.", 400);
     const calls = traffic.callsForAllListings(inputs.items.length);
     if (!budget.allows('view', calls)) throw new AnalyticsError(`Loading every listing takes ${calls} calls, more than today's allowance has left.`, 429);
     const report = await reportFor({ connectionId, inputs, timeZone, from: win.from, to: win.to, scope: 'all', lastFinal, allowFetch: true });
@@ -753,7 +756,7 @@ async function readListing(connectionId, ownerId, itemId, { range = '30d' } = {}
     const timeZone = d.timeZoneFor(inputs.marketplaceId);
     const { today, lastFinal } = contextFor(timeZone);
     const win = d.rangeWindow(range, { today, lastFinal });
-    if (win.partial) throw new AnalyticsError("Today's listing figures come from Refresh today.", 400);
+    if (win.partial) throw new AnalyticsError("A listing's traffic for today arrives once eBay closes the day.", 400);
     const ranges = [[win.from, win.to]];
     if (liveThroughPrevious(item, win.previous.from, timeZone)) ranges.push([win.previous.from, win.previous.to]);
     if (!budget.allows('view', ranges.length)) throw new AnalyticsError("Today's eBay allowance for traffic data doesn't cover this. Try again after the reset.", 429);

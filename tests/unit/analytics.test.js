@@ -45,9 +45,10 @@ test('each day starts at its own midnight: UTC offsets either side of the clock 
   assert.strictEqual(days.offsetAt('2026-09-21', 'Australia/Sydney'), '+10:00');
 });
 
-test('ranges are complete days (Today is the running day) and compare with the period before', () => {
+test('ranges are complete days (there is no Today) and compare with the period before', () => {
   const ctx = { today: '2026-09-22', lastFinal: '2026-09-21' };
-  assert.deepStrictEqual(days.rangeWindow('today', ctx), { range: 'today', from: '2026-09-22', to: '2026-09-22', days: 1, partial: true, previous: { from: '2026-09-21', to: '2026-09-21' } });
+  assert.ok(!days.RANGES.includes('today'));
+  assert.strictEqual(days.rangeWindow('today', ctx).range, '30d', 'an unknown range falls back to 30 days');
   assert.deepStrictEqual(days.rangeWindow('7d', ctx), { range: '7d', from: '2026-09-15', to: '2026-09-21', days: 7, partial: false, previous: { from: '2026-09-08', to: '2026-09-14' } });
   assert.strictEqual(days.rangeWindow('90d', ctx).from, '2026-06-24');
   assert.deepStrictEqual(days.rangeWindow('this_month', ctx).previous, { from: '2026-08-01', to: '2026-08-21' });
@@ -55,9 +56,8 @@ test('ranges are complete days (Today is the running day) and compare with the p
   // On the 1st, "this month" has no complete day yet: it is today so far.
   const first = days.rangeWindow('this_month', { today: '2026-10-01', lastFinal: '2026-09-30' });
   assert.strictEqual(first.range, 'this_month');
-  assert.strictEqual(first.partial, true);
+  assert.deepStrictEqual([first.partial, first.previous], [true, { from: '2026-09-30', to: '2026-09-30' }]);
   // A single day is charted at the end of the 14 days leading up to it.
-  assert.deepStrictEqual(days.leadIn(days.rangeWindow('today', ctx)), { from: '2026-09-09', to: '2026-09-22' });
   assert.deepStrictEqual(days.leadIn(first), { from: '2026-09-18', to: '2026-10-01' });
   assert.strictEqual(days.leadIn(days.rangeWindow('7d', ctx)), null);
   assert.strictEqual(first.from, '2026-10-01');
@@ -294,7 +294,7 @@ test('92 days of listing history reach every filter and its comparison (but 90 d
     for (const lag of [1, 2]) {
       const lastFinal = days.addDays(day, -lag); // before 02:00 the last complete day is two back
       const floor = days.addDays(lastFinal, -(days.LISTING_HISTORY_DAYS - 1));
-      for (const range of days.RANGES.filter((r) => r !== 'today')) {
+      for (const range of days.RANGES) {
         const win = days.rangeWindow(range, { today: day, lastFinal });
         assert.ok(win.from >= floor, `${range} on ${day}`);
         if (range !== '90d' && !win.partial) assert.ok(win.previous.from >= floor, `${range}'s comparison on ${day}`);

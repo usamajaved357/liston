@@ -26,7 +26,8 @@ const ACCOUNT_HISTORY_DAYS = 180; // account totals kept, for period comparisons
 // filter and every comparison but 90 days' is added up from stored days.
 // (Account totals keep 180 days, so the 90-day account comparison stays.)
 const LISTING_HISTORY_DAYS = 92;
-const RANGES = ['today', '7d', '30d', 'this_month', 'last_month', '90d'];
+// No "Today": eBay's traffic for a day comes once the day is complete.
+const RANGES = ['7d', '30d', 'this_month', 'last_month', '90d'];
 
 const timeZoneFor = (marketplaceId) => SITE_TIME_ZONES[marketplaceId] || null;
 
@@ -103,10 +104,10 @@ function nextSyncAt(timeZone, now = new Date()) {
 const monthStart = (day) => `${day.slice(0, 7)}-01`;
 
 /**
- * A range's days and the period it's compared with. Every range but Today
- * is made of complete days, ending with the last complete day, so traffic
- * and sales cover exactly the same days (and a figure never shifts while
- * eBay is still counting). Today is the running day, "so far".
+ * A range's days and the period it's compared with. Every range is made of
+ * complete days, ending with the last complete day, so traffic and sales
+ * cover exactly the same days (and a figure never shifts while eBay is
+ * still counting) — except "this month" on the 1st, the running day so far.
  *   7d / 30d / 90d  the last N complete days, vs the N days before
  *   this_month      the 1st to the last complete day, vs the same days of
  *                   last month (on the 1st, it is today so far)
@@ -114,14 +115,11 @@ const monthStart = (day) => `${day.slice(0, 7)}-01`;
  */
 function rangeWindow(range, { today: now, lastFinal }) {
   const key = RANGES.includes(range) ? range : '30d';
-  if (key === 'today') {
-    return { range: key, from: now, to: now, days: 1, partial: true, previous: { from: addDays(now, -1), to: addDays(now, -1) } };
-  }
   let from;
   let to = lastFinal;
   if (key === 'this_month') {
     from = monthStart(now);
-    if (from > lastFinal) return { ...rangeWindow('today', { today: now, lastFinal }), range: key };
+    if (from > lastFinal) return { range: key, from: now, to: now, days: 1, partial: true, previous: { from: addDays(now, -1), to: addDays(now, -1) } };
   } else if (key === 'last_month') {
     to = addDays(monthStart(now), -1);
     from = monthStart(to);
@@ -141,7 +139,7 @@ function rangeWindow(range, { today: now, lastFinal }) {
   return { range: key, from, to, days, partial: false, previous };
 }
 
-// A single-day range (Today, or "This month" on the 1st) has one point:
+// A single-day range ("This month" on the 1st) has one point:
 // its chart and sparklines show it at the end of the 14 days leading up
 // to it instead.
 const LEAD_IN_DAYS = 14;

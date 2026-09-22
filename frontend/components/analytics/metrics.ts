@@ -48,7 +48,7 @@ export const METRICS: MetricDef[] = [
   {
     key: "sold",
     label: "Units sold",
-    info: "Items sold, from your orders (cancelled orders don't count). Includes today.",
+    info: "Items sold, from your orders (cancelled orders don't count).",
     variant: "area",
     format: (v) => fullNumber(v),
     axis: (v) => compactNumber(v),
@@ -93,7 +93,6 @@ export function trendPoints(series: AnalyticsDay[], previous: AnalyticsDay[] | n
 }
 
 export const RANGE_OPTIONS: { key: AnalyticsRange; label: string; compared: string }[] = [
-  { key: "today", label: "Today", compared: "vs yesterday" },
   { key: "7d", label: "7 days", compared: "vs the 7 days before" },
   { key: "30d", label: "30 days", compared: "vs the 30 days before" },
   { key: "this_month", label: "This month", compared: "vs the same days last month" },

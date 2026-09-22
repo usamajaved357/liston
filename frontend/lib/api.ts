@@ -884,7 +884,7 @@ export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch"
 // ---- listing analytics ---------------------------------------------------------
 // Days are eBay's reporting days (US Pacific), "YYYY-MM-DD".
 
-export type AnalyticsRange = "today" | "7d" | "30d" | "this_month" | "last_month" | "90d";
+export type AnalyticsRange = "7d" | "30d" | "this_month" | "last_month" | "90d";
 
 // Traffic figures are null where eBay's figures aren't stored yet; sales
 // always come from the orders.
@@ -994,7 +994,6 @@ export interface AccountAnalytics {
     waitingForAllowance: boolean; // today's allowance ran out before this account's read
     finalThrough: string | null;
     nextSyncAt: string;
-    todayUpdatedAt: string | null;
     history: AnalyticsHistory | null;
     syncing: boolean;
   };
