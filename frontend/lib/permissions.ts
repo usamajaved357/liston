@@ -8,10 +8,11 @@ import { Connection } from "@/lib/api";
 const FEATURE_PATHS: Record<string, string> = {
   orders: "",
   listings: "/listings",
+  analytics: "/analytics",
   inbox: "/inbox",
   campaigns: "/campaigns",
 };
-const FEATURE_PRIORITY = ["orders", "listings", "inbox", "campaigns"];
+const FEATURE_PRIORITY = ["orders", "listings", "analytics", "inbox", "campaigns"];
 
 export function landingPathForConnection(connection: Connection): string {
   const base = `/accounts/${connection.id}`;

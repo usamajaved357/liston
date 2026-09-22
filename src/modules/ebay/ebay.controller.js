@@ -3,8 +3,13 @@ const ebayOauth = require('./api/ebay.oauth');
 const connectionService = require('../connections/connection.service');
 const ebayService = require('./ebay.service');
 const ebayNotifications = require('./ebay.notifications');
+const commerceNotifications = require('./commerce-notifications');
+const notificationApi = require('./api/ebay.notification-api');
+const ebayPush = require('./ebay-push');
 const connectionRepository = require('../connections/connection.repository');
 const governor = require('./request-governor');
+const analyticsBudget = require('./analytics-budget');
+const analyticsService = require('../analytics/analytics.service');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
@@ -37,6 +42,7 @@ async function oauthCallback(req, res) {
       // is kept.
       const existing = await connectionService.getConnectionWithDecryptedCredentials(statePayload.connectionId, statePayload.userId);
       await connectionService.updateConnectionCredentials(existing.id, { ...(existing.credentials || {}), ...tokens });
+      ebayPush.subscribeInBackground(existing.id, statePayload.userId);
       const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') ? statePayload.returnTo : `/accounts/${existing.id}`;
       const joiner = returnTo.includes('?') ? '&' : '?';
       return res.redirect(`${config.frontendUrl}${returnTo}${joiner}reconnected=1`);
@@ -49,6 +55,7 @@ async function oauthCallback(req, res) {
     // Tag the account with its eBay site straight away; a failure here just
     // means the tag is picked up on the next Connections visit.
     await connectionService.ensureMarketplace(created.id, statePayload.userId, ebayService).catch(() => null);
+    ebayPush.subscribeInBackground(created.id, statePayload.userId);
     return res.redirect(`${config.frontendUrl}/dashboard?connected=ebay`);
   } catch (err) {
     logger.error('eBay OAuth callback failed', { message: err.message });
@@ -90,7 +97,9 @@ function accountDeletionChallenge(req, res) {
 // record (no shopper/buyer PII is persisted anywhere) — acknowledging with
 // 200 is all compliance requires; nothing needs to be deleted on our side.
 function accountDeletionNotification(req, res) {
-  logger.info('eBay account-deletion notification received', {
+  // eBay sends one for every eBay user who closes their account, to every
+  // app — a couple a minute — so it's logged at debug, not info.
+  logger.debug('eBay account-deletion notification received', {
     notificationId: req.body?.notification?.notificationId,
   });
   return res.status(200).json({});
@@ -137,7 +146,10 @@ async function platformNotification(req, res) {
   try {
     const rows = await connectionRepository.findIdsByEbayUsername(notification.recipientUserId);
     const { kinds, saleItemId } = planFor(notification);
+    const receivedAt = new Date().toISOString();
     for (const row of rows) {
+      // A receipt: this account's Trading push is arriving (ebayService.pushEnabled).
+      connectionRepository.mergeEbaySettings(row.id, { lastPushAt: receivedAt }).catch(() => {});
       connectionService
         .withDecryptedCredentials(row.id, row.user_id, async (credentials) => {
           const jobs = [ebayService.syncAccount(credentials, row.id, kinds)];
@@ -146,9 +158,49 @@ async function platformNotification(req, res) {
         })
         .catch((err) => logger.warn('Re-read after eBay notification failed', { connectionId: row.id, error: err.message }));
     }
-    logger.info('eBay notification handled', { event: notification.eventName, accounts: rows.length, kinds, saleItemId });
+    logger.info('eBay notification handled', { event: notification.eventName, seller: notification.recipientUserId, accounts: rows.length, kinds, saleItemId });
   } catch (err) {
     logger.error('eBay notification handling failed', { error: err.message });
+  }
+}
+
+// eBay's Notification API (REST push). GET is eBay's check that we own the
+// endpoint, sent when the destination is created; POST is a notification,
+// verified by its X-EBAY-SIGNATURE before anything is done with it. eBay
+// wants a 2xx fast and retries otherwise (3 times), so work runs after the
+// reply. Spec: developer.ebay.com/api-docs/commerce/notification/overview.html
+function commerceNotificationChallenge(req, res) {
+  const { challenge_code: challengeCode } = req.query;
+  const { commerceNotificationsToken: token, commerceNotificationsUrl: endpoint } = config.ebay;
+  if (!challengeCode) return res.status(400).json({ error: 'missing_challenge_code' });
+  if (!token || !endpoint) {
+    logger.error('eBay notification challenge received but not configured', { hasToken: Boolean(token), hasEndpoint: Boolean(endpoint) });
+    return res.status(500).json({ error: 'not_configured' });
+  }
+  return res.status(200).json({ challengeResponse: commerceNotifications.challengeResponse(challengeCode, token, endpoint) });
+}
+
+async function commerceNotification(req, res) {
+  const raw = typeof req.rawBody === 'string' ? req.rawBody : '';
+  let verified = false;
+  try {
+    verified = await commerceNotifications.verifySignature(raw, req.get('x-ebay-signature'), notificationApi.getPublicKey);
+  } catch (err) {
+    logger.warn('eBay push signature could not be checked', { error: err.message });
+    // eBay retries on a non-2xx: a key-fetch hiccup shouldn't lose the order.
+    return res.status(503).end();
+  }
+  if (!verified) {
+    logger.warn('eBay push failed signature check', { topic: req.body?.metadata?.topic });
+    return res.status(412).end();
+  }
+  res.status(204).end();
+  try {
+    const result = await ebayPush.handle(req.body);
+    if (result.handled) logger.info('eBay push handled', result);
+    else logger.info('eBay push ignored', result);
+  } catch (err) {
+    logger.error('eBay push handling failed', { error: err.message });
   }
 }
 
@@ -156,20 +208,33 @@ async function platformNotification(req, res) {
 // totals, what is paused, per call and per account (with labels).
 async function usage(req, res, next) {
   try {
-    if (req.query.sync === '1') await governor.syncWithEbay();
+    if (req.query.sync === '1') await Promise.all([governor.syncWithEbay(), analyticsBudget.syncWithEbay()]);
     const snap = governor.snapshot();
     const accounts = await connectionRepository.findAllEbay();
     const labels = new Map(accounts.map((a) => [String(a.id), a.label]));
     const byAccount = Object.entries(snap.byAccount)
-      .map(([id, count]) => ({ connectionId: id, label: labels.get(id) || 'Removed account', count, push: Boolean(accounts.find((a) => String(a.id) === id)?.settings?.ebay?.notificationsEnabledAt) }))
+      .map(([id, count]) => ({ connectionId: id, label: labels.get(id) || 'Removed account', count, push: ebayService.pushEnabled(accounts.find((a) => String(a.id) === id)).orders }))
       .sort((a, b) => b.count - a.count);
     const byCall = Object.entries(snap.byCall)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count);
-    res.status(200).json({ ...snap, byAccount, byCall, accountsTotal: accounts.length, notificationsUrl: config.ebay.notificationsUrl || null });
+    res.status(200).json({
+      ...snap,
+      byAccount,
+      byCall,
+      accountsTotal: accounts.length,
+      notificationsUrl: config.ebay.notificationsUrl || null,
+      // eBay's push (ebay-push.js): set up on this server, and how many
+      // accounts it is actually arriving for, per kind.
+      orderPushConfigured: ebayPush.configured(),
+      orderPushLive: accounts.filter((a) => ebayService.pushEnabled(a).orders).length,
+      listingPushLive: accounts.filter((a) => ebayService.pushEnabled(a).listings).length,
+      // The traffic report's separate allowance (see analytics-budget).
+      analytics: await analyticsService.adminUsage(labels),
+    });
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification, platformNotification, usage, _planFor: planFor };
+module.exports = { oauthCallback, accountDeletionChallenge, accountDeletionNotification, platformNotification, commerceNotificationChallenge, commerceNotification, usage, _planFor: planFor };

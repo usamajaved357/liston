@@ -125,6 +125,14 @@ const config = {
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || null,
   },
 
+  // Listing analytics (eBay's traffic report). The allowance is eBay's
+  // default unless it has granted more; the daily read can be switched off
+  // on a machine that shares production's eBay keys (a dev laptop), since
+  // every read counts against the same app-wide allowance.
+  analytics: {
+    dailyLimit: parseInt(process.env.EBAY_ANALYTICS_DAILY_LIMIT || '100', 10),
+    schedulerEnabled: process.env.ANALYTICS_SCHEDULER !== 'off',
+  },
   ebay: {
     clientId: process.env.EBAY_CLIENT_ID || null,
     clientSecret: process.env.EBAY_CLIENT_SECRET || null,
@@ -150,6 +158,14 @@ const config = {
     // signature is verified; without it, notifications are accepted on shape
     // alone (they can only ever trigger a re-read, never a change).
     devId: process.env.EBAY_DEV_ID || null,
+    // eBay's Notification API (REST push, e.g. ORDER_CONFIRMATION): the
+    // public HTTPS URL of /api/ebay/commerce-notifications and its
+    // verification token (32-80 chars). Default to the account-deletion
+    // endpoint's host and token, which every production keyset already has.
+    commerceNotificationsUrl:
+      process.env.EBAY_COMMERCE_NOTIFICATIONS_URL ||
+      (process.env.EBAY_DELETION_ENDPOINT_URL ? process.env.EBAY_DELETION_ENDPOINT_URL.replace(/\/api\/ebay\/account-deletion\/?$/, '/api/ebay/commerce-notifications') : null),
+    commerceNotificationsToken: process.env.EBAY_COMMERCE_NOTIFICATIONS_TOKEN || process.env.EBAY_DELETION_VERIFICATION_TOKEN || null,
   },
 
   google: {

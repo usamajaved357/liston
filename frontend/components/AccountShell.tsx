@@ -121,6 +121,18 @@ export function AccountShell({
               }
             />
           )}
+          {canShow("analytics") && (
+            <NavItem
+              href={`${base}/analytics`}
+              active={pathname.startsWith(`${base}/analytics`)}
+              label="Analytics"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
           {canShow("campaigns") && (
             <NavItem
               href={`${base}/campaigns`}

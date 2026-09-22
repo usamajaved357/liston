@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingStatusFilter } from "@/lib/api";
+import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingAnalyticsSummaries, ListingStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -13,6 +13,8 @@ import { ListSkeleton } from "@/components/Skeleton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
+import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
+import { compactNumber } from "@/components/charts/chart-format";
 
 type Tab = ListingStatusFilter | "draft";
 const TrashIcon = (
@@ -47,7 +49,30 @@ function StockBadge({ available }: { available: number }) {
   );
 }
 
-function ListingRow({ item, onEdit, editing, onDelete, onEnd }: { item: Listing; onEdit: () => void; editing: boolean; onDelete?: () => void; onEnd?: () => void }) {
+const ChartIcon = (
+  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+  </svg>
+);
+
+function ListingRow({
+  item,
+  onEdit,
+  editing,
+  onDelete,
+  onEnd,
+  stats,
+  onAnalytics,
+}: {
+  item: Listing;
+  onEdit: () => void;
+  editing: boolean;
+  onDelete?: () => void;
+  onEnd?: () => void;
+  // The last 30 days, from stored analytics (no eBay call per row).
+  stats?: { views: number | null; sold: number; watchers: number | null } | null;
+  onAnalytics?: () => void;
+}) {
   const open = () => {
     if (item.viewItemUrl) window.open(item.viewItemUrl, "_blank", "noopener");
   };
@@ -62,12 +87,44 @@ function ListingRow({ item, onEdit, editing, onDelete, onEnd }: { item: Listing;
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-muted)]">
           <StockBadge available={item.quantityAvailable} />
           <span>{item.quantitySold} sold</span>
+          {stats && (
+            <span className="inline-flex items-center gap-1 text-[var(--color-ink)]" title="The last 30 complete days: views from eBay, units sold from your orders; watchers now">
+              <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-muted)]" aria-hidden>
+                <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" stroke="currentColor" strokeWidth="1.8" />
+                <circle cx="12" cy="12" r="2.8" stroke="currentColor" strokeWidth="1.8" />
+              </svg>
+              {stats.views != null && (
+                <>
+                  <span className="font-medium tabular-nums">{compactNumber(stats.views)}</span>
+                  <span className="text-[var(--color-muted)]">views ·</span>
+                </>
+              )}
+              <span className="text-[var(--color-muted)]">
+                {stats.sold} sold in 30 days
+                {stats.watchers != null && ` · ${stats.watchers} watching`}
+              </span>
+            </span>
+          )}
           <span className="font-mono text-[11.5px] tracking-tight">#{item.itemId}</span>
           {item.sku && <span className="truncate">SKU {item.sku}</span>}
           {item.startTime && <span>Listed {formatShortDate(item.startTime)}</span>}
         </div>
       </div>
       <p className="w-20 flex-shrink-0 text-right text-[14px] font-medium tracking-tight text-[var(--color-ink)]">{formatMoney(item.price)}</p>
+      {onAnalytics && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAnalytics();
+          }}
+          className="btn btn-ghost btn-icon flex-shrink-0 !h-7 !w-7 hover:!bg-[var(--color-primary-soft)] hover:!text-[var(--color-primary)]"
+          title="Analytics: impressions, views and sales"
+          aria-label={`Analytics for ${item.title}`}
+        >
+          {ChartIcon}
+        </button>
+      )}
       <button
         type="button"
         onClick={(e) => {
@@ -173,8 +230,11 @@ export default function AccountListingsPage() {
   const updateWarning = searchParams.get("warning");
   const endedItemId = searchParams.get("ended");
   const [filter, setFilter] = useState<Tab>(urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active");
-  const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
+  // ?q= opens the tab already searched (the analytics panel's "Open in
+  // Listings" passes the item number).
+  const urlSearch = searchParams.get("q") || "";
+  const [search, setSearch] = useState(urlSearch);
+  const [debounced, setDebounced] = useState(urlSearch.trim());
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState<number | "all">(25);
   const [items, setItems] = useState<Listing[]>([]);
@@ -192,6 +252,8 @@ export default function AccountListingsPage() {
   const [draftToDelete, setDraftToDelete] = useState<string | null>(null);
   const [deletingDraft, setDeletingDraft] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [summaries, setSummaries] = useState<ListingAnalyticsSummaries | null>(null);
+  const [analyticsItem, setAnalyticsItem] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<Listing | null>(null);
   const [itemToEnd, setItemToEnd] = useState<Listing | null>(null);
   const [endingItem, setEndingItem] = useState(false);
@@ -245,6 +307,20 @@ export default function AccountListingsPage() {
   useAccountEvents(connection?.id, (event) => {
     if (event.kind === "listings" && filter !== "draft") setReloadKey((k) => k + 1);
   });
+
+  // Last-30-day views per live listing, from stored analytics only.
+  const canSeeAnalytics = connection ? connection.permissions === undefined || Boolean(connection.permissions.analytics) : false;
+  useEffect(() => {
+    if (!connection || !canSeeAnalytics || filter !== "active") return;
+    let cancelled = false;
+    api
+      .getListingAnalyticsSummaries(connection.id)
+      .then((d) => !cancelled && setSummaries(d))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, canSeeAnalytics, filter, reloadKey]);
 
   async function handleRefresh() {
     if (!connection) return;
@@ -499,6 +575,12 @@ export default function AccountListingsPage() {
               <ListingRow
                 key={item.itemId}
                 item={item}
+                stats={
+                  filter === "active" && summaries?.status === "ok" && summaries.items[item.itemId]
+                    ? summaries.items[item.itemId]
+                    : null
+                }
+                onAnalytics={filter === "active" && canSeeAnalytics ? () => setAnalyticsItem(item.itemId) : undefined}
                 editing={editingItemId === item.itemId}
                 onEdit={() => openLiveEdit(item.itemId)}
                 onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
@@ -539,6 +621,20 @@ export default function AccountListingsPage() {
         onCancel={() => setDraftToDelete(null)}
         onConfirm={handleDeleteDraft}
       />
+      {analyticsItem && (
+        <ListingAnalyticsPanel
+          connectionId={connection.id}
+          itemId={analyticsItem}
+          onClose={() => setAnalyticsItem(null)}
+          onOpenInListings={() => {
+            if (filter !== "active") changeFilter("active");
+            setSearch(analyticsItem);
+            setDebounced(analyticsItem);
+            setPage(1);
+            setAnalyticsItem(null);
+          }}
+        />
+      )}
     </AccountShell>
   );
 }

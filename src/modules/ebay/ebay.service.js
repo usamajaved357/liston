@@ -472,23 +472,30 @@ async function withdrawDraft(credentials, offerId) {
 // the mirror on disk, a copy is always worth showing; only an account that
 // has never been read makes anyone wait.
 //
-// An account subscribed to eBay's push notifications (see
-// ebay.notifications.js) is told about every change, so it is polled far
-// less: the long windows are only a safety net for a missed notification.
+// An account whose eBay push is actually arriving (see pushEnabled) is told
+// about changes, so it is polled far less: the long windows are only a
+// safety net for a missed notification. Push is per kind: new orders and
+// listing changes come from eBay's Notification API (ebay-push.js); Trading's
+// older Platform Notifications (ebay.notifications.js) count for listings
+// too, when they arrive.
 const FRESH = {
   listings: 30 * 60 * 1000,
   orders: 10 * 60 * 1000,
   activeCount: 60 * 60 * 1000,
 };
-// eBay's push arrives within seconds of a change and triggers the re-read
-// itself (see syncAccount), so a subscribed account is not polled at all:
-// the daily read is only insurance against a notification eBay dropped.
+// eBay's push arrives within seconds of a change and brings it in itself
+// (a new order is read on its own, see applyNewOrder), so these reads are
+// only insurance against a notification eBay dropped — and against what
+// push doesn't cover (an order's later changes: dispatch, cancellation).
 const FRESH_WITH_PUSH = {
   listings: 24 * 60 * 60 * 1000,
-  orders: 24 * 60 * 60 * 1000,
+  orders: 6 * 60 * 60 * 1000,
   activeCount: 24 * 60 * 60 * 1000,
 };
-const freshFor = (kind) => (ctx) => (ctx?.push ? FRESH_WITH_PUSH[kind] : FRESH[kind]);
+// `push`: true (a push-triggered read: everything counts as pushed), or
+// { listings, orders } from pushEnabled(connection).
+const pushCovers = (push, kind) => (push === true ? true : Boolean(push && push[kind === 'activeCount' ? 'listings' : kind]));
+const freshFor = (kind) => (ctx) => (pushCovers(ctx?.push, kind) ? FRESH_WITH_PUSH[kind] : FRESH[kind]);
 
 // Tags a cache read for the governor: a read someone is waiting on is
 // 'user'; a refresh behind a served copy is whatever the caller said (a
@@ -1122,6 +1129,30 @@ function seededShuffle(list, seed) {
   return out;
 }
 
+// What listing analytics needs from this account: a valid token for the
+// traffic report, whether the token carries eBay's analytics scope, and the
+// cached live listings and 90 days of orders (sales are counted from these,
+// so they cost no traffic calls). Both come from the local copies, read
+// from eBay only when stale, exactly as the Listings and Orders tabs do.
+async function analyticsInputs(credentials, connectionId, { push = false } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const [items, orders] = await Promise.all([
+    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }).catch(() => []),
+    getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
+  ]);
+  return {
+    accessToken,
+    marketplaceId: credentials.marketplaceId || marketplaces.DEFAULT_ID,
+    hasAnalyticsScope: ebayOauth.grantedScopes(credentials).some((scope) => /sell\.analytics/.test(scope)),
+    items: items || [],
+    orders: orders || [],
+    listingsSyncedAt: listingsCache.syncedAt(listingsKey(id, 'active')),
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
 async function bestSellingListings(credentials, connectionId, { exclude, count = 12, push = false, seed = null } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const id = String(connectionId);
@@ -1483,7 +1514,8 @@ async function getOrderCases(credentials, { orderId, legacyOrderId }) {
   const id = legacyOrderId || orderId;
   const quiet = (label, p) =>
     p.catch((err) => {
-      logger.warn(`Could not read the order's ${label}`, { orderId, error: err.message });
+      // eBay answers 404 when an order simply has none (no dispute, say).
+      logger[/\(404\)/.test(err.message) ? 'debug' : 'warn'](`Could not read the order's ${label}`, { orderId, error: err.message });
       return null;
     });
   const [returns, inquiries, disputes] = await Promise.all([
@@ -1745,6 +1777,124 @@ async function syncAccount(credentials, connectionId, kinds = ['listings', 'orde
 // announced to open pages. A listing that just sold out leaves the active
 // list; the count follows. Falls back to a stale mark (re-read on the next
 // look, no call now) when there is no loaded copy to patch.
+// Listings a pushed order just sold from, per account: eBay follows a sale
+// with a LISTING "UPDATED" push for the new quantity, which applyNewOrder
+// has already applied — so that one needs no read.
+const recentSales = new Map(); // connectionId -> Map(listingId -> ms)
+const SALE_UPDATE_WINDOW_MS = 5 * 60 * 1000;
+// More changed listings than this in one batch: one read of the whole
+// active list (1 call per 200 listings) beats a GetItem each.
+const LISTING_READS_BEFORE_FULL = 8;
+
+/**
+ * Listing changes eBay pushed (LISTING: CREATED | UPDATED | ENDED), gathered
+ * per account (ebay-push.js). Ended listings leave the active list with no
+ * call; an update right after a pushed sale was already applied; the rest
+ * are read one by one (Trading GetItem, trimmed), or — for a burst — the
+ * whole active list once. Open pages are told ("listings" event). Resolves
+ * to { summary, credentialsChanged, credentials }.
+ */
+async function applyListingChanges(credentials, connectionId, changes) {
+  const id = String(connectionId);
+  const { accessToken, siteId, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const ctx = { accessToken, siteId, connectionId: id, push: { listings: true, orders: false }, priority: 'push' };
+  const key = listingsKey(id, 'active');
+  const now = Date.now();
+  const soldAt = recentSales.get(id) || new Map();
+  const ended = new Set(changes.filter((c) => c.reason === 'ENDED').map((c) => String(c.listingId)));
+  const toRead = [];
+  let skippedSales = 0;
+  for (const c of changes) {
+    const listingId = String(c.listingId);
+    if (ended.has(listingId)) continue;
+    if (c.reason === 'UPDATED' && now - (soldAt.get(listingId) || 0) < SALE_UPDATE_WINDOW_MS) {
+      skippedSales += 1;
+      continue;
+    }
+    toRead.push(listingId);
+  }
+
+  let reads = 0;
+  let fullRead = false;
+  if (toRead.length > LISTING_READS_BEFORE_FULL) {
+    listingsCache.markStale(key);
+    await listingsCache.get(key, { ...ctx, status: 'active' });
+    fullRead = true;
+  } else {
+    const fetched = new Map();
+    for (const listingId of toRead) {
+      const result = await governor
+        .withContext({ connectionId: id, priority: 'push' }, () => ebayTrading.getListingItem(accessToken, listingId, { siteId }))
+        .catch((err) => (err.code === 'EBAY_BUDGET' ? null : Promise.reject(err)));
+      reads += 1;
+      if (!result) continue; // held back by the Trading budget: the next routine read catches it
+      if (result.active) fetched.set(listingId, result.item);
+      else ended.add(listingId);
+    }
+    if (fetched.size || ended.size) {
+      await listingsCache.patchStored(key, (items) => {
+        const next = [];
+        for (const item of items) {
+          const itemId = String(item.itemId);
+          if (ended.has(itemId)) continue;
+          next.push(fetched.has(itemId) ? { ...item, ...fetched.get(itemId) } : item);
+          fetched.delete(itemId);
+        }
+        return [...fetched.values(), ...next]; // new listings first, as eBay lists them
+      });
+    }
+  }
+  if (ended.size) listingsCache.markStale(listingsKey(id, 'inactive')); // the Unsold tab gains them on its next look
+  const active = listingsCache.peek(key);
+  if (Array.isArray(active)) await activeCountCache.patchStored(id, () => active.length);
+  return {
+    summary: { changes: changes.length, ended: ended.size, fromSales: skippedSales, reads, fullRead },
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
+/**
+ * A new order eBay pushed (ORDER_CONFIRMATION): read it on its own from the
+ * Fulfillment API (1 call, its own allowance — no Trading call), add it to
+ * the order list, and take the units off the listings it came from, from
+ * the quantities in the notification (no call). Open pages are told
+ * ("orders", "listings" events). The next routine Trading read of the
+ * account replaces the order with Trading's own copy.
+ */
+async function applyNewOrder(credentials, connectionId, { orderId, lineItems = [] }) {
+  const id = String(connectionId);
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const raw = await ebayFulfillment.getOrder(accessToken, orderId, credentials.marketplaceId || 'EBAY_GB');
+  const order = ebayFulfillment.toListOrder(raw);
+  await persist(() => mirror.upsertOrders(id, [order]));
+  const inList = await ordersCache.patchStored(id, (orders) => [order, ...orders.filter((o) => o.orderId !== order.orderId)]);
+  // No stored copy yet (the account's orders were never read): the order is
+  // in the mirror, which the first read includes; tell open pages anyway.
+  if (!inList) accountEvents.emitUpdated(id, 'orders');
+
+  const sold = new Map();
+  const soldAt = recentSales.get(id) || new Map();
+  recentSales.set(id, soldAt);
+  for (const li of lineItems.length ? lineItems : order.lineItems.map((l) => ({ listingId: l.itemId, quantity: l.quantityPurchased }))) {
+    if (!li.listingId) continue;
+    sold.set(String(li.listingId), (sold.get(String(li.listingId)) || 0) + (Number(li.quantity) || 1));
+    soldAt.set(String(li.listingId), Date.now());
+  }
+  if (sold.size) {
+    await listingsCache.patchStored(listingsKey(id, 'active'), (items) =>
+      items.flatMap((item) => {
+        const units = sold.get(String(item.itemId));
+        if (!units) return [item];
+        const available = item.quantityAvailable == null ? null : Math.max(0, item.quantityAvailable - units);
+        if (available === 0) return []; // sold out: ended on eBay
+        return [{ ...item, quantityAvailable: available, quantitySold: (item.quantitySold || 0) + units }];
+      })
+    );
+  }
+  return { order, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function applySale(credentials, connectionId, itemId) {
   const id = String(connectionId);
   const key = listingsKey(id, 'active');
@@ -1946,8 +2096,18 @@ async function getEarningsSummary(credentials, { connectionId, range, from, to, 
 
 // Whether an account gets eBay's push notifications (set by
 // scripts/enable-ebay-notifications.js).
-function pushEnabled(connection) {
-  return Boolean(connection?.settings?.ebay?.notificationsEnabledAt);
+// Whether eBay's push is actually arriving for an account, per kind — not
+// merely subscribed: a subscription eBay stays silent on (as Trading's
+// Platform Notifications did for sales) must not stop Liston checking. A
+// push counts for two days after the last one received.
+const PUSH_TRUST_MS = 48 * 60 * 60 * 1000;
+function pushEnabled(connection, now = Date.now()) {
+  const ebay = connection?.settings?.ebay || {};
+  const recent = (at) => Boolean(at) && now - new Date(at).getTime() < PUSH_TRUST_MS;
+  const listings =
+    (Boolean(ebay.listingPush?.subscriptionId) && recent(ebay.listingPush?.lastReceivedAt)) || (Boolean(ebay.notificationsEnabledAt) && recent(ebay.lastPushAt));
+  const orders = Boolean(ebay.orderPush?.subscriptionId) && recent(ebay.orderPush?.lastReceivedAt);
+  return { listings, orders };
 }
 
 module.exports = {
@@ -1966,6 +2126,7 @@ module.exports = {
   dispatchOrder,
   EbayError,
   ensureValidAccessToken,
+  analyticsInputs,
   createOfferWithRetry,
   buildInventoryItem,
   splitProductIdentifiers,
@@ -2005,6 +2166,8 @@ module.exports = {
   markAccountStale,
   syncAccount,
   applySale,
+  applyNewOrder,
+  applyListingChanges,
   enableNotifications,
   listOrdersDetailed,
   getEarningsSummary,

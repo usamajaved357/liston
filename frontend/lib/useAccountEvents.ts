@@ -11,7 +11,7 @@ import { useEffect, useRef } from "react";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
-export type AccountEvent = { type: "updated"; kind: "listings" | "orders" | "activeCount"; at: string };
+export type AccountEvent = { type: "updated"; kind: "listings" | "orders" | "activeCount" | "analytics"; at: string };
 
 export function useAccountEvents(connectionId: string | null | undefined, onEvent: (event: AccountEvent) => void) {
   // The latest handler, so the stream never has to be re-opened because a

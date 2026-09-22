@@ -29,6 +29,7 @@ test('getActiveListings maps items and pagination out of the Trading API XML', a
               <SellingStatus><CurrentPrice currencyID="GBP">9.99</CurrentPrice><QuantitySold>3</QuantitySold></SellingStatus>
               <PictureDetails><GalleryURL>https://example.com/pic.jpg</GalleryURL></PictureDetails>
               <ListingDetails><StartTime>2026-01-01T00:00:00.000Z</StartTime><ViewItemURL>https://ebay.com/itm/123</ViewItemURL></ListingDetails>
+              <WatchCount>5</WatchCount>
             </Item>
           </ItemArray>
         </ActiveList>
@@ -52,6 +53,7 @@ test('getActiveListings maps items and pagination out of the Trading API XML', a
     viewItemUrl: 'https://ebay.com/itm/123',
     startTime: '2026-01-01T00:00:00.000Z',
     endTime: null,
+    watchCount: 5,
   });
 });
 

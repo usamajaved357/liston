@@ -119,6 +119,10 @@ function mapListingItem(item) {
     viewItemUrl: item.ListingDetails?.ViewItemURL || null,
     startTime: item.ListingDetails?.StartTime || null,
     endTime: item.ListingDetails?.EndTime || null,
+    // Buyers watching it now: GetMyeBaySelling returns it with the listing
+    // (so listing analytics gets it without a traffic call) and leaves it
+    // out when nobody is watching.
+    watchCount: Number(item.WatchCount ?? 0),
   };
 }
 
@@ -137,6 +141,35 @@ async function getActiveListings(accessToken, { pageNumber = 1, entriesPerPage =
     items: toArray(list?.ItemArray?.Item).map(mapListingItem),
     ...paginationOf(list),
   };
+}
+
+// One listing in the Listings tab's shape (mapListingItem), for a change
+// eBay pushed: GetItem trimmed to those fields, instead of re-reading every
+// listing. `active` is false once it has ended.
+const LISTING_ITEM_FIELDS = [
+  'Item.ItemID',
+  'Item.SKU',
+  'Item.Title',
+  'Item.Quantity',
+  'Item.QuantityAvailable',
+  'Item.SellingStatus.CurrentPrice',
+  'Item.SellingStatus.ConvertedCurrentPrice',
+  'Item.SellingStatus.QuantitySold',
+  'Item.SellingStatus.ListingStatus',
+  'Item.PictureDetails.GalleryURL',
+  'Item.ListingDetails.ViewItemURL',
+  'Item.ListingDetails.StartTime',
+  'Item.ListingDetails.EndTime',
+  'Item.WatchCount',
+];
+async function getListingItem(accessToken, itemId, { siteId } = {}) {
+  const body = `<ItemID>${itemId}</ItemID><IncludeWatchCount>true</IncludeWatchCount>` + LISTING_ITEM_FIELDS.map((f) => `<OutputSelector>${f}</OutputSelector>`).join('');
+  const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
+  const item = res.Item || {};
+  const mapped = mapListingItem(item);
+  // GetItem leaves QuantityAvailable out on some listings; it's what's left.
+  if (item.QuantityAvailable === undefined) mapped.quantityAvailable = Math.max(0, mapped.quantity - mapped.quantitySold);
+  return { item: mapped, active: (item.SellingStatus?.ListingStatus || 'Active') === 'Active' };
 }
 
 async function getUnsoldListings(accessToken, { pageNumber = 1, entriesPerPage = 25, siteId } = {}) {
@@ -604,6 +637,7 @@ module.exports = {
   getActiveListings,
   getUnsoldListings,
   getOrders,
+  getListingItem,
   getItemSummary,
   getItem,
   getStoreProfile,
