@@ -3,14 +3,13 @@
 import { useState } from "react";
 import type { AnalyticsChanges, AnalyticsDay, AnalyticsMetrics, AnalyticsRange } from "@/lib/api";
 import { KpiTile } from "@/components/charts/KpiTile";
-import { TrendChart, TrendTable } from "@/components/charts/TrendChart";
-import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { ChartLegend, TrendChart, TrendTable } from "@/components/charts/TrendChart";
 import { dayRangeLabel } from "@/components/charts/chart-format";
 import { METRICS, MetricKey, comparedFor, metricDef, metricValue, trendPoints } from "./metrics";
 
 // The headline figures as tiles, and the chart of whichever one is
-// selected, with its day-by-day table one click away. Used by the
-// Analytics tab (whole account) and the listing panel (one listing).
+// selected. Used by the Analytics tab (whole account) and the listing panel
+// (one listing).
 
 export function MetricsBoard({
   totals,
@@ -47,7 +46,6 @@ export function MetricsBoard({
   emptyDailyMessage?: string;
 }) {
   const [selected, setSelected] = useState<MetricKey>("views");
-  const [view, setView] = useState<"chart" | "table">("chart");
   const def = metricDef(selected);
   const compared = comparedFor(range);
   const leadIn = series.length <= 1 && leadInSeries && leadInSeries.length > 1 ? leadInSeries : null;
@@ -57,6 +55,14 @@ export function MetricsBoard({
   const shownLabel = leadIn ? dayRangeLabel(leadIn[0].day, leadIn[leadIn.length - 1].day) : rangeLabel;
   const hasPrevious = points.some((p) => p.previous != null);
   const salesMetric = selected === "sold" || selected === "sales";
+  const drawn = !(loading && !shown.length) && points.some((p) => p.value != null);
+  const note = leadIn
+    ? "Today so far, after the 13 days before it"
+    : hasPrevious
+      ? "Each day against the same day of the previous period"
+      : previousRange && salesMetric
+        ? "No earlier period to compare: eBay keeps 90 days of orders"
+        : null;
 
   return (
     <div className={compact ? "space-y-4" : "space-y-5"}>
@@ -81,31 +87,22 @@ export function MetricsBoard({
       </div>
 
       <section className="card p-5" aria-label={`${def.label} by day`}>
-        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-          <div>
+        {/* The heading on the left; on the right, which line is which, each
+            with its own dates. */}
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0">
             <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">{def.label} by day</h2>
-            <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
-              {leadIn ? (
-                <>The last {leadIn.length} days · today so far at the end</>
-              ) : (
-                <>
-                  {rangeLabel}
-                  {previousRange && hasPrevious && <> · compared with {dayRangeLabel(previousRange.from, previousRange.to)}</>}
-                  {previousRange && !hasPrevious && salesMetric && <> · no earlier period to compare: eBay keeps 90 days of orders</>}
-                </>
-              )}
-            </p>
+            {note && <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">{note}</p>}
           </div>
-          <SegmentedControl
-            size="sm"
-            label="Show as"
-            value={view}
-            onChange={setView}
-            options={[
-              { key: "chart", label: "Chart" },
-              { key: "table", label: "Table" },
-            ]}
-          />
+          {drawn && (
+            <ChartLegend
+              current={shownLabel}
+              currentCaption={leadIn ? `Last ${leadIn.length} days` : "This period"}
+              previous={hasPrevious && previousRange ? dayRangeLabel(previousRange.from, previousRange.to) : null}
+              today={points.some((p) => p.partial && p.value != null)}
+              bars={single}
+            />
+          )}
         </div>
         {loading && !shown.length ? (
           <div className="h-[276px] animate-pulse rounded-xl bg-[var(--color-paper)]" />
@@ -114,18 +111,23 @@ export function MetricsBoard({
             <p className="text-[13px] font-medium text-[var(--color-ink)]">No day-by-day {def.label.toLowerCase()} for this range</p>
             <p className="max-w-md text-[12px] leading-relaxed text-[var(--color-muted)]">{emptyDailyMessage || "eBay hasn't reported these days yet."}</p>
           </div>
-        ) : view === "chart" ? (
-          <TrendChart
-            points={points}
-            label={`${def.label} per day, ${shownLabel}`}
-            format={(v) => def.format(v, currency)}
-            axisFormat={(v) => def.axis(v, currency)}
-            variant={single ? "bars" : def.variant}
-            currentLabel={shownLabel}
-            previousLabel="Previous period"
-          />
         ) : (
-          <TrendTable points={points} format={(v) => def.format(v, currency)} currentLabel={def.label} previousLabel="Previous period" />
+          <>
+            <TrendChart
+              points={points}
+              label={`${def.label} per day, ${shownLabel}`}
+              format={(v) => def.format(v, currency)}
+              axisFormat={(v) => def.axis(v, currency)}
+              variant={single ? "bars" : def.variant}
+              currentLabel={shownLabel}
+              previousLabel="Previous period"
+              legend={false}
+            />
+            {/* The same days as a table, for screen readers. */}
+            <div className="sr-only">
+              <TrendTable points={points} format={(v) => def.format(v, currency)} currentLabel={def.label} previousLabel="Previous period" />
+            </div>
+          </>
         )}
       </section>
     </div>

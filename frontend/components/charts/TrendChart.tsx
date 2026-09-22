@@ -3,6 +3,7 @@
 import { useId, useMemo, useState } from "react";
 import { dayLabel, dayLabelLong, niceTicks } from "./chart-format";
 import { useWidth } from "./useWidth";
+import { monotonePath } from "./curve";
 
 // One measure over days, on one axis: the current period as an area (or
 // bars, for counts like units sold) in the brand colour, the previous
@@ -36,6 +37,7 @@ export function TrendChart({
   previousLabel = "Previous period",
   variant = "area",
   showPrevious = true,
+  legend = true,
 }: {
   points: TrendPoint[];
   format: (v: number | null) => string;
@@ -45,6 +47,7 @@ export function TrendChart({
   previousLabel?: string;
   variant?: "area" | "bars";
   showPrevious?: boolean;
+  legend?: boolean; // false when the card shows a ChartLegend in its heading
 }) {
   const [boxRef, measured] = useWidth<HTMLDivElement>();
   const width = Math.max(240, measured || 640);
@@ -67,21 +70,23 @@ export function TrendChart({
   const x = (i: number) => (variant === "bars" ? M.left + slot * (i + 0.5) : M.left + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW));
   const y = (v: number) => M.top + innerH - (v / yMax) * innerH;
 
+  // Smooth runs between gaps: a monotone curve through each day's figure,
+  // never overshooting a real high or low.
   function linePaths(get: (p: TrendPoint) => number | null | undefined) {
     const segments: { d: string; start: number; end: number }[] = [];
-    let d = "";
+    let run: [number, number][] = [];
     let start = -1;
+    const close = (end: number) => {
+      if (run.length) segments.push({ d: monotonePath(run), start, end });
+      run = [];
+    };
     points.forEach((p, i) => {
       const v = get(p);
-      if (v == null) {
-        if (d) segments.push({ d, start, end: i - 1 });
-        d = "";
-        return;
-      }
-      if (!d) start = i;
-      d += `${d ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`;
+      if (v == null) return close(i - 1);
+      if (!run.length) start = i;
+      run.push([x(i), y(v)]);
     });
-    if (d) segments.push({ d, start, end: n - 1 });
+    close(n - 1);
     return segments;
   }
 
@@ -127,33 +132,11 @@ export function TrendChart({
 
   return (
     <div ref={boxRef} className="relative w-full min-w-0 select-none">
-      {/* Legend: always present when two periods are drawn. */}
-      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-[var(--color-muted)]">
-        <span className="inline-flex items-center gap-1.5">
-          {variant === "bars" ? (
-            <span className="inline-block h-2.5 w-2.5 rounded-[3px] bg-[var(--color-primary)]" aria-hidden />
-          ) : (
-            <span className="inline-block h-[2px] w-4 rounded bg-[var(--color-primary)]" aria-hidden />
-          )}
-          {currentLabel}
-        </span>
-        {hasPrevious && (
-          <span className="inline-flex items-center gap-1.5">
-            <svg width="16" height="4" aria-hidden>
-              <line x1="0" y1="2" x2="16" y2="2" stroke="var(--color-muted)" strokeWidth="1.5" strokeDasharray="3 3" />
-            </svg>
-            {previousLabel}
-          </span>
-        )}
-        {partialIndex >= 0 && (
-          <span className="inline-flex items-center gap-1.5">
-            <svg width="10" height="10" aria-hidden>
-              <circle cx="5" cy="5" r="3.5" fill="var(--color-panel)" stroke="var(--color-primary)" strokeWidth="1.5" />
-            </svg>
-            Today so far
-          </span>
-        )}
-      </div>
+      {legend && (
+        <div className="mb-2">
+          <ChartLegend current={currentLabel} previous={hasPrevious ? previousLabel : null} today={partialIndex >= 0} bars={variant === "bars"} />
+        </div>
+      )}
 
       {/* Fills its box: the measured width only sets the drawing's own
           coordinates, so the chart never props its container open. */}
@@ -171,7 +154,7 @@ export function TrendChart({
       >
         <defs>
           <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.18" />
+            <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.2" />
             <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0" />
           </linearGradient>
         </defs>
@@ -219,13 +202,20 @@ export function TrendChart({
           : currentSegments.map((s, k) => (
               <g key={`c${k}`}>
                 <path d={`${s.d}L${x(s.end).toFixed(1)},${baseline}L${x(s.start).toFixed(1)},${baseline}Z`} fill={`url(#${gradientId})`} />
-                <path d={s.d} fill="none" stroke="var(--color-primary)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                <path d={s.d} fill="none" stroke="var(--color-primary)" strokeWidth={2.25} strokeLinecap="round" strokeLinejoin="round" />
               </g>
             ))}
 
         {/* The step into today (still running) is dashed, the point hollow. */}
         {variant === "area" && partialIndex >= 0 && (
           <>
+            {lastFinal >= 0 && lastFinal === partialIndex - 1 && (
+              <path
+                d={`M${x(lastFinal).toFixed(1)},${y(points[lastFinal].value as number).toFixed(1)}L${x(partialIndex).toFixed(1)},${y(points[partialIndex].value as number).toFixed(1)}L${x(partialIndex).toFixed(1)},${baseline}L${x(lastFinal).toFixed(1)},${baseline}Z`}
+                fill={`url(#${gradientId})`}
+                opacity={0.5}
+              />
+            )}
             {lastFinal >= 0 && lastFinal === partialIndex - 1 && (
               <line
                 x1={x(lastFinal)}
@@ -303,6 +293,65 @@ export function TrendChart({
 }
 
 /** The same points as a plain table: the chart's accessible twin. */
+// Which line is which: the current period (solid brand line) and the
+// previous one (dashed), each captioned and dated, plus the hollow "today
+// so far" point when the running day is drawn. Sits in a chart card's
+// heading, or above the chart.
+export function ChartLegend({
+  current,
+  previous,
+  today = false,
+  bars = false,
+  currentCaption = "This period",
+  previousCaption = "Previous period",
+}: {
+  current: string;
+  previous?: string | null;
+  today?: boolean;
+  bars?: boolean;
+  currentCaption?: string;
+  previousCaption?: string;
+}) {
+  const item = (swatch: React.ReactNode, caption: string, text?: string) => (
+    <div className="flex items-center gap-2">
+      {swatch}
+      <div className="leading-tight">
+        <p className="text-[10.5px] font-medium uppercase tracking-wide text-[var(--color-muted)]">{caption}</p>
+        {text && <p className="text-[12.5px] font-semibold text-[var(--color-ink)]">{text}</p>}
+      </div>
+    </div>
+  );
+  return (
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+      {item(
+        bars ? (
+          <span className="inline-block h-3 w-3 rounded-[3px] bg-[var(--color-primary)]" aria-hidden />
+        ) : (
+          <span className="inline-block h-[3px] w-5 rounded-full bg-[var(--color-primary)]" aria-hidden />
+        ),
+        currentCaption,
+        current,
+      )}
+      {previous &&
+        item(
+          <svg width="20" height="4" className="flex-shrink-0" aria-hidden>
+            <line x1="1" y1="2" x2="19" y2="2" stroke="var(--color-muted)" strokeWidth="2" strokeDasharray="4 3" strokeLinecap="round" />
+          </svg>,
+          previousCaption,
+          previous,
+        )}
+      {today &&
+        item(
+          <svg width="12" height="12" className="flex-shrink-0" aria-hidden>
+            <circle cx="6" cy="6" r="4" fill="var(--color-panel)" stroke="var(--color-primary)" strokeWidth="2" />
+          </svg>,
+          "Today",
+          "So far",
+        )}
+    </div>
+  );
+}
+
 export function TrendTable({ points, format, currentLabel = "This period", previousLabel = "Previous period" }: { points: TrendPoint[]; format: (v: number | null) => string; currentLabel?: string; previousLabel?: string }) {
   const hasPrevious = points.some((p) => p.previous != null);
   // Fixed columns, every figure right-aligned under a right-aligned heading.
