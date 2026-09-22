@@ -499,7 +499,9 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
     const hasTraffic = status === 'ok' && Boolean(state.account_through);
 
     // Account totals and the daily series, from the stored days.
-    const accountRows = hasTraffic ? await repo.accountDays(connectionId, win.previous.from, win.to) : [];
+    const lead = d.leadIn(win);
+    const loadFrom = lead && lead.from < win.previous.from ? lead.from : win.previous.from;
+    const accountRows = hasTraffic ? await repo.accountDays(connectionId, loadFrom, win.to) : [];
     const rowsByDay = new Map(accountRows.map((r) => [r.day, r]));
     const inRange = (from, to) => accountRows.filter((r) => r.day >= from && r.day <= to);
     const salesCurrent = d.salesWithin(sales.byDay, win.from, win.to);
@@ -602,6 +604,7 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
         changes: withChanges(totals, previous),
         series: d.daysBetween(win.from, win.to).map(dayPoint),
         previousSeries: d.daysBetween(win.previous.from, win.previous.to).map(dayPoint),
+        leadInSeries: lead ? d.daysBetween(lead.from, lead.to).map(dayPoint) : null,
         sources: sourcesFrom(d.sumTraffic(inRange(win.from, win.to))),
         listings,
         listingReport: {
@@ -694,9 +697,11 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
     // Daily traffic: a day read with this listing in it has its figures; a
     // day read that covered it (named it, or had no cutoff) without a row
     // is zero, as is a day before it was listed; otherwise unknown.
-    const rows = status === 'ok' ? await repo.listingDays(connectionId, id, win.previous.from, win.to) : [];
+    const lead = d.leadIn(win);
+    const loadFrom = lead && lead.from < win.previous.from ? lead.from : win.previous.from;
+    const rows = status === 'ok' ? await repo.listingDays(connectionId, id, loadFrom, win.to) : [];
     const byDay = new Map(rows.map((r) => [r.day, r]));
-    const reads = status === 'ok' ? new Map((await repo.dayReads(connectionId, win.previous.from, win.to)).map((r) => [r.day, r])) : new Map();
+    const reads = status === 'ok' ? new Map((await repo.dayReads(connectionId, loadFrom, win.to)).map((r) => [r.day, r])) : new Map();
     const listed = listedOn.get(id);
     const coveredZero = (day) => {
       if (listed && listed > day) return true;
@@ -747,6 +752,7 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
         changes: withChanges(totals, previous),
         series,
         previousSeries: d.daysBetween(win.previous.from, win.previous.to).map(dayPoint),
+        leadInSeries: lead ? d.daysBetween(lead.from, lead.to).map(dayPoint) : null,
         dailyTrafficDays: series.filter((p) => p.views != null).length,
         comparable,
         // "Read this listing": this range (and the previous one) for this

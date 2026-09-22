@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { dayLabel, dayLabelLong, niceTicks } from "./chart-format";
+import { useWidth } from "./useWidth";
 
 // One measure over days, on one axis: the current period as an area (or
 // bars, for counts like units sold) in the brand colour, the previous
@@ -25,19 +26,6 @@ export interface TrendPoint {
 const HEIGHT = 248;
 const M = { top: 16, right: 16, bottom: 28, left: 52 };
 
-function useWidth<T extends HTMLElement>() {
-  const ref = useRef<T | null>(null);
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    if (!ref.current) return;
-    const el = ref.current;
-    setWidth(el.getBoundingClientRect().width);
-    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width] as const;
-}
 
 export function TrendChart({
   points,

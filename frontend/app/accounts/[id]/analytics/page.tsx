@@ -36,6 +36,7 @@ function Freshness({ data }: { data: AccountAnalytics }) {
     sync.todayUpdatedAt && `Today so far as of ${timeOfDay(sync.todayUpdatedAt)}.`,
     `Next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}.`,
     sync.history && !sync.history.complete && `Listing history: ${sync.history.stored} of ${sync.history.needed} days stored.`,
+    `Days follow ${data.timeZone.replace("_", " ")} time. Last read from eBay ${timeAgo(sync.lastSyncedAt)}.`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -285,18 +286,20 @@ function AnalyticsPageInner() {
           {data?.status === "ok" && data.sync.waitingForAllowance && (
             <div className="notice notice-warning">Today&apos;s eBay allowance for traffic data is used up, so this account&apos;s latest figures are read after the reset. Sales are up to date.</div>
           )}
+          {data?.status === "ok" && <SourcesStrip sources={data.sources} />}
+
           <MetricsBoard
             totals={data?.totals ?? null}
             changes={data?.changes ?? null}
             series={data?.series ?? []}
             previousSeries={data?.previousSeries ?? null}
+            leadInSeries={data?.leadInSeries ?? null}
             currency={data?.currency ?? null}
             range={range}
             rangeLabel={rangeLabel}
             previousRange={data?.range.previous ?? null}
             loading={!data && !loadError}
             trafficUnavailable={data ? data.status !== "ok" || !data.sync.finalThrough : false}
-            footer={data && data.status === "ok" ? <SourcesStrip sources={data.sources} /> : null}
           />
 
           {data && (
@@ -322,14 +325,6 @@ function AnalyticsPageInner() {
               filter={listingFilter}
               onFilter={setListingFilter}
             />
-          )}
-
-          {data && (
-            <p className="pb-2 text-[11.5px] leading-relaxed text-[var(--color-muted)]">
-              Impressions (eBay&apos;s total, as in Seller Hub), views and click-through come from eBay&apos;s Analytics API; sales and units from your orders (cancelled orders and postage
-              excluded); watchers are live. Days follow your eBay site&apos;s time zone ({data.timeZone.replace("_", " ")}); every range but Today is complete days. Updated{" "}
-              {timeAgo(data.sync.lastSyncedAt)}.
-            </p>
           )}
         </div>
       )}

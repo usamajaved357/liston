@@ -141,6 +141,15 @@ function rangeWindow(range, { today: now, lastFinal }) {
   return { range: key, from, to, days, partial: false, previous };
 }
 
+// A single-day range (Today, or "This month" on the 1st) has one point:
+// its chart and sparklines show it at the end of the 14 days leading up
+// to it instead.
+const LEAD_IN_DAYS = 14;
+function leadIn(win) {
+  if (win.days > 1) return null;
+  return { from: addDays(win.to, -(LEAD_IN_DAYS - 1)), to: win.to };
+}
+
 // ---- totals and rates -----------------------------------------------------
 
 const TRAFFIC_COLUMNS = [
@@ -334,6 +343,8 @@ module.exports = {
   SYNC_HOUR,
   ACCOUNT_HISTORY_DAYS,
   LISTING_HISTORY_DAYS,
+  LEAD_IN_DAYS,
+  leadIn,
   historyDaysMissing,
   historyReport,
   RANGES,

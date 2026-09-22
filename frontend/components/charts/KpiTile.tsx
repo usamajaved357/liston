@@ -4,7 +4,7 @@ import { DeltaBadge } from "./DeltaBadge";
 import { Sparkline } from "./Sparkline";
 
 // A headline figure: label, value, change from the previous period and a
-// sparkline of the period. Selectable tiles act as the tabs of the chart
+// sparkline of the period filling the space beside the change. Selectable tiles act as the tabs of the chart
 // below them (pressing one shows that measure in the chart). The change
 // sits on its own line under the value, as coloured text, so it never
 // crowds the label however long the figure.
@@ -53,13 +53,9 @@ export function KpiTile({
       ) : (
         <>
           <p className="mt-1.5 truncate text-[22px] font-semibold leading-tight tracking-tight tabular-nums text-[var(--color-ink)]">{value}</p>
-          <div className="mt-1.5 flex h-[22px] items-end justify-between gap-2">
-            {change !== undefined ? (
-              <DeltaBadge change={change} compared={compared} higherIsBetter={higherIsBetter} size="md" variant="text" />
-            ) : (
-              <span />
-            )}
-            {spark && <Sparkline values={spark} width={56} height={22} className={selected ? "text-[var(--color-primary)]" : "text-[var(--color-line-strong)]"} />}
+          <div className="mt-1.5 flex h-[30px] items-end gap-3">
+            <span className="flex-shrink-0 pb-0.5">{change !== undefined && <DeltaBadge change={change} compared={compared} higherIsBetter={higherIsBetter} size="md" variant="text" />}</span>
+            {spark && <Sparkline values={spark} height={30} className={`ml-auto w-full max-w-[128px] flex-1 ${selected ? "text-[var(--color-primary)]" : "text-[#a5b4fc]"}`} />}
           </div>
         </>
       )}

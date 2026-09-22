@@ -179,6 +179,11 @@ test('the Analytics tab: every range, and its comparison, is added up from store
   }
   const listedDays = days.dayCount(days.dayOf(SMALL_STORE[0].startTime, UK), lastFinal);
   assert.strictEqual(views['30d'].listings.find((l) => l.itemId === '111').views, listedDays * 6, 'every day since it was listed');
+  assert.strictEqual(views['7d'].leadInSeries, null, 'a range of days charts itself');
+  const today = (await service.getAnalytics(connectionId, userId, { range: 'today' })).data;
+  assert.strictEqual(today.series.length, 1);
+  assert.deepStrictEqual(today.leadInSeries.map((p) => p.day), days.daysBetween(days.addDays(today.range.to, -13), today.range.to), 'Today: charted after the 13 days before it');
+  assert.strictEqual(today.leadInSeries.find((p) => p.day === lastFinal).views, 100, 'the complete days, from stored days');
   const panel = await service.getListingAnalytics(connectionId, userId, '222', { range: '30d' });
   assert.strictEqual(panel.data.traffic, 'measured');
   assert.strictEqual(panel.data.dailyTrafficDays, 30, 'a figure every day: zero before it was listed');

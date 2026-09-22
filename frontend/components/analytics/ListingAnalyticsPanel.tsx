@@ -186,6 +186,7 @@ export function ListingAnalyticsPanel({
             changes={view?.changes ?? null}
             series={view?.series ?? []}
             previousSeries={view?.previousSeries ?? null}
+            leadInSeries={view?.leadInSeries ?? null}
             currency={view?.currency ?? null}
             range={range}
             rangeLabel={rangeLabel}

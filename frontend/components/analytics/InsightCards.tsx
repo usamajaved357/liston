@@ -258,25 +258,29 @@ export function SourcesStrip({ sources }: { sources: AnalyticsSource[] }) {
   const total = sources.reduce((sum, s) => sum + (s.views || 0), 0);
   if (!total) return null;
   const sorted = [...sources].sort((a, b) => (b.views || 0) - (a.views || 0));
+  const top = (sorted[0].views || 0) / total;
   return (
-    <div className="mt-4 border-t border-[var(--color-line)] pt-3.5">
-      <p className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Where views came from</p>
-      <div className="grid grid-cols-2 gap-x-5 gap-y-2.5 sm:grid-cols-3 lg:grid-cols-5">
+    <section aria-label="Where views came from" className="card flex flex-col gap-2.5 px-4 py-3 xl:flex-row xl:items-center xl:gap-6">
+      <div className="flex flex-shrink-0 items-baseline gap-2 xl:w-44 xl:flex-col xl:items-start xl:gap-0.5">
+        <p className="text-[12px] font-semibold text-[var(--color-ink)]">Where views came from</p>
+        <p className="text-[11.5px] tabular-nums text-[var(--color-muted)]">{fullNumber(total)} views</p>
+      </div>
+      <div className="grid min-w-0 flex-1 grid-cols-2 gap-x-4 gap-y-2.5 min-[640px]:grid-cols-3 min-[900px]:grid-cols-5">
         {sorted.map((s) => {
           const share = (s.views || 0) / total;
           return (
-            <div key={s.key} className="min-w-0" title={`${fullNumber(s.views)} views`}>
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="truncate text-[11.5px] text-[var(--color-muted)]">{s.label}</span>
-                <span className="text-[12px] font-semibold tabular-nums text-[var(--color-ink)]">{percent(share)}</span>
-              </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-paper)]">
-                <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.max(2, share * 100)}%`, opacity: 0.35 + 0.65 * share / (sorted[0].views! / total) }} />
+            <div key={s.key} className="min-w-0" title={`${s.label}: ${fullNumber(s.views)} views`}>
+              <p className="truncate text-[11.5px] text-[var(--color-muted)]">{s.label}</p>
+              <div className="mt-1 flex items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-paper)]">
+                  <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.max(2, share * 100)}%`, opacity: 0.35 + (0.65 * share) / top }} />
+                </div>
+                <span className="w-10 text-right text-[12px] font-semibold tabular-nums text-[var(--color-ink)]">{percent(share)}</span>
               </div>
             </div>
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }

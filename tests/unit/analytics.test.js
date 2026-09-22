@@ -56,6 +56,10 @@ test('ranges are complete days (Today is the running day) and compare with the p
   const first = days.rangeWindow('this_month', { today: '2026-10-01', lastFinal: '2026-09-30' });
   assert.strictEqual(first.range, 'this_month');
   assert.strictEqual(first.partial, true);
+  // A single day is charted at the end of the 14 days leading up to it.
+  assert.deepStrictEqual(days.leadIn(days.rangeWindow('today', ctx)), { from: '2026-09-09', to: '2026-09-22' });
+  assert.deepStrictEqual(days.leadIn(first), { from: '2026-09-18', to: '2026-10-01' });
+  assert.strictEqual(days.leadIn(days.rangeWindow('7d', ctx)), null);
   assert.strictEqual(first.from, '2026-10-01');
 });
 

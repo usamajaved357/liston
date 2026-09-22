@@ -986,6 +986,7 @@ export interface AccountAnalytics {
   changes: AnalyticsChanges;
   series: AnalyticsDay[];
   previousSeries: AnalyticsDay[]; // the comparison period, day by day
+  leadInSeries?: AnalyticsDay[] | null; // a single-day range: the 14 days ending with it, for the chart
   sources: AnalyticsSource[];
   listings: ListingAnalyticsRow[];
   listingReport: ListingReportInfo;
@@ -1028,6 +1029,7 @@ export interface ListingAnalytics {
   changes: AnalyticsChanges;
   series: AnalyticsDay[];
   previousSeries: AnalyticsDay[];
+  leadInSeries?: AnalyticsDay[] | null;
   sources: AnalyticsSource[];
   hint: AnalyticsHint | null;
   dailyTrafficDays: number; // days in the range with this listing's daily traffic

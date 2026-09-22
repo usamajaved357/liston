@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ListingAnalyticsRow, ListingReportInfo } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 import { DeltaBadge } from "@/components/charts/DeltaBadge";
@@ -125,6 +125,22 @@ export function ListingsTable({
   // A new filter, search, sort or range starts again from page one.
   useEffect(() => setPage(1), [filter, search, sort, rows]);
 
+  // The section is as tall as the page's scrolling area, so scrolled to, it
+  // fills the screen: rows scroll under the pinned header and the pages sit
+  // at the foot of the screen, as on Orders. It is the page's last card, so
+  // it takes back most of the page's bottom padding (leaving ~6px).
+  const sectionRef = useRef<HTMLElement>(null);
+  const [fitHeight, setFitHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const scroller = sectionRef.current?.closest<HTMLElement>("[data-scroller]");
+    if (!scroller) return;
+    const fit = () => setFitHeight(Math.max(480, scroller.clientHeight - 12));
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, []);
+
   const counts = useMemo(
     () => ({
       attention: rows.filter((r) => r.hint && r.hint.kind !== "converting").length,
@@ -214,7 +230,7 @@ export function ListingsTable({
   const filterLabel = filter !== "all" && filter !== "attention" && filter !== "converting" ? actionDef(filter).label : null;
 
   return (
-    <section className="card flex flex-col overflow-hidden" id="analytics-listings">
+    <section ref={sectionRef} className="card -mb-[26px] flex scroll-mt-1.5 flex-col overflow-hidden" id="analytics-listings" style={fitHeight ? { height: fitHeight } : undefined}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Listings</h2>
@@ -259,7 +275,7 @@ export function ListingsTable({
 
       {/* Rows scroll inside the card under a pinned header; the pages stay at its foot. */}
       {/* Wide enough for every column from ~900px; below that the rows scroll sideways inside the card. */}
-      <div className="max-h-[min(640px,calc(100vh-220px))] overflow-auto min-[900px]:overflow-x-hidden">
+      <div className="min-h-0 flex-1 overflow-auto min-[900px]:overflow-x-hidden">
         <table className="w-full min-w-[660px] table-fixed text-[12.5px]">
           <colgroup>
             <col className="w-[31%]" />
@@ -317,7 +333,7 @@ export function ListingsTable({
       </div>
 
       {visible.length > 0 && (
-        <div className="border-t border-[var(--color-line)] bg-[var(--color-panel)] px-4">
+        <div className="mt-auto flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-4">
           <ListFooter
             page={current}
             totalPages={totalPages}

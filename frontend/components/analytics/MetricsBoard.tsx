@@ -17,6 +17,7 @@ export function MetricsBoard({
   changes,
   series,
   previousSeries,
+  leadInSeries,
   currency,
   range,
   rangeLabel,
@@ -25,12 +26,14 @@ export function MetricsBoard({
   compact = false,
   trafficUnavailable,
   emptyDailyMessage,
-  footer,
 }: {
   totals: AnalyticsMetrics | null;
   changes: AnalyticsChanges | null;
   series: AnalyticsDay[];
   previousSeries: AnalyticsDay[] | null;
+  // A single-day range (Today) is charted at the end of the days leading up
+  // to it rather than as one lone bar.
+  leadInSeries?: AnalyticsDay[] | null;
   currency: string | null;
   range: AnalyticsRange;
   rangeLabel: string;
@@ -42,14 +45,16 @@ export function MetricsBoard({
   // figures in the range (a listing's traffic is kept day by day only while
   // it's among the account's busiest).
   emptyDailyMessage?: string;
-  footer?: React.ReactNode; // under the chart, inside its card (the Analytics tab's traffic sources)
 }) {
   const [selected, setSelected] = useState<MetricKey>("views");
   const [view, setView] = useState<"chart" | "table">("chart");
   const def = metricDef(selected);
   const compared = comparedFor(range);
-  const points = trendPoints(series, previousSeries, def);
-  const single = series.length <= 1;
+  const leadIn = series.length <= 1 && leadInSeries && leadInSeries.length > 1 ? leadInSeries : null;
+  const shown = leadIn ?? series;
+  const points = trendPoints(shown, leadIn ? null : previousSeries, def);
+  const single = shown.length <= 1;
+  const shownLabel = leadIn ? dayRangeLabel(leadIn[0].day, leadIn[leadIn.length - 1].day) : rangeLabel;
   const hasPrevious = points.some((p) => p.previous != null);
   const salesMetric = selected === "sold" || selected === "sales";
 
@@ -66,7 +71,7 @@ export function MetricsBoard({
               value={trafficUnavailable && traffic ? "—" : m.format(metricValue(totals, m.key), currency)}
               change={changes ? changes[m.key] : null}
               compared={compared}
-              spark={single ? undefined : series.map(m.daily)}
+              spark={single ? undefined : shown.map(m.daily)}
               selected={selected === m.key}
               onSelect={() => setSelected(m.key)}
               loading={loading}
@@ -80,9 +85,15 @@ export function MetricsBoard({
           <div>
             <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">{def.label} by day</h2>
             <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
-              {rangeLabel}
-              {previousRange && hasPrevious && <> · compared with {dayRangeLabel(previousRange.from, previousRange.to)}</>}
-              {previousRange && !hasPrevious && salesMetric && <> · no earlier period to compare: eBay keeps 90 days of orders</>}
+              {leadIn ? (
+                <>The last {leadIn.length} days · today so far at the end</>
+              ) : (
+                <>
+                  {rangeLabel}
+                  {previousRange && hasPrevious && <> · compared with {dayRangeLabel(previousRange.from, previousRange.to)}</>}
+                  {previousRange && !hasPrevious && salesMetric && <> · no earlier period to compare: eBay keeps 90 days of orders</>}
+                </>
+              )}
             </p>
           </div>
           <SegmentedControl
@@ -96,7 +107,7 @@ export function MetricsBoard({
             ]}
           />
         </div>
-        {loading && !series.length ? (
+        {loading && !shown.length ? (
           <div className="h-[276px] animate-pulse rounded-xl bg-[var(--color-paper)]" />
         ) : points.every((p) => p.value == null) ? (
           <div className="flex h-[248px] flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-[var(--color-line)] px-6 text-center">
@@ -106,17 +117,16 @@ export function MetricsBoard({
         ) : view === "chart" ? (
           <TrendChart
             points={points}
-            label={`${def.label} per day, ${rangeLabel}`}
+            label={`${def.label} per day, ${shownLabel}`}
             format={(v) => def.format(v, currency)}
             axisFormat={(v) => def.axis(v, currency)}
             variant={single ? "bars" : def.variant}
-            currentLabel={rangeLabel}
+            currentLabel={shownLabel}
             previousLabel="Previous period"
           />
         ) : (
           <TrendTable points={points} format={(v) => def.format(v, currency)} currentLabel={def.label} previousLabel="Previous period" />
         )}
-        {footer}
       </section>
     </div>
   );
