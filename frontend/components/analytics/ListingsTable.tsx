@@ -48,21 +48,19 @@ function Thumb({ src }: { src: string | null }) {
 function ReportNote({
   report,
   partial,
-  todayRead,
   belowCount,
   onLoadAll,
   loadingAll,
 }: {
   report: ListingReportInfo;
   partial: boolean;
-  todayRead: boolean;
   belowCount: number;
   onLoadAll: () => void;
   loadingAll: boolean;
 }) {
   let text: React.ReactNode = null;
   if (partial) {
-    text = todayRead ? "Today’s listing figures are from your last Refresh today." : "Press Refresh today for today’s listing traffic. Sales and units below are live.";
+    text = "Each listing’s traffic for today arrives once eBay closes the day. Sales and units below are live.";
   } else if (report.state === "allowance") {
     text = "Listing traffic for this range couldn’t be read: today’s eBay allowance is used up. Sales, units and watchers are exact.";
   } else if (report.state === "error") {
@@ -98,7 +96,6 @@ export function ListingsTable({
   onOpen,
   report,
   partial,
-  todayRead,
   onLoadAll,
   loadingAll,
   filter,
@@ -110,8 +107,7 @@ export function ListingsTable({
   days: number; // the range's length, for the stock-cover filter
   onOpen: (itemId: string) => void;
   report: ListingReportInfo;
-  partial: boolean; // Today: listing traffic only after "Refresh today"
-  todayRead: boolean;
+  partial: boolean; // Today: listing traffic arrives once the day is complete
   onLoadAll: () => void;
   loadingAll: boolean;
   filter: ListingFilter;
@@ -271,7 +267,7 @@ export function ListingsTable({
         </div>
       </div>
 
-      <ReportNote report={report} partial={partial} todayRead={todayRead} belowCount={rows.filter((r) => r.traffic === "below").length} onLoadAll={onLoadAll} loadingAll={loadingAll} />
+      <ReportNote report={report} partial={partial} belowCount={rows.filter((r) => r.traffic === "below").length} onLoadAll={onLoadAll} loadingAll={loadingAll} />
 
       {/* Rows scroll inside the card under a pinned header; the pages stay at its foot. */}
       {/* Wide enough for every column from ~900px; below that the rows scroll sideways inside the card. */}

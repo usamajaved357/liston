@@ -263,24 +263,22 @@ test('filters never read eBay: a store over 1,000 while its history fills, then 
   assert.strictEqual(data.listingReport.scope, 'all');
 });
 
-test('"Refresh today" reads today so far and is limited per account per day', async () => {
+test('Today costs nothing extra: its account totals come with the nightly read, sales are live, and nothing reads eBay on request', async () => {
   const { userId, connectionId } = await fixture();
-  mockInputs();
-  const calls = mockTrafficReports();
-  budget._reset({ limit: 100 });
   const now = new Date();
   const today = days.today(UK, now);
+  mockInputs({ orders: [{ createdAt: now.toISOString(), lineItems: [{ itemId: '111', quantityPurchased: 1, price: { amount: 4.5, currency: 'GBP' } }] }] });
+  const calls = mockTrafficReports();
+  budget._reset({ limit: 100 });
   await service.syncAccount(connectionId, userId, { mode: 'essential', now });
+  await syncUntilDone(connectionId, userId, now);
   const before = calls.length;
-  for (let i = 0; i < service.REFRESHES_PER_DAY; i += 1) await service.refreshToday(connectionId, userId, now);
-  assert.strictEqual(calls.length - before, 2 * service.REFRESHES_PER_DAY, 'one account call and one listing call per refresh');
-  const state = await repo.getSyncState(connectionId);
-  assert.deepStrictEqual([state.today_day, state.refresh_count], [today, service.REFRESHES_PER_DAY]);
-  const [todayRead] = await repo.dayReads(connectionId, today, today);
-  assert.strictEqual(todayRead.final, false);
   const { data } = await service.getAnalytics(connectionId, userId, { range: 'today' });
-  assert.strictEqual(data.listings.find((l) => l.itemId === '111').views, 6, 'today’s listing figures after a refresh');
-  await assert.rejects(service.refreshToday(connectionId, userId, now), (err) => err.statusCode === 429);
+  assert.strictEqual(calls.length - before, 0);
+  assert.deepStrictEqual([data.range.from, data.range.partial], [today, true]);
+  assert.strictEqual(data.totals.views, 100, 'today so far, as of the nightly read');
+  assert.deepStrictEqual([data.totals.sold, data.totals.sales], [1, 4.5], 'sales from orders, live');
+  assert.strictEqual(data.sync.refreshesLeft, undefined, 'no "Refresh today"');
 });
 
 test('an account without the analytics scope makes no traffic calls and asks to reconnect', async () => {
@@ -294,7 +292,6 @@ test('an account without the analytics scope makes no traffic calls and asks to 
   assert.strictEqual(data.totals.impressions, null);
   assert.strictEqual(data.listings[0].traffic, 'unknown');
   assert.strictEqual(data.listings[0].watchers, 3, 'watchers still show: they cost nothing');
-  await assert.rejects(service.refreshToday(connectionId, userId), (err) => err.statusCode === 403);
 });
 
 test('a later day reads only the new day; a filter the history doesn’t reach shows sales, and a failed read on request says so', async () => {

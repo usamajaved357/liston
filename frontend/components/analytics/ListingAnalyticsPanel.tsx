@@ -219,7 +219,7 @@ export function ListingAnalyticsPanel({
               {view.traffic === "measured"
                 ? "Totals are eBay’s exact figures for this range. "
                 : view.range.partial
-                  ? "Today’s traffic for this listing comes from Refresh today. "
+                  ? "Today’s traffic for this listing arrives once eBay closes the day. "
                   : ""}
               {view.traffic === "measured" && view.dailyTrafficDays < view.series.filter((p) => !p.partial).length && (
                 <>

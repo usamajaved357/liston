@@ -13,11 +13,13 @@ const appState = require('../../db/app-state.repository');
 //             listing's figures for the day just ended — up to 70%;
 //   view      listing figures for a range the stored history doesn't cover
 //             yet (and "Load all listings", a listing on its own) — to 90%;
-//   refresh   a person pressing "Refresh today" — keeps the last 10%;
 //   history   filling older days of listing history — ONLY in the last two
 //             hours before the reset, from allowance that would otherwise
-//             expire unused, up to 95% (the rest stays for refreshes), and
-//             never from what the caller holds back (`reserve`).
+//             expire unused, up to 95%, and never from what the caller holds
+//             back (`reserve`).
+// The last 5% is never spent: a margin for eBay counting a little
+// differently from us. Nothing reads "today so far" on request any more
+// (it cost two calls a press); today's totals come with the nightly read.
 // When the allowance is gone, pages keep showing what's stored.
 //
 // Usage is counted locally and persisted, so a restart doesn't forget it.
@@ -25,7 +27,7 @@ const appState = require('../../db/app-state.repository');
 // reports one for this API, and wins over ours.
 
 const DEFAULT_LIMIT = config.analytics.dailyLimit || 100;
-const CEILING = { sync: 0.7, view: 0.9, refresh: 1, history: 0.95 };
+const CEILING = { sync: 0.7, view: 0.9, history: 0.95 };
 // History waits for the window's last hours: whatever is left then would
 // expire at the reset anyway, so filling it costs the day nothing.
 const SPARE_WINDOW_MS = 2 * 60 * 60 * 1000;

@@ -26,15 +26,6 @@ async function getAnalytics(req, res, next) {
   }
 }
 
-async function refreshToday(req, res, next) {
-  try {
-    const { refreshesLeft } = await analyticsService.refreshToday(req.params.id, req.ownerId);
-    res.status(200).json({ refreshesLeft });
-  } catch (err) {
-    next(err);
-  }
-}
-
 async function loadAllListings(req, res, next) {
   try {
     const { range } = parse(rangeSchema, req.query);
@@ -76,4 +67,4 @@ async function getListingSummaries(req, res, next) {
   }
 }
 
-module.exports = { getAnalytics, refreshToday, loadAllListings, getListingAnalytics, readListing, getListingSummaries };
+module.exports = { getAnalytics, loadAllListings, getListingAnalytics, readListing, getListingSummaries };

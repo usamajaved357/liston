@@ -32,7 +32,6 @@ const logger = require('../../utils/logger');
 const repo = require('./analytics.repository');
 const d = require('./analytics-days');
 
-const REFRESHES_PER_DAY = 3;
 // Stores up to this size have every listing read each day (5 calls); a
 // bigger one gets eBay's busiest 200 (1 call).
 const DAY_READ_MAX_LISTINGS = 1000;
@@ -183,7 +182,7 @@ function blockedStatus(inputs) {
  *              ended, then (with `fill`) older listing days from what the
  *              reserve for other accounts' nightly reads leaves
  *   essential  account totals only (a first visit waits for this much)
- *   refresh    today so far: account total and every listing
+ * Account totals come with today so far as of the read, at no extra call.
  * One sync per account at a time: a second caller shares the first's.
  */
 function syncAccount(connectionId, ownerId, { mode = 'auto', now = new Date(), fill = true } = {}) {
@@ -252,18 +251,14 @@ async function runSync(connectionId, ownerId, { mode, now, fill }) {
     try {
       // Account totals: any complete days not yet stored, and today so far.
       const accountFrom = state.account_through ? d.addDays(state.account_through, 1) : d.addDays(today, -(d.ACCOUNT_HISTORY_DAYS - 1));
-      if (accountFrom <= lastFinal || mode === 'refresh') {
-        const from = accountFrom <= lastFinal ? accountFrom : today;
-        const rows = await traffic.fetchAccountDays(inputs.accessToken, { ...ctx, segments: accountSegments(from, today, timeZone), kind: mode === 'refresh' ? 'refresh' : 'sync' });
+      if (accountFrom <= lastFinal) {
+        const rows = await traffic.fetchAccountDays(inputs.accessToken, { ...ctx, segments: accountSegments(accountFrom, today, timeZone), kind: 'sync' });
         await repo.upsertTraffic(connectionId, rows.filter((r) => r.day <= lastFinal), { final: true });
         await repo.upsertTraffic(connectionId, rows.filter((r) => r.day > lastFinal), { final: false });
-        await repo.saveSyncState(connectionId, { time_zone: timeZone, ...(accountFrom <= lastFinal ? { account_through: lastFinal } : {}) });
+        await repo.saveSyncState(connectionId, { time_zone: timeZone, account_through: lastFinal });
       }
 
-      if (mode === 'refresh') {
-        await readListingDay(today, 'refresh', false);
-        await repo.saveSyncState(connectionId, { today_day: today, today_fetched_at: now.toISOString() });
-      } else if (mode === 'auto') {
+      if (mode === 'auto') {
         // The day just ended, then older days from what isn't held back
         // for other accounts' nightly reads.
         if (!done.has(lastFinal) && budget.allows('sync', perDay)) await storeDay(lastFinal, 'sync');
@@ -303,28 +298,6 @@ async function runSync(connectionId, ownerId, { mode, now, fill }) {
   return outcome;
 }
 
-/**
- * "Refresh today": today's figures so far. Limited per account per day, and
- * by the allowance's last slice, which only this uses.
- */
-async function refreshToday(connectionId, ownerId, now = new Date()) {
-  const state = await repo.getSyncState(connectionId);
-  const timeZone = state.time_zone || 'Europe/London';
-  const today = d.today(timeZone, now);
-  const used = state.refresh_day === today ? state.refresh_count : 0;
-  if (used >= REFRESHES_PER_DAY) {
-    throw new AnalyticsError(`Today's ${REFRESHES_PER_DAY} refreshes are used. Figures update again overnight.`, 429);
-  }
-  if (!budget.allows('refresh', 2)) {
-    throw new AnalyticsError("eBay's daily allowance for traffic data is used up. Try again after the reset.", 429);
-  }
-  const outcome = await syncAccount(connectionId, ownerId, { mode: 'refresh', now });
-  if (outcome.status === BLOCKED.reconnect) throw new AnalyticsError('Reconnect this eBay account to read its traffic.', 403);
-  if (outcome.status === BLOCKED.unsupported) throw new AnalyticsError("eBay's traffic report doesn't cover this account's site.", 400);
-  await repo.saveSyncState(connectionId, { refresh_day: today, refresh_count: used + 1 });
-  return { refreshesLeft: REFRESHES_PER_DAY - used - 1 };
-}
-
 // Before reading figures: an account never synced waits for its account
 // totals (so the first visit has figures) and gets yesterday's listings in
 // the background; one merely due is read in the background while the
@@ -350,7 +323,7 @@ async function ensureFresh(connectionId, ownerId) {
  * The stored report for a range and scope; read from eBay when missing only
  * with `allowFetch` — which only a person's explicit "Load all" or "Read
  * this listing" passes; browsing never does. A range that includes today is
- * never read (today's listing figures come from "Refresh today"). Resolves
+ * never read (each listing's today arrives once the day is complete). Resolves
  * to the report, null, or { error } when the allowance or eBay says no.
  */
 async function reportFor({ connectionId, inputs, timeZone, from, to, scope, lastFinal, allowFetch = false }) {
@@ -620,9 +593,6 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
           finalThrough: state.account_through,
           nextSyncAt: d.nextSyncAt(timeZone, now).toISOString(),
           todayUpdatedAt: rowsByDay.get(today)?.fetched_at || null,
-          todayListingsUpdatedAt: state.today_day === today ? state.today_fetched_at : null,
-          refreshesLeft: Math.max(0, REFRESHES_PER_DAY - (state.refresh_day === today ? state.refresh_count : 0)),
-          refreshLimit: REFRESHES_PER_DAY,
           history: status === 'ok' ? historyProgress(state, timeZone, now) : null,
           syncing: running.has(String(connectionId)),
         },
@@ -761,7 +731,7 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
         canRead: status === 'ok' && t.state !== 'measured' && !win.partial && budget.allows('view', comparable ? 2 : 1),
         sources: t.state === 'measured' ? sourcesFrom(t.traffic) : [],
         hint: t.state === 'measured' && !win.partial ? d.hintFor(totals, win) : null,
-        sync: { finalThrough: state.account_through, todayListingsUpdatedAt: state.today_day === today ? state.today_fetched_at : null },
+        sync: { finalThrough: state.account_through },
       },
     };
   });
@@ -849,20 +819,18 @@ async function adminUsage(labels) {
       finalThrough: s.account_through,
       detailDays: s.detail_day_count || 0,
       history: s.time_zone ? historyProgress({ history_from: s.history_from, detail_days: s.detail_days || [] }, s.time_zone) : null,
-      refreshesToday: s.time_zone && s.refresh_day === d.today(s.time_zone) ? s.refresh_count || 0 : 0,
       lastSyncedAt: s.last_synced_at,
       status:
         s.last_error === BLOCKED.reconnect ? 'reconnect' : s.last_error === BLOCKED.unsupported ? 'unsupported' : s.last_error === WAITING ? 'waiting' : s.last_error ? 'error' : 'ok',
       lastError: s.last_error && !Object.values(BLOCKED).includes(s.last_error) && s.last_error !== WAITING ? s.last_error : null,
     }))
     .sort((a, b) => b.calls - a.calls || a.label.localeCompare(b.label));
-  return { ...snap, refreshesPerAccount: REFRESHES_PER_DAY, dayReadMaxListings: DAY_READ_MAX_LISTINGS, nightlyReserve: await nightlyReserve(), byAccount };
+  return { ...snap, dayReadMaxListings: DAY_READ_MAX_LISTINGS, nightlyReserve: await nightlyReserve(), byAccount };
 }
 
 module.exports = {
   AnalyticsError,
   syncAccount,
-  refreshToday,
   getAnalytics,
   loadAllListings,
   getListingAnalytics,
@@ -873,6 +841,5 @@ module.exports = {
   nightlyReserve,
   accountSegments,
   trafficFrom,
-  REFRESHES_PER_DAY,
   DAY_READ_MAX_LISTINGS,
 };

@@ -123,7 +123,7 @@ test('a range goes to eBay in the seller’s time zone, parsed by the report’s
 
 // ---- the allowance -----------------------------------------------------------------
 
-test('the allowance is tiered: the nightly sync stops at 70%, ranges at 90%, refresh uses the rest', async () => {
+test('the allowance is tiered: the nightly sync stops at 70%, ranges at 90%, and the last 5% is never spent', async () => {
   budget._reset({ limit: 100, used: 69 });
   assert.strictEqual(budget.allows('sync'), true);
   await budget.spend('sync', 'c1', async () => 'ok');
@@ -131,10 +131,9 @@ test('the allowance is tiered: the nightly sync stops at 70%, ranges at 90%, ref
   assert.strictEqual(budget.allows('view', 20), true);
   budget._reset({ limit: 100, used: 90 });
   assert.strictEqual(budget.allows('view'), false);
-  assert.strictEqual(budget.allows('refresh', 10), true);
   await assert.rejects(budget.spend('view', 'c1', async () => 'never'), (err) => err.code === 'ANALYTICS_BUDGET' && err.statusCode === 429);
   assert.strictEqual(budget.snapshot().used, 90, 'a refused call is not counted');
-  assert.deepStrictEqual(budget.snapshot().ceilings, { sync: 70, view: 90, refresh: 100, history: 95 });
+  assert.deepStrictEqual(budget.snapshot().ceilings, { sync: 70, view: 90, history: 95 });
 });
 
 test('history fills only in the last two hours before the reset, from what is left, up to 95%', async () => {
@@ -143,7 +142,7 @@ test('history fills only in the last two hours before the reset, from what is le
   budget._reset({ limit: 100, used: 10, resetAt: new Date(Date.now() + 3600e3).toISOString() });
   assert.strictEqual(budget.snapshot().spareWindow.open, true);
   assert.strictEqual(budget.allows('history', 85), true);
-  assert.strictEqual(budget.allows('history', 86), false, 'the last 5% stays for refreshes');
+  assert.strictEqual(budget.allows('history', 86), false, 'the last 5% is a margin');
   assert.strictEqual(budget.allows('history', 80, { reserve: 6 }), false, 'six calls held back for nightly reads');
   assert.strictEqual(budget.allows('history', 79, { reserve: 6 }), true);
   await budget.spend('history', 'c1', async () => 'ok');
@@ -155,7 +154,7 @@ test('failed calls still count, and eBay saying "over the limit" closes the wind
   await assert.rejects(budget.spend('sync', 'c1', async () => Promise.reject(Object.assign(new Error('Too many'), { statusCode: 429 }))));
   assert.strictEqual(budget.snapshot().used, 1);
   assert.strictEqual(budget.snapshot().exhausted, true);
-  assert.strictEqual(budget.allows('refresh'), false);
+  assert.strictEqual(budget.allows('view'), false);
 });
 
 // ---- reading an account --------------------------------------------------------------

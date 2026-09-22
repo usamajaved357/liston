@@ -82,7 +82,7 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
           <span>70% · nightly update pauses{usage.paused.sync ? " (paused now)" : ""}</span>
           <span>90% · Load all and single-listing reads pause{usage.paused.view ? " (paused now)" : ""}</span>
           <span>Up to 95% · history fill, {usage.spareWindow.open ? "running now (leftover allowance)" : `only from ${fmtTime(usage.spareWindow.opensAt)}, from leftover allowance`}</span>
-          <span>Last 10% · &quot;Refresh today&quot; ({usage.refreshesPerAccount} per account a day)</span>
+          <span>Last 5% · never spent (a margin for eBay&apos;s count)</span>
         </div>
         {usage.exhausted && <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further traffic calls today. Analytics pages keep showing their stored history.</p>}
       </div>
@@ -91,7 +91,7 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
         <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="traffic calls until reset" />
         <Tile label="Nightly update" value={usage.byKind.sync.toLocaleString()} sub="each account's day just ended" />
         <Tile label="History fill" value={(usage.byKind.history ?? 0).toLocaleString()} sub="leftover allowance, once per account" />
-        <Tile label="On request · refresh" value={`${usage.byKind.view.toLocaleString()} · ${usage.byKind.refresh.toLocaleString()}`} sub="Load all, one listing · Refresh today" />
+        <Tile label="On request" value={usage.byKind.view.toLocaleString()} sub="Load all, one listing" />
       </div>
 
       <section className="card overflow-hidden">
@@ -102,14 +102,13 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
               <th className="px-3 py-2.5 text-right font-semibold">Calls today</th>
               <th className="px-3 py-2.5 font-semibold">Listing history</th>
               <th className="px-3 py-2.5 font-semibold">Complete to</th>
-              <th className="px-3 py-2.5 text-right font-semibold">Refreshes</th>
               <th className="px-5 py-2.5 font-semibold">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--color-line)]">
             {usage.byAccount.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-5 py-6 text-center text-[var(--color-muted)]">
+                <td colSpan={5} className="px-5 py-6 text-center text-[var(--color-muted)]">
                   No account has been read yet. The first read happens at the next daily update or when someone opens Analytics.
                 </td>
               </tr>
@@ -125,9 +124,6 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
                     {a.timeZone && <span className="ml-2 text-[var(--color-line-strong)]">{a.timeZone.replace("_", " ")}</span>}
                   </td>
                   <td className="px-3 py-2.5 text-[var(--color-muted)]">{a.finalThrough ? new Date(`${a.finalThrough}T12:00:00Z`).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" }) : "—"}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-muted)]">
-                    {a.refreshesToday}/{usage.refreshesPerAccount}
-                  </td>
                   <td className="px-5 py-2.5">
                     <span className={status.className} title={a.lastError || undefined}>
                       {status.label}

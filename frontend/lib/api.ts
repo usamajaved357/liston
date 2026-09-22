@@ -92,10 +92,9 @@ export interface AnalyticsUsage {
   resetAt: string | null;
   exhausted: boolean;
   lastSyncedWithEbay: string | null;
-  ceilings: { sync: number; view: number; refresh: number; history: number };
+  ceilings: { sync: number; view: number; history: number };
   paused: { sync: boolean; view: boolean };
-  byKind: { sync: number; view: number; refresh: number; history: number; [kind: string]: number };
-  refreshesPerAccount: number;
+  byKind: { sync: number; view: number; history: number; [kind: string]: number };
   dayReadMaxListings: number;
   // History fills only in the last hours before the reset, from leftover allowance.
   spareWindow: { open: boolean; opensAt: string };
@@ -108,7 +107,6 @@ export interface AnalyticsUsage {
     finalThrough: string | null;
     detailDays: number;
     history: AnalyticsHistory | null;
-    refreshesToday: number;
     lastSyncedAt: string | null;
     status: "ok" | "reconnect" | "unsupported" | "waiting" | "error";
     lastError: string | null;
@@ -997,9 +995,6 @@ export interface AccountAnalytics {
     finalThrough: string | null;
     nextSyncAt: string;
     todayUpdatedAt: string | null;
-    todayListingsUpdatedAt: string | null;
-    refreshesLeft: number;
-    refreshLimit: number;
     history: AnalyticsHistory | null;
     syncing: boolean;
   };
@@ -1036,7 +1031,7 @@ export interface ListingAnalytics {
   comparable: boolean; // false when the listing started after the previous period began
   canRead: boolean; // "Read this listing" is offered (not in the stored days, allowance left)
   readCalls: number;
-  sync: { finalThrough: string | null; todayListingsUpdatedAt: string | null };
+  sync: { finalThrough: string | null };
 }
 
 export interface ListingAnalyticsSummaries {
@@ -1215,7 +1210,6 @@ export const api = {
 
   // Listing analytics: eBay traffic (stored daily) + sales from orders.
   getAnalytics: (id: string, range: AnalyticsRange) => request<AccountAnalytics>(`/api/connections/${id}/analytics?range=${range}`),
-  refreshAnalyticsToday: (id: string) => request<{ refreshesLeft: number }>(`/api/connections/${id}/analytics/refresh`, { method: "POST" }),
   getListingAnalytics: (id: string, itemId: string, range: AnalyticsRange) =>
     request<ListingAnalytics>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}?range=${range}`),
   loadAllListingAnalytics: (id: string, range: AnalyticsRange) =>

@@ -143,20 +143,18 @@ async function latestDayReadSizes() {
 
 // ---- sync bookkeeping ---------------------------------------------------------
 
-const SYNC_FIELDS = ['time_zone', 'account_through', 'detail_days', 'history_from', 'today_day', 'today_fetched_at', 'refresh_day', 'refresh_count', 'last_error', 'last_synced_at'];
+const SYNC_FIELDS = ['time_zone', 'account_through', 'detail_days', 'history_from', 'last_error', 'last_synced_at'];
 
 async function getSyncState(connectionId) {
   const { rows } = await query(
     `SELECT time_zone, to_char(account_through, 'YYYY-MM-DD') AS account_through,
             ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(detail_days) AS d ORDER BY d) AS detail_days,
-            to_char(history_from, 'YYYY-MM-DD') AS history_from,
-            to_char(today_day, 'YYYY-MM-DD') AS today_day, today_fetched_at,
-            to_char(refresh_day, 'YYYY-MM-DD') AS refresh_day, refresh_count, last_error, last_synced_at
+            to_char(history_from, 'YYYY-MM-DD') AS history_from, last_error, last_synced_at
      FROM ebay_traffic_sync WHERE connection_id = $1`,
     [connectionId]
   );
   return (
-    rows[0] || { time_zone: null, account_through: null, detail_days: [], history_from: null, today_day: null, today_fetched_at: null, refresh_day: null, refresh_count: 0, last_error: null, last_synced_at: null }
+    rows[0] || { time_zone: null, account_through: null, detail_days: [], history_from: null, last_error: null, last_synced_at: null }
   );
 }
 
@@ -178,7 +176,7 @@ async function allSyncStates() {
   const { rows } = await query(
     `SELECT connection_id, time_zone, to_char(account_through, 'YYYY-MM-DD') AS account_through, cardinality(detail_days) AS detail_day_count, to_char(history_from, 'YYYY-MM-DD') AS history_from,
             ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(detail_days) AS d) AS detail_days,
-            refresh_count, to_char(refresh_day, 'YYYY-MM-DD') AS refresh_day, last_error, last_synced_at
+            last_error, last_synced_at
      FROM ebay_traffic_sync`
   );
   return rows;
