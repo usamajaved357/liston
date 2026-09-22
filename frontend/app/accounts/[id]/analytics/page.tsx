@@ -319,8 +319,8 @@ function AnalyticsPageInner() {
           )}
           {data?.status === "ok" && data.sync.history && !data.sync.history.complete && data.sync.finalThrough && (
             <div className="notice notice-success">
-              Storing listing history: {data.sync.history.stored} of {data.sync.history.needed} days, filled overnight from spare eBay allowance. Once complete, ranges load
-              with no eBay calls.
+              Storing listing history: {data.sync.history.stored} of {data.sync.history.needed} days, from eBay allowance left over before each daily reset. Filters never
+              call eBay; listing traffic for a range shows once its days are in.
             </div>
           )}
           <MetricsBoard

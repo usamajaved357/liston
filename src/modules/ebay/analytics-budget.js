@@ -14,9 +14,10 @@ const appState = require('../../db/app-state.repository');
 //   view      listing figures for a range the stored history doesn't cover
 //             yet (and "Load all listings", a listing on its own) — to 90%;
 //   refresh   a person pressing "Refresh today" — keeps the last 10%;
-//   history   filling older days of listing history — ONLY in the last
+//   history   filling older days of listing history — ONLY in the last two
 //             hours before the reset, from allowance that would otherwise
-//             expire unused, up to 95% (the rest stays for refreshes).
+//             expire unused, up to 95% (the rest stays for refreshes), and
+//             never from what the caller holds back (`reserve`).
 // When the allowance is gone, pages keep showing what's stored.
 //
 // Usage is counted locally and persisted, so a restart doesn't forget it.
@@ -25,8 +26,8 @@ const appState = require('../../db/app-state.repository');
 
 const DEFAULT_LIMIT = config.analytics.dailyLimit || 100;
 const CEILING = { sync: 0.7, view: 0.9, refresh: 1, history: 0.95 };
-// History reads wait for the window's last hours: whatever is left then
-// would expire at the reset anyway.
+// History waits for the window's last hours: whatever is left then would
+// expire at the reset anyway, so filling it costs the day nothing.
 const SPARE_WINDOW_MS = 2 * 60 * 60 * 1000;
 const KINDS = Object.keys(CEILING);
 const STATE_KEY = 'ebay-analytics-usage';
@@ -137,7 +138,7 @@ function ceilingFor(kind) {
   return Math.floor(state.limit * (CEILING[kind] ?? 0));
 }
 
-/** Whether the window is in its last hours, when spare allowance is spent on history. */
+/** Whether the window is in its last hours, when leftover allowance goes on history. */
 function inSpareWindow(now = Date.now()) {
   rollWindowIfNeeded();
   return new Date(state.resetAt).getTime() - now <= SPARE_WINDOW_MS;
@@ -151,8 +152,12 @@ function available(kind) {
   return Math.max(0, ceilingFor(kind) - state.used);
 }
 
-function allows(kind, calls = 1) {
-  return available(kind) >= calls;
+/**
+ * Whether `calls` of this kind fit. `reserve` holds calls back for work
+ * still due this window (history passes tonight's nightly updates).
+ */
+function allows(kind, calls = 1, { reserve = 0 } = {}) {
+  return available(kind) - reserve >= calls;
 }
 
 function record(kind, connectionId, calls = 1) {

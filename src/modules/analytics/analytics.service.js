@@ -2,22 +2,25 @@
 // traffic (impressions, views, click-through) from its Analytics API, sales
 // and units from the mirrored orders, watchers from the listings copy.
 //
-// eBay allows the whole app ~100 traffic calls a day, and nothing pushes
-// traffic to us (no notification topic carries it), so every figure is
-// read, once, and kept (see ARCHITECTURE.md §6):
+// eBay allows the whole app ~100 traffic calls a day and pushes no traffic
+// data (no notification topic carries it), and a LISTING report gives one
+// total per listing for the whole range asked — never a day-by-day split —
+// so every listing's figures are read one day at a time, once, and kept
+// (see ARCHITECTURE.md §6):
 //   - each night, at 02:00 in the seller's time zone, the day just ended:
 //     the account's totals (1 call) and every live listing's figures for
 //     that day (1 call per 200 listings, up to 1,000 listings; a bigger
 //     store gets eBay's busiest 200);
-//   - older days of that listing history, back 180 days, from allowance
-//     left over in the last hours before eBay's daily reset — allowance
-//     that would otherwise expire unused;
-//   - any date range and its previous period is then ADDED UP from the
-//     stored days: opening a range, switching ranges, the listing panel
-//     and the Listings tab read nothing from eBay. Only while the history
-//     is still filling (a new account's first nights), or for a big
-//     store's quieter listings, is a range read as one report and kept for
-//     the day;
+//   - older days of that history, back 92 days (every filter and its
+//     comparison), ONLY in the last two hours before eBay's daily reset,
+//     from allowance that would otherwise expire unused — so filling it
+//     never costs the day anything;
+//   - every filter, the listing panel and the Listings tab are ADDED UP
+//     from the stored days and never read eBay. A range the history
+//     doesn't reach yet shows account figures and sales, and listing
+//     traffic once its days are in; eBay is read for a range only when
+//     someone presses "Load all" or reads one listing, each labelled with
+//     its cost;
 //   - "Refresh today": today so far, 3 times per account per day.
 // Every day is the seller's own calendar day, as in Seller Hub.
 const connectionService = require('../connections/connection.service');
@@ -33,8 +36,8 @@ const REFRESHES_PER_DAY = 3;
 // Stores up to this size have every listing read each day (5 calls); a
 // bigger one gets eBay's busiest 200 (1 call).
 const DAY_READ_MAX_LISTINGS = 1000;
-// Days of history one account may fill per run, so each account gets a
-// share of the spare allowance (the scheduler runs every 10 minutes).
+// Days of history one account may fill per run, so every account gets a
+// share of the allowance (the scheduler runs every 10 minutes).
 const HISTORY_DAYS_PER_RUN = 15;
 const REPORT_KEEP_MS = 3 * 24 * 3600e3;
 // States that mean "nothing to read until the seller acts"; re-checked
@@ -123,8 +126,34 @@ function contextFor(timeZone, now = new Date()) {
 
 // ---- when to read eBay ---------------------------------------------------------
 
-/** Whether an account's stored figures need a read from eBay now. */
-function isDue(state, now = new Date()) {
+/** What one account's nightly read costs: its totals, and its listings' day. */
+function nightlyCalls(listingCount) {
+  return 1 + (listingCount === undefined ? 1 : listingCount === null ? 1 : callsPerDay(listingCount));
+}
+
+/**
+ * Calls held back from history filling for nightly reads still to come in
+ * this allowance window: each set-up account whose day just ended isn't
+ * read yet, or whose next day completes before eBay's reset.
+ */
+async function nightlyReserve(now = new Date()) {
+  const [states, sizes] = await Promise.all([repo.allSyncStates(), repo.latestDayReadSizes()]);
+  const resetAt = new Date(budget.snapshot().resetAt);
+  let reserve = 0;
+  for (const s of states) {
+    if (!s.time_zone || Object.values(BLOCKED).includes(s.last_error)) continue;
+    const readLastFinal = (s.detail_days || []).includes(d.lastFinalDay(s.time_zone, now));
+    if (!readLastFinal || d.nextSyncAt(s.time_zone, now) < resetAt) reserve += nightlyCalls(sizes.get(String(s.connection_id)));
+  }
+  return reserve;
+}
+
+/**
+ * Whether an account's stored figures need a read from eBay now.
+ * `reserve`: calls held back for other accounts' nightly reads (the
+ * scheduler works it out once a tick); only history filling respects it.
+ */
+function isDue(state, now = new Date(), { reserve = 0, history = true } = {}) {
   const since = state.last_synced_at ? now - new Date(state.last_synced_at) : Infinity;
   if (Object.values(BLOCKED).includes(state.last_error) && since < BLOCKED_RECHECK_MS) return false;
   if (state.last_error === WAITING && !budget.allows('sync')) return false;
@@ -134,8 +163,8 @@ function isDue(state, now = new Date()) {
   const done = state.detail_days || [];
   // The day just ended, for every listing.
   if (!done.includes(lastFinal)) return budget.allows('sync');
-  // Older days, only from the spare allowance before the reset.
-  return budget.allows('history') && d.historyDaysMissing({ lastFinal, historyFrom: state.history_from, done }).length > 0;
+  // Older days, from whatever isn't held back for tonight.
+  return history && budget.allows('history', 1, { reserve }) && d.historyDaysMissing({ lastFinal, historyFrom: state.history_from, done }).length > 0;
 }
 
 // ---- reading eBay ------------------------------------------------------------------
@@ -151,20 +180,21 @@ function blockedStatus(inputs) {
 /**
  * Brings an account's stored figures up to date. `mode`:
  *   auto       what's due: account totals, every listing's day just
- *              ended, then older listing days from spare allowance
+ *              ended, then (with `fill`) older listing days from what the
+ *              reserve for other accounts' nightly reads leaves
  *   essential  account totals only (a first visit waits for this much)
  *   refresh    today so far: account total and every listing
  * One sync per account at a time: a second caller shares the first's.
  */
-function syncAccount(connectionId, ownerId, { mode = 'auto', now = new Date() } = {}) {
+function syncAccount(connectionId, ownerId, { mode = 'auto', now = new Date(), fill = true } = {}) {
   const key = String(connectionId);
   if (running.has(key)) return running.get(key);
-  const promise = runSync(key, ownerId, { mode, now }).finally(() => running.delete(key));
+  const promise = runSync(key, ownerId, { mode, now, fill }).finally(() => running.delete(key));
   running.set(key, promise);
   return promise;
 }
 
-async function runSync(connectionId, ownerId, { mode, now }) {
+async function runSync(connectionId, ownerId, { mode, now, fill }) {
   let failure = null;
   let outcome = { calls: 0, status: 'ok' };
   await connectionService.withDecryptedCredentials(connectionId, ownerId, async (credentials, connection) => {
@@ -234,14 +264,19 @@ async function runSync(connectionId, ownerId, { mode, now }) {
         await readListingDay(today, 'refresh', false);
         await repo.saveSyncState(connectionId, { today_day: today, today_fetched_at: now.toISOString() });
       } else if (mode === 'auto') {
-        // The day just ended, then older days while the spare allowance lasts.
+        // The day just ended, then older days from what isn't held back
+        // for other accounts' nightly reads.
         if (!done.has(lastFinal) && budget.allows('sync', perDay)) await storeDay(lastFinal, 'sync');
-        const missing = d.historyDaysMissing({ lastFinal, historyFrom, done: [...done] }).slice(0, HISTORY_DAYS_PER_RUN);
-        for (const day of missing) {
-          if (!budget.allows('history', perDay)) break;
-          await storeDay(day, 'history');
-        }
         await saveDays();
+        if (fill) {
+          const reserve = await nightlyReserve(now);
+          const missing = d.historyDaysMissing({ lastFinal, historyFrom, done: [...done] }).slice(0, HISTORY_DAYS_PER_RUN);
+          for (const day of missing) {
+            if (!budget.allows('history', perDay, { reserve })) break;
+            await storeDay(day, 'history');
+          }
+          await saveDays();
+        }
       }
 
       await repo.pruneBefore(connectionId, {
@@ -291,31 +326,34 @@ async function refreshToday(connectionId, ownerId, now = new Date()) {
 }
 
 // Before reading figures: an account never synced waits for its account
-// totals (so the first visit has figures) and gets its listings' detail in
+// totals (so the first visit has figures) and gets yesterday's listings in
 // the background; one merely due is read in the background while the
 // stored figures are shown, and the page is told when new ones land
 // (account event "analytics").
 async function ensureFresh(connectionId, ownerId) {
   const state = await repo.getSyncState(connectionId);
   const now = new Date();
-  if (!isDue(state, now)) return;
+  if (!isDue(state, now, { history: false })) return;
+  // Opening a page only catches up the nightly read (a server that was
+  // down at 02:00); history is filled by the scheduler, never by browsing.
   if (state.account_through) {
-    syncAccount(connectionId, ownerId, { now }).catch(() => {});
+    syncAccount(connectionId, ownerId, { now, fill: false }).catch(() => {});
     return;
   }
   await syncAccount(connectionId, ownerId, { mode: 'essential', now }).catch(() => {});
-  syncAccount(connectionId, ownerId).catch(() => {});
+  syncAccount(connectionId, ownerId, { fill: false }).catch(() => {});
 }
 
 // ---- listing figures for a range ---------------------------------------------------------
 
 /**
- * The stored report for a range and scope, read from eBay when missing. A
- * range that includes today is never read automatically (today's listing
- * figures come from "Refresh today"). Resolves to the report, null, or
- * { error } when the allowance or eBay says no — the page still shows sales.
+ * The stored report for a range and scope; read from eBay when missing only
+ * with `allowFetch` — which only a person's explicit "Load all" or "Read
+ * this listing" passes; browsing never does. A range that includes today is
+ * never read (today's listing figures come from "Refresh today"). Resolves
+ * to the report, null, or { error } when the allowance or eBay says no.
  */
-async function reportFor({ connectionId, inputs, timeZone, from, to, scope, lastFinal, allowFetch = true }) {
+async function reportFor({ connectionId, inputs, timeZone, from, to, scope, lastFinal, allowFetch = false }) {
   const stored = (await repo.reportsFor(connectionId, from, to)).get(scope);
   if (stored) return stored;
   if (!allowFetch || to > lastFinal) return null;
@@ -340,11 +378,23 @@ async function reportFor({ connectionId, inputs, timeZone, from, to, scope, last
  * Each listing's totals for a range added up from the stored days, for the
  * listings those days cover exactly (analytics-days.historyReport).
  */
-async function historyFor(connectionId, from, to, listedOn) {
+async function historyFor(connectionId, from, to, listedOn, historyFrom) {
   const reads = await repo.dayReads(connectionId, from, to);
   const busiestDays = reads.filter((r) => !r.listing_ids && r.cutoff != null).map((r) => r.day);
   const totals = await repo.listingTotals(connectionId, from, to, busiestDays);
-  return d.historyReport({ from, to, reads, totals, listedOn });
+  return d.historyReport({ from, to, reads, totals, listedOn, historyFrom });
+}
+
+/**
+ * A listing's traffic for a range: from the reports (stored history first),
+ * or, when none has it, "pending" while the history doesn't reach the
+ * range yet, or "below" when it does (a big store's listing outside eBay's
+ * busiest 200 on some day).
+ */
+function listingTraffic(reports, id, history) {
+  const t = trafficFrom(reports, id);
+  if (t.state !== 'unknown' || !history) return t;
+  return { state: history.filled ? 'below' : 'pending', traffic: null, cutoff: null };
 }
 
 /** How far each account's listing history reaches, for the page and the admin. */
@@ -418,7 +468,12 @@ function statusOf(inputs) {
 function describeReport(report) {
   if (!report) return { state: 'none' };
   if (report.error) return { state: report.error === 'allowance' ? 'allowance' : 'error', message: report.message };
-  if (report.scope === 'history') return { state: 'ok', scope: 'history', cutoff: null, measured: report.coveredCount, fetchedAt: null };
+  if (report.scope === 'history') {
+    // Not every listing covered: the history is still filling (pending),
+    // or a big store's quieter listings weren't in eBay's busiest 200.
+    const state = report.complete ? 'ok' : report.filled ? 'ok' : 'filling';
+    return { state, scope: 'history', cutoff: null, measured: report.coveredCount, busiest: !report.complete && report.filled, fetchedAt: null };
+  }
   return { state: 'ok', scope: report.scope, cutoff: report.cutoff, measured: (report.rows || []).length, fetchedAt: report.fetched_at };
 }
 
@@ -474,34 +529,32 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
       };
     };
 
-    // Listing figures: added up from the stored days. Only when those
-    // don't cover every live listing yet (history still filling, or a big
-    // store's quieter listings) is the range read as one report, kept for
-    // the day. The previous period is never read for this: its changes
-    // show once the history reaches it (or from a report already stored).
+    // Listing figures: added up from the stored days — never read from
+    // eBay here, whatever the range. A "Load all" report someone asked for
+    // (or one kept from earlier) fills in listings the history doesn't.
     let current = [];
     let prior = [];
     let history = null;
     if (status === 'ok') {
       const listedOn = listedOnMap(inputs.items, timeZone);
       const args = { connectionId, inputs, timeZone, lastFinal };
-      const [hist, prevHist] = await Promise.all([historyFor(connectionId, win.from, win.to, listedOn), historyFor(connectionId, win.previous.from, win.previous.to, listedOn)]);
+      const [hist, prevHist] = await Promise.all([
+        historyFor(connectionId, win.from, win.to, listedOn, state.history_from),
+        historyFor(connectionId, win.previous.from, win.previous.to, listedOn, state.history_from),
+      ]);
       history = hist;
-      const [all, top] = hist.complete
-        ? [null, null]
-        : await Promise.all([reportFor({ ...args, from: win.from, to: win.to, scope: 'all', allowFetch: false }), reportFor({ ...args, from: win.from, to: win.to, scope: 'top' })]);
-      const [prevAll, prevTop] = prevHist.complete
-        ? [null, null]
-        : await Promise.all([
-            reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'all', allowFetch: false }),
-            reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'top', allowFetch: false }),
-          ]);
+      const [all, top, prevAll, prevTop] = await Promise.all([
+        reportFor({ ...args, from: win.from, to: win.to, scope: 'all' }),
+        reportFor({ ...args, from: win.from, to: win.to, scope: 'top' }),
+        reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'all' }),
+        reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'top' }),
+      ]);
       current = [hist, all, top];
       prior = [prevHist, prevAll, prevTop];
     }
     const listings = inputs.items.map((item) => {
       const id = String(item.itemId);
-      const t = trafficFrom(current, id);
+      const t = listingTraffic(current, id, history);
       const m = listingMetrics(t, d.salesWithin(sales.byListingDay.get(id), win.from, win.to));
       const pt = trafficFrom(prior, id);
       let prev = null;
@@ -518,7 +571,7 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
         price: item.price || null,
         quantityAvailable: item.quantityAvailable ?? null,
         watchers: item.watchCount ?? null,
-        traffic: t.state, // measured | below | unknown
+        traffic: t.state, // measured | pending | below | unknown
         ...m,
         sales: round2(m.sales),
         changes: withChanges(m, t.state === 'measured' ? prev : null),
@@ -526,8 +579,8 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
       };
     });
 
-    const fallback = current.slice(1);
-    const shown = history?.complete ? history : fallback.find((r) => r && !r.error) || fallback.find(Boolean) || null;
+    const stored = current.slice(1).find((r) => r && !r.error);
+    const shown = history && !history.complete && stored ? stored : history;
     const report = describeReport(shown);
     const loadAllCalls = traffic.callsForAllListings(inputs.items.length);
     return {
@@ -548,7 +601,7 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
           ...report,
           live: inputs.items.length,
           loadAllCalls,
-          canLoadAll: report.state === 'ok' && report.scope === 'top' && report.cutoff != null && !win.partial && budget.allows('view', loadAllCalls),
+          canLoadAll: status === 'ok' && !win.partial && !history?.complete && report.scope !== 'all' && budget.allows('view', loadAllCalls),
         },
         sync: {
           lastSyncedAt: state.last_synced_at,
@@ -581,7 +634,7 @@ async function loadAllListings(connectionId, ownerId, { range = '30d' } = {}) {
     if (win.partial) throw new AnalyticsError("Today's listing figures come from Refresh today.", 400);
     const calls = traffic.callsForAllListings(inputs.items.length);
     if (!budget.allows('view', calls)) throw new AnalyticsError(`Loading every listing takes ${calls} calls, more than today's allowance has left.`, 429);
-    const report = await reportFor({ connectionId, inputs, timeZone, from: win.from, to: win.to, scope: 'all', lastFinal });
+    const report = await reportFor({ connectionId, inputs, timeZone, from: win.from, to: win.to, scope: 'all', lastFinal, allowFetch: true });
     if (report?.error) throw new AnalyticsError(report.message, report.error === 'allowance' ? 429 : 502);
     accountEvents.emitUpdated(connectionId, 'analytics');
     return { ...base, data: { calls, listings: inputs.items.length } };
@@ -589,10 +642,9 @@ async function loadAllListings(connectionId, ownerId, { range = '30d' } = {}) {
 }
 
 /**
- * One listing over a range: exact totals (from the range's reports, or a
- * read of this listing on its own when it wasn't among the busiest), the
- * change, and its daily series — traffic for the days it was among the
- * account's busiest 200, sales every day.
+ * One listing over a range: exact totals added up from the stored days (or
+ * from a report someone asked for: "Load all", or this listing read on its
+ * own), the change, and its daily series. Never reads eBay.
  */
 async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d' } = {}) {
   await ensureFresh(connectionId, ownerId);
@@ -614,16 +666,13 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
     const ordersFrom = d.addDays(today, -89);
 
     // Totals: added up from the stored days; failing that, whichever stored
-    // report has this listing; failing that, read it on its own (exact,
-    // whatever the store's size).
+    // report has this listing.
     const listedOn = listedOnMap([item], timeZone);
     const totalsFor = async (from, to) => {
       if (status !== 'ok') return { state: 'unknown', traffic: null, cutoff: null };
       const stored = await repo.reportsFor(connectionId, from, to);
-      const t = trafficFrom([await historyFor(connectionId, from, to, listedOn), stored.get('all'), stored.get(`item:${id}`), stored.get('top')], id);
-      if (t.state === 'measured') return t;
-      const own = await reportFor({ connectionId, inputs, timeZone, lastFinal, from, to, scope: `item:${id}` });
-      return own && !own.error ? trafficFrom([own], id) : t;
+      const history = await historyFor(connectionId, from, to, listedOn, state.history_from);
+      return listingTraffic([history, stored.get('all'), stored.get(`item:${id}`), stored.get('top')], id, history);
     };
     const comparable = liveThroughPrevious(item, win.previous.from, timeZone);
     const [t, pt] = await Promise.all([totalsFor(win.from, win.to), comparable ? totalsFor(win.previous.from, win.previous.to) : { state: 'unknown', traffic: null }]);
@@ -693,6 +742,10 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
         previousSeries: d.daysBetween(win.previous.from, win.previous.to).map(dayPoint),
         dailyTrafficDays: series.filter((p) => p.views != null).length,
         comparable,
+        // "Read this listing": this range (and the previous one) for this
+        // listing alone, on request.
+        readCalls: comparable ? 2 : 1,
+        canRead: status === 'ok' && t.state !== 'measured' && !win.partial && budget.allows('view', comparable ? 2 : 1),
         sources: t.state === 'measured' ? sourcesFrom(t.traffic) : [],
         hint: t.state === 'measured' && !win.partial ? d.hintFor(totals, win) : null,
         sync: { finalThrough: state.account_through, todayListingsUpdatedAt: state.today_day === today ? state.today_fetched_at : null },
@@ -702,9 +755,37 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
 }
 
 /**
+ * "Read this listing": one listing's figures for a range, and the previous
+ * period when it was live through it, read from eBay on request (1–2
+ * calls) and kept — for a listing the stored days don't cover yet.
+ */
+async function readListing(connectionId, ownerId, itemId, { range = '30d' } = {}) {
+  return connectionService.withDecryptedCredentials(connectionId, ownerId, async (credentials, connection) => {
+    const inputs = await ebayService.analyticsInputs(credentials, connectionId, { push: ebayService.pushEnabled(connection) });
+    const base = { credentialsChanged: inputs.credentialsChanged, credentials: inputs.credentials };
+    if (statusOf(inputs) !== 'ok') throw new AnalyticsError('Traffic data isn’t available for this account.', 403);
+    const id = String(itemId);
+    const item = inputs.items.find((i) => String(i.itemId) === id);
+    if (!item) throw new AnalyticsError('That listing is not live on this account.', 404);
+    const timeZone = d.timeZoneFor(inputs.marketplaceId);
+    const { today, lastFinal } = contextFor(timeZone);
+    const win = d.rangeWindow(range, { today, lastFinal });
+    if (win.partial) throw new AnalyticsError("Today's listing figures come from Refresh today.", 400);
+    const ranges = [[win.from, win.to]];
+    if (liveThroughPrevious(item, win.previous.from, timeZone)) ranges.push([win.previous.from, win.previous.to]);
+    if (!budget.allows('view', ranges.length)) throw new AnalyticsError("Today's eBay allowance for traffic data doesn't cover this. Try again after the reset.", 429);
+    for (const [from, to] of ranges) {
+      const report = await reportFor({ connectionId, inputs, timeZone, lastFinal, from, to, scope: `item:${id}`, allowFetch: true });
+      if (report?.error) throw new AnalyticsError(report.message, report.error === 'allowance' ? 429 : 502);
+    }
+    return { ...base, data: { calls: ranges.length } };
+  });
+}
+
+/**
  * The last 30 complete days per live listing (views, impressions), units
- * sold and watchers, for the Listings tab's rows. Uses the 30-day report
- * (one call the first time that day, shared with the Analytics tab).
+ * sold and watchers, for the Listings tab's rows. From the stored days;
+ * never reads eBay.
  */
 async function getListingSummaries(connectionId, ownerId) {
   return connectionService.withDecryptedCredentials(connectionId, ownerId, async (credentials, connection) => {
@@ -715,16 +796,18 @@ async function getListingSummaries(connectionId, ownerId) {
     const { today, lastFinal } = contextFor(timeZone);
     const win = d.rangeWindow('30d', { today, lastFinal });
     let reports = [];
+    let history = null;
     if (status === 'ok') {
-      const hist = await historyFor(connectionId, win.from, win.to, listedOnMap(inputs.items, timeZone));
+      const state = await repo.getSyncState(connectionId);
+      history = await historyFor(connectionId, win.from, win.to, listedOnMap(inputs.items, timeZone), state.history_from);
       const args = { connectionId, inputs, timeZone, lastFinal, from: win.from, to: win.to };
-      reports = hist.complete ? [hist] : [hist, await reportFor({ ...args, scope: 'all', allowFetch: false }), await reportFor({ ...args, scope: 'top' })];
+      reports = history.complete ? [history] : [history, await reportFor({ ...args, scope: 'all' }), await reportFor({ ...args, scope: 'top' })];
     }
     const sales = d.salesIndex(inputs.orders, timeZone);
     const items = {};
     for (const item of inputs.items) {
       const id = String(item.itemId);
-      const t = trafficFrom(reports, id);
+      const t = listingTraffic(reports, id, history);
       items[id] = {
         traffic: t.state,
         views: t.state === 'measured' ? t.traffic.views : null,
@@ -760,7 +843,7 @@ async function adminUsage(labels) {
       lastError: s.last_error && !Object.values(BLOCKED).includes(s.last_error) && s.last_error !== WAITING ? s.last_error : null,
     }))
     .sort((a, b) => b.calls - a.calls || a.label.localeCompare(b.label));
-  return { ...snap, refreshesPerAccount: REFRESHES_PER_DAY, dayReadMaxListings: DAY_READ_MAX_LISTINGS, byAccount };
+  return { ...snap, refreshesPerAccount: REFRESHES_PER_DAY, dayReadMaxListings: DAY_READ_MAX_LISTINGS, nightlyReserve: await nightlyReserve(), byAccount };
 }
 
 module.exports = {
@@ -770,9 +853,11 @@ module.exports = {
   getAnalytics,
   loadAllListings,
   getListingAnalytics,
+  readListing,
   getListingSummaries,
   adminUsage,
   isDue,
+  nightlyReserve,
   accountSegments,
   trafficFrom,
   REFRESHES_PER_DAY,

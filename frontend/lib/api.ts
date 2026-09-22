@@ -91,11 +91,12 @@ export interface AnalyticsUsage {
   lastSyncedWithEbay: string | null;
   ceilings: { sync: number; view: number; refresh: number; history: number };
   paused: { sync: boolean; view: boolean };
-  // History is filled only in the last hours before the reset, from spare allowance.
-  spareWindow: { open: boolean; opensAt: string };
   byKind: { sync: number; view: number; refresh: number; history: number; [kind: string]: number };
   refreshesPerAccount: number;
   dayReadMaxListings: number;
+  // History fills only in the last hours before the reset, from leftover allowance.
+  spareWindow: { open: boolean; opensAt: string };
+  nightlyReserve: number; // calls held back for nightly reads still due before the reset
   byAccount: {
     connectionId: string;
     label: string;
@@ -932,7 +933,9 @@ export interface AnalyticsRangeInfo {
 //   measured  exact figures (zero included) from eBay's report for the range
 //   below     not among the busiest 200 read: fewer impressions than the cutoff
 //   unknown   no report (not read yet, allowance used, or no traffic access)
-export type ListingTrafficState = "measured" | "below" | "unknown";
+// pending: the stored history doesn't reach this range yet; below: a big
+// store's listing outside eBay's busiest 200 on some day.
+export type ListingTrafficState = "measured" | "pending" | "below" | "unknown";
 
 export interface ListingAnalyticsRow extends AnalyticsMetrics {
   itemId: string;
@@ -958,8 +961,9 @@ export interface AnalyticsHistory {
 }
 
 export interface ListingReportInfo {
-  state: "ok" | "none" | "allowance" | "error";
+  state: "ok" | "filling" | "none" | "allowance" | "error";
   message?: string;
+  busiest?: boolean; // history: exact for eBay's busiest 200 each day, not the rest
   scope?: string; // "history" (added up from stored days) | "top" (busiest 200, or every listing of a store of ≤200) | "all"
   cutoff?: number | null; // impressions of the 200th listing; null = every listing read
   measured?: number;
@@ -1025,6 +1029,8 @@ export interface ListingAnalytics {
   hint: AnalyticsHint | null;
   dailyTrafficDays: number; // days in the range with this listing's daily traffic
   comparable: boolean; // false when the listing started after the previous period began
+  canRead: boolean; // "Read this listing" is offered (not in the stored days, allowance left)
+  readCalls: number;
   sync: { finalThrough: string | null; todayListingsUpdatedAt: string | null };
 }
 
@@ -1209,6 +1215,8 @@ export const api = {
     request<ListingAnalytics>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}?range=${range}`),
   loadAllListingAnalytics: (id: string, range: AnalyticsRange) =>
     request<{ calls: number; listings: number }>(`/api/connections/${id}/analytics/listings/all?range=${range}`, { method: "POST" }),
+  readListingAnalytics: (id: string, itemId: string, range: AnalyticsRange) =>
+    request<{ calls: number }>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/read?range=${range}`, { method: "POST" }),
   getListingAnalyticsSummaries: (id: string) => request<ListingAnalyticsSummaries>(`/api/connections/${id}/analytics/listings/summary`),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {

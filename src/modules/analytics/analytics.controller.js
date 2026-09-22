@@ -56,6 +56,17 @@ async function getListingAnalytics(req, res, next) {
   }
 }
 
+async function readListing(req, res, next) {
+  try {
+    const { range } = parse(rangeSchema, req.query);
+    const { itemId } = parse(itemSchema, req.params);
+    const result = await analyticsService.readListing(req.params.id, req.ownerId, itemId, { range });
+    res.status(200).json(result.data);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getListingSummaries(req, res, next) {
   try {
     const result = await analyticsService.getListingSummaries(req.params.id, req.ownerId);
@@ -65,4 +76,4 @@ async function getListingSummaries(req, res, next) {
   }
 }
 
-module.exports = { getAnalytics, refreshToday, loadAllListings, getListingAnalytics, getListingSummaries };
+module.exports = { getAnalytics, refreshToday, loadAllListings, getListingAnalytics, readListing, getListingSummaries };

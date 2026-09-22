@@ -13,5 +13,7 @@ router.post('/listings/all', requireAuth, requireFeature('analytics'), analytics
 // The Listings tab's rows: the 30-day report, shared with the Analytics tab.
 router.get('/listings/summary', requireAuth, requireFeature('analytics'), analyticsController.getListingSummaries);
 router.get('/listings/:itemId', requireAuth, requireFeature('analytics'), analyticsController.getListingAnalytics);
+// One listing's figures for a range, read on request (1–2 traffic calls).
+router.post('/listings/:itemId/read', requireAuth, requireFeature('analytics'), analyticsController.readListing);
 
 module.exports = router;

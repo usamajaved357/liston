@@ -133,13 +133,15 @@ test('the allowance is tiered: the nightly sync stops at 70%, ranges at 90%, ref
   assert.deepStrictEqual(budget.snapshot().ceilings, { sync: 70, view: 90, refresh: 100, history: 95 });
 });
 
-test('history is filled only from spare allowance, in the last two hours before the reset', async () => {
+test('history fills only in the last two hours before the reset, from what is left, up to 95%', async () => {
   budget._reset({ limit: 100, used: 10 });
-  assert.strictEqual(budget.allows('history'), false, 'mid-window: the allowance may still be needed');
-  assert.strictEqual(budget.snapshot().spareWindow.open, false);
+  assert.strictEqual(budget.allows('history'), false, 'mid-window: never');
   budget._reset({ limit: 100, used: 10, resetAt: new Date(Date.now() + 3600e3).toISOString() });
+  assert.strictEqual(budget.snapshot().spareWindow.open, true);
   assert.strictEqual(budget.allows('history', 85), true);
   assert.strictEqual(budget.allows('history', 86), false, 'the last 5% stays for refreshes');
+  assert.strictEqual(budget.allows('history', 80, { reserve: 6 }), false, 'six calls held back for nightly reads');
+  assert.strictEqual(budget.allows('history', 79, { reserve: 6 }), true);
   await budget.spend('history', 'c1', async () => 'ok');
   assert.strictEqual(budget.snapshot().byKind.history, 1);
 });
@@ -217,7 +219,7 @@ test('a listing’s traffic from a range’s reports: measured, zero when comple
   assert.strictEqual(trafficFrom([null, { error: 'allowance' }], '2').state, 'unknown');
 });
 
-test('an account is due once its day is complete, for older listing days only in the spare hours, and not while blocked', () => {
+test('an account is due once its day is complete, for older listing days only in the last hours before the reset, and not while blocked', () => {
   const { isDue } = require('../../src/modules/analytics/analytics.service');
   const now = new Date('2026-09-22T12:00:00Z'); // complete through 21 Sep in the UK
   // History reaches back to the oldest live listing (listed 19 Sep).
@@ -229,10 +231,12 @@ test('an account is due once its day is complete, for older listing days only in
   assert.strictEqual(isDue({ ...synced, detail_days: ['2026-09-19', '2026-09-20'] }, now), false, 'the nightly tier is spent');
   budget._reset({ limit: 100, used: 0 });
   const gap = { ...synced, detail_days: ['2026-09-21'] };
-  assert.strictEqual(isDue(gap, now), false, 'older days wait for the spare hours');
+  assert.strictEqual(isDue(gap, now), false, 'older days wait for the last hours before the reset');
   budget._reset({ limit: 100, used: 30, resetAt: new Date(Date.now() + 3600e3).toISOString() });
   assert.strictEqual(isDue(gap, now), true);
-  budget._reset({ limit: 100, used: 0 });
+  assert.strictEqual(isDue(gap, now, { history: false }), false, 'a page view never fills history');
+  budget._reset({ limit: 100, used: 90, resetAt: new Date(Date.now() + 3600e3).toISOString() });
+  assert.strictEqual(isDue(gap, now, { reserve: 5 }), false, 'what’s left is held back for tonight');
   assert.strictEqual(isDue({ account_through: null, detail_days: [], last_error: 'needs_reconnect', last_synced_at: '2026-09-22T11:00:00Z' }, now), false);
   assert.strictEqual(isDue({ account_through: null, detail_days: [], last_error: 'needs_reconnect', last_synced_at: '2026-09-22T05:00:00Z' }, now), true);
   // Waiting for the allowance: not retried until the daily-sync tier has room.
@@ -242,12 +246,12 @@ test('an account is due once its day is complete, for older listing days only in
   assert.strictEqual(isDue({ ...synced, account_through: '2026-09-20', last_error: 'waiting_allowance' }, now), true);
 });
 
-test('listing history: newest days first, back 180 days or to the oldest live listing', () => {
+test('listing history: newest days first, back 92 days (every filter and its comparison) or to the oldest live listing', () => {
   const missing = days.historyDaysMissing({ lastFinal: '2026-09-21', historyFrom: null, done: ['2026-09-21', '2026-09-19'] });
   assert.strictEqual(missing[0], '2026-09-20');
   assert.strictEqual(missing[1], '2026-09-18');
-  assert.strictEqual(missing.length, 178);
-  assert.strictEqual(missing[missing.length - 1], days.addDays('2026-09-21', -179));
+  assert.strictEqual(missing.length, 90);
+  assert.strictEqual(missing[missing.length - 1], days.addDays('2026-09-21', -91));
   assert.deepStrictEqual(days.historyDaysMissing({ lastFinal: '2026-09-21', historyFrom: '2026-09-18', done: ['2026-09-21', '2026-09-19'] }), ['2026-09-20', '2026-09-18']);
 });
 
@@ -280,4 +284,18 @@ test('a range from stored days: exact for the listings every day covered, and on
   const busiest = [{ day: '2026-09-21', listing_ids: null, cutoff: 40 }];
   const big = days.historyReport({ from: '2026-09-21', to: '2026-09-21', reads: busiest, totals: [{ listing_id: '1', ...t(9), counted_days: 1 }], listedOn: new Map([['1', null], ['2', null]]) });
   assert.deepStrictEqual([big.covers('1'), big.covers('2')], [true, false]);
+});
+
+test('92 days of listing history reach every filter and its comparison (but 90 days’) on every day of the year', () => {
+  for (let day = '2026-01-01'; day <= '2026-12-31'; day = days.addDays(day, 1)) {
+    for (const lag of [1, 2]) {
+      const lastFinal = days.addDays(day, -lag); // before 02:00 the last complete day is two back
+      const floor = days.addDays(lastFinal, -(days.LISTING_HISTORY_DAYS - 1));
+      for (const range of days.RANGES.filter((r) => r !== 'today')) {
+        const win = days.rangeWindow(range, { today: day, lastFinal });
+        assert.ok(win.from >= floor, `${range} on ${day}`);
+        if (range !== '90d' && !win.partial) assert.ok(win.previous.from >= floor, `${range}'s comparison on ${day}`);
+      }
+    }
+  }
 });

@@ -10,10 +10,10 @@ import { MetricKey, metricDef } from "./metrics";
 
 // Every live listing over the chosen range: sortable by any figure,
 // searchable, filterable to the ones worth a look. A row opens the
-// listing's own panel. Traffic comes from one eBay report per range: every
-// listing of a store with up to 200, or the busiest 200 of a bigger one —
-// the others show "under N" impressions (never a made-up zero) until
-// "Load all" reads them. Sales, units and watchers are always exact.
+// listing's own panel. Traffic is added up from the stored day-by-day
+// history; a range it doesn't reach yet shows "—" (never a made-up zero)
+// until the history fills, or "Load all" reads it on request. Sales, units
+// and watchers are always exact.
 
 type SortKey = MetricKey | "title" | "watchers";
 type Filter = "all" | "attention" | "converting";
@@ -82,6 +82,19 @@ function ReportNote({
     text = "Listing traffic for this range couldn’t be read: today’s eBay allowance is used up. Sales, units and watchers are exact.";
   } else if (report.state === "error") {
     text = "eBay didn’t return listing traffic for this range. Sales, units and watchers are exact.";
+  } else if (report.state === "filling") {
+    text = (
+      <>
+        Listing traffic for this range appears once its days are stored (usually within a day of connecting). Account figures, sales, units and watchers are exact now.
+      </>
+    );
+  } else if (report.state === "ok" && report.busiest && belowCount > 0) {
+    text = (
+      <>
+        Traffic shown for your <strong className="font-semibold text-[var(--color-ink)]">busiest listings</strong>; the other {fullNumber(belowCount)} weren&apos;t among eBay&apos;s
+        200 busiest every day of this range.
+      </>
+    );
   } else if (report.state === "ok" && report.cutoff != null && report.scope !== "all" && belowCount > 0) {
     text = (
       <>
@@ -259,8 +272,23 @@ export function ListingsTable({
                 {COLUMNS.map((key) => {
                   const def = metricDef(key);
                   const change = row.changes?.[key];
+                  // Not in the stored days yet: no figure rather than a zero.
+                  if (row.traffic === "pending" && TRAFFIC_KEYS.includes(key)) {
+                    return (
+                      <td key={key} className="px-3 py-2.5 text-right align-middle text-[12px] text-[var(--color-line-strong)]" title="Appears once this range's days are stored">
+                        —
+                      </td>
+                    );
+                  }
                   // Not among the busiest read: fewer impressions than the cutoff.
                   if (row.traffic === "below" && TRAFFIC_KEYS.includes(key)) {
+                    if (report.cutoff == null) {
+                      return (
+                        <td key={key} className="px-3 py-2.5 text-right align-middle text-[12px] text-[var(--color-muted)]" title="Not among eBay's 200 busiest every day of this range; Load all reads it">
+                          —
+                        </td>
+                      );
+                    }
                     return (
                       <td key={key} className="px-3 py-2.5 text-right align-middle text-[12px] text-[var(--color-muted)]" title={`Fewer than ${fullNumber(report.cutoff ?? 0)} impressions in this range; not among the 200 busiest read`}>
                         {key === "impressions" ? `< ${compactNumber(report.cutoff ?? 0)}` : "—"}

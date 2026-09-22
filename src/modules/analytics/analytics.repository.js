@@ -129,6 +129,18 @@ async function pruneReports(connectionId, fetchedBefore, dayReadsBefore) {
   );
 }
 
+/**
+ * Each account's latest day read: how many listings it named (null when it
+ * was eBay's busiest 200), which is what a night's read costs it.
+ */
+async function latestDayReadSizes() {
+  const { rows } = await query(
+    `SELECT DISTINCT ON (connection_id) connection_id, cardinality(listing_ids) AS listings
+     FROM ebay_traffic_listing_reports WHERE scope = 'day' ORDER BY connection_id, from_day DESC`
+  );
+  return new Map(rows.map((r) => [String(r.connection_id), r.listings == null ? null : Number(r.listings)]));
+}
+
 // ---- sync bookkeeping ---------------------------------------------------------
 
 const SYNC_FIELDS = ['time_zone', 'account_through', 'detail_days', 'history_from', 'today_day', 'today_fetched_at', 'refresh_day', 'refresh_count', 'last_error', 'last_synced_at'];
@@ -183,6 +195,7 @@ module.exports = {
   reportsFor,
   saveReport,
   pruneReports,
+  latestDayReadSizes,
   pruneBefore,
   getSyncState,
   saveSyncState,

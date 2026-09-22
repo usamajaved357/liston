@@ -57,8 +57,8 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
         <p className="text-[12.5px] text-[var(--color-muted)]">
           A separate allowance of {usage.limit.toLocaleString()}
           {" "}calls a day for impressions and views, shared by every account. Each night (02:00 in the account&apos;s time zone) an account&apos;s totals and
-          every listing&apos;s figures for the day just ended are read and stored, so switching ranges costs nothing. Older days of listing history fill from
-          allowance left over in the last two hours before the reset. Resets {fmtTime(usage.resetAt)}.
+          every listing&apos;s figures for the day just ended are read and stored; filters add up stored days and never call eBay. Older days of listing
+          history (92) fill only in the last two hours before the reset, from allowance that would otherwise expire. Resets {fmtTime(usage.resetAt)}.
         </p>
       </div>
       <div className="card px-5 py-4">
@@ -74,16 +74,14 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
           exhausted={usage.exhausted}
           marks={[
             { at: 70, title: "The nightly update pauses here" },
-            { at: 90, title: "Ranges not in the stored history pause here" },
+            { at: 90, title: "Load all and single-listing reads pause here" },
             { at: 95, title: "Filling history stops here" },
           ]}
         />
         <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
           <span>70% · nightly update pauses{usage.paused.sync ? " (paused now)" : ""}</span>
-          <span>90% · ranges outside the history pause{usage.paused.view ? " (paused now)" : ""}</span>
-          <span>
-            Up to 95% · history fill, {usage.spareWindow.open ? "running now" : `from ${fmtTime(usage.spareWindow.opensAt)}`}
-          </span>
+          <span>90% · Load all and single-listing reads pause{usage.paused.view ? " (paused now)" : ""}</span>
+          <span>Up to 95% · history fill, {usage.spareWindow.open ? "running now (leftover allowance)" : `only from ${fmtTime(usage.spareWindow.opensAt)}, from leftover allowance`}</span>
           <span>Last 10% · &quot;Refresh today&quot; ({usage.refreshesPerAccount} per account a day)</span>
         </div>
         {usage.exhausted && <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further traffic calls today. Analytics pages keep showing their stored history.</p>}
@@ -92,8 +90,8 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="traffic calls until reset" />
         <Tile label="Nightly update" value={usage.byKind.sync.toLocaleString()} sub="each account's day just ended" />
-        <Tile label="History fill" value={(usage.byKind.history ?? 0).toLocaleString()} sub="spare allowance before the reset" />
-        <Tile label="Ranges · refresh" value={`${usage.byKind.view.toLocaleString()} · ${usage.byKind.refresh.toLocaleString()}`} sub="outside the history · pressed by sellers" />
+        <Tile label="History fill" value={(usage.byKind.history ?? 0).toLocaleString()} sub="leftover allowance, once per account" />
+        <Tile label="On request · refresh" value={`${usage.byKind.view.toLocaleString()} · ${usage.byKind.refresh.toLocaleString()}`} sub="Load all, one listing · Refresh today" />
       </div>
 
       <section className="card overflow-hidden">

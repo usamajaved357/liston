@@ -32,6 +32,8 @@ export function ListingAnalyticsPanel({
   const [range, setRange] = useState<AnalyticsRange>(initialRange);
   const [byKey, setByKey] = useState<Record<string, ListingAnalytics | { error: string }>>({});
   const [reload, setReload] = useState(0);
+  const [reading, setReading] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const key = `${itemId}:${range}`;
   const loaded = byKey[key];
@@ -74,6 +76,25 @@ export function ListingAnalyticsPanel({
       document.body.style.overflow = overflow;
     };
   }, [onClose]);
+
+  // "Read this listing": only on request, labelled with its cost.
+  async function readListing() {
+    setReading(true);
+    setReadError(null);
+    try {
+      await api.readListingAnalytics(connectionId, itemId, range);
+      setByKey((m) => {
+        const next = { ...m };
+        delete next[key];
+        return next;
+      });
+      setReload((n) => n + 1);
+    } catch (err) {
+      setReadError(err instanceof ApiError ? err.message : "Couldn't read this listing from eBay.");
+    } finally {
+      setReading(false);
+    }
+  }
 
   const listing = view?.listing;
   const rangeLabel = view ? dayRangeLabel(view.range.from, view.range.to) : "";
@@ -133,6 +154,24 @@ export function ListingAnalyticsPanel({
         <div className={`flex-1 space-y-4 overflow-y-auto px-6 py-5 transition-opacity ${view && !data ? "opacity-60" : ""}`}>
           {error && <div className="notice notice-danger">{error}</div>}
           {view?.status === "reconnect" && <div className="notice notice-warning">Reconnect this eBay account to see its traffic. Sales below are from your orders.</div>}
+          {view && view.traffic !== "measured" && !view.range.partial && view.status === "ok" && (
+            <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-3 text-[12.5px] text-[var(--color-muted)]">
+              <span className="min-w-0 flex-1">
+                {view.traffic === "pending"
+                  ? "This listing's traffic for this range appears once its days are stored. Sales and units are exact now."
+                  : "Not among eBay's 200 busiest listings every day of this range, so its traffic isn't stored day by day."}
+                {readError && <span className="mt-1 block text-[var(--color-danger)]">{readError}</span>}
+              </span>
+              {view.canRead && (
+                <button type="button" onClick={readListing} disabled={reading} className="btn btn-secondary btn-sm" title="Reads this listing's figures from eBay now, using today's allowance">
+                  {reading ? "Reading…" : "Read from eBay"}
+                  <span className="text-[11px] font-medium text-[var(--color-muted)]">
+                    {view.readCalls} {view.readCalls === 1 ? "call" : "calls"}
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
 
           {view?.hint && (
             <div className="flex items-start gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
@@ -153,7 +192,7 @@ export function ListingAnalyticsPanel({
             previousRange={view?.previous ? view.range.previous : null}
             loading={!view && !error}
             trafficUnavailable={view ? view.traffic !== "measured" : false}
-            emptyDailyMessage="Totals above are exact. Day-by-day traffic is kept for your account's 200 busiest listings each day, starting from the day analytics began, so this chart fills in from the next daily update. Sales show every day."
+            emptyDailyMessage="Day-by-day traffic for this listing appears as its days are stored. Sales show every day."
           />
 
           {view && (
@@ -180,11 +219,11 @@ export function ListingAnalyticsPanel({
                 ? "Totals are eBay’s exact figures for this range. "
                 : view.range.partial
                   ? "Today’s traffic for this listing comes from Refresh today. "
-                  : "eBay’s traffic for this listing couldn’t be read right now (today’s allowance may be used up). "}
+                  : ""}
               {view.traffic === "measured" && view.dailyTrafficDays < view.series.filter((p) => !p.partial).length && (
                 <>
-                  Day-by-day traffic is kept for your 200 busiest listings each day, so the chart has traffic for {view.dailyTrafficDays} of {view.series.filter((p) => !p.partial).length}{" "}
-                  days; sales show every day.{" "}
+                  The chart has day-by-day traffic for {view.dailyTrafficDays} of {view.series.filter((p) => !p.partial).length} days (the rest aren&apos;t stored yet); sales show
+                  every day.{" "}
                 </>
               )}
               Sales are from your orders. Days follow your eBay site&apos;s time zone.

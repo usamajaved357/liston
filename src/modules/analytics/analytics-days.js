@@ -21,10 +21,11 @@ const SITE_TIME_ZONES = {
 // A day is complete, and read, at 02:00 local time the next morning.
 const SYNC_HOUR = 2;
 const ACCOUNT_HISTORY_DAYS = 180; // account totals kept, for period comparisons
-// Each listing's figures day by day: enough for the longest range (90
-// days) and the 90 before it, so every range and its comparison is added
-// up from stored days.
-const LISTING_HISTORY_DAYS = 180;
+// Each listing's figures day by day: enough for every range — 90 days, and
+// last month with the month before it (at most 92 days back) — so every
+// filter and every comparison but 90 days' is added up from stored days.
+// (Account totals keep 180 days, so the 90-day account comparison stays.)
+const LISTING_HISTORY_DAYS = 92;
 const RANGES = ['today', '7d', '30d', 'this_month', 'last_month', '90d'];
 
 const timeZoneFor = (marketplaceId) => SITE_TIME_ZONES[marketplaceId] || null;
@@ -276,7 +277,7 @@ function historyDaysMissing({ lastFinal, historyFrom, done }) {
  * `listedOn` maps listing id -> the seller day it was listed (or null).
  * Returns a report trafficFrom() reads: rows, cutoff null, covers(id).
  */
-function historyReport({ from, to, reads, totals, listedOn }) {
+function historyReport({ from, to, reads, totals, listedOn, historyFrom = null }) {
   const readByDay = new Map(reads.map((r) => [r.day, r]));
   const missing = [];
   const named = [];
@@ -299,7 +300,11 @@ function historyReport({ from, to, reads, totals, listedOn }) {
     covered.add(id);
   }
   const rows = [...covered].filter((id) => rowsById.has(id)).map((id) => ({ ...rowsById.get(id), listingId: id }));
-  return { scope: 'history', rows, cutoff: null, covers: (id) => covered.has(String(id)), coveredCount: covered.size, complete: covered.size === listedOn.size };
+  // Every day of the range is stored (days before anything live was
+  // listed need no read): a listing still not covered was outside a big
+  // store's busiest 200, not waiting for history.
+  const filled = missing.every((day) => historyFrom && day < historyFrom);
+  return { scope: 'history', rows, cutoff: null, covers: (id) => covered.has(String(id)), coveredCount: covered.size, complete: covered.size === listedOn.size, filled };
 }
 
 // ---- what to look at ----------------------------------------------------------

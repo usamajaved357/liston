@@ -2,8 +2,8 @@
 // light check every few minutes asks each eBay account "is a read due?"
 // (analytics.service.isDue) — its totals and every listing's day once the
 // day is complete (02:00 in the seller's time zone), then older days of
-// listing history in the last hours before eBay's reset, from spare
-// allowance — and syncs the ones that are, one at a time. Progress lives in
+// listing history from whatever allowance isn't held back for the other
+// accounts' nightly reads — and syncs the ones that are, one at a time. Progress lives in
 // the database, so a restart neither repeats a read nor skips one. No job
 // queue needed; moves to BullMQ with the other background work (§9).
 const config = require('../../config');
@@ -26,7 +26,7 @@ async function tick(now = new Date()) {
     const connections = await connectionRepository.findAllEbay();
     for (const connection of connections) {
       const state = await repo.getSyncState(connection.id);
-      if (!service.isDue(state, now)) continue;
+      if (!service.isDue(state, now, { reserve: await service.nightlyReserve(now) })) continue;
       try {
         await service.syncAccount(connection.id, connection.user_id, { now });
         synced.push(connection.id);
