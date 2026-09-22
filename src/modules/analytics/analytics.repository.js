@@ -1,7 +1,11 @@
 const { query } = require('../../db/client');
 const { TRAFFIC_COLUMNS } = require('./analytics-days');
 
-// The only file that touches the traffic tables (see migration 016).
+// The only file that touches the traffic tables (see migrations 016, 017):
+//   ebay_traffic_days             account totals per day ('' listing) and
+//                                 per-day rows for the busiest listings
+//   ebay_traffic_listing_reports  each listing's totals for one exact range
+//   ebay_traffic_sync             per-account bookkeeping
 
 const ACCOUNT = ''; // listing_id of the whole-account rows
 
@@ -32,8 +36,6 @@ async function clearListingDay(connectionId, day) {
   await query(`DELETE FROM ebay_traffic_days WHERE connection_id = $1 AND day = $2 AND listing_id <> $3`, [connectionId, day, ACCOUNT]);
 }
 
-const sumColumns = TRAFFIC_COLUMNS.map((c) => `COALESCE(SUM(${c}), 0)::int AS ${c}`).join(', ');
-
 /** Whole-account rows between two days, one per day. */
 async function accountDays(connectionId, from, to) {
   const { rows } = await query(
@@ -44,14 +46,13 @@ async function accountDays(connectionId, from, to) {
   return rows;
 }
 
-/** Per-listing totals between two days: Map(listingId -> counts). */
-async function listingTotals(connectionId, from, to) {
+/** Listings that have day-by-day rows between two days. */
+async function detailListingIds(connectionId, from, to) {
   const { rows } = await query(
-    `SELECT listing_id, ${sumColumns}
-     FROM ebay_traffic_days WHERE connection_id = $1 AND listing_id <> $2 AND day BETWEEN $3 AND $4 GROUP BY listing_id`,
+    `SELECT DISTINCT listing_id FROM ebay_traffic_days WHERE connection_id = $1 AND listing_id <> $2 AND day BETWEEN $3 AND $4`,
     [connectionId, ACCOUNT, from, to]
   );
-  return new Map(rows.map((r) => [r.listing_id, r]));
+  return new Set(rows.map((r) => r.listing_id));
 }
 
 /** One listing's rows between two days, one per day. */
@@ -70,27 +71,69 @@ async function pruneBefore(connectionId, { accountBefore, listingBefore }) {
   await query(`DELETE FROM ebay_traffic_days WHERE connection_id = $1 AND listing_id <> $2 AND day < $3`, [connectionId, ACCOUNT, listingBefore]);
 }
 
+/** Everything stored for an account (its days moved to another time zone). */
+async function clearAccount(connectionId) {
+  await query(`DELETE FROM ebay_traffic_days WHERE connection_id = $1`, [connectionId]);
+  await query(`DELETE FROM ebay_traffic_listing_reports WHERE connection_id = $1`, [connectionId]);
+  await query(`DELETE FROM ebay_traffic_sync WHERE connection_id = $1`, [connectionId]);
+}
+
+// ---- range reports --------------------------------------------------------------
+
+const REPORT_COLUMNS = `to_char(from_day, 'YYYY-MM-DD') AS from_day, to_char(to_day, 'YYYY-MM-DD') AS to_day, scope, rows, cutoff, final, fetched_at`;
+
+/** Every stored report for one exact range, keyed by scope. */
+async function reportsFor(connectionId, from, to) {
+  const { rows } = await query(`SELECT ${REPORT_COLUMNS} FROM ebay_traffic_listing_reports WHERE connection_id = $1 AND from_day = $2 AND to_day = $3`, [connectionId, from, to]);
+  return new Map(rows.map((r) => [r.scope, r]));
+}
+
+async function saveReport(connectionId, { from, to, scope, rows, cutoff = null, final = true }) {
+  await query(
+    `INSERT INTO ebay_traffic_listing_reports (connection_id, from_day, to_day, scope, rows, cutoff, final, fetched_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     ON CONFLICT (connection_id, from_day, to_day, scope)
+     DO UPDATE SET rows = EXCLUDED.rows, cutoff = EXCLUDED.cutoff, final = EXCLUDED.final, fetched_at = now()`,
+    [connectionId, from, to, scope, JSON.stringify(rows), cutoff, final]
+  );
+}
+
+/**
+ * Range reports are superseded daily (every range moves on), so they go
+ * after a few days. A single day's report of the busiest listings is kept
+ * as long as that day's detail rows: it holds the day's cutoff.
+ */
+async function pruneReports(connectionId, fetchedBefore, dayReportsBefore) {
+  await query(
+    `DELETE FROM ebay_traffic_listing_reports
+     WHERE connection_id = $1 AND ((from_day <> to_day AND fetched_at < $2) OR (scope LIKE 'item:%' AND fetched_at < $2) OR to_day < $3)`,
+    [connectionId, fetchedBefore, dayReportsBefore]
+  );
+}
+
 // ---- sync bookkeeping ---------------------------------------------------------
 
-const SYNC_FIELDS = ['account_through', 'listing_days', 'today_day', 'today_fetched_at', 'refresh_day', 'refresh_count', 'last_error', 'last_synced_at'];
+const SYNC_FIELDS = ['time_zone', 'account_through', 'detail_days', 'today_day', 'today_fetched_at', 'refresh_day', 'refresh_count', 'last_error', 'last_synced_at'];
 
 async function getSyncState(connectionId) {
   const { rows } = await query(
-    `SELECT to_char(account_through, 'YYYY-MM-DD') AS account_through,
-            ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(listing_days) AS d ORDER BY d) AS listing_days,
+    `SELECT time_zone, to_char(account_through, 'YYYY-MM-DD') AS account_through,
+            ARRAY(SELECT to_char(d, 'YYYY-MM-DD') FROM unnest(detail_days) AS d ORDER BY d) AS detail_days,
             to_char(today_day, 'YYYY-MM-DD') AS today_day, today_fetched_at,
             to_char(refresh_day, 'YYYY-MM-DD') AS refresh_day, refresh_count, last_error, last_synced_at
      FROM ebay_traffic_sync WHERE connection_id = $1`,
     [connectionId]
   );
-  return rows[0] || { account_through: null, listing_days: [], today_day: null, today_fetched_at: null, refresh_day: null, refresh_count: 0, last_error: null, last_synced_at: null };
+  return (
+    rows[0] || { time_zone: null, account_through: null, detail_days: [], today_day: null, today_fetched_at: null, refresh_day: null, refresh_count: 0, last_error: null, last_synced_at: null }
+  );
 }
 
 /** Saves the given fields of an account's sync state (others unchanged). */
 async function saveSyncState(connectionId, fields) {
   const keys = Object.keys(fields).filter((k) => SYNC_FIELDS.includes(k));
   if (!keys.length) return;
-  const cast = (k, i) => (k === 'listing_days' ? `$${i}::date[]` : `$${i}`);
+  const cast = (k, i) => (k === 'detail_days' ? `$${i}::date[]` : `$${i}`);
   await query(
     `INSERT INTO ebay_traffic_sync (connection_id, ${keys.join(', ')}, updated_at)
      VALUES ($1, ${keys.map((k, i) => cast(k, i + 2)).join(', ')}, now())
@@ -102,7 +145,7 @@ async function saveSyncState(connectionId, fields) {
 /** Every account's sync state, for the admin page. */
 async function allSyncStates() {
   const { rows } = await query(
-    `SELECT connection_id, to_char(account_through, 'YYYY-MM-DD') AS account_through, cardinality(listing_days) AS listing_day_count,
+    `SELECT connection_id, time_zone, to_char(account_through, 'YYYY-MM-DD') AS account_through, cardinality(detail_days) AS detail_day_count,
             refresh_count, to_char(refresh_day, 'YYYY-MM-DD') AS refresh_day, last_error, last_synced_at
      FROM ebay_traffic_sync`
   );
@@ -113,8 +156,12 @@ module.exports = {
   upsertTraffic,
   clearListingDay,
   accountDays,
-  listingTotals,
+  detailListingIds,
   listingDays,
+  clearAccount,
+  reportsFor,
+  saveReport,
+  pruneReports,
   pruneBefore,
   getSyncState,
   saveSyncState,

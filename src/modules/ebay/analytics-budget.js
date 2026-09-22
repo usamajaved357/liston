@@ -8,21 +8,24 @@ const appState = require('../../db/app-state.repository');
 // this is its own allowance and never takes from Trading's.
 //
 // Calls carry a kind, and the allowance is tiered the way request-governor
-// tiers Trading's:
-//   backfill  filling in older per-listing days — stops first, at 60%;
-//   sync      the once-a-day read of yesterday (and the first read of a new
-//             account) — up to 90%;
+// tiers Trading's, cheapest-to-lose first:
+//   detail    day-by-day figures for an account's busiest 200 listings —
+//             a nice-to-have, stops at 40%;
+//   sync      the once-a-day read of each account's totals — up to 70%;
+//   view      a range of listing figures someone opened (and "Load all
+//             listings", a listing asked for on its own) — up to 90%;
 //   refresh   a person pressing "Refresh today" — keeps the last 10%.
-// When the allowance is gone, pages keep showing their stored history.
+// When the allowance is gone, pages keep showing what's stored.
 //
 // Usage is counted locally and persisted, so a restart doesn't forget it.
 // eBay's own figure is read from its developer Analytics API when eBay
 // reports one for this API, and wins over ours.
 
 const DEFAULT_LIMIT = config.analytics.dailyLimit || 100;
-const CEILING = { backfill: 0.6, sync: 0.9, refresh: 1 };
+const CEILING = { detail: 0.4, sync: 0.7, view: 0.9, refresh: 1 };
 const KINDS = Object.keys(CEILING);
 const STATE_KEY = 'ebay-analytics-usage';
+const emptyKinds = () => Object.fromEntries(KINDS.map((k) => [k, 0]));
 const PERSIST_DEBOUNCE_MS = 5 * 1000;
 const EBAY_SYNC_MS = 30 * 60 * 1000;
 
@@ -40,7 +43,7 @@ const state = {
   used: 0,
   resetAt: null,
   exhausted: false, // eBay refused a call as over its limit this window
-  byKind: { backfill: 0, sync: 0, refresh: 0 },
+  byKind: emptyKinds(),
   byAccount: {},
   lastSyncedWithEbay: null,
 };
@@ -59,7 +62,7 @@ function nextReset(from = new Date()) {
 function rollWindowIfNeeded() {
   if (!state.resetAt) state.resetAt = nextReset();
   if (Date.now() < new Date(state.resetAt).getTime()) return;
-  Object.assign(state, { used: 0, exhausted: false, byKind: { backfill: 0, sync: 0, refresh: 0 }, byAccount: {}, resetAt: nextReset() });
+  Object.assign(state, { used: 0, exhausted: false, byKind: emptyKinds(), byAccount: {}, resetAt: nextReset() });
   schedulePersist();
 }
 
@@ -69,7 +72,7 @@ async function load() {
   try {
     const saved = await appState.get(STATE_KEY);
     if (saved && saved.resetAt && Date.now() < new Date(saved.resetAt).getTime()) {
-      Object.assign(state, saved, { byKind: { backfill: 0, sync: 0, refresh: 0, ...(saved.byKind || {}) }, byAccount: saved.byAccount || {} });
+      Object.assign(state, saved, { byKind: { ...emptyKinds(), ...(saved.byKind || {}) }, byAccount: saved.byAccount || {} });
     }
   } catch (err) {
     logger.warn('Could not load eBay analytics usage', { error: err.message });
@@ -184,7 +187,7 @@ function snapshot() {
     exhausted: state.exhausted,
     lastSyncedWithEbay: state.lastSyncedWithEbay,
     ceilings: Object.fromEntries(KINDS.map((k) => [k, ceilingFor(k)])),
-    paused: { backfill: !allows('backfill'), sync: !allows('sync') },
+    paused: { detail: !allows('detail'), sync: !allows('sync'), view: !allows('view') },
     byKind: { ...state.byKind },
     byAccount: { ...state.byAccount },
   };
@@ -197,7 +200,7 @@ function _reset({ limit = DEFAULT_LIMIT, used = 0 } = {}) {
     used,
     resetAt: nextReset(),
     exhausted: false,
-    byKind: { backfill: 0, sync: 0, refresh: 0 },
+    byKind: emptyKinds(),
     byAccount: {},
     lastSyncedWithEbay: null,
   });

@@ -6,7 +6,7 @@ import { formatMoney, formatShortDate } from "@/lib/format";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { BarList } from "@/components/charts/BarList";
-import { dayLabel, dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
+import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
 import { MetricsBoard } from "./MetricsBoard";
 import { Funnel } from "./Funnel";
 import { HintChip } from "./ListingsTable";
@@ -102,6 +102,7 @@ export function ListingAnalyticsPanel({
                   <span className="font-medium text-[var(--color-ink)]">{formatMoney(listing.price)}</span>
                   {listing.quantityAvailable != null && <span>{listing.quantityAvailable} in stock</span>}
                   {listing.quantitySold != null && <span>{fullNumber(listing.quantitySold)} sold in total</span>}
+                  {listing.watchers != null && <span>{fullNumber(listing.watchers)} watching</span>}
                   {listing.startTime && <span>Listed {formatShortDate(listing.startTime)}</span>}
                   <span className="font-mono text-[11px]">#{listing.itemId}</span>
                 </p>
@@ -151,7 +152,8 @@ export function ListingAnalyticsPanel({
             rangeLabel={rangeLabel}
             previousRange={view?.previous ? view.range.previous : null}
             loading={!view && !error}
-            trafficUnavailable={view?.status === "reconnect" || !view?.coverage.listingsFrom}
+            trafficUnavailable={view ? view.traffic !== "measured" : false}
+            emptyDailyMessage="Totals above are exact. Day-by-day traffic is kept for your account's 200 busiest listings each day, starting from the day analytics began, so this chart fills in from the next daily update. Sales show every day."
           />
 
           {view && (
@@ -173,12 +175,19 @@ export function ListingAnalyticsPanel({
 
           {view && (
             <p className="text-[11.5px] leading-relaxed text-[var(--color-muted)]">
-              {view.coverage.listingsFrom
-                ? view.coverage.listingsComplete
-                  ? "Traffic from eBay's Analytics API, updated daily at 10:00 UK time."
-                  : `This listing's traffic is stored from ${dayLabel(view.coverage.listingsFrom)}; earlier days are still filling in.`
-                : "This listing's traffic appears after the first daily update."}{" "}
-              Sales are from your orders and include today. Days follow eBay&apos;s reporting day, which ends at 08:00 UK time.
+              {!view.comparable && "Listed after the previous period began, so there’s no comparison. "}
+              {view.traffic === "measured"
+                ? "Totals are eBay’s exact figures for this range. "
+                : view.range.partial
+                  ? "Today’s traffic for this listing comes from Refresh today. "
+                  : "eBay’s traffic for this listing couldn’t be read right now (today’s allowance may be used up). "}
+              {view.traffic === "measured" && view.dailyTrafficDays < view.series.filter((p) => !p.partial).length && (
+                <>
+                  Day-by-day traffic is kept for your 200 busiest listings each day, so the chart has traffic for {view.dailyTrafficDays} of {view.series.filter((p) => !p.partial).length}{" "}
+                  days; sales show every day.{" "}
+                </>
+              )}
+              Sales are from your orders. Days follow your eBay site&apos;s time zone.
             </p>
           )}
         </div>

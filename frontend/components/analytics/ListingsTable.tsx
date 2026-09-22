@@ -1,17 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AnalyticsHint, ListingAnalyticsRow } from "@/lib/api";
+import type { AnalyticsHint, ListingAnalyticsRow, ListingReportInfo } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 import { DeltaBadge } from "@/components/charts/DeltaBadge";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { compactNumber, fullNumber } from "@/components/charts/chart-format";
 import { MetricKey, metricDef } from "./metrics";
 
 // Every live listing over the chosen range: sortable by any figure,
 // searchable, filterable to the ones worth a look. A row opens the
-// listing's own panel.
+// listing's own panel. Traffic comes from one eBay report per range: every
+// listing of a store with up to 200, or the busiest 200 of a bigger one —
+// the others show "under N" impressions (never a made-up zero) until
+// "Load all" reads them. Sales, units and watchers are always exact.
 
-type SortKey = MetricKey | "title";
+type SortKey = MetricKey | "title" | "watchers";
 type Filter = "all" | "attention" | "converting";
 
 const COLUMNS: MetricKey[] = ["impressions", "views", "ctr", "sold", "sales", "conversion"];
@@ -54,18 +58,74 @@ function Thumb({ src }: { src: string | null }) {
   );
 }
 
+const TRAFFIC_KEYS: MetricKey[] = ["impressions", "views", "ctr", "conversion"];
+
+function ReportNote({
+  report,
+  partial,
+  todayRead,
+  belowCount,
+  onLoadAll,
+  loadingAll,
+}: {
+  report: ListingReportInfo;
+  partial: boolean;
+  todayRead: boolean;
+  belowCount: number;
+  onLoadAll: () => void;
+  loadingAll: boolean;
+}) {
+  let text: React.ReactNode = null;
+  if (partial) {
+    text = todayRead ? "Today’s listing figures are from your last Refresh today." : "Press Refresh today for today’s listing traffic. Sales and units below are live.";
+  } else if (report.state === "allowance") {
+    text = "Listing traffic for this range couldn’t be read: today’s eBay allowance is used up. Sales, units and watchers are exact.";
+  } else if (report.state === "error") {
+    text = "eBay didn’t return listing traffic for this range. Sales, units and watchers are exact.";
+  } else if (report.state === "ok" && report.cutoff != null && report.scope !== "all" && belowCount > 0) {
+    text = (
+      <>
+        Traffic read for your <strong className="font-semibold text-[var(--color-ink)]">busiest listings</strong>; the other {fullNumber(belowCount)} had fewer than {fullNumber(report.cutoff)}{" "}
+        impressions each in this range.
+      </>
+    );
+  }
+  if (!text) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-5 py-2.5 text-[12px] text-[var(--color-muted)]">
+      <span className="flex-1">{text}</span>
+      {report.canLoadAll && !partial && (
+        <button type="button" onClick={onLoadAll} disabled={loadingAll} className="btn btn-secondary btn-sm" title={`Reads every listing's figures for this range: ${report.loadAllCalls} calls from today's allowance`}>
+          {loadingAll ? "Loading…" : `Load all ${fullNumber(report.live)} listings`}
+          <span className="text-[11px] font-medium text-[var(--color-muted)]">
+            {report.loadAllCalls} {report.loadAllCalls === 1 ? "call" : "calls"}
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ListingsTable({
   rows,
   currency,
   compared,
   onOpen,
-  complete,
+  report,
+  partial,
+  todayRead,
+  onLoadAll,
+  loadingAll,
 }: {
   rows: ListingAnalyticsRow[];
   currency: string | null;
   compared: string;
   onOpen: (itemId: string) => void;
-  complete: boolean; // per-listing figures cover the whole range
+  report: ListingReportInfo;
+  partial: boolean; // Today: listing traffic only after "Refresh today"
+  todayRead: boolean;
+  onLoadAll: () => void;
+  loadingAll: boolean;
 }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: "desc" | "asc" }>({ key: "impressions", dir: "desc" });
   const [search, setSearch] = useState("");
@@ -91,8 +151,8 @@ export function ListingsTable({
     const dir = sort.dir === "desc" ? -1 : 1;
     return [...list].sort((a, b) => {
       if (sort.key === "title") return a.title.localeCompare(b.title) * dir;
-      const av = a[sort.key];
-      const bv = b[sort.key];
+      const av = sort.key === "watchers" ? a.watchers : a[sort.key];
+      const bv = sort.key === "watchers" ? b.watchers : b[sort.key];
       if (av == null && bv == null) return 0;
       if (av == null) return 1; // unknowns always last
       if (bv == null) return -1;
@@ -161,18 +221,15 @@ export function ListingsTable({
         </div>
       </div>
 
-      {!complete && (
-        <p className="border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-5 py-2 text-[12px] text-[var(--color-muted)]">
-          Per-listing traffic is still filling in for part of this range. Sales are complete; insights appear once every day is in.
-        </p>
-      )}
+      <ReportNote report={report} partial={partial} todayRead={todayRead} belowCount={rows.filter((r) => r.traffic === "below").length} onLoadAll={onLoadAll} loadingAll={loadingAll} />
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[860px] text-[13px]">
+        <table className="w-full min-w-[940px] text-[13px]">
           <thead className="bg-[var(--color-paper)]/70 text-[11px] text-[var(--color-muted)]">
             <tr>
               {header("title", "Listing", "left")}
               {COLUMNS.map((key) => header(key, metricDef(key).label))}
+              {header("watchers", "Watchers")}
               <th scope="col" className="px-3 py-2.5 text-left font-semibold uppercase tracking-wide">
                 Insight
               </th>
@@ -202,6 +259,14 @@ export function ListingsTable({
                 {COLUMNS.map((key) => {
                   const def = metricDef(key);
                   const change = row.changes?.[key];
+                  // Not among the busiest read: fewer impressions than the cutoff.
+                  if (row.traffic === "below" && TRAFFIC_KEYS.includes(key)) {
+                    return (
+                      <td key={key} className="px-3 py-2.5 text-right align-middle text-[12px] text-[var(--color-muted)]" title={`Fewer than ${fullNumber(report.cutoff ?? 0)} impressions in this range; not among the 200 busiest read`}>
+                        {key === "impressions" ? `< ${compactNumber(report.cutoff ?? 0)}` : "—"}
+                      </td>
+                    );
+                  }
                   return (
                     <td key={key} className="px-3 py-2.5 text-right align-middle">
                       <div className="font-medium tabular-nums text-[var(--color-ink)]">{def.format(row[key], currency)}</div>
@@ -213,6 +278,9 @@ export function ListingsTable({
                     </td>
                   );
                 })}
+                <td className="px-3 py-2.5 text-right align-middle font-medium tabular-nums text-[var(--color-ink)]" title="Buyers watching it now">
+                  {row.watchers == null ? "—" : fullNumber(row.watchers)}
+                </td>
                 <td className="px-3 py-2.5 pr-5">{row.hint ? <HintChip hint={row.hint} /> : <span className="text-[12px] text-[var(--color-line-strong)]">—</span>}</td>
               </tr>
             ))}

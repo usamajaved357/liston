@@ -24,6 +24,7 @@ export function MetricsBoard({
   loading,
   compact = false,
   trafficUnavailable,
+  emptyDailyMessage,
 }: {
   totals: AnalyticsMetrics | null;
   changes: AnalyticsChanges | null;
@@ -36,6 +37,10 @@ export function MetricsBoard({
   loading?: boolean;
   compact?: boolean;
   trafficUnavailable?: boolean; // no eBay traffic yet: show sales, dim the rest
+  // Shown instead of an empty chart when the selected measure has no daily
+  // figures in the range (a listing's traffic is kept day by day only while
+  // it's among the account's busiest).
+  emptyDailyMessage?: string;
 }) {
   const [selected, setSelected] = useState<MetricKey>("views");
   const [view, setView] = useState<"chart" | "table">("chart");
@@ -91,6 +96,11 @@ export function MetricsBoard({
         </div>
         {loading && !series.length ? (
           <div className="h-[276px] animate-pulse rounded-xl bg-[var(--color-paper)]" />
+        ) : points.every((p) => p.value == null) ? (
+          <div className="flex h-[248px] flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-[var(--color-line)] px-6 text-center">
+            <p className="text-[13px] font-medium text-[var(--color-ink)]">No day-by-day {def.label.toLowerCase()} for this range</p>
+            <p className="max-w-md text-[12px] leading-relaxed text-[var(--color-muted)]">{emptyDailyMessage || "eBay hasn't reported these days yet."}</p>
+          </div>
         ) : view === "chart" ? (
           <TrendChart
             points={points}

@@ -14,7 +14,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
-import { compactNumber, dayLabel } from "@/components/charts/chart-format";
+import { compactNumber } from "@/components/charts/chart-format";
 
 type Tab = ListingStatusFilter | "draft";
 const TrashIcon = (
@@ -70,7 +70,7 @@ function ListingRow({
   onDelete?: () => void;
   onEnd?: () => void;
   // The last 30 days, from stored analytics (no eBay call per row).
-  stats?: { views: number; sold: number; viewsSince: string | null } | null;
+  stats?: { views: number | null; sold: number; watchers: number | null } | null;
   onAnalytics?: () => void;
 }) {
   const open = () => {
@@ -88,14 +88,20 @@ function ListingRow({
           <StockBadge available={item.quantityAvailable} />
           <span>{item.quantitySold} sold</span>
           {stats && (
-            <span className="inline-flex items-center gap-1 text-[var(--color-ink)]" title={stats.viewsSince ? `Views since ${dayLabel(stats.viewsSince)}, units sold in the last 30 days` : "Views and units sold in the last 30 days"}>
+            <span className="inline-flex items-center gap-1 text-[var(--color-ink)]" title="The last 30 complete days: views from eBay, units sold from your orders; watchers now">
               <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-muted)]" aria-hidden>
                 <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" stroke="currentColor" strokeWidth="1.8" />
                 <circle cx="12" cy="12" r="2.8" stroke="currentColor" strokeWidth="1.8" />
               </svg>
-              <span className="font-medium tabular-nums">{compactNumber(stats.views)}</span>
+              {stats.views != null && (
+                <>
+                  <span className="font-medium tabular-nums">{compactNumber(stats.views)}</span>
+                  <span className="text-[var(--color-muted)]">views ·</span>
+                </>
+              )}
               <span className="text-[var(--color-muted)]">
-                views{stats.viewsSince ? ` since ${dayLabel(stats.viewsSince)}` : ""} · {stats.sold} sold in 30 days
+                {stats.sold} sold in 30 days
+                {stats.watchers != null && ` · ${stats.watchers} watching`}
               </span>
             </span>
           )}
@@ -568,7 +574,7 @@ export default function AccountListingsPage() {
                 item={item}
                 stats={
                   filter === "active" && summaries?.status === "ok" && summaries.items[item.itemId]
-                    ? { ...summaries.items[item.itemId], viewsSince: summaries.complete ? null : summaries.viewsFrom }
+                    ? summaries.items[item.itemId]
                     : null
                 }
                 onAnalytics={filter === "active" && canSeeAnalytics ? () => setAnalyticsItem(item.itemId) : undefined}

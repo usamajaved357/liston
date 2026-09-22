@@ -1,71 +1,64 @@
 // Reading eBay's traffic report for one account, every call metered by
-// analytics-budget. The analytics module decides WHAT to read and when;
-// this is HOW, in eBay's terms: DAY reports for account totals (up to 90
-// days per call) and LISTING reports for one day at a time (up to 200
-// listings per call).
+// analytics-budget. The analytics module decides WHAT to read and when (and
+// works out each range's dates and UTC offsets in the seller's time zone);
+// this is HOW, in eBay's terms:
+//   - DAY reports: whole-account figures per day, up to 90 days a call;
+//   - LISTING reports: each listing's totals for one exact range. Without
+//     a listing filter eBay returns at most 200 listings — asked here for
+//     the 200 with the most impressions; with one, up to 200 named listings
+//     a call.
 const ebayAnalytics = require('./api/ebay.analytics');
 const budget = require('./analytics-budget');
 
-const MAX_DAYS_PER_CALL = 90;
+const TOP_SORT = '-TOTAL_IMPRESSION_TOTAL';
 
-function addDays(day, n) {
-  const d = new Date(`${day}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-/** Calls a per-listing day costs for an account with this many live listings. */
-function callsForListingDay(listingCount) {
-  return listingCount > ebayAnalytics.MAX_LISTING_IDS ? Math.ceil(listingCount / ebayAnalytics.MAX_LISTING_IDS) : 1;
-}
-
-/** Calls an account-totals read of this many days costs. */
-function callsForAccountDays(from, to) {
-  const days = Math.round((new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`)) / 86400000) + 1;
-  return Math.max(1, Math.ceil(days / MAX_DAYS_PER_CALL));
+/** Calls reading every listing of an account costs. */
+function callsForAllListings(listingCount) {
+  return Math.max(1, Math.ceil(listingCount / ebayAnalytics.MAX_LISTING_IDS));
 }
 
 /**
- * Whole-account figures per day, `from`..`to` inclusive, oldest window
- * first. Resolves to [{ day, ...counts }].
+ * Whole-account figures per day. `segments` are ranges of at most 90 days
+ * that each keep one UTC offset (split at clock changes by the caller), one
+ * call each. Resolves to [{ day, ...counts }].
  */
-async function fetchAccountDays(accessToken, { connectionId, marketplaceId, from, to, kind }) {
+async function fetchAccountDays(accessToken, { connectionId, marketplaceId, segments, kind }) {
+  if (!budget.allows(kind, segments.length)) {
+    throw new budget.AnalyticsBudgetError("Today's allowance for eBay traffic data doesn't cover this read. It runs again after the reset.");
+  }
   const rows = [];
-  for (let start = from; start <= to; start = addDays(start, MAX_DAYS_PER_CALL)) {
-    const end = [addDays(start, MAX_DAYS_PER_CALL - 1), to].sort()[0];
-    const report = await budget.spend(kind, connectionId, () =>
-      ebayAnalytics.getTrafficReport(accessToken, { dimension: 'DAY', marketplaceId, from: start, to: end })
-    );
+  for (const range of segments) {
+    const report = await budget.spend(kind, connectionId, () => ebayAnalytics.getTrafficReport(accessToken, { dimension: 'DAY', marketplaceId, range }));
     rows.push(...ebayAnalytics.parseTrafficReport(report, 'DAY'));
   }
   return rows;
 }
 
 /**
- * Per-listing figures for one day. With up to 200 live listings one call
- * without a listing filter covers them (and any that sold or ended that
- * day); beyond that, the live listings go in batches of 200.
- * Resolves to [{ listingId, ...counts }].
+ * Each listing's totals for one range. `listingIds` null asks for the 200
+ * listings with the most impressions (one call); `cutoff` is then the 200th
+ * one's impressions when eBay's 200 were full — every other listing had
+ * fewer — or null when the account has no more. With ids, every named
+ * listing is read, 200 a call, and nothing is cut off.
+ * Resolves to { rows: [{ listingId, ...counts }], cutoff }.
  */
-async function fetchListingDay(accessToken, { connectionId, marketplaceId, day, listingIds = [], kind }) {
+async function fetchListingReport(accessToken, { connectionId, marketplaceId, range, listingIds = null, kind }) {
   const batches = [];
-  if (listingIds.length > ebayAnalytics.MAX_LISTING_IDS) {
-    for (let i = 0; i < listingIds.length; i += ebayAnalytics.MAX_LISTING_IDS) batches.push(listingIds.slice(i, i + ebayAnalytics.MAX_LISTING_IDS));
-  } else {
-    batches.push(null);
-  }
+  if (listingIds) for (let i = 0; i < listingIds.length; i += ebayAnalytics.MAX_LISTING_IDS) batches.push(listingIds.slice(i, i + ebayAnalytics.MAX_LISTING_IDS));
+  else batches.push(null);
   if (!budget.allows(kind, batches.length)) {
     throw new budget.AnalyticsBudgetError("Today's allowance for eBay traffic data doesn't cover this read. It runs again after the reset.");
   }
   const rows = [];
   for (const batch of batches) {
     const report = await budget.spend(kind, connectionId, () =>
-      // Unfiltered, eBay returns up to 200 listings: ask for the busiest.
-      ebayAnalytics.getTrafficReport(accessToken, { dimension: 'LISTING', marketplaceId, from: day, to: day, listingIds: batch || undefined, sort: batch ? undefined : '-LISTING_IMPRESSION_TOTAL' })
+      ebayAnalytics.getTrafficReport(accessToken, { dimension: 'LISTING', marketplaceId, range, listingIds: batch || undefined, sort: batch ? undefined : TOP_SORT })
     );
     rows.push(...ebayAnalytics.parseTrafficReport(report, 'LISTING'));
   }
-  return rows;
+  const full = !listingIds && rows.length >= ebayAnalytics.MAX_LISTING_IDS;
+  const cutoff = full ? Math.min(...rows.map((r) => r.total_impressions)) : null;
+  return { rows, cutoff };
 }
 
-module.exports = { fetchAccountDays, fetchListingDay, callsForListingDay, callsForAccountDays };
+module.exports = { fetchAccountDays, fetchListingReport, callsForAllListings, TOP_SORT };

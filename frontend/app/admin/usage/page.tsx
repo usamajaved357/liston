@@ -44,6 +44,7 @@ const ANALYTICS_STATUS: Record<AnalyticsUsage["byAccount"][number]["status"], { 
   ok: { label: "Up to date", className: "chip chip-accent" },
   reconnect: { label: "Needs reconnect", className: "chip chip-warning" },
   unsupported: { label: "Site not covered", className: "chip" },
+  waiting: { label: "After the reset", className: "chip" },
   error: { label: "Stopped early", className: "chip chip-warning" },
 };
 
@@ -54,8 +55,9 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
     <section className="space-y-4">
       <div>
         <p className="text-[12.5px] text-[var(--color-muted)]">
-          A separate allowance of {usage.limit.toLocaleString()} calls a day for impressions and views, shared by every account. Each account is read once a day, next at {fmtTime(usage.nextSyncAt)};
-          resets {fmtTime(usage.resetAt)}.
+          A separate allowance of {usage.limit.toLocaleString()}
+          {" "}calls a day for impressions and views, shared by every account. Each account&apos;s totals are read once a day (02:00 in its own time
+          zone); listing figures for a range are read when someone opens it, then kept for the day. Resets {fmtTime(usage.resetAt)}.
         </p>
       </div>
       <div className="card px-5 py-4">
@@ -70,23 +72,25 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
           limit={usage.limit}
           exhausted={usage.exhausted}
           marks={[
-            { at: 60, title: "Filling in older days pauses here" },
-            { at: 90, title: "The daily update pauses here" },
+            { at: 40, title: "Daily detail for the busiest listings pauses here" },
+            { at: 70, title: "The daily account update pauses here" },
+            { at: 90, title: "Opening new ranges pauses here" },
           ]}
         />
         <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
-          <span>60% · filling in older days pauses{usage.paused.backfill ? " (paused now)" : ""}</span>
-          <span>90% · daily update pauses{usage.paused.sync ? " (paused now)" : ""}</span>
-          <span>Last 10% · kept for &quot;Refresh today&quot; ({usage.refreshesPerAccount} per account a day)</span>
+          <span>40% · busiest listings&apos; daily detail pauses{usage.paused.detail ? " (paused now)" : ""}</span>
+          <span>70% · daily account update pauses{usage.paused.sync ? " (paused now)" : ""}</span>
+          <span>90% · new listing ranges pause{usage.paused.view ? " (paused now)" : ""}</span>
+          <span>Last 10% · &quot;Refresh today&quot; ({usage.refreshesPerAccount} per account a day)</span>
         </div>
         {usage.exhausted && <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further traffic calls today. Analytics pages keep showing their stored history.</p>}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="traffic calls until reset" />
-        <Tile label="Daily updates" value={usage.byKind.sync.toLocaleString()} sub="yesterday's figures per account" />
-        <Tile label="Filling in history" value={usage.byKind.backfill.toLocaleString()} sub="older days, from spare allowance" />
-        <Tile label="Refresh today" value={usage.byKind.refresh.toLocaleString()} sub="pressed by sellers" />
+        <Tile label="Account updates" value={usage.byKind.sync.toLocaleString()} sub="each account's day, once" />
+        <Tile label="Listing ranges" value={usage.byKind.view.toLocaleString()} sub="read when opened, kept for the day" />
+        <Tile label="Daily detail · refresh" value={`${usage.byKind.detail.toLocaleString()} · ${usage.byKind.refresh.toLocaleString()}`} sub="busiest listings · pressed by sellers" />
       </div>
 
       <section className="card overflow-hidden">
@@ -95,7 +99,7 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
             <tr>
               <th className="px-5 py-2.5 font-semibold">Account</th>
               <th className="px-3 py-2.5 text-right font-semibold">Calls today</th>
-              <th className="px-3 py-2.5 font-semibold">Per-listing history</th>
+              <th className="px-3 py-2.5 font-semibold">Daily detail</th>
               <th className="px-3 py-2.5 font-semibold">Complete to</th>
               <th className="px-3 py-2.5 text-right font-semibold">Refreshes</th>
               <th className="px-5 py-2.5 font-semibold">Status</th>
@@ -115,15 +119,9 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
                 <tr key={a.connectionId}>
                   <td className="px-5 py-2.5 text-[var(--color-ink)]">{a.label}</td>
                   <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-[var(--color-ink)]">{a.calls.toLocaleString()}</td>
-                  <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <div className="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--color-line)]">
-                        <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.min(100, (a.listingDays / a.listingDaysTotal) * 100)}%` }} />
-                      </div>
-                      <span className="text-xs tabular-nums text-[var(--color-muted)]">
-                        {a.listingDays}/{a.listingDaysTotal} days
-                      </span>
-                    </div>
+                  <td className="px-3 py-2.5 text-xs tabular-nums text-[var(--color-muted)]" title="Days with day-by-day figures for the account's busiest listings">
+                    {a.detailDays ? `${a.detailDays} ${a.detailDays === 1 ? "day" : "days"}` : "—"}
+                    {a.timeZone && <span className="ml-2 text-[var(--color-line-strong)]">{a.timeZone.replace("_", " ")}</span>}
                   </td>
                   <td className="px-3 py-2.5 text-[var(--color-muted)]">{a.finalThrough ? new Date(`${a.finalThrough}T12:00:00Z`).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" }) : "—"}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-muted)]">

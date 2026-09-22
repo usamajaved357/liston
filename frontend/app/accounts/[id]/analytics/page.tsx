@@ -9,7 +9,7 @@ import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { BarList } from "@/components/charts/BarList";
-import { dayLabel, dayLabelLong, dayRangeLabel, fullNumber, timeAgo } from "@/components/charts/chart-format";
+import { dayLabelLong, dayRangeLabel, fullNumber, timeAgo } from "@/components/charts/chart-format";
 import { MetricsBoard } from "@/components/analytics/MetricsBoard";
 import { Funnel } from "@/components/analytics/Funnel";
 import { HintChip, ListingsTable } from "@/components/analytics/ListingsTable";
@@ -31,9 +31,9 @@ function timeOfDay(iso: string) {
 function Freshness({ data }: { data: AccountAnalytics }) {
   const { sync } = data;
   const parts: string[] = [];
-  if (sync.finalThrough) parts.push(`eBay traffic complete to ${dayLabelLong(sync.finalThrough)}`);
+  if (sync.finalThrough) parts.push(`complete to ${dayLabelLong(sync.finalThrough)}`);
   if (sync.todayUpdatedAt) parts.push(`today so far as of ${timeOfDay(sync.todayUpdatedAt)}`);
-  parts.push(`next update ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}`);
+  parts.push(`next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}`);
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-muted)]">
       {sync.syncing ? (
@@ -61,8 +61,10 @@ function InsightsCard({ data, onOpen }: { data: AccountAnalytics; onOpen: (id: s
           {attention.length} need attention · {winners.length} converting well
         </span>
       </div>
-      {!data.coverage.listingsComplete ? (
-        <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--color-muted)]">Suggestions appear once every day of this range has per-listing figures.</p>
+      {data.range.partial ? (
+        <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--color-muted)]">Suggestions look at complete days. Choose 7 days or longer to see them.</p>
+      ) : data.listingReport.state !== "ok" ? (
+        <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--color-muted)]">Suggestions appear once this range&apos;s listing figures are read from eBay.</p>
       ) : picks.length === 0 ? (
         <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--color-muted)]">Nothing stands out in this range. Every listing is getting seen and clicked at a normal rate.</p>
       ) : (
@@ -176,6 +178,23 @@ function AnalyticsPageInner() {
       setNotice({ tone: "danger", text: err instanceof ApiError ? err.message : "Couldn't refresh today's figures." });
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  const [loadingAll, setLoadingAll] = useState(false);
+  async function loadAll() {
+    if (!connection) return;
+    setLoadingAll(true);
+    setNotice(null);
+    try {
+      const { calls, listings } = await api.loadAllListingAnalytics(connection.id, range);
+      setNotice({ tone: "success", text: `Figures for all ${listings.toLocaleString()} listings loaded (${calls} ${calls === 1 ? "call" : "calls"} from today's allowance).` });
+      setByRange({});
+      setReload((n) => n + 1);
+    } catch (err) {
+      setNotice({ tone: "danger", text: err instanceof ApiError ? err.message : "Couldn't load every listing." });
+    } finally {
+      setLoadingAll(false);
     }
   }
 
@@ -294,29 +313,9 @@ function AnalyticsPageInner() {
           )}
           {data?.status === "unsupported" && <div className="notice notice-warning">eBay&apos;s traffic report doesn&apos;t cover this account&apos;s eBay site yet. Sales below are from your orders.</div>}
           {data?.status === "ok" && data.sync.lastError && <div className="notice notice-warning">The last update from eBay stopped early: {data.sync.lastError}</div>}
-          {data?.status === "ok" && data.coverage.listingDaysDone < data.coverage.listingDaysTotal && (
-            <div className="card flex flex-wrap items-center gap-4 px-5 py-3.5">
-              <div className="min-w-0 flex-1">
-                <p className="text-[13px] font-medium text-[var(--color-ink)]">Building your per-listing history</p>
-                <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
-                  {data.coverage.listingsFrom ? `Per-listing traffic from ${dayLabel(data.coverage.listingsFrom)}. ` : ""}
-                  Earlier days are read from eBay a few at a time, within its daily allowance. Account totals above are already complete.
-                </p>
-              </div>
-              <div className="w-48">
-                <div className="flex justify-between text-[11.5px] text-[var(--color-muted)]">
-                  <span>
-                    {data.coverage.listingDaysDone} of {data.coverage.listingDaysTotal} days
-                  </span>
-                  <span>{Math.round((data.coverage.listingDaysDone / data.coverage.listingDaysTotal) * 100)}%</span>
-                </div>
-                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-line)]">
-                  <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${(data.coverage.listingDaysDone / data.coverage.listingDaysTotal) * 100}%` }} />
-                </div>
-              </div>
-            </div>
+          {data?.status === "ok" && data.sync.waitingForAllowance && (
+            <div className="notice notice-warning">Today&apos;s eBay allowance for traffic data is used up, so this account&apos;s latest figures are read after the reset. Sales are up to date.</div>
           )}
-
           <MetricsBoard
             totals={data?.totals ?? null}
             changes={data?.changes ?? null}
@@ -327,7 +326,7 @@ function AnalyticsPageInner() {
             rangeLabel={rangeLabel}
             previousRange={data?.range.previous ?? null}
             loading={!data && !loadError}
-            trafficUnavailable={data ? data.status !== "ok" || !data.coverage.account : false}
+            trafficUnavailable={data ? data.status !== "ok" || !data.sync.finalThrough : false}
           />
 
           {data && (
@@ -354,12 +353,25 @@ function AnalyticsPageInner() {
             </div>
           )}
 
-          {data && <ListingsTable rows={data.listings} currency={data.currency} compared={compared} onOpen={openListing} complete={data.coverage.listingsComplete} />}
+          {data && (
+            <ListingsTable
+              rows={data.listings}
+              currency={data.currency}
+              compared={compared}
+              onOpen={openListing}
+              report={data.listingReport}
+              partial={data.range.partial}
+              todayRead={Boolean(data.sync.todayListingsUpdatedAt)}
+              onLoadAll={loadAll}
+              loadingAll={loadingAll}
+            />
+          )}
 
           {data && (
             <p className="pb-2 text-[11.5px] leading-relaxed text-[var(--color-muted)]">
-              Impressions, views and click-through come from eBay&apos;s Analytics API; sales and units from your orders (cancelled orders excluded, postage excluded). Days follow eBay&apos;s reporting
-              day, which ends at 08:00 UK time. Updated {timeAgo(data.sync.lastSyncedAt)}.
+              Impressions (eBay&apos;s total, as in Seller Hub), views and click-through come from eBay&apos;s Analytics API; sales and units from your orders (cancelled orders and postage
+              excluded); watchers are live. Days follow your eBay site&apos;s time zone ({data.timeZone.replace("_", " ")}); every range but Today is complete days. Updated{" "}
+              {timeAgo(data.sync.lastSyncedAt)}.
             </p>
           )}
         </div>

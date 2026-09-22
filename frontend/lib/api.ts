@@ -89,21 +89,20 @@ export interface AnalyticsUsage {
   resetAt: string | null;
   exhausted: boolean;
   lastSyncedWithEbay: string | null;
-  ceilings: { backfill: number; sync: number; refresh: number };
-  paused: { backfill: boolean; sync: boolean };
-  byKind: { backfill: number; sync: number; refresh: number };
+  ceilings: { detail: number; sync: number; view: number; refresh: number };
+  paused: { detail: boolean; sync: boolean; view: boolean };
+  byKind: { detail: number; sync: number; view: number; refresh: number; [kind: string]: number };
   refreshesPerAccount: number;
-  nextSyncAt: string;
   byAccount: {
     connectionId: string;
     label: string;
+    timeZone: string | null;
     calls: number;
     finalThrough: string | null;
-    listingDays: number;
-    listingDaysTotal: number;
+    detailDays: number;
     refreshesToday: number;
     lastSyncedAt: string | null;
-    status: "ok" | "reconnect" | "unsupported" | "error";
+    status: "ok" | "reconnect" | "unsupported" | "waiting" | "error";
     lastError: string | null;
   }[];
 }
@@ -921,8 +920,15 @@ export interface AnalyticsRangeInfo {
   from: string;
   to: string;
   days: number;
+  partial: boolean; // Today: the running day, so far
   previous: { from: string; to: string };
 }
+
+// How a listing's traffic for a range is known:
+//   measured  exact figures (zero included) from eBay's report for the range
+//   below     not among the busiest 200 read: fewer impressions than the cutoff
+//   unknown   no report (not read yet, allowance used, or no traffic access)
+export type ListingTrafficState = "measured" | "below" | "unknown";
 
 export interface ListingAnalyticsRow extends AnalyticsMetrics {
   itemId: string;
@@ -931,14 +937,29 @@ export interface ListingAnalyticsRow extends AnalyticsMetrics {
   url: string | null;
   price: Money | null;
   quantityAvailable: number | null;
+  watchers: number | null; // buyers watching it now
+  traffic: ListingTrafficState;
   changes: AnalyticsChanges;
   hint: AnalyticsHint | null;
 }
 
 export type AnalyticsStatus = "ok" | "reconnect" | "unsupported";
 
+export interface ListingReportInfo {
+  state: "ok" | "none" | "allowance" | "error";
+  message?: string;
+  scope?: string; // "top" (busiest 200, or every listing of a store of ≤200) | "all"
+  cutoff?: number | null; // impressions of the 200th listing; null = every listing read
+  measured?: number;
+  fetchedAt?: string;
+  live: number;
+  loadAllCalls: number;
+  canLoadAll: boolean;
+}
+
 export interface AccountAnalytics {
   status: AnalyticsStatus;
+  timeZone: string;
   range: AnalyticsRangeInfo;
   currency: string | null;
   totals: AnalyticsMetrics;
@@ -948,10 +969,11 @@ export interface AccountAnalytics {
   previousSeries: AnalyticsDay[]; // the comparison period, day by day
   sources: AnalyticsSource[];
   listings: ListingAnalyticsRow[];
-  coverage: { account: boolean; listingsFrom: string | null; listingsComplete: boolean; listingDaysDone: number; listingDaysTotal: number };
+  listingReport: ListingReportInfo;
   sync: {
     lastSyncedAt: string | null;
     lastError: string | null;
+    waitingForAllowance: boolean; // today's allowance ran out before this account's read
     finalThrough: string | null;
     nextSyncAt: string;
     todayUpdatedAt: string | null;
@@ -965,6 +987,7 @@ export interface AccountAnalytics {
 
 export interface ListingAnalytics {
   status: AnalyticsStatus;
+  timeZone: string;
   listing: {
     itemId: string;
     title: string;
@@ -973,10 +996,13 @@ export interface ListingAnalytics {
     price: Money | null;
     quantityAvailable: number | null;
     quantitySold: number | null;
+    watchers: number | null;
     startTime: string | null;
   };
   range: AnalyticsRangeInfo;
   currency: string | null;
+  traffic: ListingTrafficState;
+  cutoff: number | null;
   totals: AnalyticsMetrics;
   previous: AnalyticsMetrics | null;
   changes: AnalyticsChanges;
@@ -984,7 +1010,8 @@ export interface ListingAnalytics {
   previousSeries: AnalyticsDay[];
   sources: AnalyticsSource[];
   hint: AnalyticsHint | null;
-  coverage: { listingsFrom: string | null; listingsComplete: boolean };
+  dailyTrafficDays: number; // days in the range with this listing's daily traffic
+  comparable: boolean; // false when the listing started after the previous period began
   sync: { finalThrough: string | null; todayListingsUpdatedAt: string | null };
 }
 
@@ -992,9 +1019,7 @@ export interface ListingAnalyticsSummaries {
   status: "ok" | "reconnect";
   from: string;
   to: string;
-  viewsFrom: string | null; // views cover from here (later than `from` while history fills in)
-  complete: boolean;
-  items: Record<string, { views: number; impressions: number; sold: number }>;
+  items: Record<string, { traffic: ListingTrafficState; views: number | null; impressions: number | null; sold: number; watchers: number | null }>;
 }
 
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
@@ -1169,6 +1194,8 @@ export const api = {
   refreshAnalyticsToday: (id: string) => request<{ refreshesLeft: number }>(`/api/connections/${id}/analytics/refresh`, { method: "POST" }),
   getListingAnalytics: (id: string, itemId: string, range: AnalyticsRange) =>
     request<ListingAnalytics>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}?range=${range}`),
+  loadAllListingAnalytics: (id: string, range: AnalyticsRange) =>
+    request<{ calls: number; listings: number }>(`/api/connections/${id}/analytics/listings/all?range=${range}`, { method: "POST" }),
   getListingAnalyticsSummaries: (id: string) => request<ListingAnalyticsSummaries>(`/api/connections/${id}/analytics/listings/summary`),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {

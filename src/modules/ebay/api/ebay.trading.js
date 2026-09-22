@@ -119,6 +119,10 @@ function mapListingItem(item) {
     viewItemUrl: item.ListingDetails?.ViewItemURL || null,
     startTime: item.ListingDetails?.StartTime || null,
     endTime: item.ListingDetails?.EndTime || null,
+    // Buyers watching it now: GetMyeBaySelling returns it with the listing
+    // (so listing analytics gets it without a traffic call) and leaves it
+    // out when nobody is watching.
+    watchCount: Number(item.WatchCount ?? 0),
   };
 }
 

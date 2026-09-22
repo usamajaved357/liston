@@ -21,7 +21,7 @@ export const METRICS: MetricDef[] = [
   {
     key: "impressions",
     label: "Impressions",
-    info: "How many times your listings were shown on eBay: in search results, your store and elsewhere.",
+    info: "How many times your listings were shown anywhere on eBay: search, your store and every other page. The same total Seller Hub shows.",
     variant: "area",
     format: (v) => fullNumber(v),
     axis: (v) => compactNumber(v),

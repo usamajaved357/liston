@@ -5,8 +5,10 @@
 // eBay's limits shape every caller of this file:
 //   - ~100 traffic_report calls a day for the whole app (see
 //     ebay/analytics-budget.js, which every call here must pass through);
-//   - a day is eBay's reporting day, US Pacific time; at most 90 days per
-//     call; the running day comes back partial;
+//   - days are split on the UTC offset the date range carries (so a range
+//     sent in the seller's own time zone matches Seller Hub; without one,
+//     eBay uses US Pacific); at most 90 days per call; the running day comes
+//     back partial;
 //   - dimension DAY (one row per day, whole account) or LISTING (one row per
 //     listing over the range), never both; LISTING returns at most 200
 //     listings, so larger accounts pass listing ids in batches of 200.
@@ -43,15 +45,23 @@ const COLUMN_FOR_METRIC = {
 
 const MAX_LISTING_IDS = 200;
 
-// "2026-09-21" -> "20260921" (eBay's Pacific-day date format).
-const compact = (day) => day.replace(/-/g, '');
+/**
+ * eBay's date_range. With offsets, each day starts at local midnight in the
+ * seller's time zone ("2026-09-17T00:00:00.000+01:00"); eBay reads the end
+ * date as the whole of that day. Without, "20260917" (US Pacific days).
+ */
+function dateRange({ from, to, fromOffset, toOffset }) {
+  if (fromOffset && toOffset) return `[${from}T00:00:00.000${fromOffset}..${to}T00:00:00.000${toOffset}]`;
+  return `[${from.replace(/-/g, '')}..${to.replace(/-/g, '')}]`;
+}
 
 /**
- * One traffic report. `from`/`to` are eBay days ("YYYY-MM-DD", inclusive).
- * Returns the raw report: { header, records, startDate, endDate, lastUpdatedDate }.
+ * One traffic report. `range` = { from, to, fromOffset?, toOffset? } in
+ * days ("YYYY-MM-DD", inclusive). Returns the raw report:
+ * { header, records, startDate, endDate, lastUpdatedDate }.
  */
-function getTrafficReport(accessToken, { dimension, marketplaceId, from, to, listingIds, sort }) {
-  const filter = [`marketplace_ids:{${marketplaceId}}`, `date_range:[${compact(from)}..${compact(to)}]`];
+function getTrafficReport(accessToken, { dimension, marketplaceId, range, listingIds, sort }) {
+  const filter = [`marketplace_ids:{${marketplaceId}}`, `date_range:${dateRange(range)}`];
   if (listingIds?.length) {
     if (listingIds.length > MAX_LISTING_IDS) throw new Error(`At most ${MAX_LISTING_IDS} listing ids per traffic report`);
     filter.push(`listing_ids:{${listingIds.join('|')}}`);
@@ -82,4 +92,4 @@ function parseTrafficReport(report, dimension) {
   });
 }
 
-module.exports = { getTrafficReport, parseTrafficReport, METRICS, COLUMN_FOR_METRIC, MAX_LISTING_IDS };
+module.exports = { getTrafficReport, parseTrafficReport, dateRange, METRICS, COLUMN_FOR_METRIC, MAX_LISTING_IDS };

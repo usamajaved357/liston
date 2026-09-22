@@ -35,6 +35,16 @@ async function refreshToday(req, res, next) {
   }
 }
 
+async function loadAllListings(req, res, next) {
+  try {
+    const { range } = parse(rangeSchema, req.query);
+    const result = await analyticsService.loadAllListings(req.params.id, req.ownerId, { range });
+    res.status(200).json(result.data);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getListingAnalytics(req, res, next) {
   try {
     const { range } = parse(rangeSchema, req.query);
@@ -55,4 +65,4 @@ async function getListingSummaries(req, res, next) {
   }
 }
 
-module.exports = { getAnalytics, refreshToday, getListingAnalytics, getListingSummaries };
+module.exports = { getAnalytics, refreshToday, loadAllListings, getListingAnalytics, getListingSummaries };
