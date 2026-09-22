@@ -301,9 +301,9 @@ function EbayUsageInner() {
             <Tile label="Held back" value={(usage.deferred.background + usage.deferred.push).toLocaleString()} sub="re-reads skipped to protect the allowance" />
             <Tile label="In flight" value={String(usage.inFlight)} sub={`${usage.waiting} waiting for a slot`} />
             <Tile
-              label="Push notifications"
-              value={`${usage.byAccount.filter((a) => a.push).length + 0} / ${usage.accountsTotal}`}
-              sub={usage.notificationsUrl ? "accounts subscribed" : "not configured on this server"}
+              label="Live order push"
+              value={`${usage.orderPushLive} / ${usage.accountsTotal}`}
+              sub={usage.orderPushConfigured ? "accounts eBay sent new orders for (2 days)" : "not set up on this server"}
             />
           </div>
 
@@ -318,7 +318,7 @@ function EbayUsageInner() {
                     <li key={a.connectionId} className="flex items-center justify-between py-2 text-sm">
                       <span className="text-[var(--color-ink)]">
                         {a.label}
-                        {a.push && <span className="ml-2 chip chip-primary">push</span>}
+                        {a.push && <span className="ml-2 chip chip-primary">live orders</span>}
                       </span>
                       <span className="font-semibold text-[var(--color-ink)]">{a.count.toLocaleString()}</span>
                     </li>

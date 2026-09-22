@@ -76,6 +76,8 @@ export interface EbayUsage {
   byAccount: { connectionId: string; label: string; count: number; push: boolean }[];
   accountsTotal: number;
   notificationsUrl: string | null;
+  orderPushConfigured: boolean; // eBay's new-order push is set up on this server
+  orderPushLive: number; // accounts it has actually arrived for in the last two days
   inFlight: number;
   waiting: number;
   // eBay's traffic report has its own, much smaller allowance.

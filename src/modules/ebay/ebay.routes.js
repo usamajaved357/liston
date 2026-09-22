@@ -18,6 +18,12 @@ router.post('/account-deletion', ebayController.accountDeletionNotification);
 // by signature when EBAY_DEV_ID is set; only ever triggers a re-read.
 router.post('/notifications', express.text({ type: '*/*', limit: '1mb' }), ebayController.platformNotification);
 
+// Public — eBay's Notification API (REST push: new orders). GET is its
+// endpoint-ownership challenge; POST is verified by X-EBAY-SIGNATURE
+// (the raw body is kept for that by the JSON parser, see app.js).
+router.get('/commerce-notifications', ebayController.commerceNotificationChallenge);
+router.post('/commerce-notifications', ebayController.commerceNotification);
+
 // Admin only: today's eBay API usage.
 router.get('/usage', requireAuth, requireAdmin, ebayController.usage);
 

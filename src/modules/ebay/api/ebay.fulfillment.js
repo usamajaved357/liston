@@ -177,4 +177,80 @@ function mapOrder(o, fulfillments = []) {
   };
 }
 
-module.exports = { getOrder, getShippingFulfillments, createShippingFulfillment, issueRefund, getPaymentDisputeSummaries, getPaymentDispute, acceptPaymentDispute, contestPaymentDispute, mapOrder, mapLineItem, baseUrl };
+// --- the order list's shape ---------------------------------------------------
+
+// The order list is read with Trading's GetOrders (ebay.trading mapOrder).
+// A new order pushed by eBay is read here instead — one Fulfillment call,
+// its own generous allowance, no Trading call — and put in the same shape,
+// so it joins the list at once. The next routine Trading read replaces it.
+const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+const countryName = (code) => {
+  try {
+    return code ? regionNames.of(code) : '';
+  } catch {
+    return code || '';
+  }
+};
+const money = (node) => (node && node.value !== undefined ? { amount: Number(node.value), currency: node.currency } : null);
+const CANCEL_STATUS = { NONE_REQUESTED: 'NotApplicable', IN_PROGRESS: 'CancelPending', CANCELED: 'CancelComplete' };
+
+function toListOrder(o) {
+  const shipTo = (o.fulfillmentStartInstructions || [])[0]?.shippingStep?.shipTo || null;
+  const address = shipTo?.contactAddress || {};
+  const lineItems = (o.lineItems || []).map((li) => {
+    const quantity = Number(li.quantity ?? 1);
+    const cost = money(li.lineItemCost); // the line's total; Trading gives the unit price
+    const instructions = li.lineItemFulfillmentInstructions || {};
+    return {
+      itemId: li.legacyItemId ? String(li.legacyItemId) : null,
+      title: li.title || null,
+      quantityPurchased: quantity,
+      price: cost ? { amount: Math.round((cost.amount / quantity) * 100) / 100, currency: cost.currency } : null,
+      variation: (li.variationAspects || []).map((v) => ({ name: v.name, value: v.value })),
+      trackingCarrier: null,
+      trackingNumber: null,
+      handleByTime: instructions.shipByDate || null,
+      estimatedDeliveryMin: instructions.minEstimatedDeliveryDate || null,
+      estimatedDeliveryMax: instructions.maxEstimatedDeliveryDate || null,
+      shippingService: null,
+    };
+  });
+  const cancelState = o.cancelStatus?.cancelState || 'NONE_REQUESTED';
+  const paid = o.orderPaymentStatus === 'PAID' || o.orderPaymentStatus === 'PARTIALLY_REFUNDED';
+  const registration = o.buyer?.buyerRegistrationAddress || {};
+  const street = [address.addressLine1, address.addressLine2, address.city, address.postalCode].some(Boolean);
+  return {
+    orderId: o.orderId,
+    status: cancelState === 'CANCELED' ? 'Cancelled' : paid ? 'Completed' : 'Active',
+    createdAt: o.creationDate,
+    total: money(o.pricingSummary?.total),
+    subtotal: money(o.pricingSummary?.priceSubtotal),
+    buyerName: registration.fullName || shipTo?.fullName || null,
+    buyerUserId: o.buyer?.username || null,
+    buyerEmail: registration.email || shipTo?.email || null,
+    salesRecordNumber: o.salesRecordReference ? String(o.salesRecordReference) : null,
+    shippingAddress: street
+      ? {
+          name: shipTo?.fullName || '',
+          street1: address.addressLine1 || '',
+          street2: address.addressLine2 || '',
+          city: address.city || '',
+          state: address.stateOrProvince || '',
+          postalCode: address.postalCode || '',
+          country: countryName(address.countryCode),
+          phone: shipTo?.primaryPhone?.phoneNumber || '',
+        }
+      : null,
+    itemTitle: lineItems[0]?.title || null,
+    itemId: lineItems[0]?.itemId || null,
+    itemCount: lineItems.length,
+    checkoutStatus: paid ? 'Complete' : 'Incomplete',
+    paidTime: o.paymentSummary?.payments?.[0]?.paymentDate || null,
+    shippedTime: null,
+    cancelStatus: CANCEL_STATUS[cancelState] || cancelState,
+    dispatchByTime: lineItems.map((li) => li.handleByTime).filter(Boolean).sort()[0] || null,
+    lineItems,
+  };
+}
+
+module.exports = { toListOrder, getOrder, getShippingFulfillments, createShippingFulfillment, issueRefund, getPaymentDisputeSummaries, getPaymentDispute, acceptPaymentDispute, contestPaymentDispute, mapOrder, mapLineItem, baseUrl };

@@ -62,6 +62,36 @@ async function findIdsByEbayUsername(username) {
   return result.rows;
 }
 
+// eBay's REST notifications name the seller by immutable user id (and,
+// outside the US, username). Either matches.
+async function findIdsByEbayUser({ userId, username }) {
+  if (!userId && !username) return [];
+  const result = await query(
+    `SELECT id, user_id FROM connections
+     WHERE ($1::text IS NOT NULL AND settings->'ebay'->>'userId' = $1) OR ($2::text IS NOT NULL AND settings->'ebay'->>'username' = $2)`,
+    [userId || null, username || null]
+  );
+  return result.rows;
+}
+
+/**
+ * Merges fields into settings.ebay in place (one statement, no read first),
+ * for bookkeeping written from eBay's callbacks. `orderPush` is merged one
+ * level deeper so a receipt doesn't drop the subscription it belongs to.
+ */
+async function mergeEbaySettings(id, patch) {
+  const { orderPush, ...rest } = patch;
+  await query(
+    `UPDATE connections SET settings = jsonb_set(
+       COALESCE(settings, '{}'::jsonb), '{ebay}',
+       COALESCE(settings->'ebay', '{}'::jsonb) || $2::jsonb
+         || CASE WHEN $3::jsonb IS NULL THEN '{}'::jsonb
+                 ELSE jsonb_build_object('orderPush', COALESCE(settings->'ebay'->'orderPush', '{}'::jsonb) || $3::jsonb) END
+     ), updated_at = now() WHERE id = $1`,
+    [id, JSON.stringify(rest), orderPush ? JSON.stringify(orderPush) : null]
+  );
+}
+
 // All eBay connections, for one-off maintenance (e.g. subscribing every
 // account to notifications). Credentials come back encrypted.
 async function findAllEbay() {
@@ -118,6 +148,8 @@ module.exports = {
   create,
   updateCredentials,
   updateSettings,
+  findIdsByEbayUser,
+  mergeEbaySettings,
   updateStatus,
   deleteByIdForUser,
 };
