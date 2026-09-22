@@ -5,7 +5,7 @@ const ebayService = require('./ebay.service');
 const ebayNotifications = require('./ebay.notifications');
 const commerceNotifications = require('./commerce-notifications');
 const notificationApi = require('./api/ebay.notification-api');
-const orderPush = require('./order-push');
+const ebayPush = require('./ebay-push');
 const connectionRepository = require('../connections/connection.repository');
 const governor = require('./request-governor');
 const analyticsBudget = require('./analytics-budget');
@@ -42,7 +42,7 @@ async function oauthCallback(req, res) {
       // is kept.
       const existing = await connectionService.getConnectionWithDecryptedCredentials(statePayload.connectionId, statePayload.userId);
       await connectionService.updateConnectionCredentials(existing.id, { ...(existing.credentials || {}), ...tokens });
-      orderPush.subscribeInBackground(existing.id, statePayload.userId);
+      ebayPush.subscribeInBackground(existing.id, statePayload.userId);
       const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') ? statePayload.returnTo : `/accounts/${existing.id}`;
       const joiner = returnTo.includes('?') ? '&' : '?';
       return res.redirect(`${config.frontendUrl}${returnTo}${joiner}reconnected=1`);
@@ -55,7 +55,7 @@ async function oauthCallback(req, res) {
     // Tag the account with its eBay site straight away; a failure here just
     // means the tag is picked up on the next Connections visit.
     await connectionService.ensureMarketplace(created.id, statePayload.userId, ebayService).catch(() => null);
-    orderPush.subscribeInBackground(created.id, statePayload.userId);
+    ebayPush.subscribeInBackground(created.id, statePayload.userId);
     return res.redirect(`${config.frontendUrl}/dashboard?connected=ebay`);
   } catch (err) {
     logger.error('eBay OAuth callback failed', { message: err.message });
@@ -196,7 +196,7 @@ async function commerceNotification(req, res) {
   }
   res.status(204).end();
   try {
-    const result = await orderPush.handle(req.body);
+    const result = await ebayPush.handle(req.body);
     if (result.handled) logger.info('eBay push handled', result);
     else logger.info('eBay push ignored', result);
   } catch (err) {
@@ -224,10 +224,11 @@ async function usage(req, res, next) {
       byCall,
       accountsTotal: accounts.length,
       notificationsUrl: config.ebay.notificationsUrl || null,
-      // New-order push (order-push.js): set up on this server, and how many
-      // accounts it is actually arriving for.
-      orderPushConfigured: orderPush.configured(),
+      // eBay's push (ebay-push.js): set up on this server, and how many
+      // accounts it is actually arriving for, per kind.
+      orderPushConfigured: ebayPush.configured(),
       orderPushLive: accounts.filter((a) => ebayService.pushEnabled(a).orders).length,
+      listingPushLive: accounts.filter((a) => ebayService.pushEnabled(a).listings).length,
       // The traffic report's separate allowance (see analytics-budget).
       analytics: await analyticsService.adminUsage(labels),
     });

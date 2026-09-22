@@ -77,7 +77,8 @@ export interface EbayUsage {
   accountsTotal: number;
   notificationsUrl: string | null;
   orderPushConfigured: boolean; // eBay's new-order push is set up on this server
-  orderPushLive: number; // accounts it has actually arrived for in the last two days
+  orderPushLive: number; // accounts new-order push has actually arrived for in the last two days
+  listingPushLive: number; // … and listing push
   inFlight: number;
   waiting: number;
   // eBay's traffic report has its own, much smaller allowance.

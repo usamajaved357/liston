@@ -52,9 +52,19 @@ test('an order push names the seller, the order and its lines', () => {
     attempt: 1,
     seller: { userId: 'u-123', username: 'seller1' },
     orderId: '12-34567-89012',
+    listingId: null,
+    reason: null,
     lineItems: [{ lineItemId: 'li-1', listingId: '4071', quantity: 2 }],
   });
   assert.strictEqual(commerce.parseNotification({ nothing: true }), null);
+});
+
+test('a listing push names the seller, the listing and what happened to it', () => {
+  const n = commerce.parseNotification({
+    metadata: { topic: 'LISTING', schemaVersion: '1.0' },
+    notification: { notificationId: 'n-2', publishAttemptCount: 2, data: { listingId: '4072', reason: 'UPDATED', user: { userId: 'u-123', username: 'seller1' } } },
+  });
+  assert.deepStrictEqual([n.topic, n.listingId, n.reason, n.seller.userId, n.attempt, n.orderId], ['LISTING', '4072', 'UPDATED', 'u-123', 2, null]);
 });
 
 test('a Fulfillment order takes the order list’s (Trading) shape', () => {
@@ -99,5 +109,6 @@ test('push is trusted only while it is actually arriving, per kind', () => {
   assert.deepStrictEqual(ebayService.pushEnabled(conn({ notificationsEnabledAt: hoursAgo(500), lastPushAt: hoursAgo(3) }), now), { listings: true, orders: false });
   assert.deepStrictEqual(ebayService.pushEnabled(conn({ orderPush: { subscriptionId: 's1', lastReceivedAt: hoursAgo(20) } }), now), { listings: false, orders: true });
   assert.deepStrictEqual(ebayService.pushEnabled(conn({ orderPush: { subscriptionId: 's1', lastReceivedAt: hoursAgo(72) } }), now).orders, false, 'silent for three days');
+  assert.deepStrictEqual(ebayService.pushEnabled(conn({ listingPush: { subscriptionId: 's2', lastReceivedAt: hoursAgo(1) } }), now), { listings: true, orders: false }, 'listing push from the Notification API');
   assert.deepStrictEqual(ebayService.pushEnabled(null, now), { listings: false, orders: false });
 });

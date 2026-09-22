@@ -301,9 +301,9 @@ function EbayUsageInner() {
             <Tile label="Held back" value={(usage.deferred.background + usage.deferred.push).toLocaleString()} sub="re-reads skipped to protect the allowance" />
             <Tile label="In flight" value={String(usage.inFlight)} sub={`${usage.waiting} waiting for a slot`} />
             <Tile
-              label="Live order push"
-              value={`${usage.orderPushLive} / ${usage.accountsTotal}`}
-              sub={usage.orderPushConfigured ? "accounts eBay sent new orders for (2 days)" : "not set up on this server"}
+              label="Live eBay push"
+              value={`${usage.orderPushLive} · ${usage.listingPushLive} / ${usage.accountsTotal}`}
+              sub={usage.orderPushConfigured ? "orders · listings, accounts eBay pushed to (2 days)" : "not set up on this server"}
             />
           </div>
 

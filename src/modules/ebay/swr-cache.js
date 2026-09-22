@@ -137,6 +137,28 @@ function createSwrCache({ freshMs, staleMs, fetcher, load, store, onUpdate }) {
     return true;
   }
 
+  /**
+   * patch() for a change eBay pushed: loads the stored copy first when it
+   * isn't in memory (after a restart, say) — never a fetch — and waits for
+   * the write. Resolves to false when there is no copy at all (nothing to
+   * patch; the next look reads it whole).
+   */
+  async function patchStored(key, update) {
+    const entry = entries.get(key) || {};
+    entries.set(key, entry);
+    await hydrate(key, entry);
+    if (entry.value === undefined) return false;
+    entry.value = update(entry.value);
+    if (store) await Promise.resolve(store(key, entry.value, entry.meta)).catch(() => {});
+    if (onUpdate) onUpdate(key, entry.value);
+    return true;
+  }
+
+  /** The copy in memory, if any (no load, no fetch). */
+  function peek(key) {
+    return entries.get(key)?.value;
+  }
+
   function syncedAt(key) {
     const entry = entries.get(key);
     return entry?.fetchedAt || null;
@@ -150,7 +172,7 @@ function createSwrCache({ freshMs, staleMs, fetcher, load, store, onUpdate }) {
     return get(key, entry.ctx, { touch: false });
   }
 
-  return { get, invalidate, markStale, patch, syncedAt, refresh };
+  return { get, invalidate, markStale, patch, patchStored, peek, syncedAt, refresh };
 }
 
 module.exports = { createSwrCache };

@@ -14,7 +14,8 @@ const connectionRepository = require('../../src/modules/connections/connection.r
 const accountEvents = require('../../src/modules/ebay/account-events');
 const notificationApi = require('../../src/modules/ebay/api/ebay.notification-api');
 const appToken = require('../../src/modules/ebay/api/ebay.app-token');
-const orderPush = require('../../src/modules/ebay/order-push');
+const ebayPush = require('../../src/modules/ebay/ebay-push');
+const mirror = require('../../src/modules/ebay/ebay-mirror.repository');
 const commerce = require('../../src/modules/ebay/commerce-notifications');
 
 // Against the real local DB and the real HTTP app (fixture users are
@@ -39,7 +40,7 @@ test.after(async () => {
 
 test.afterEach(() => mock.restoreAll());
 
-const SCOPES = ['https://api.ebay.com/oauth/api_scope/sell.fulfillment', 'https://api.ebay.com/oauth/api_scope/commerce.notification.subscription'];
+const SCOPES = ['sell.fulfillment', 'sell.listing', 'commerce.notification.subscription'].map((s) => `https://api.ebay.com/oauth/api_scope/${s}`);
 
 async function fixture(ebay = {}) {
   const email = `test-${crypto.randomUUID()}@example.com`;
@@ -118,7 +119,8 @@ test('a signed new-order push puts the order on the list within seconds, with on
   const row = await until(async () => (await pool.query('SELECT data FROM ebay_orders WHERE connection_id = $1 AND order_id = $2', [connectionId, orderId])).rows[0]);
   assert.ok(row, 'the order is in the list');
   assert.deepStrictEqual([row.data.buyerUserId, row.data.status, row.data.itemId], ['buyer_1', 'Completed', '4071']);
-  assert.ok(events.some(([id, kind]) => id === String(connectionId) && kind === 'orders'), 'open Orders pages are told');
+  // eBay has its 204 before the work finishes: wait for the page event too.
+  assert.ok(await until(() => events.some(([id, kind]) => id === String(connectionId) && kind === 'orders')), 'open Orders pages are told');
   assert.strictEqual(calls.length, 1);
   assert.ok(calls[0].url.includes(`/sell/fulfillment/v1/order/${orderId}`));
   assert.ok(!calls.some((c) => c.url.includes('/ws/api.dll')), 'no Trading call');
@@ -149,7 +151,7 @@ test('eBay’s endpoint check is answered with the challenge hash', async () => 
   assert.strictEqual(data.challengeResponse, commerce.challengeResponse('abc123', config.ebay.commerceNotificationsToken, config.ebay.commerceNotificationsUrl));
 });
 
-test('subscribing an account: one destination for the app, one ORDER_CONFIRMATION subscription per seller, idempotent', async () => {
+test('subscribing an account: one destination for the app, one subscription per seller and topic (new orders, listings), idempotent', async () => {
   const saved = await appState.get('ebay-commerce-destination');
   await pool.query("DELETE FROM app_state WHERE key = 'ebay-commerce-destination'");
   try {
@@ -165,32 +167,89 @@ test('subscribing an account: one destination for the app, one ORDER_CONFIRMATIO
         method: 'POST',
         reply: (u, init) => {
           const req = JSON.parse(init.body);
-          subscriptions = [{ subscriptionId: 's-9', topicId: req.topicId, destinationId: req.destinationId, status: 'ENABLED' }];
-          return { status: 201, location: 'https://api.ebay.com/commerce/notification/v1/subscription/s-9' };
+          const subscriptionId = `s-${req.topicId}`;
+          subscriptions.push({ subscriptionId, topicId: req.topicId, destinationId: req.destinationId, status: 'ENABLED' });
+          return { status: 201, location: `https://api.ebay.com/commerce/notification/v1/subscription/${subscriptionId}` };
         },
       },
     });
     // Creating the destination makes eBay call our endpoint back; stood in for here.
     const createDestination = mock.method(notificationApi, 'createDestination', async () => 'd-1');
 
-    const first = await orderPush.subscribeConnection(connectionId, userId);
-    assert.strictEqual(first.subscriptionId, 's-9');
+    const first = await ebayPush.subscribeConnection(connectionId, userId);
+    assert.deepStrictEqual(first.topics, { ORDER_CONFIRMATION: 's-ORDER_CONFIRMATION', LISTING: 's-LISTING' });
     assert.strictEqual(createDestination.mock.callCount(), 1);
-    const created = calls.find((c) => c.method === 'POST' && c.url.endsWith('/commerce/notification/v1/subscription'));
-    assert.deepStrictEqual(created.body, { topicId: 'ORDER_CONFIRMATION', status: 'ENABLED', destinationId: 'd-1', payload: { format: 'JSON', schemaVersion: '1.0', deliveryProtocol: 'HTTPS' } });
-    assert.ok(calls.some((c) => c.url.endsWith('/subscription/s-9/test')), 'eBay is asked for a test push');
+    const created = calls.filter((c) => c.method === 'POST' && c.url.endsWith('/commerce/notification/v1/subscription'));
+    assert.deepStrictEqual(created.map((c) => c.body), ['ORDER_CONFIRMATION', 'LISTING'].map((topicId) => ({ topicId, status: 'ENABLED', destinationId: 'd-1', payload: { format: 'JSON', schemaVersion: '1.0', deliveryProtocol: 'HTTPS' } })));
+    assert.strictEqual(calls.filter((c) => c.url.endsWith('/test')).length, 2, 'eBay is asked for a test push per topic');
     const ebay = await settingsOf(connectionId);
-    assert.deepStrictEqual([ebay.userId, ebay.username, ebay.orderPush.subscriptionId, ebay.orderPush.destinationId], ['u-immutable-1', 'walexo_seller', 's-9', 'd-1']);
+    assert.deepStrictEqual([ebay.userId, ebay.username, ebay.orderPush.subscriptionId, ebay.listingPush.subscriptionId, ebay.orderPush.destinationId], ['u-immutable-1', 'walexo_seller', 's-ORDER_CONFIRMATION', 's-LISTING', 'd-1']);
 
-    // Again: the stored destination and the existing subscription are reused.
-    const creates = () => calls.filter((c) => c.method === 'POST' && c.url.endsWith('/commerce/notification/v1/subscription')).length;
-    await orderPush.subscribeConnection(connectionId, userId);
+    // Again: the stored destination and the existing subscriptions are reused.
+    await ebayPush.subscribeConnection(connectionId, userId);
     assert.strictEqual(createDestination.mock.callCount(), 1);
-    assert.strictEqual(creates(), 1);
+    assert.strictEqual(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/commerce/notification/v1/subscription')).length, 2);
   } finally {
     await pool.query("DELETE FROM app_state WHERE key = 'ebay-commerce-destination'");
     if (saved) await appState.set('ebay-commerce-destination', saved);
   }
+});
+
+const listing = (itemId, title, quantityAvailable, extra = {}) => ({ itemId, sku: null, title, price: { amount: 4.5, currency: 'GBP' }, convertedPrice: null, quantity: quantityAvailable, quantityAvailable, quantitySold: 0, imageUrl: null, viewItemUrl: null, startTime: null, endTime: null, watchCount: 0, ...extra });
+const getItemXml = (id, title, price, status = 'Active') =>
+  `<?xml version="1.0" encoding="UTF-8"?><GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>${id}</ItemID><Title>${title}</Title><Quantity>7</Quantity><QuantityAvailable>7</QuantityAvailable><SellingStatus><CurrentPrice currencyID="GBP">${price}</CurrentPrice><QuantitySold>0</QuantitySold><ListingStatus>${status}</ListingStatus></SellingStatus><WatchCount>2</WatchCount></Item></GetItemResponse>`;
+
+test('listing pushes: ended ones leave, a sale’s update needs no read, others are read one by one with GetItem', async () => {
+  const { connectionId, seller } = await fixture({ orderPush: { subscriptionId: 's-1' }, listingPush: { subscriptionId: 's-2' } });
+  await mirror.saveSnapshot(connectionId, 'listings:active', { items: [listing('4071', 'Garden light', 5), listing('4072', 'Fishing line', 3), listing('4073', 'Bird feeder', 2)] }, { totalPages: 1 });
+  const orderId = `12-${Date.now()}`;
+  const calls = mockEbay({
+    '/sell/fulfillment/v1/order/': { reply: () => ({ body: fulfillmentOrder(orderId) }) },
+    '/ws/api.dll': {
+      method: 'POST',
+      reply: () => ({ body: {} }),
+    },
+  });
+  // Trading answers XML: served here by item id.
+  const tradingXml = { 4072: getItemXml('4072', 'Fishing line 100m', '5.25'), 5000: getItemXml('5000', 'New lamp', '12.00') };
+  const fetchMock = global.fetch;
+  mock.method(global, 'fetch', async (url, init = {}) => {
+    if (String(url).includes('/ws/api.dll')) {
+      const id = String(init.body).match(/<ItemID>(\d+)<\/ItemID>/)[1];
+      calls.push({ url: String(url), method: 'POST', body: { call: init.headers['X-EBAY-API-CALL-NAME'], id } });
+      return new Response(tradingXml[id], { status: 200, headers: { 'Content-Type': 'text/xml' } });
+    }
+    return fetchMock(url, init);
+  });
+  const sign = signer();
+  const post = async (payload) => {
+    const body = JSON.stringify(payload);
+    const res = await realFetch(`${baseUrl}/api/ebay/commerce-notifications`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-EBAY-SIGNATURE': sign(body) }, body });
+    assert.strictEqual(res.status, 204);
+  };
+  const listingPush = (listingId, reason) => ({ metadata: { topic: 'LISTING', schemaVersion: '1.0' }, notification: { notificationId: crypto.randomUUID(), publishAttemptCount: 1, data: { listingId, reason, user: seller } } });
+
+  await post(orderPushPayload(seller, orderId)); // sells 1 of 4071
+  await until(async () => (await pool.query('SELECT 1 FROM ebay_orders WHERE connection_id = $1 AND order_id = $2', [connectionId, orderId])).rows[0]);
+  await post(listingPush('4071', 'UPDATED')); // eBay's quantity update for that sale
+  await post(listingPush('4072', 'UPDATED')); // a price edit in Seller Hub
+  await post(listingPush('4073', 'ENDED'));
+  await post(listingPush('5000', 'CREATED'));
+  await post(listingPush('4072', 'UPDATED')); // a retry: gathered with the first
+  // Each push is handled after its 204: wait for all four listings to be gathered.
+  assert.ok(await until(() => ebayPush._pendingCount(connectionId) === 4));
+  const [summary] = await ebayPush._flushAll();
+
+  assert.deepStrictEqual(summary, { changes: 4, ended: 1, fromSales: 1, reads: 2, fullRead: false });
+  const trading = calls.filter((c) => c.url.includes('/ws/api.dll'));
+  assert.deepStrictEqual(trading.map((c) => [c.body.call, c.body.id]).sort(), [['GetItem', '4072'], ['GetItem', '5000']], 'one light GetItem per changed listing, none for the sale or the end');
+  const items = (await mirror.loadSnapshot(connectionId, 'listings:active')).value.items;
+  const byId = Object.fromEntries(items.map((i) => [i.itemId, i]));
+  assert.deepStrictEqual(Object.keys(byId).sort(), ['4071', '4072', '5000']);
+  assert.strictEqual(byId['4071'].quantityAvailable, 4, 'the sale, from the order push');
+  assert.deepStrictEqual([byId['4072'].title, byId['4072'].price.amount, byId['4072'].watchCount], ['Fishing line 100m', 5.25, 2]);
+  assert.strictEqual(byId['5000'].title, 'New lamp');
+  assert.ok((await settingsOf(connectionId)).listingPush.lastReceivedAt);
 });
 
 test('an account connected without the notification permission isn’t subscribed and is told to reconnect', async () => {
@@ -202,6 +261,6 @@ test('an account connected without the notification permission isn’t subscribe
     credentials: { accessToken: 'a', refreshToken: 'r', accessTokenExpiresAt: Date.now() + 3600e3, scopes: ['https://api.ebay.com/oauth/api_scope/sell.inventory'] },
   });
   const calls = mockEbay({});
-  await assert.rejects(orderPush.subscribeConnection(connection.id, user.id), (err) => err.code === 'EBAY_SCOPE_MISSING');
+  await assert.rejects(ebayPush.subscribeConnection(connection.id, user.id), (err) => err.code === 'EBAY_SCOPE_MISSING');
   assert.strictEqual(calls.length, 0);
 });

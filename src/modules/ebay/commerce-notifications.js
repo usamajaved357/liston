@@ -11,7 +11,8 @@ const crypto = require('crypto');
 //   - the payload: { metadata: { topic, schemaVersion }, notification:
 //     { notificationId, eventDate, publishDate, publishAttemptCount, data } }.
 //     ORDER_CONFIRMATION's data: { user: { userId, username }, order:
-//     { orderId, orderLineItems: [{ orderLineItemId, listingId, quantity }] } }.
+//     { orderId, orderLineItems: [{ orderLineItemId, listingId, quantity }] } };
+//     LISTING's: { listingId, reason: CREATED | UPDATED | ENDED, user }.
 
 function challengeResponse(challengeCode, verificationToken, endpoint) {
   return crypto.createHash('sha256').update(String(challengeCode)).update(verificationToken).update(endpoint).digest('hex');
@@ -78,6 +79,8 @@ function parseNotification(payload) {
     attempt: Number(n.publishAttemptCount || 1),
     seller: { userId: user.userId ? String(user.userId) : data.publicUserId ? String(data.publicUserId) : null, username: user.username ? String(user.username) : data.username ? String(data.username) : null },
     orderId: order.orderId ? String(order.orderId) : data.orderId ? String(data.orderId) : null,
+    listingId: data.listingId ? String(data.listingId) : null,
+    reason: data.reason ? String(data.reason).toUpperCase() : null,
     lineItems: (order.orderLineItems || []).map((li) => ({ lineItemId: li.orderLineItemId ? String(li.orderLineItemId) : null, listingId: li.listingId ? String(li.listingId) : null, quantity: Number(li.quantity || 1) })),
   };
 }
