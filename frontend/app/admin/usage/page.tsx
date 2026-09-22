@@ -56,8 +56,9 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
       <div>
         <p className="text-[12.5px] text-[var(--color-muted)]">
           A separate allowance of {usage.limit.toLocaleString()}
-          {" "}calls a day for impressions and views, shared by every account. Each account&apos;s totals are read once a day (02:00 in its own time
-          zone); listing figures for a range are read when someone opens it, then kept for the day. Resets {fmtTime(usage.resetAt)}.
+          {" "}calls a day for impressions and views, shared by every account. Each night (02:00 in the account&apos;s time zone) an account&apos;s totals and
+          every listing&apos;s figures for the day just ended are read and stored, so switching ranges costs nothing. Older days of listing history fill from
+          allowance left over in the last two hours before the reset. Resets {fmtTime(usage.resetAt)}.
         </p>
       </div>
       <div className="card px-5 py-4">
@@ -72,15 +73,17 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
           limit={usage.limit}
           exhausted={usage.exhausted}
           marks={[
-            { at: 40, title: "Daily detail for the busiest listings pauses here" },
-            { at: 70, title: "The daily account update pauses here" },
-            { at: 90, title: "Opening new ranges pauses here" },
+            { at: 70, title: "The nightly update pauses here" },
+            { at: 90, title: "Ranges not in the stored history pause here" },
+            { at: 95, title: "Filling history stops here" },
           ]}
         />
         <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
-          <span>40% · busiest listings&apos; daily detail pauses{usage.paused.detail ? " (paused now)" : ""}</span>
-          <span>70% · daily account update pauses{usage.paused.sync ? " (paused now)" : ""}</span>
-          <span>90% · new listing ranges pause{usage.paused.view ? " (paused now)" : ""}</span>
+          <span>70% · nightly update pauses{usage.paused.sync ? " (paused now)" : ""}</span>
+          <span>90% · ranges outside the history pause{usage.paused.view ? " (paused now)" : ""}</span>
+          <span>
+            Up to 95% · history fill, {usage.spareWindow.open ? "running now" : `from ${fmtTime(usage.spareWindow.opensAt)}`}
+          </span>
           <span>Last 10% · &quot;Refresh today&quot; ({usage.refreshesPerAccount} per account a day)</span>
         </div>
         {usage.exhausted && <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further traffic calls today. Analytics pages keep showing their stored history.</p>}
@@ -88,9 +91,9 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="traffic calls until reset" />
-        <Tile label="Account updates" value={usage.byKind.sync.toLocaleString()} sub="each account's day, once" />
-        <Tile label="Listing ranges" value={usage.byKind.view.toLocaleString()} sub="read when opened, kept for the day" />
-        <Tile label="Daily detail · refresh" value={`${usage.byKind.detail.toLocaleString()} · ${usage.byKind.refresh.toLocaleString()}`} sub="busiest listings · pressed by sellers" />
+        <Tile label="Nightly update" value={usage.byKind.sync.toLocaleString()} sub="each account's day just ended" />
+        <Tile label="History fill" value={(usage.byKind.history ?? 0).toLocaleString()} sub="spare allowance before the reset" />
+        <Tile label="Ranges · refresh" value={`${usage.byKind.view.toLocaleString()} · ${usage.byKind.refresh.toLocaleString()}`} sub="outside the history · pressed by sellers" />
       </div>
 
       <section className="card overflow-hidden">
@@ -99,7 +102,7 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
             <tr>
               <th className="px-5 py-2.5 font-semibold">Account</th>
               <th className="px-3 py-2.5 text-right font-semibold">Calls today</th>
-              <th className="px-3 py-2.5 font-semibold">Daily detail</th>
+              <th className="px-3 py-2.5 font-semibold">Listing history</th>
               <th className="px-3 py-2.5 font-semibold">Complete to</th>
               <th className="px-3 py-2.5 text-right font-semibold">Refreshes</th>
               <th className="px-5 py-2.5 font-semibold">Status</th>
@@ -119,8 +122,8 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
                 <tr key={a.connectionId}>
                   <td className="px-5 py-2.5 text-[var(--color-ink)]">{a.label}</td>
                   <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-[var(--color-ink)]">{a.calls.toLocaleString()}</td>
-                  <td className="px-3 py-2.5 text-xs tabular-nums text-[var(--color-muted)]" title="Days with day-by-day figures for the account's busiest listings">
-                    {a.detailDays ? `${a.detailDays} ${a.detailDays === 1 ? "day" : "days"}` : "—"}
+                  <td className="px-3 py-2.5 text-xs tabular-nums text-[var(--color-muted)]" title="Days of every listing's figures stored; ranges inside them cost no calls">
+                    {a.history ? (a.history.complete ? `Complete · ${a.history.needed} days` : `${a.history.stored} of ${a.history.needed} days`) : "—"}
                     {a.timeZone && <span className="ml-2 text-[var(--color-line-strong)]">{a.timeZone.replace("_", " ")}</span>}
                   </td>
                   <td className="px-3 py-2.5 text-[var(--color-muted)]">{a.finalThrough ? new Date(`${a.finalThrough}T12:00:00Z`).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" }) : "—"}</td>

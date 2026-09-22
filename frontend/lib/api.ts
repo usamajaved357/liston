@@ -89,10 +89,13 @@ export interface AnalyticsUsage {
   resetAt: string | null;
   exhausted: boolean;
   lastSyncedWithEbay: string | null;
-  ceilings: { detail: number; sync: number; view: number; refresh: number };
-  paused: { detail: boolean; sync: boolean; view: boolean };
-  byKind: { detail: number; sync: number; view: number; refresh: number; [kind: string]: number };
+  ceilings: { sync: number; view: number; refresh: number; history: number };
+  paused: { sync: boolean; view: boolean };
+  // History is filled only in the last hours before the reset, from spare allowance.
+  spareWindow: { open: boolean; opensAt: string };
+  byKind: { sync: number; view: number; refresh: number; history: number; [kind: string]: number };
   refreshesPerAccount: number;
+  dayReadMaxListings: number;
   byAccount: {
     connectionId: string;
     label: string;
@@ -100,6 +103,7 @@ export interface AnalyticsUsage {
     calls: number;
     finalThrough: string | null;
     detailDays: number;
+    history: AnalyticsHistory | null;
     refreshesToday: number;
     lastSyncedAt: string | null;
     status: "ok" | "reconnect" | "unsupported" | "waiting" | "error";
@@ -945,10 +949,18 @@ export interface ListingAnalyticsRow extends AnalyticsMetrics {
 
 export type AnalyticsStatus = "ok" | "reconnect" | "unsupported";
 
+// How much of an account's day-by-day listing history is stored: ranges
+// inside it are added up in Liston, with no eBay calls.
+export interface AnalyticsHistory {
+  stored: number;
+  needed: number;
+  complete: boolean;
+}
+
 export interface ListingReportInfo {
   state: "ok" | "none" | "allowance" | "error";
   message?: string;
-  scope?: string; // "top" (busiest 200, or every listing of a store of ≤200) | "all"
+  scope?: string; // "history" (added up from stored days) | "top" (busiest 200, or every listing of a store of ≤200) | "all"
   cutoff?: number | null; // impressions of the 200th listing; null = every listing read
   measured?: number;
   fetchedAt?: string;
@@ -980,6 +992,7 @@ export interface AccountAnalytics {
     todayListingsUpdatedAt: string | null;
     refreshesLeft: number;
     refreshLimit: number;
+    history: AnalyticsHistory | null;
     syncing: boolean;
   };
   listingsSyncedAt: number | null;

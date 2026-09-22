@@ -1,11 +1,11 @@
 // Keeps every account's traffic current without anyone opening the page: a
 // light check every few minutes asks each eBay account "is a read due?"
-// (analytics.service.isDue) — its totals once its day is complete (02:00 in
-// the seller's time zone), then the busiest listings' day while the
-// allowance's detail tier lasts — and syncs the ones that are, one at a
-// time. Progress lives in the database, so a restart neither repeats a read
-// nor skips one. No job queue needed; moves to BullMQ with the other
-// background work (§9).
+// (analytics.service.isDue) — its totals and every listing's day once the
+// day is complete (02:00 in the seller's time zone), then older days of
+// listing history in the last hours before eBay's reset, from spare
+// allowance — and syncs the ones that are, one at a time. Progress lives in
+// the database, so a restart neither repeats a read nor skips one. No job
+// queue needed; moves to BullMQ with the other background work (§9).
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const connectionRepository = require('../connections/connection.repository');

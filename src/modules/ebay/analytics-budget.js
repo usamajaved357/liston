@@ -9,12 +9,14 @@ const appState = require('../../db/app-state.repository');
 //
 // Calls carry a kind, and the allowance is tiered the way request-governor
 // tiers Trading's, cheapest-to-lose first:
-//   detail    day-by-day figures for an account's busiest 200 listings —
-//             a nice-to-have, stops at 40%;
-//   sync      the once-a-day read of each account's totals — up to 70%;
-//   view      a range of listing figures someone opened (and "Load all
-//             listings", a listing asked for on its own) — up to 90%;
-//   refresh   a person pressing "Refresh today" — keeps the last 10%.
+//   sync      the nightly read of each account: its totals and every
+//             listing's figures for the day just ended — up to 70%;
+//   view      listing figures for a range the stored history doesn't cover
+//             yet (and "Load all listings", a listing on its own) — to 90%;
+//   refresh   a person pressing "Refresh today" — keeps the last 10%;
+//   history   filling older days of listing history — ONLY in the last
+//             hours before the reset, from allowance that would otherwise
+//             expire unused, up to 95% (the rest stays for refreshes).
 // When the allowance is gone, pages keep showing what's stored.
 //
 // Usage is counted locally and persisted, so a restart doesn't forget it.
@@ -22,7 +24,10 @@ const appState = require('../../db/app-state.repository');
 // reports one for this API, and wins over ours.
 
 const DEFAULT_LIMIT = config.analytics.dailyLimit || 100;
-const CEILING = { detail: 0.4, sync: 0.7, view: 0.9, refresh: 1 };
+const CEILING = { sync: 0.7, view: 0.9, refresh: 1, history: 0.95 };
+// History reads wait for the window's last hours: whatever is left then
+// would expire at the reset anyway.
+const SPARE_WINDOW_MS = 2 * 60 * 60 * 1000;
 const KINDS = Object.keys(CEILING);
 const STATE_KEY = 'ebay-analytics-usage';
 const emptyKinds = () => Object.fromEntries(KINDS.map((k) => [k, 0]));
@@ -132,10 +137,17 @@ function ceilingFor(kind) {
   return Math.floor(state.limit * (CEILING[kind] ?? 0));
 }
 
+/** Whether the window is in its last hours, when spare allowance is spent on history. */
+function inSpareWindow(now = Date.now()) {
+  rollWindowIfNeeded();
+  return new Date(state.resetAt).getTime() - now <= SPARE_WINDOW_MS;
+}
+
 /** Calls of this kind still allowed in this window. */
 function available(kind) {
   rollWindowIfNeeded();
   if (state.exhausted) return 0;
+  if (kind === 'history' && !inSpareWindow()) return 0;
   return Math.max(0, ceilingFor(kind) - state.used);
 }
 
@@ -187,18 +199,20 @@ function snapshot() {
     exhausted: state.exhausted,
     lastSyncedWithEbay: state.lastSyncedWithEbay,
     ceilings: Object.fromEntries(KINDS.map((k) => [k, ceilingFor(k)])),
-    paused: { detail: !allows('detail'), sync: !allows('sync'), view: !allows('view') },
+    paused: { sync: !allows('sync'), view: !allows('view') },
+    spareWindow: { open: inSpareWindow(), opensAt: new Date(new Date(state.resetAt).getTime() - SPARE_WINDOW_MS).toISOString() },
     byKind: { ...state.byKind },
     byAccount: { ...state.byAccount },
   };
 }
 
-// Test hook.
-function _reset({ limit = DEFAULT_LIMIT, used = 0 } = {}) {
+// Test hook. The window ends 12h from now unless `resetAt` says otherwise
+// (1h ahead: the spare hours are open).
+function _reset({ limit = DEFAULT_LIMIT, used = 0, resetAt = new Date(Date.now() + 12 * 3600e3).toISOString() } = {}) {
   Object.assign(state, {
     limit,
     used,
-    resetAt: nextReset(),
+    resetAt,
     exhausted: false,
     byKind: emptyKinds(),
     byAccount: {},
@@ -206,4 +220,4 @@ function _reset({ limit = DEFAULT_LIMIT, used = 0 } = {}) {
   });
 }
 
-module.exports = { start, load, spend, allows, available, snapshot, syncWithEbay, AnalyticsBudgetError, CEILING, _reset };
+module.exports = { start, load, spend, allows, available, inSpareWindow, snapshot, syncWithEbay, AnalyticsBudgetError, CEILING, _reset };

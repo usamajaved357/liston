@@ -41,8 +41,11 @@ async function fixture() {
   return { userId: user.id, connectionId: connection.id };
 }
 
-const item = (id, title) => ({ itemId: id, title, imageUrl: null, viewItemUrl: `https://www.ebay.co.uk/itm/${id}`, price: { amount: 4.5, currency: 'GBP' }, quantityAvailable: 9, watchCount: 3 });
+const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString();
+const item = (id, title, startTime = daysAgo(20)) => ({ itemId: id, title, imageUrl: null, viewItemUrl: `https://www.ebay.co.uk/itm/${id}`, price: { amount: 4.5, currency: 'GBP' }, quantityAvailable: 9, watchCount: 3, startTime });
 const SMALL_STORE = [item('111', 'Garden light'), item('222', 'Fishing line')];
+// The last two hours before eBay's reset: spare allowance goes on history.
+const spareHours = (used = 0) => budget._reset({ limit: 100, used, resetAt: new Date(Date.now() + 3600e3).toISOString() });
 
 function mockInputs({ scope = true, orders = [], items = SMALL_STORE } = {}) {
   mock.method(ebayService, 'analyticsInputs', async (credentials) => ({
@@ -58,10 +61,11 @@ function mockInputs({ scope = true, orders = [], items = SMALL_STORE } = {}) {
 }
 
 // A fake traffic report. Whole account: every day 70,000 total impressions
-// (800 in search), 100 views (20 from search). Per listing, per call: 111
-// gets 600 total impressions / 6 views, 222 gets 400 / 4; unfiltered
-// requests return `topCount` listings (the busiest of a big store).
-function mockTrafficReports({ topCount = 2 } = {}) {
+// (800 in search), 100 views (20 from search), except `quietDay` (none).
+// Per listing, per call: 111 gets 600 total impressions / 6 views, 222 gets
+// 400 / 4; unfiltered requests return `topCount` listings (the busiest of a
+// big store).
+function mockTrafficReports({ topCount = 2, quietDay = null } = {}) {
   const calls = [];
   const header = { metrics: ['TOTAL_IMPRESSION_TOTAL', 'LISTING_IMPRESSION_SEARCH_RESULTS_PAGE', 'LISTING_VIEWS_TOTAL', 'LISTING_VIEWS_SOURCE_SEARCH_RESULTS_PAGE'].map((key) => ({ key })) };
   const values = (arr) => arr.map((value) => ({ value }));
@@ -73,7 +77,7 @@ function mockTrafficReports({ topCount = 2 } = {}) {
     const [from, to] = filter.match(/date_range:\[(\d{4}-\d\d-\d\d)T[^.]*\.000[+-]\d\d:\d\d\.\.(\d{4}-\d\d-\d\d)T/).slice(1);
     let records;
     if (u.searchParams.get('dimension') === 'DAY') {
-      records = days.daysBetween(from, to).map((day) => ({ dimensionValues: [{ value: day.replace(/-/g, '') }], metricValues: values([70000, 800, 100, 20]) }));
+      records = days.daysBetween(from, to).map((day) => ({ dimensionValues: [{ value: day.replace(/-/g, '') }], metricValues: values(day === quietDay ? [0, 0, 0, 0] : [70000, 800, 100, 20]) }));
     } else {
       const ids = filter.match(/listing_ids:\{([^}]*)\}/);
       const list = ids ? ids[1].split('|') : ['111', '222', ...Array.from({ length: topCount - 2 }, (_, i) => String(9000 + i))];
@@ -84,38 +88,56 @@ function mockTrafficReports({ topCount = 2 } = {}) {
   return calls;
 }
 
-test('a first sync reads 180 days of account totals in the seller’s time zone, then a week of the busiest listings', async () => {
+/** Syncs until nothing is due (history fills 15 days a run). */
+async function syncUntilDone(connectionId, userId, now = new Date()) {
+  for (let i = 0; i < 20 && service.isDue(await repo.getSyncState(connectionId), now); i += 1) await service.syncAccount(connectionId, userId, { now });
+}
+
+test('each night reads the day just ended for every listing; older days only from spare allowance before the reset', async () => {
   const { userId, connectionId } = await fixture();
   mockInputs();
-  const calls = mockTrafficReports();
-  budget._reset({ limit: 100 });
   const now = new Date();
   const today = days.today(UK, now);
   const lastFinal = days.lastFinalDay(UK, now);
+  const quietDay = days.addDays(lastFinal, -3);
+  const calls = mockTrafficReports({ quietDay });
+  budget._reset({ limit: 100 });
 
   const first = await service.syncAccount(connectionId, userId, { mode: 'essential', now });
   const segments = service.accountSegments(days.addDays(today, -179), today, UK).length;
   assert.strictEqual(first.calls, segments, 'one call per segment (split at clock changes)');
   let state = await repo.getSyncState(connectionId);
-  assert.strictEqual(state.time_zone, UK);
-  assert.strictEqual(state.account_through, lastFinal);
+  assert.deepStrictEqual([state.time_zone, state.account_through], [UK, lastFinal]);
   const acct = await repo.accountDays(connectionId, days.addDays(today, -179), today);
   assert.strictEqual(acct.length, 180);
   assert.strictEqual(acct.find((r) => r.day === today).final, false, 'today is kept as partial');
   assert.ok(calls.every((u) => /T00:00:00\.000\+0[01]:00/.test(u.searchParams.get('filter'))), 'every range is sent at UK midnight');
 
-  const second = await service.syncAccount(connectionId, userId, { now });
-  assert.strictEqual(second.calls, 7, 'a week of the busiest listings, one call a day');
-  state = await repo.getSyncState(connectionId);
-  assert.strictEqual(state.detail_days.length, 7);
-  assert.strictEqual(service.isDue(state, now), false, 'nothing more to read today');
-  // A store of two names both listings (complete, no cutoff).
-  const dayReport = (await repo.reportsFor(connectionId, lastFinal, lastFinal)).get('top');
-  assert.strictEqual(dayReport.cutoff, null);
+  // Mid-window: just the day just ended, naming every live listing.
+  const nightly = await service.syncAccount(connectionId, userId, { now });
+  assert.strictEqual(nightly.calls, 1);
   assert.ok(calls.at(-1).searchParams.get('filter').includes('listing_ids:{111|222}'));
+  state = await repo.getSyncState(connectionId);
+  assert.deepStrictEqual(state.detail_days, [lastFinal]);
+  assert.strictEqual(state.history_from, days.dayOf(SMALL_STORE[0].startTime, UK), 'history reaches back to the oldest live listing');
+  assert.strictEqual(service.isDue(state, now), false, 'older days wait for the spare hours');
+  const [read] = await repo.dayReads(connectionId, lastFinal, lastFinal);
+  assert.deepStrictEqual([read.listing_ids, read.cutoff, read.final], [['111', '222'], null, true]);
+
+  // The spare hours: the rest of the history, a day a call — except a day
+  // the account had no traffic at all, which needs none.
+  spareHours();
+  const before = calls.length;
+  await syncUntilDone(connectionId, userId, now);
+  state = await repo.getSyncState(connectionId);
+  const needed = days.dayCount(state.history_from, lastFinal);
+  assert.strictEqual(state.detail_days.length, needed);
+  assert.strictEqual(calls.length - before, needed - 2, 'every missing day but the quiet one');
+  assert.strictEqual(budget.snapshot().byKind.history, needed - 2);
+  assert.strictEqual(service.isDue(state, now), false);
 });
 
-test('the Analytics tab: account totals from stored days, listing figures from one report per range, read once', async () => {
+test('the Analytics tab: every range, and its comparison, is added up from stored days: switching ranges reads nothing', async () => {
   const { userId, connectionId } = await fixture();
   const now = new Date();
   const lastFinal = days.lastFinalDay(UK, now);
@@ -127,13 +149,12 @@ test('the Analytics tab: account totals from stored days, listing figures from o
   ];
   mockInputs({ orders });
   const calls = mockTrafficReports();
-  budget._reset({ limit: 100 });
   await service.syncAccount(connectionId, userId, { mode: 'essential', now });
-  await service.syncAccount(connectionId, userId, { now }); // the week of detail, so only the view reads below
+  spareHours();
+  await syncUntilDone(connectionId, userId, now);
 
   const before = calls.length;
   const { data } = await service.getAnalytics(connectionId, userId, { range: '7d' });
-  assert.strictEqual(calls.length - before, 2, 'the range’s listing report and the previous period’s');
   assert.strictEqual(data.status, 'ok');
   assert.strictEqual(data.timeZone, UK);
   assert.deepStrictEqual([data.range.to, data.range.days, data.range.partial], [lastFinal, 7, false], 'complete days only');
@@ -144,39 +165,70 @@ test('the Analytics tab: account totals from stored days, listing figures from o
   assert.strictEqual(data.changes.impressions, 0);
 
   const garden = data.listings.find((l) => l.itemId === '111');
-  assert.deepStrictEqual([garden.traffic, garden.impressions, garden.views, garden.sold, garden.sales, garden.watchers], ['measured', 600, 6, 2, 9, 3]);
-  assert.strictEqual(garden.changes.views, 0);
-  assert.deepStrictEqual(data.listingReport, { ...data.listingReport, state: 'ok', scope: 'top', cutoff: null, live: 2, canLoadAll: false });
+  assert.deepStrictEqual([garden.traffic, garden.impressions, garden.views, garden.sold, garden.sales, garden.watchers], ['measured', 7 * 600, 7 * 6, 2, 9, 3]);
+  assert.strictEqual(garden.changes.views, 0, 'the previous 7 days, also from stored days');
+  assert.deepStrictEqual(data.listingReport, { ...data.listingReport, state: 'ok', scope: 'history', cutoff: null, live: 2, canLoadAll: false });
+  assert.deepStrictEqual(data.sync.history, { ...data.sync.history, complete: true });
 
-  // Opening the same range again reads nothing from eBay.
-  await service.getAnalytics(connectionId, userId, { range: '7d' });
-  assert.strictEqual(calls.length - before, 2);
-  // Today's listing figures are never read automatically.
-  const todayView = await service.getAnalytics(connectionId, userId, { range: 'today' });
-  assert.strictEqual(todayView.data.range.partial, true);
-  assert.strictEqual(todayView.data.listings[0].traffic !== undefined, true);
+  const views = {};
+  for (const range of ['30d', 'this_month', 'last_month', '90d', '7d']) {
+    views[range] = (await service.getAnalytics(connectionId, userId, { range })).data;
+    assert.ok(views[range].listings.every((l) => l.traffic === 'measured'), range);
+  }
+  const listedDays = days.dayCount(days.dayOf(SMALL_STORE[0].startTime, UK), lastFinal);
+  assert.strictEqual(views['30d'].listings.find((l) => l.itemId === '111').views, listedDays * 6, 'every day since it was listed');
+  const panel = await service.getListingAnalytics(connectionId, userId, '222', { range: '30d' });
+  assert.strictEqual(panel.data.traffic, 'measured');
+  assert.strictEqual(panel.data.dailyTrafficDays, 30, 'a figure every day: zero before it was listed');
+  const summary = await service.getListingSummaries(connectionId, userId);
+  assert.strictEqual(summary.data.items['111'].views, listedDays * 6, 'the Listings tab: the same 30 days');
+  assert.strictEqual(calls.length - before, 0, 'every range, the panel and the Listings tab: no eBay calls');
 });
 
-test('a big store: the busiest 200 with a cutoff, "Load all" for the rest, and a listing read on its own', async () => {
+test('a store of 300: each day reads every listing (2 calls), so ranges are exact for all of them', async () => {
   const { userId, connectionId } = await fixture();
-  const items = [...SMALL_STORE, ...Array.from({ length: 298 }, (_, i) => item(String(9000 + i), `Listing ${i}`))];
+  const items = [...SMALL_STORE, ...Array.from({ length: 298 }, (_, i) => item(String(9000 + i), `Listing ${i}`, daysAgo(5)))].map((i) => ({ ...i, startTime: daysAgo(5) }));
+  mockInputs({ items });
+  const calls = mockTrafficReports();
+  const now = new Date();
+  await service.syncAccount(connectionId, userId, { mode: 'essential', now });
+  let before = calls.length;
+  await service.syncAccount(connectionId, userId, { now });
+  assert.strictEqual(calls.length - before, 2, '300 listings = 2 calls for the day');
+  spareHours();
+  await syncUntilDone(connectionId, userId, now);
+  before = calls.length;
+  const { data } = await service.getAnalytics(connectionId, userId, { range: '7d' });
+  assert.strictEqual(data.listings.filter((l) => l.traffic === 'measured').length, 300);
+  assert.strictEqual(data.listingReport.scope, 'history');
+  assert.strictEqual(calls.length - before, 0);
+});
+
+test('a store over 1,000: eBay’s busiest 200 a day, a range report for the rest, "Load all", and a listing read on its own', async () => {
+  const { userId, connectionId } = await fixture();
+  const items = [...SMALL_STORE, ...Array.from({ length: 1098 }, (_, i) => item(String(9000 + i), `Listing ${i}`, null))];
   mockInputs({ items });
   const calls = mockTrafficReports({ topCount: 200 });
-  budget._reset({ limit: 100 });
-  await service.syncAccount(connectionId, userId, { mode: 'essential', now: new Date() });
-  await service.syncAccount(connectionId, userId, { now: new Date() });
+  const now = new Date();
+  await service.syncAccount(connectionId, userId, { mode: 'essential', now });
+  let before = calls.length;
+  await service.syncAccount(connectionId, userId, { now });
+  assert.strictEqual(calls.length - before, 1, 'the busiest 200: one call');
+  assert.strictEqual(calls.at(-1).searchParams.get('sort'), '-TOTAL_IMPRESSION_TOTAL');
 
+  before = calls.length;
   let { data } = await service.getAnalytics(connectionId, userId, { range: '30d' });
+  assert.strictEqual(calls.length - before, 1, 'the range’s busiest 200 (the previous period isn’t read for comparisons)');
   const below = data.listings.filter((l) => l.traffic === 'below');
   assert.strictEqual(data.listings.filter((l) => l.traffic === 'measured').length, 200);
-  assert.strictEqual(below.length, 100);
+  assert.strictEqual(below.length, 900);
   assert.strictEqual(below[0].impressions, null, 'not read — never shown as zero');
   assert.ok(data.listingReport.cutoff > 0);
-  assert.deepStrictEqual([data.listingReport.loadAllCalls, data.listingReport.canLoadAll], [2, true]);
+  assert.deepStrictEqual([data.listingReport.loadAllCalls, data.listingReport.canLoadAll], [6, true]);
 
   // One listing outside the 200: its panel reads it on its own, exactly.
   const outside = below[0].itemId;
-  const before = calls.length;
+  before = calls.length;
   const panel = await service.getListingAnalytics(connectionId, userId, outside, { range: '30d' });
   assert.strictEqual(panel.data.traffic, 'measured');
   assert.ok(panel.data.totals.impressions > 0);
@@ -184,9 +236,9 @@ test('a big store: the busiest 200 with a cutoff, "Load all" for the rest, and a
   assert.ok(calls.at(-1).searchParams.get('filter').includes(`listing_ids:{${outside}}`));
 
   const loaded = await service.loadAllListings(connectionId, userId, { range: '30d' });
-  assert.strictEqual(loaded.data.calls, 2);
+  assert.strictEqual(loaded.data.calls, 6);
   ({ data } = await service.getAnalytics(connectionId, userId, { range: '30d' }));
-  assert.strictEqual(data.listings.filter((l) => l.traffic === 'measured').length, 300, 'every listing, exactly');
+  assert.strictEqual(data.listings.filter((l) => l.traffic === 'measured').length, 1100, 'every listing, exactly');
   assert.strictEqual(data.listingReport.scope, 'all');
 });
 
@@ -203,8 +255,8 @@ test('"Refresh today" reads today so far and is limited per account per day', as
   assert.strictEqual(calls.length - before, 2 * service.REFRESHES_PER_DAY, 'one account call and one listing call per refresh');
   const state = await repo.getSyncState(connectionId);
   assert.deepStrictEqual([state.today_day, state.refresh_count], [today, service.REFRESHES_PER_DAY]);
-  const todayReport = (await repo.reportsFor(connectionId, today, today)).get('top');
-  assert.strictEqual(todayReport.final, false);
+  const [todayRead] = await repo.dayReads(connectionId, today, today);
+  assert.strictEqual(todayRead.final, false);
   const { data } = await service.getAnalytics(connectionId, userId, { range: 'today' });
   assert.strictEqual(data.listings.find((l) => l.itemId === '111').views, 6, 'today’s listing figures after a refresh');
   await assert.rejects(service.refreshToday(connectionId, userId, now), (err) => err.statusCode === 429);

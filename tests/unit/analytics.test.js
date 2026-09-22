@@ -119,12 +119,10 @@ test('a range goes to eBay in the seller’s time zone, parsed by the report’s
 
 // ---- the allowance -----------------------------------------------------------------
 
-test('the allowance is tiered: detail stops at 40%, the daily sync at 70%, views at 90%, refresh uses the rest', async () => {
-  budget._reset({ limit: 100, used: 39 });
-  assert.strictEqual(budget.allows('detail'), true);
-  await budget.spend('detail', 'c1', async () => 'ok');
-  assert.strictEqual(budget.allows('detail'), false);
-  budget._reset({ limit: 100, used: 70 });
+test('the allowance is tiered: the nightly sync stops at 70%, ranges at 90%, refresh uses the rest', async () => {
+  budget._reset({ limit: 100, used: 69 });
+  assert.strictEqual(budget.allows('sync'), true);
+  await budget.spend('sync', 'c1', async () => 'ok');
   assert.strictEqual(budget.allows('sync'), false);
   assert.strictEqual(budget.allows('view', 20), true);
   budget._reset({ limit: 100, used: 90 });
@@ -132,7 +130,18 @@ test('the allowance is tiered: detail stops at 40%, the daily sync at 70%, views
   assert.strictEqual(budget.allows('refresh', 10), true);
   await assert.rejects(budget.spend('view', 'c1', async () => 'never'), (err) => err.code === 'ANALYTICS_BUDGET' && err.statusCode === 429);
   assert.strictEqual(budget.snapshot().used, 90, 'a refused call is not counted');
-  assert.deepStrictEqual(budget.snapshot().ceilings, { detail: 40, sync: 70, view: 90, refresh: 100 });
+  assert.deepStrictEqual(budget.snapshot().ceilings, { sync: 70, view: 90, refresh: 100, history: 95 });
+});
+
+test('history is filled only from spare allowance, in the last two hours before the reset', async () => {
+  budget._reset({ limit: 100, used: 10 });
+  assert.strictEqual(budget.allows('history'), false, 'mid-window: the allowance may still be needed');
+  assert.strictEqual(budget.snapshot().spareWindow.open, false);
+  budget._reset({ limit: 100, used: 10, resetAt: new Date(Date.now() + 3600e3).toISOString() });
+  assert.strictEqual(budget.allows('history', 85), true);
+  assert.strictEqual(budget.allows('history', 86), false, 'the last 5% stays for refreshes');
+  await budget.spend('history', 'c1', async () => 'ok');
+  assert.strictEqual(budget.snapshot().byKind.history, 1);
 });
 
 test('failed calls still count, and eBay saying "over the limit" closes the window', async () => {
@@ -208,15 +217,22 @@ test('a listing’s traffic from a range’s reports: measured, zero when comple
   assert.strictEqual(trafficFrom([null, { error: 'allowance' }], '2').state, 'unknown');
 });
 
-test('an account is due once its day is complete, for detail while that tier lasts, and not while blocked', () => {
+test('an account is due once its day is complete, for older listing days only in the spare hours, and not while blocked', () => {
   const { isDue } = require('../../src/modules/analytics/analytics.service');
   const now = new Date('2026-09-22T12:00:00Z'); // complete through 21 Sep in the UK
-  const synced = { time_zone: UK, account_through: '2026-09-21', detail_days: ['2026-09-21'], last_synced_at: now.toISOString() };
+  // History reaches back to the oldest live listing (listed 19 Sep).
+  const synced = { time_zone: UK, account_through: '2026-09-21', history_from: '2026-09-19', detail_days: ['2026-09-19', '2026-09-20', '2026-09-21'], last_synced_at: now.toISOString() };
   assert.strictEqual(isDue(synced, now), false);
   assert.strictEqual(isDue({ ...synced, account_through: '2026-09-20' }, now), true);
-  assert.strictEqual(isDue({ ...synced, detail_days: [] }, now), true);
-  budget._reset({ limit: 100, used: 40 });
-  assert.strictEqual(isDue({ ...synced, detail_days: [] }, now), false, 'detail waits for tomorrow’s allowance');
+  assert.strictEqual(isDue({ ...synced, detail_days: ['2026-09-19', '2026-09-20'] }, now), true, 'the day just ended, for every listing');
+  budget._reset({ limit: 100, used: 70 });
+  assert.strictEqual(isDue({ ...synced, detail_days: ['2026-09-19', '2026-09-20'] }, now), false, 'the nightly tier is spent');
+  budget._reset({ limit: 100, used: 0 });
+  const gap = { ...synced, detail_days: ['2026-09-21'] };
+  assert.strictEqual(isDue(gap, now), false, 'older days wait for the spare hours');
+  budget._reset({ limit: 100, used: 30, resetAt: new Date(Date.now() + 3600e3).toISOString() });
+  assert.strictEqual(isDue(gap, now), true);
+  budget._reset({ limit: 100, used: 0 });
   assert.strictEqual(isDue({ account_through: null, detail_days: [], last_error: 'needs_reconnect', last_synced_at: '2026-09-22T11:00:00Z' }, now), false);
   assert.strictEqual(isDue({ account_through: null, detail_days: [], last_error: 'needs_reconnect', last_synced_at: '2026-09-22T05:00:00Z' }, now), true);
   // Waiting for the allowance: not retried until the daily-sync tier has room.
@@ -224,4 +240,44 @@ test('an account is due once its day is complete, for detail while that tier las
   assert.strictEqual(isDue({ ...synced, account_through: '2026-09-20', last_error: 'waiting_allowance' }, now), false);
   budget._reset({ limit: 100, used: 0 });
   assert.strictEqual(isDue({ ...synced, account_through: '2026-09-20', last_error: 'waiting_allowance' }, now), true);
+});
+
+test('listing history: newest days first, back 180 days or to the oldest live listing', () => {
+  const missing = days.historyDaysMissing({ lastFinal: '2026-09-21', historyFrom: null, done: ['2026-09-21', '2026-09-19'] });
+  assert.strictEqual(missing[0], '2026-09-20');
+  assert.strictEqual(missing[1], '2026-09-18');
+  assert.strictEqual(missing.length, 178);
+  assert.strictEqual(missing[missing.length - 1], days.addDays('2026-09-21', -179));
+  assert.deepStrictEqual(days.historyDaysMissing({ lastFinal: '2026-09-21', historyFrom: '2026-09-18', done: ['2026-09-21', '2026-09-19'] }), ['2026-09-20', '2026-09-18']);
+});
+
+test('a range from stored days: exact for the listings every day covered, and only those', () => {
+  const t = (views) => ({ ...days.emptyTraffic(), views, total_impressions: views * 10 });
+  const reads = [
+    { day: '2026-09-19', listing_ids: ['1', '2'], cutoff: null },
+    { day: '2026-09-20', listing_ids: ['1', '2', '3'], cutoff: null },
+    { day: '2026-09-21', listing_ids: ['1', '2', '3'], cutoff: null },
+  ];
+  const totals = [{ listing_id: '1', ...t(9), counted_days: 0 }, { listing_id: '3', ...t(4), counted_days: 0 }];
+  const listedOn = new Map([['1', '2026-01-01'], ['2', '2026-01-01'], ['3', '2026-09-20'], ['4', '2026-01-01'], ['5', null]]);
+  const report = days.historyReport({ from: '2026-09-19', to: '2026-09-21', reads, totals, listedOn });
+  assert.strictEqual(report.covers('1'), true);
+  assert.strictEqual(report.covers('2'), true, 'named every day, no traffic: zero');
+  assert.strictEqual(report.covers('3'), true, 'listed on the 20th: the 19th counts as zero');
+  assert.strictEqual(report.covers('4'), false, 'never named');
+  assert.strictEqual(report.covers('5'), false);
+  assert.strictEqual(report.complete, false);
+  const { trafficFrom } = require('../../src/modules/analytics/analytics.service');
+  assert.strictEqual(trafficFrom([report], '1').traffic.views, 9);
+  assert.strictEqual(trafficFrom([report], '2').traffic.views, 0);
+  assert.deepStrictEqual(trafficFrom([report, { rows: [{ listingId: '4', views: 2 }], cutoff: 50 }], '4').traffic, { listingId: '4', views: 2 }, 'uncovered: the next report answers');
+
+  // A missing day covers only listings listed after it.
+  const gap = days.historyReport({ from: '2026-09-18', to: '2026-09-21', reads, totals, listedOn });
+  assert.deepStrictEqual(['1', '3'].map((id) => gap.covers(id)), [false, true]);
+
+  // A big store's day of eBay's busiest 200 (a cutoff) covers the listings in it that day.
+  const busiest = [{ day: '2026-09-21', listing_ids: null, cutoff: 40 }];
+  const big = days.historyReport({ from: '2026-09-21', to: '2026-09-21', reads: busiest, totals: [{ listing_id: '1', ...t(9), counted_days: 1 }], listedOn: new Map([['1', null], ['2', null]]) });
+  assert.deepStrictEqual([big.covers('1'), big.covers('2')], [true, false]);
 });

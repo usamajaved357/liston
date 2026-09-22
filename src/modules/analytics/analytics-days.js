@@ -21,7 +21,10 @@ const SITE_TIME_ZONES = {
 // A day is complete, and read, at 02:00 local time the next morning.
 const SYNC_HOUR = 2;
 const ACCOUNT_HISTORY_DAYS = 180; // account totals kept, for period comparisons
-const DETAIL_HISTORY_DAYS = 90; // day-by-day rows for the busiest listings
+// Each listing's figures day by day: enough for the longest range (90
+// days) and the 90 before it, so every range and its comparison is added
+// up from stored days.
+const LISTING_HISTORY_DAYS = 180;
 const RANGES = ['today', '7d', '30d', 'this_month', 'last_month', '90d'];
 
 const timeZoneFor = (marketplaceId) => SITE_TIME_ZONES[marketplaceId] || null;
@@ -246,6 +249,59 @@ function salesWithin(dayMap, from, to) {
   return out;
 }
 
+// ---- listing history -----------------------------------------------------------
+
+/**
+ * The days of listing history still to read, newest first (so the short
+ * ranges are covered soonest): from the last complete day back to
+ * LISTING_HISTORY_DAYS, or to `historyFrom` when nothing live is older.
+ */
+function historyDaysMissing({ lastFinal, historyFrom, done }) {
+  const floor = [addDays(lastFinal, -(LISTING_HISTORY_DAYS - 1)), historyFrom || ''].sort()[1];
+  const have = new Set(done || []);
+  const out = [];
+  for (let day = lastFinal; day >= floor; day = addDays(day, -1)) if (!have.has(day)) out.push(day);
+  return out;
+}
+
+/**
+ * Which live listings the stored day-by-day history gives exact totals for
+ * over a range, and those totals. A listing is covered when, on every day
+ * of the range, it had been read or couldn't have had traffic:
+ *   - a day read naming listings (`listing_ids`) covers the ones named;
+ *   - an unfiltered day read with no cutoff covers every listing;
+ *   - an unfiltered day with a cutoff (eBay's busiest 200 of a big store)
+ *     covers only the listings in it that day;
+ *   - any day before a listing was listed counts as zero for it.
+ * `listedOn` maps listing id -> the seller day it was listed (or null).
+ * Returns a report trafficFrom() reads: rows, cutoff null, covers(id).
+ */
+function historyReport({ from, to, reads, totals, listedOn }) {
+  const readByDay = new Map(reads.map((r) => [r.day, r]));
+  const missing = [];
+  const named = [];
+  const busiest = [];
+  for (const day of daysBetween(from, to)) {
+    const read = readByDay.get(day);
+    if (!read) missing.push(day);
+    else if (read.listing_ids) named.push({ day, ids: new Set(read.listing_ids.map(String)) });
+    else if (read.cutoff != null) busiest.push(day);
+  }
+  const latestMissing = missing.length ? missing[missing.length - 1] : null;
+  const rowsById = new Map(totals.map((r) => [String(r.listing_id), r]));
+  const covered = new Set();
+  for (const [id, listed] of listedOn) {
+    const after = (day) => Boolean(listed) && listed > day;
+    if (latestMissing && !after(latestMissing)) continue;
+    if (!named.every(({ day, ids }) => ids.has(id) || after(day))) continue;
+    const needed = busiest.filter((day) => !after(day)).length;
+    if (needed && (rowsById.get(id)?.counted_days || 0) < needed) continue;
+    covered.add(id);
+  }
+  const rows = [...covered].filter((id) => rowsById.has(id)).map((id) => ({ ...rowsById.get(id), listingId: id }));
+  return { scope: 'history', rows, cutoff: null, covers: (id) => covered.has(String(id)), coveredCount: covered.size, complete: covered.size === listedOn.size };
+}
+
 // ---- what to look at ----------------------------------------------------------
 
 /**
@@ -272,7 +328,9 @@ module.exports = {
   SITE_TIME_ZONES,
   SYNC_HOUR,
   ACCOUNT_HISTORY_DAYS,
-  DETAIL_HISTORY_DAYS,
+  LISTING_HISTORY_DAYS,
+  historyDaysMissing,
+  historyReport,
   RANGES,
   TRAFFIC_COLUMNS,
   timeZoneFor,

@@ -34,6 +34,7 @@ function Freshness({ data }: { data: AccountAnalytics }) {
   if (sync.finalThrough) parts.push(`complete to ${dayLabelLong(sync.finalThrough)}`);
   if (sync.todayUpdatedAt) parts.push(`today so far as of ${timeOfDay(sync.todayUpdatedAt)}`);
   parts.push(`next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}`);
+  if (sync.history && !sync.history.complete) parts.push(`listing history ${sync.history.stored} of ${sync.history.needed} days`);
   return (
     <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-muted)]">
       {sync.syncing ? (
@@ -315,6 +316,12 @@ function AnalyticsPageInner() {
           {data?.status === "ok" && data.sync.lastError && <div className="notice notice-warning">The last update from eBay stopped early: {data.sync.lastError}</div>}
           {data?.status === "ok" && data.sync.waitingForAllowance && (
             <div className="notice notice-warning">Today&apos;s eBay allowance for traffic data is used up, so this account&apos;s latest figures are read after the reset. Sales are up to date.</div>
+          )}
+          {data?.status === "ok" && data.sync.history && !data.sync.history.complete && data.sync.finalThrough && (
+            <div className="notice notice-success">
+              Storing listing history: {data.sync.history.stored} of {data.sync.history.needed} days, filled overnight from spare eBay allowance. Once complete, ranges load
+              with no eBay calls.
+            </div>
           )}
           <MetricsBoard
             totals={data?.totals ?? null}
