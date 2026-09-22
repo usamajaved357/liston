@@ -8,11 +8,11 @@ import { useAccountEvents } from "@/lib/useAccountEvents";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
-import { BarList } from "@/components/charts/BarList";
-import { dayLabelLong, dayRangeLabel, fullNumber, timeAgo } from "@/components/charts/chart-format";
+import { dayLabel, dayLabelLong, dayRangeLabel, timeAgo } from "@/components/charts/chart-format";
 import { MetricsBoard } from "@/components/analytics/MetricsBoard";
-import { Funnel } from "@/components/analytics/Funnel";
-import { HintChip, ListingsTable } from "@/components/analytics/ListingsTable";
+import { ListingsTable } from "@/components/analytics/ListingsTable";
+import { GrowthCard, SourcesStrip, TopMoversCard, WorthALookCard } from "@/components/analytics/InsightCards";
+import type { ListingFilter } from "@/components/analytics/insights";
 import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
 import { RANGE_OPTIONS, comparedFor } from "@/components/analytics/metrics";
 
@@ -28,70 +28,31 @@ function timeOfDay(iso: string) {
   return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
+// One short line beside the ranges; the details are in its tooltip.
 function Freshness({ data }: { data: AccountAnalytics }) {
   const { sync } = data;
-  const parts: string[] = [];
-  if (sync.finalThrough) parts.push(`complete to ${dayLabelLong(sync.finalThrough)}`);
-  if (sync.todayUpdatedAt) parts.push(`today so far as of ${timeOfDay(sync.todayUpdatedAt)}`);
-  parts.push(`next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}`);
-  if (sync.history && !sync.history.complete) parts.push(`listing history ${sync.history.stored} of ${sync.history.needed} days`);
+  const details = [
+    sync.finalThrough && `Complete to ${dayLabelLong(sync.finalThrough)}.`,
+    sync.todayUpdatedAt && `Today so far as of ${timeOfDay(sync.todayUpdatedAt)}.`,
+    `Next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}.`,
+    sync.history && !sync.history.complete && `Listing history: ${sync.history.stored} of ${sync.history.needed} days stored.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <p className="flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-muted)]">
+    <span title={details} className="inline-flex cursor-help items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-2.5 py-1 text-[11.5px] text-[var(--color-muted)]">
       {sync.syncing ? (
-        <span className="inline-flex items-center gap-1.5 font-medium text-[var(--color-primary)]">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-primary)]" /> Updating from eBay…
-        </span>
+        <>
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-primary)]" aria-hidden />
+          <span className="font-medium text-[var(--color-primary)]">Updating…</span>
+        </>
       ) : (
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+        <>
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+          {sync.finalThrough ? `Updated to ${dayLabel(sync.finalThrough)}` : "Waiting for eBay"}
+        </>
       )}
-      {parts.join(" · ")}
-    </p>
-  );
-}
-
-function InsightsCard({ data, onOpen }: { data: AccountAnalytics; onOpen: (id: string) => void }) {
-  const withHints = data.listings.filter((l) => l.hint);
-  const attention = withHints.filter((l) => l.hint!.kind !== "converting").sort((a, b) => (b.views ?? 0) - (a.views ?? 0));
-  const winners = withHints.filter((l) => l.hint!.kind === "converting").sort((a, b) => (b.sold ?? 0) - (a.sold ?? 0));
-  const picks = [...attention.slice(0, 3), ...winners.slice(0, 2)];
-  return (
-    <section className="card flex flex-col p-5">
-      <div className="flex items-baseline justify-between">
-        <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">Worth a look</h2>
-        <span className="text-[11.5px] text-[var(--color-muted)]">
-          {attention.length} need attention · {winners.length} converting well
-        </span>
-      </div>
-      {data.range.partial ? (
-        <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--color-muted)]">Suggestions look at complete days. Choose 7 days or longer to see them.</p>
-      ) : data.listingReport.state !== "ok" ? (
-        <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--color-muted)]">Suggestions appear once this range&apos;s listing figures are read from eBay.</p>
-      ) : picks.length === 0 ? (
-        <p className="mt-4 text-[12.5px] leading-relaxed text-[var(--color-muted)]">Nothing stands out in this range. Every listing is getting seen and clicked at a normal rate.</p>
-      ) : (
-        <ul className="mt-3 -mx-2 flex-1 space-y-0.5">
-          {picks.map((l) => (
-            <li key={l.itemId}>
-              <button type="button" onClick={() => onOpen(l.itemId)} className="group flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left transition-colors hover:bg-[var(--color-paper)]">
-                {l.imageUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={l.imageUrl} alt="" className="h-9 w-9 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-contain" loading="lazy" />
-                ) : (
-                  <span className="h-9 w-9 flex-shrink-0 rounded-lg bg-[var(--color-paper)]" />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{l.title}</span>
-                  <span className="mt-0.5 block text-[11.5px] text-[var(--color-muted)]">
-                    {fullNumber(l.views)} views · {fullNumber(l.sold)} sold
-                  </span>
-                </span>
-                <HintChip hint={l.hint!} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    </span>
   );
 }
 
@@ -110,6 +71,7 @@ function AnalyticsPageInner() {
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [listingFilter, setListingFilter] = useState<ListingFilter>("all");
 
   const loaded = byRange[range];
   const fresh = loaded && !("error" in loaded) ? loaded : null;
@@ -159,6 +121,12 @@ function AnalyticsPageInner() {
   function changeRange(next: AnalyticsRange) {
     setRange(next);
     setUrl({ range: next });
+  }
+
+  // A group picked in "Growth opportunities": the table below shows it.
+  function showGroup(filter: ListingFilter) {
+    setListingFilter(filter);
+    requestAnimationFrame(() => document.getElementById("analytics-listings")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
   function openListing(itemId: string | null) {
@@ -285,7 +253,7 @@ function AnalyticsPageInner() {
           <p className="mt-1 text-[13px] text-[var(--color-muted)]">Ask the account owner to give you Analytics access on the Team page.</p>
         </div>
       ) : (
-        <div className={`space-y-6 transition-opacity ${data && !fresh ? "opacity-60" : ""}`}>
+        <div className={`space-y-5 transition-opacity ${data && !fresh ? "opacity-60" : ""}`}>
           {notice && (
             <div className={`notice ${notice.tone === "success" ? "notice-success" : "notice-danger"}`}>
               <span className="flex-1">{notice.text}</span>
@@ -317,12 +285,6 @@ function AnalyticsPageInner() {
           {data?.status === "ok" && data.sync.waitingForAllowance && (
             <div className="notice notice-warning">Today&apos;s eBay allowance for traffic data is used up, so this account&apos;s latest figures are read after the reset. Sales are up to date.</div>
           )}
-          {data?.status === "ok" && data.sync.history && !data.sync.history.complete && data.sync.finalThrough && (
-            <div className="notice notice-success">
-              Storing listing history: {data.sync.history.stored} of {data.sync.history.needed} days, from eBay allowance left over before each daily reset. Filters never
-              call eBay; listing traffic for a range shows once its days are in.
-            </div>
-          )}
           <MetricsBoard
             totals={data?.totals ?? null}
             changes={data?.changes ?? null}
@@ -334,29 +296,14 @@ function AnalyticsPageInner() {
             previousRange={data?.range.previous ?? null}
             loading={!data && !loadError}
             trafficUnavailable={data ? data.status !== "ok" || !data.sync.finalThrough : false}
+            footer={data && data.status === "ok" ? <SourcesStrip sources={data.sources} /> : null}
           />
 
           {data && (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              <section className="card p-5">
-                <div className="flex items-baseline justify-between">
-                  <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">From shown to sold</h2>
-                  <span className="text-[11.5px] text-[var(--color-muted)]">{rangeLabel}</span>
-                </div>
-                <div className="mt-4">
-                  <Funnel impressions={data.totals.impressions} views={data.totals.views} sold={data.totals.sold} ctr={data.totals.ctr} />
-                </div>
-              </section>
-              <section className="card p-5">
-                <div className="flex items-baseline justify-between">
-                  <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">Where views came from</h2>
-                  <span className="text-[11.5px] text-[var(--color-muted)]">{fullNumber(data.totals.views)} views</span>
-                </div>
-                <div className="mt-4">
-                  <BarList items={data.sources.map((s) => ({ key: s.key, label: s.label, value: s.views }))} format={fullNumber} empty="No views recorded in this range yet." />
-                </div>
-              </section>
-              <InsightsCard data={data} onOpen={openListing} />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <GrowthCard data={data} onPick={showGroup} />
+              <TopMoversCard data={data} onOpen={openListing} />
+              <WorthALookCard data={data} onOpen={openListing} />
             </div>
           )}
 
@@ -365,12 +312,15 @@ function AnalyticsPageInner() {
               rows={data.listings}
               currency={data.currency}
               compared={compared}
+              days={data.range.days}
               onOpen={openListing}
               report={data.listingReport}
               partial={data.range.partial}
               todayRead={Boolean(data.sync.todayListingsUpdatedAt)}
               onLoadAll={loadAll}
               loadingAll={loadingAll}
+              filter={listingFilter}
+              onFilter={setListingFilter}
             />
           )}
 

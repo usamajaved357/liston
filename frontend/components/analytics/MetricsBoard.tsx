@@ -25,6 +25,7 @@ export function MetricsBoard({
   compact = false,
   trafficUnavailable,
   emptyDailyMessage,
+  footer,
 }: {
   totals: AnalyticsMetrics | null;
   changes: AnalyticsChanges | null;
@@ -41,6 +42,7 @@ export function MetricsBoard({
   // figures in the range (a listing's traffic is kept day by day only while
   // it's among the account's busiest).
   emptyDailyMessage?: string;
+  footer?: React.ReactNode; // under the chart, inside its card (the Analytics tab's traffic sources)
 }) {
   const [selected, setSelected] = useState<MetricKey>("views");
   const [view, setView] = useState<"chart" | "table">("chart");
@@ -53,7 +55,7 @@ export function MetricsBoard({
 
   return (
     <div className={compact ? "space-y-4" : "space-y-5"}>
-      <div role="tablist" aria-label="Measure shown in the chart" className={`grid gap-3 ${compact ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2 md:grid-cols-3 xl:grid-cols-6"}`}>
+      <div role="tablist" aria-label="Measure shown in the chart" className={`grid gap-2.5 ${compact ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-2 sm:grid-cols-3 xl:grid-cols-6"}`}>
         {METRICS.map((m) => {
           const traffic = m.key === "impressions" || m.key === "views" || m.key === "ctr" || m.key === "conversion";
           return (
@@ -114,6 +116,7 @@ export function MetricsBoard({
         ) : (
           <TrendTable points={points} format={(v) => def.format(v, currency)} currentLabel={def.label} previousLabel="Previous period" />
         )}
+        {footer}
       </section>
     </div>
   );

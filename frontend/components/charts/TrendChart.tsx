@@ -317,27 +317,43 @@ export function TrendChart({
 /** The same points as a plain table: the chart's accessible twin. */
 export function TrendTable({ points, format, currentLabel = "This period", previousLabel = "Previous period" }: { points: TrendPoint[]; format: (v: number | null) => string; currentLabel?: string; previousLabel?: string }) {
   const hasPrevious = points.some((p) => p.previous != null);
+  // Fixed columns, every figure right-aligned under a right-aligned heading.
   return (
-    <div className="max-h-[280px] overflow-y-auto rounded-lg border border-[var(--color-line)]">
-      <table className="w-full text-[12.5px]">
-        <thead className="sticky top-0 bg-[var(--color-paper)] text-left text-[11px] uppercase tracking-wide text-[var(--color-muted)]">
+    <div className="max-h-[300px] overflow-y-auto rounded-xl border border-[var(--color-line)]">
+      <table className="w-full table-fixed text-[12.5px]">
+        <colgroup>
+          <col className="w-[34%]" />
+          <col />
+          {hasPrevious && <col />}
+          {hasPrevious && <col className="w-[18%]" />}
+        </colgroup>
+        <thead className="sticky top-0 z-10 bg-[var(--color-paper)] text-[10.5px] uppercase tracking-wide text-[var(--color-muted)] shadow-[0_1px_0_var(--color-line)]">
           <tr>
-            <th className="px-3 py-2 font-semibold">Day</th>
-            <th className="px-3 py-2 text-right font-semibold">{currentLabel}</th>
-            {hasPrevious && <th className="px-3 py-2 text-right font-semibold">{previousLabel}</th>}
+            <th scope="col" className="px-4 py-2.5 text-left font-semibold">Day</th>
+            <th scope="col" className="px-4 py-2.5 text-right font-semibold">{currentLabel}</th>
+            {hasPrevious && <th scope="col" className="px-4 py-2.5 text-right font-semibold">{previousLabel}</th>}
+            {hasPrevious && <th scope="col" className="px-4 py-2.5 text-right font-semibold">Change</th>}
           </tr>
         </thead>
-        <tbody className="divide-y divide-[var(--color-line)]">
-          {points.map((p) => (
-            <tr key={p.day}>
-              <td className="px-3 py-1.5 text-[var(--color-ink)]">
-                {dayLabelLong(p.day)}
-                {p.partial && <span className="ml-1 text-[var(--color-muted)]">(so far)</span>}
-              </td>
-              <td className="px-3 py-1.5 text-right font-medium tabular-nums text-[var(--color-ink)]">{format(p.value)}</td>
-              {hasPrevious && <td className="px-3 py-1.5 text-right tabular-nums text-[var(--color-muted)]">{format(p.previous ?? null)}</td>}
-            </tr>
-          ))}
+        <tbody>
+          {points.map((p) => {
+            const change = p.value != null && p.previous != null && p.previous !== 0 ? (p.value - p.previous) / p.previous : null;
+            return (
+              <tr key={p.day} className="border-b border-[var(--color-line)]/70 last:border-0 odd:bg-[var(--color-panel)] even:bg-[var(--color-paper)]/40">
+                <td className="px-4 py-2 text-[var(--color-ink)]">
+                  {dayLabelLong(p.day)}
+                  {p.partial && <span className="ml-1 text-[var(--color-muted)]">(so far)</span>}
+                </td>
+                <td className="px-4 py-2 text-right font-semibold tabular-nums text-[var(--color-ink)]">{format(p.value)}</td>
+                {hasPrevious && <td className="px-4 py-2 text-right tabular-nums text-[var(--color-muted)]">{format(p.previous ?? null)}</td>}
+                {hasPrevious && (
+                  <td className={`px-4 py-2 text-right text-[11.5px] font-semibold tabular-nums ${change == null ? "text-[var(--color-line-strong)]" : change >= 0 ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
+                    {change == null ? "—" : `${change >= 0 ? "▲" : "▼"} ${Math.abs(change * 100).toFixed(Math.abs(change) < 0.1 ? 1 : 0)}%`}
+                  </td>
+                )}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

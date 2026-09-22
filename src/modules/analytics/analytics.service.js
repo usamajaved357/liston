@@ -556,12 +556,17 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
       const id = String(item.itemId);
       const t = listingTraffic(current, id, history);
       const m = listingMetrics(t, d.salesWithin(sales.byListingDay.get(id), win.from, win.to));
+      // The previous period: traffic when its stored days cover this listing,
+      // sales whenever the orders reach back that far — each compared on
+      // its own, so sales changes show while traffic history still fills.
       const pt = trafficFrom(prior, id);
       let prev = null;
-      if (pt.state === 'measured' && liveThroughPrevious(item, win.previous.from, timeZone)) {
+      if (liveThroughPrevious(item, win.previous.from, timeZone)) {
         const pSales = win.previous.from >= ordersFrom ? d.salesWithin(sales.byListingDay.get(id), win.previous.from, win.previous.to) : null;
-        prev = listingMetrics(pt, pSales || { units: 0, amount: 0, orders: 0 });
-        if (!pSales) Object.assign(prev, { sold: null, sales: null, conversion: null, orders: null });
+        if (pt.state === 'measured' || pSales) {
+          prev = listingMetrics(pt, pSales || { units: 0, amount: 0, orders: 0 });
+          if (!pSales) Object.assign(prev, { sold: null, sales: null, conversion: null, orders: null });
+        }
       }
       return {
         itemId: id,
@@ -574,7 +579,9 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
         traffic: t.state, // measured | pending | below | unknown
         ...m,
         sales: round2(m.sales),
-        changes: withChanges(m, t.state === 'measured' ? prev : null),
+        // Traffic changes need both periods measured: an unmeasured side is
+        // null in listingMetrics, and a change with a null side is null.
+        changes: withChanges(m, prev),
         hint: t.state === 'measured' && !win.partial ? d.hintFor(m, win) : null,
       };
     });

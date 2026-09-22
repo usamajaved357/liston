@@ -9,7 +9,7 @@ import { BarList } from "@/components/charts/BarList";
 import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
 import { MetricsBoard } from "./MetricsBoard";
 import { Funnel } from "./Funnel";
-import { HintChip } from "./ListingsTable";
+import { HintTag } from "./InsightCards";
 import { RANGE_OPTIONS } from "./metrics";
 
 // One listing's analytics in a panel that slides over the page: its
@@ -175,7 +175,7 @@ export function ListingAnalyticsPanel({
 
           {view?.hint && (
             <div className="flex items-start gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
-              <HintChip hint={view.hint} size="md" />
+              <HintTag hint={view.hint} />
               <p className="text-[13px] leading-relaxed text-[var(--color-ink)]">{view.hint.detail}</p>
             </div>
           )}
