@@ -7,6 +7,7 @@ import { DeltaBadge } from "@/components/charts/DeltaBadge";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { compactNumber, fullNumber } from "@/components/charts/chart-format";
 import { ListFooter } from "@/components/ListFooter";
+import { readView, writeView } from "@/lib/viewState";
 import { MetricKey, metricDef } from "./metrics";
 import { HintTag } from "./InsightCards";
 import { ListingFilter, actionDef, matchesFilter } from "./insights";
@@ -34,6 +35,7 @@ const COLUMNS: { key: MetricKey | "watchers"; label: string }[] = [
 ];
 const PAGE_SIZES = [25, 50, 100] as const;
 type PageSize = (typeof PAGE_SIZES)[number];
+type TableView = { sort: { key: SortKey; dir: "desc" | "asc" }; search: string; page: number; perPage: PageSize; rowsScroll: number };
 const TRAFFIC_KEYS: string[] = ["impressions", "views", "ctr", "conversion"];
 
 function Thumb({ src }: { src: string | null }) {
@@ -100,6 +102,7 @@ export function ListingsTable({
   loadingAll,
   filter,
   onFilter,
+  viewKey,
 }: {
   rows: ListingAnalyticsRow[];
   currency: string | null;
@@ -112,14 +115,27 @@ export function ListingsTable({
   loadingAll: boolean;
   filter: ListingFilter;
   onFilter: (f: ListingFilter) => void;
+  viewKey?: string; // remembers search, sort, page and scroll for coming back
 }) {
-  const [sort, setSort] = useState<{ key: SortKey; dir: "desc" | "asc" }>({ key: "impressions", dir: "desc" });
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState<PageSize>(25);
+  const [saved] = useState(() => (viewKey ? readView<TableView>(viewKey) : {}));
+  const [sort, setSort] = useState<{ key: SortKey; dir: "desc" | "asc" }>(saved.sort ?? { key: "impressions", dir: "desc" });
+  const [search, setSearch] = useState(saved.search ?? "");
+  const [page, setPage] = useState(saved.page ?? 1);
+  const [perPage, setPerPage] = useState<PageSize>(saved.perPage ?? 25);
+  useEffect(() => {
+    if (viewKey) writeView<TableView>(viewKey, { sort, search, page, perPage });
+  }, [viewKey, sort, search, page, perPage]);
 
-  // A new filter, search, sort or range starts again from page one.
-  useEffect(() => setPage(1), [filter, search, sort, rows]);
+  // A new filter, search, sort or range starts again from page one (not the
+  // first render: that is the page it was left on). A refresh of the same
+  // range keeps the page; it only clamps to the last one.
+  const resetOn = `${filter}|${search}|${sort.key}|${sort.dir}|${compared}`;
+  const lastResetOn = useRef(resetOn);
+  useEffect(() => {
+    if (lastResetOn.current === resetOn) return;
+    lastResetOn.current = resetOn;
+    setPage(1);
+  }, [resetOn]);
 
   // The section is as tall as the page's scrolling area, so scrolled to, it
   // fills the screen: rows scroll under the pinned header and the pages sit
@@ -136,6 +152,19 @@ export function ListingsTable({
     observer.observe(scroller);
     return () => observer.disconnect();
   }, []);
+
+  // The rows' own scroll, put back once the section has its height (before
+  // that the rows don't scroll).
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const rowsRestored = useRef(false);
+  useEffect(() => {
+    if (!fitHeight || rowsRestored.current) return;
+    rowsRestored.current = true;
+    if (rowsRef.current && saved.rowsScroll) rowsRef.current.scrollTop = saved.rowsScroll;
+  }, [fitHeight, saved.rowsScroll]);
+  const rememberRowsScroll = () => {
+    if (viewKey && rowsRef.current) writeView<TableView>(viewKey, { rowsScroll: rowsRef.current.scrollTop });
+  };
 
   const counts = useMemo(
     () => ({
@@ -271,7 +300,7 @@ export function ListingsTable({
 
       {/* Rows scroll inside the card under a pinned header; the pages stay at its foot. */}
       {/* Wide enough for every column from ~900px; below that the rows scroll sideways inside the card. */}
-      <div className="min-h-0 flex-1 overflow-auto min-[900px]:overflow-x-hidden">
+      <div ref={rowsRef} onScroll={rememberRowsScroll} className="min-h-0 flex-1 overflow-auto min-[900px]:overflow-x-hidden">
         <table className="w-full min-w-[660px] table-fixed text-[12.5px]">
           <colgroup>
             <col className="w-[31%]" />

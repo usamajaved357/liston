@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { api, ApiError, AnalyticsRange, ListingAnalytics } from "@/lib/api";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { useAccountEvents } from "@/lib/useAccountEvents";
@@ -16,18 +17,23 @@ import { RANGE_OPTIONS } from "./metrics";
 // figures for a range, the change from the period before, the day-by-day
 // chart, where its views came from and a suggestion when there is one.
 // Opened from the Analytics tab and from each live listing on the Listings
-// tab, so neither has to leave its page.
+// tab, so neither has to leave its page. "Open in Listings" takes the seller
+// to the listing on Liston's Active tab (searched by its item number), where
+// it can be edited or ended — the fix happens here, not on eBay.
 
 export function ListingAnalyticsPanel({
   connectionId,
   itemId,
   initialRange = "30d",
   onClose,
+  onOpenInListings,
 }: {
   connectionId: string;
   itemId: string;
   initialRange?: AnalyticsRange;
   onClose: () => void;
+  // Already on the Listings tab: show the listing there instead of navigating.
+  onOpenInListings?: () => void;
 }) {
   const [range, setRange] = useState<AnalyticsRange>(initialRange);
   const [byKey, setByKey] = useState<Record<string, ListingAnalytics | { error: string }>>({});
@@ -130,13 +136,16 @@ export function ListingAnalyticsPanel({
               )}
             </div>
             <div className="flex flex-shrink-0 items-center gap-1.5">
-              {listing?.url && (
-                <a href={listing.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">
-                  View on eBay
-                  <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
-                    <path d="M14 5h5v5M19 5l-8 8M10 5H6a1 1 0 00-1 1v12a1 1 0 001 1h12a1 1 0 001-1v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </a>
+              {onOpenInListings ? (
+                <button type="button" onClick={onOpenInListings} className="btn btn-secondary btn-sm">
+                  Open in Listings
+                  <ArrowIcon />
+                </button>
+              ) : (
+                <Link href={`/accounts/${connectionId}/listings?q=${encodeURIComponent(itemId)}`} className="btn btn-secondary btn-sm">
+                  Open in Listings
+                  <ArrowIcon />
+                </Link>
               )}
               <button ref={closeRef} type="button" onClick={onClose} className="btn btn-ghost btn-icon" aria-label="Close">
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
@@ -233,5 +242,13 @@ export function ListingAnalyticsPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+function ArrowIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
+      <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

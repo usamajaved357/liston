@@ -230,8 +230,11 @@ export default function AccountListingsPage() {
   const updateWarning = searchParams.get("warning");
   const endedItemId = searchParams.get("ended");
   const [filter, setFilter] = useState<Tab>(urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active");
-  const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
+  // ?q= opens the tab already searched (the analytics panel's "Open in
+  // Listings" passes the item number).
+  const urlSearch = searchParams.get("q") || "";
+  const [search, setSearch] = useState(urlSearch);
+  const [debounced, setDebounced] = useState(urlSearch.trim());
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState<number | "all">(25);
   const [items, setItems] = useState<Listing[]>([]);
@@ -618,7 +621,20 @@ export default function AccountListingsPage() {
         onCancel={() => setDraftToDelete(null)}
         onConfirm={handleDeleteDraft}
       />
-      {analyticsItem && <ListingAnalyticsPanel connectionId={connection.id} itemId={analyticsItem} onClose={() => setAnalyticsItem(null)} />}
+      {analyticsItem && (
+        <ListingAnalyticsPanel
+          connectionId={connection.id}
+          itemId={analyticsItem}
+          onClose={() => setAnalyticsItem(null)}
+          onOpenInListings={() => {
+            if (filter !== "active") changeFilter("active");
+            setSearch(analyticsItem);
+            setDebounced(analyticsItem);
+            setPage(1);
+            setAnalyticsItem(null);
+          }}
+        />
+      )}
     </AccountShell>
   );
 }

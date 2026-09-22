@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, AccountAnalytics, AnalyticsRange } from "@/lib/api";
+import { cacheResponse, cachedResponse, readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { AccountShell } from "@/components/AccountShell";
@@ -23,6 +24,8 @@ import { RANGE_OPTIONS, comparedFor } from "@/components/analytics/metrics";
 // eBay on its own; traffic arrives each day once eBay closes it.
 
 const RANGE_KEYS = RANGE_OPTIONS.map((r) => r.key);
+
+type AnalyticsView = { range: AnalyticsRange; openItem: string | null; listingFilter: ListingFilter; scrollTop: number };
 
 // On the right of the ranges, as plain text: the last complete day the
 // figures reach, with a dot (green when up to date, pulsing while
@@ -68,15 +71,29 @@ function AnalyticsPageInner() {
   const searchParams = useSearchParams();
   const { connection, user, loading, error } = useConnection(params.id);
 
+  // Coming back (Back, or the sidebar) shows the page as it was left: the
+  // range, the open listing, the group picked, the table and the scroll.
+  // The URL wins when it names a range or listing.
+  const viewKey = `analytics:${params.id}`;
+  const [saved] = useState(() => readView<AnalyticsView>(viewKey));
   const urlRange = searchParams.get("range") as AnalyticsRange | null;
-  const [range, setRange] = useState<AnalyticsRange>(urlRange && RANGE_KEYS.includes(urlRange) ? urlRange : "30d");
-  const [byRange, setByRange] = useState<Record<string, AccountAnalytics | { error: string }>>({});
-  const [shown, setShown] = useState<AccountAnalytics | null>(null);
+  const [range, setRange] = useState<AnalyticsRange>(() =>
+    urlRange && RANGE_KEYS.includes(urlRange) ? urlRange : saved.range && RANGE_KEYS.includes(saved.range) ? saved.range : "30d"
+  );
+  const responseKey = (r: AnalyticsRange) => `analytics:${params.id}:${r}`;
+  // The figures last shown for this range paint at once; they're re-read straight after.
+  const [byRange, setByRange] = useState<Record<string, AccountAnalytics | { error: string }>>(() => {
+    const cached = cachedResponse<AccountAnalytics>(responseKey(range));
+    return cached ? { [range]: cached } : {};
+  });
+  const [shown, setShown] = useState<AccountAnalytics | null>(() => cachedResponse<AccountAnalytics>(responseKey(range)) ?? null);
   const [reload, setReload] = useState(0);
-  const [openItem, setOpenItem] = useState<string | null>(searchParams.get("listing"));
+  const [openItem, setOpenItem] = useState<string | null>(() => searchParams.get("listing") ?? (urlRange ? null : saved.openItem ?? null));
   const [notice, setNotice] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
-  const [listingFilter, setListingFilter] = useState<ListingFilter>("all");
+  const [listingFilter, setListingFilter] = useState<ListingFilter>(saved.listingFilter ?? "all");
+
+  useEffect(() => writeView<AnalyticsView>(viewKey, { range, openItem, listingFilter }), [viewKey, range, openItem, listingFilter]);
 
   const loaded = byRange[range];
   const fresh = loaded && !("error" in loaded) ? loaded : null;
@@ -92,6 +109,7 @@ function AnalyticsPageInner() {
       .getAnalytics(connection.id, range)
       .then((d) => {
         if (cancelled) return;
+        cacheResponse(`analytics:${connection.id}:${range}`, d);
         setByRange((m) => ({ ...m, [range]: d }));
         setShown(d);
       })
@@ -100,6 +118,31 @@ function AnalyticsPageInner() {
       cancelled = true;
     };
   }, [connection, canView, range, reload]);
+
+  // The page's scroll: kept as it moves, put back once the figures are on
+  // screen again.
+  // Ready once the page's own frame (and its scrolling area) is on screen.
+  const scrollReady = Boolean(data) && !loading && canView;
+  const scrollRestored = useRef(false);
+  useEffect(() => {
+    if (!scrollReady) return;
+    const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+    if (!scroller) return;
+    if (!scrollRestored.current) {
+      scrollRestored.current = true;
+      if (saved.scrollTop) scroller.scrollTop = saved.scrollTop;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onScroll = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => writeView<AnalyticsView>(viewKey, { scrollTop: scroller.scrollTop }), 120);
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      clearTimeout(timer);
+      scroller.removeEventListener("scroll", onScroll);
+    };
+  }, [scrollReady, saved.scrollTop, viewKey]);
 
   // New traffic from eBay (the daily update, a refresh, backfill) or a new
   // sale re-reads the figures; the frame stays put while it does.
@@ -293,6 +336,7 @@ function AnalyticsPageInner() {
               loadingAll={loadingAll}
               filter={listingFilter}
               onFilter={setListingFilter}
+              viewKey={`${viewKey}:table`}
             />
           )}
         </div>
