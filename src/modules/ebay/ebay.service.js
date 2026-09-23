@@ -5,6 +5,8 @@ const ebayFulfillment = require('./api/ebay.fulfillment');
 const ebayFinances = require('./api/ebay.finances');
 const ebaySignature = require('./api/ebay.signature');
 const ebayPostOrder = require('./api/ebay.postorder');
+const ebayBrowse = require('./api/ebay.browse');
+const ebayTaxonomy = require('./api/ebay.taxonomy');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
@@ -2110,7 +2112,21 @@ function pushEnabled(connection, now = Date.now()) {
   return { listings, orders };
 }
 
+// Similar listings on a site (public data, 1 Browse call), for a listing's
+// health check: the cheapest by price in the same category.
+function searchSimilarListings({ q, categoryId, filter, limit = 20 }, marketplaceId) {
+  return ebayBrowse.searchItemSummaries({ q, limit, filter, categoryIds: categoryId || undefined, sort: 'price' }, marketplaceId);
+}
+
+// A category's item specifics with required/recommended flags (cached by
+// the taxonomy client for a day); null when eBay couldn't be asked.
+function categoryAspectSchema(marketplaceId, categoryId) {
+  return ebayTaxonomy.getEditorAspectSchema(marketplaceId, categoryId);
+}
+
 module.exports = {
+  searchSimilarListings,
+  categoryAspectSchema,
   pushEnabled,
   getOrderCases,
   declineCancellation,

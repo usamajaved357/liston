@@ -1217,6 +1217,7 @@ function AiPanel({
   busy,
   currentImageUrl,
   hasVariations,
+  initialInstruction,
 }: {
   scope: "text" | "image";
   onScopeChange: (s: "text" | "image") => void;
@@ -1232,8 +1233,9 @@ function AiPanel({
   busy: boolean;
   currentImageUrl: string | null;
   hasVariations: boolean;
+  initialInstruction?: string | null; // typed in for the seller (a health check's fix), not sent
 }) {
-  const [instruction, setInstruction] = useState("");
+  const [instruction, setInstruction] = useState(initialInstruction || "");
   const proposal = scope === "text" ? textProposal : imageProposal;
 
   function submit(e?: React.FormEvent) {
@@ -1255,7 +1257,7 @@ function AiPanel({
       : ['Add the heading "FREE UK DELIVERY"', "Add a UK flag badge"];
 
   return (
-    <div className={`${cardClass} border-[var(--color-primary)]/25 bg-gradient-to-b from-[var(--color-primary-soft)]/50 to-[var(--color-panel)]`}>
+    <div id="ask-ai" className={`${cardClass} scroll-mt-4 border-[var(--color-primary)]/25 bg-gradient-to-b from-[var(--color-primary-soft)]/50 to-[var(--color-panel)]`}>
       <div className="flex items-center justify-between gap-2">
         <h3 className={`${cardTitleClass} flex items-center gap-1.5`}>
           <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-[var(--color-primary)]">
@@ -1355,6 +1357,9 @@ function AiPanel({
             </div>
           )}
 
+          {scope === "text" && textProposal && !textProposal.cannotDo && textRows.length === 0 && (
+            <p className="px-3 py-2 text-[12px] leading-relaxed text-[var(--color-muted)]">Nothing to change: the listing&apos;s own facts don&apos;t say more than what&apos;s already there.</p>
+          )}
           {scope === "text" && textProposal && textRows.length > 0 && (
             <ul className="max-h-72 divide-y divide-[var(--color-line)] overflow-y-auto">
               {textRows.map((row, i) => (
@@ -1378,13 +1383,13 @@ function AiPanel({
           )}
 
           <div className="flex gap-1.5 border-t border-[var(--color-line)] bg-[var(--color-paper)]/60 px-3 py-2">
-            {!(scope === "text" && textProposal?.cannotDo) && (
+            {!(scope === "text" && (textProposal?.cannotDo || textRows.length === 0)) && (
               <button type="button" onClick={scope === "text" ? onAcceptText : onAcceptImage} disabled={busy} className="btn btn-primary btn-sm">
                 Accept
               </button>
             )}
             <button type="button" onClick={onDiscard} disabled={busy} className="btn btn-ghost btn-sm">
-              {scope === "text" && textProposal?.cannotDo ? "OK" : "Discard"}
+              {scope === "text" && (textProposal?.cannotDo || textRows.length === 0) ? "OK" : "Discard"}
             </button>
           </div>
         </div>
@@ -1482,6 +1487,12 @@ function withSchemaRows(rows: { name: string; value: string }[], info: DraftCate
 export default function DraftEditorPage() {
   const params = useParams<{ id: string; offerId: string }>();
   const router = useRouter();
+  // ?ask= is a fix from Analytics' health check ("Fill specifics with AI"):
+  // once the listing is loaded, Ask AI proposes it straight away and the
+  // proposal waits for the seller to Accept — nothing changes on eBay until
+  // they accept and update the listing.
+  const [askPrefill] = useState(() => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("ask")));
+  const askedRef = useRef(false);
 
   const [listing, setListing] = useState<DraftListing | null>(null);
   const [policies, setPolicies] = useState<ConnectionPolicies | null>(null);
@@ -2222,6 +2233,21 @@ export default function DraftEditorPage() {
       setAiBusy(false);
     }
   }
+  // The health check's fix, asked once the editor holds this listing (its
+  // title state matches the loaded draft); ?ask= is then dropped so a reload
+  // doesn't ask again.
+  const editorReady = Boolean(content) && title === (content ? (isVariationDraft(content) ? content.commonTitle : content.title) : null);
+  useEffect(() => {
+    if (!askPrefill || askedRef.current || !editable || !editorReady || !listing) return;
+    askedRef.current = true;
+    setAiScope("text");
+    window.history.replaceState(null, "", window.location.pathname);
+    const show = () => document.getElementById("ask-ai")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setTimeout(show, 150);
+    proposeText(askPrefill).then(() => setTimeout(show, 50));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the editor is ready
+  }, [askPrefill, editable, editorReady, listing]);
+
   async function proposeImage(instruction: string) {
     if (!listing || !images[selectedImage]) return;
     setAiBusy(true);
@@ -2261,7 +2287,10 @@ export default function DraftEditorPage() {
     if (newDesc !== undefined && newDesc !== description) rows.push({ label: "Description", from: description, to: newDesc, long: true });
     for (const [name, values] of Object.entries(c.aspects || {})) {
       const from = editedAspects[name]?.join(", ");
-      rows.push({ label: `Specific · ${name}`, from, to: values.join(", ") });
+      const to = values.join(", ");
+      // The same value again isn't a change (the model sometimes repeats what's there).
+      if ((from ?? "").trim().toLowerCase() === to.trim().toLowerCase()) continue;
+      rows.push({ label: `Specific · ${name}`, from, to });
     }
     for (const name of c.removeAspects || []) if (editedAspects[name]) rows.push({ label: `Specific · ${name}`, from: editedAspects[name].join(", "), to: "removed" });
     if (c.condition && c.condition !== condition) rows.push({ label: "Condition", from: CONDITIONS.find((x) => x.value === condition)?.label, to: CONDITIONS.find((x) => x.value === c.condition)?.label || c.condition });
@@ -2548,6 +2577,7 @@ export default function DraftEditorPage() {
                   busy={aiBusy}
                   currentImageUrl={imageProposalTarget}
                   hasVariations={Boolean(variation)}
+                  initialInstruction={askPrefill}
                 />
               )}
             </div>

@@ -1171,8 +1171,50 @@ async function startLiveEdit(connectionId, userId, itemId) {
       }
     }
 
-    return listingRepository.createLiveEdit({ connectionId, itemId, sku: item.sku, generatedData: draft });
+    // The listing as it was, so publishing the edit can record what changed
+    // (for its before/after figures in Analytics).
+    return listingRepository.createLiveEdit({ connectionId, itemId, sku: item.sku, generatedData: draft, sourceData: { liveOriginal: editSnapshot(draft) } });
   });
+}
+
+// What a live edit is judged by: the things buyers see in search and on
+// the listing. Text is kept as a fingerprint, not copied.
+function editSnapshot(draft) {
+  const variation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const fingerprint = (value) => crypto.createHash('sha1').update(JSON.stringify(value ?? '')).digest('hex').slice(0, 12);
+  const aspects = (variation ? draft.variesBy?.aspects : draft.aspects) || {};
+  const sortedAspects = Object.keys(aspects)
+    .sort()
+    .map((k) => [k, aspects[k]]);
+  const prices = variation ? draft.variants.map((v) => Number(v.price?.value)).filter(Number.isFinite) : [Number(draft.price?.value)].filter(Number.isFinite);
+  return {
+    title: String((variation ? draft.commonTitle : draft.title) || ''),
+    mainPhoto: draft.imageUrls?.[0] || null,
+    photos: (draft.imageUrls || []).length,
+    photoSet: fingerprint(draft.imageUrls || []),
+    price: prices.length ? Math.min(...prices) : null,
+    quantity: variation ? draft.variants.reduce((sum, v) => sum + (Number(v.quantity) || 0), 0) : Number(draft.quantity) || 0,
+    specifics: Object.values(aspects).filter((v) => (v || []).some((x) => String(x).trim())).length,
+    specificsSet: fingerprint(sortedAspects),
+    description: fingerprint(variation ? draft.commonDescription : draft.description),
+  };
+}
+
+// The fields that differ between two snapshots, with readable before/after
+// values (fingerprints stay out of them).
+function editDifferences(before, after) {
+  if (!before || !after) return null;
+  const fields = [];
+  if (before.title !== after.title) fields.push('title');
+  if (before.mainPhoto !== after.mainPhoto) fields.push('main_photo');
+  else if (before.photoSet !== after.photoSet) fields.push('photos');
+  if (before.price !== after.price) fields.push('price');
+  if (before.quantity !== after.quantity) fields.push('quantity');
+  if (before.specificsSet !== after.specificsSet) fields.push('specifics');
+  if (before.description !== after.description) fields.push('description');
+  if (!fields.length) return null;
+  const readable = ({ title, mainPhoto, photos, price, quantity, specifics }) => ({ title, mainPhoto, photos, price, quantity, specifics });
+  return { fields, before: readable(before), after: readable(after) };
 }
 
 async function publishLiveEdit(listing, userId) {
@@ -1255,6 +1297,14 @@ async function publishLiveEdit(listing, userId) {
     }
   });
   resyncListings(listing.connection_id, userId);
+  // What changed, for the listing's before/after figures in Analytics. A
+  // failure to record never fails the edit itself.
+  const changed = editDifferences(listing.source_data?.liveOriginal, editSnapshot(draft));
+  if (changed) {
+    await listingRepository
+      .recordListingChange(listing.connection_id, listing.edit_of_item_id, changed)
+      .catch((err) => logger.warn('Listing change not recorded', { itemId: listing.edit_of_item_id, error: err.message }));
+  }
   // Liston's record of the published listing follows the edit, so the next
   // edit starts from what is live and the draft never contradicts eBay.
   if (own) {
@@ -1798,6 +1848,8 @@ function withSkus(draft, connectionId) {
 }
 
 module.exports = {
+  editSnapshot,
+  editDifferences,
   renderDraftDescription,
   renderTemplatePreview,
   uploadDraftImage,

@@ -540,7 +540,19 @@ async function getItem(accessToken, itemId, { siteId } = {}) {
     variationSpecificsSet: specificsFrom(variationsNode?.VariationSpecificsSet),
     variations,
     variationPictures,
+    // What a buyer pays and waits for, for the listing health check.
+    shipping: shippingFrom(item),
+    returnsAccepted: item.ReturnPolicy?.ReturnsAcceptedOption ? item.ReturnPolicy.ReturnsAcceptedOption === 'ReturnsAccepted' : null,
   };
+}
+
+// The first (cheapest, as eBay lists them) domestic postage option and the
+// dispatch time.
+function shippingFrom(item) {
+  const first = toArray(item.ShippingDetails?.ShippingServiceOptions)[0];
+  const cost = first ? (first.FreeShipping === true || first.FreeShipping === 'true' ? 0 : Number(first.ShippingServiceCost?.['#text'] ?? first.ShippingServiceCost ?? NaN)) : NaN;
+  const dispatch = Number(item.DispatchTimeMax);
+  return { cost: Number.isFinite(cost) ? cost : null, dispatchDays: Number.isFinite(dispatch) ? dispatch : null };
 }
 
 // Revises a live fixed-price listing in place. Only the fields given are

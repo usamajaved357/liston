@@ -14,5 +14,7 @@ router.get('/listings/summary', requireAuth, requireFeature('analytics'), analyt
 router.get('/listings/:itemId', requireAuth, requireFeature('analytics'), analyticsController.getListingAnalytics);
 // One listing's figures for a range, read on request (1–2 traffic calls).
 router.post('/listings/:itemId/read', requireAuth, requireFeature('analytics'), analyticsController.readListing);
+// A listing's deeper health check, on request (1 Trading call, +1 search of similar listings).
+router.post('/listings/:itemId/check', requireAuth, requireFeature('analytics'), analyticsController.checkListing);
 
 module.exports = router;

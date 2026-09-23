@@ -2,15 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { api, ApiError, AnalyticsRange, ListingAnalytics } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { api, ApiError, AnalyticsRange, HealthFix, ListingAnalytics } from "@/lib/api";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { BarList } from "@/components/charts/BarList";
 import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
 import { MetricsBoard } from "./MetricsBoard";
-import { Funnel } from "./Funnel";
-import { HintTag } from "./InsightCards";
+import { HealthPanel } from "./HealthPanel";
 import { RANGE_OPTIONS } from "./metrics";
 
 // One listing's analytics in a panel that slides over the page: its
@@ -40,6 +40,8 @@ export function ListingAnalyticsPanel({
   const [reload, setReload] = useState(0);
   const [reading, setReading] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
+  const [fixError, setFixError] = useState<string | null>(null);
+  const router = useRouter();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const key = `${itemId}:${range}`;
   const loaded = byKey[key];
@@ -102,7 +104,31 @@ export function ListingAnalyticsPanel({
     }
   }
 
+  // A health fix: the listing opens in Liston's live editor, where Ask AI
+  // proposes that fix straight away when it has one (the seller accepts it).
+  async function openFix(_fix: HealthFix, instruction: string | null) {
+    setFixError(null);
+    try {
+      const { listing: draft } = await api.startLiveEdit(connectionId, itemId);
+      router.push(`/accounts/${connectionId}/listings/draft/${draft.id}${instruction ? `?ask=${encodeURIComponent(instruction)}` : ""}`);
+    } catch (err) {
+      setFixError(err instanceof ApiError ? err.message : "Couldn't open this listing for editing. Try again.");
+    }
+  }
+
+  // The deeper check, then this range again (its reasons now use it).
+  async function runCheck(competitor: boolean) {
+    try {
+      await api.checkListingHealth(connectionId, itemId, competitor);
+    } catch (err) {
+      throw new Error(err instanceof ApiError ? err.message : "The check didn't finish. Try again.");
+    }
+    setByKey({});
+    setReload((n) => n + 1);
+  }
+
   const listing = view?.listing;
+  const sellerHubUrl = listing?.url ? `${new URL(listing.url).origin}/sh/lst/active` : null;
   const rangeLabel = view ? dayRangeLabel(view.range.from, view.range.to) : "";
 
   return (
@@ -182,11 +208,20 @@ export function ListingAnalyticsPanel({
             </div>
           )}
 
-          {view?.hint && (
-            <div className="flex items-start gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
-              <HintTag hint={view.hint} />
-              <p className="text-[13px] leading-relaxed text-[var(--color-ink)]">{view.hint.detail}</p>
-            </div>
+          {fixError && <div className="notice notice-danger">{fixError}</div>}
+          {view?.health && (
+            <HealthPanel
+              key={`${itemId}:${view.range.key}`}
+              health={view.health}
+              benchmarks={view.benchmarks}
+              check={view.check}
+              checkCalls={view.checkCalls}
+              edits={view.edits}
+              currency={view.currency}
+              sellerHubUrl={sellerHubUrl}
+              onFix={openFix}
+              onCheck={runCheck}
+            />
           )}
 
           <MetricsBoard
@@ -206,21 +241,13 @@ export function ListingAnalyticsPanel({
             emptyDailyMessage="Day-by-day traffic for this listing appears as its days are stored. Sales show every day."
           />
 
-          {view && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <section className="card p-5">
-                <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">From shown to sold</h3>
-                <div className="mt-3">
-                  <Funnel impressions={view.totals.impressions} views={view.totals.views} sold={view.totals.sold} ctr={view.totals.ctr} />
-                </div>
-              </section>
-              <section className="card p-5">
-                <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">Where views came from</h3>
-                <div className="mt-3">
-                  <BarList items={view.sources.map((s) => ({ key: s.key, label: s.label, value: s.views }))} format={fullNumber} empty="No views recorded in this range." />
-                </div>
-              </section>
-            </div>
+          {view && view.sources.length > 0 && (
+            <section className="card p-5">
+              <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">Where views came from</h3>
+              <div className="mt-3">
+                <BarList items={view.sources.map((s) => ({ key: s.key, label: s.label, value: s.views }))} format={fullNumber} empty="No views recorded in this range." />
+              </div>
+            </section>
           )}
 
           {view && (

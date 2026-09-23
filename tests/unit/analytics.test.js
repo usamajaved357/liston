@@ -107,14 +107,6 @@ test('a listing counts each order once, however many of its lines the order has'
   assert.deepStrictEqual(days.salesWithin(idx.byDay, '2026-09-21', '2026-09-21'), { units: 5, amount: 32, orders: 2 });
 });
 
-test('hints need enough traffic to mean something', () => {
-  const m = (over) => ({ impressions: 0, views: 0, ctr: null, sold: 0, sales: 0, orders: 0, conversion: null, ...over });
-  assert.strictEqual(days.hintFor(m({}), { days: 7 }).kind, 'no_impressions');
-  assert.strictEqual(days.hintFor(m({ impressions: 900, ctr: 0.002, views: 3 }), { days: 7 }).kind, 'low_ctr');
-  assert.strictEqual(days.hintFor(m({ impressions: 900, ctr: 0.03, views: 45 }), { days: 7 }).kind, 'no_sales');
-  assert.strictEqual(days.hintFor(m({ impressions: 900, ctr: 0.03, views: 40, sold: 4, conversion: 0.1 }), { days: 7 }).kind, 'converting');
-});
-
 // ---- the eBay client --------------------------------------------------------------
 
 function fakeFetch(handler) {

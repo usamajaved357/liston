@@ -332,7 +332,6 @@ function AnalyticsPageInner() {
               rows={data.listings}
               currency={data.currency}
               compared={compared}
-              days={data.range.days}
               onOpen={openListing}
               report={data.listingReport}
               partial={data.range.partial}

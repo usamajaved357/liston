@@ -47,11 +47,11 @@ async function findLiveEdit(connectionId, userId, itemId) {
   return result.rows[0] || null;
 }
 
-async function createLiveEdit({ connectionId, itemId, sku, generatedData }) {
+async function createLiveEdit({ connectionId, itemId, sku, generatedData, sourceData = null }) {
   const result = await query(
-    `INSERT INTO listings (connection_id, sku, external_product_id, edit_of_item_id, generated_data, status)
-     VALUES ($1, $2, $3, $3, $4, 'pending_review') RETURNING *`,
-    [connectionId, sku, itemId, generatedData]
+    `INSERT INTO listings (connection_id, sku, external_product_id, edit_of_item_id, generated_data, source_data, status)
+     VALUES ($1, $2, $3, $3, $4, $5, 'pending_review') RETURNING *`,
+    [connectionId, sku, itemId, generatedData, sourceData]
   );
   return result.rows[0];
 }
@@ -143,7 +143,37 @@ async function deleteDraft(id, userId) {
   return result.rows[0] || null;
 }
 
+/** Liston's drafts of these published eBay items: itemId -> generated_data. */
+async function findPublishedDataByItemIds(connectionId, itemIds) {
+  if (!itemIds.length) return new Map();
+  const result = await query(
+    `SELECT DISTINCT ON (external_product_id) external_product_id, generated_data FROM listings
+     WHERE connection_id = $1 AND status = 'published' AND edit_of_item_id IS NULL AND external_product_id = ANY($2)
+     ORDER BY external_product_id, updated_at DESC`,
+    [connectionId, itemIds.map(String)]
+  );
+  return new Map(result.rows.map((r) => [r.external_product_id, r.generated_data]));
+}
+
+// ---- what live edits changed (migration 020) ---------------------------------
+
+async function recordListingChange(connectionId, itemId, { fields, before, after }) {
+  await query('INSERT INTO listing_changes (connection_id, item_id, fields, before, after) VALUES ($1, $2, $3, $4, $5)', [connectionId, String(itemId), fields, before, after]);
+}
+
+/** The most recent changes to a listing, newest first. */
+async function listingChanges(connectionId, itemId, limit = 5) {
+  const result = await query(
+    'SELECT id, changed_at, fields, before, after FROM listing_changes WHERE connection_id = $1 AND item_id = $2 ORDER BY changed_at DESC LIMIT $3',
+    [connectionId, String(itemId), limit]
+  );
+  return result.rows;
+}
+
 module.exports = {
+  findPublishedDataByItemIds,
+  recordListingChange,
+  listingChanges,
   findOtherWithSku,
   findLiveEdit,
   createLiveEdit,

@@ -191,3 +191,16 @@ test('reviseText reports what it cannot do instead of inventing a change', async
   const result = await revision.reviseText({ draft: variationDraft, instruction: 'remove the background of photo 2' });
   assert.deepStrictEqual(result, { changes: {}, summary: 'Photos are edited from the gallery, not here.', cannotDo: true });
 });
+
+test('reviseText tells the model that item specifics must be stated facts, never invented', async () => {
+  const Anthropic = require('@anthropic-ai/sdk');
+  const messagesProto = Object.getPrototypeOf(new Anthropic({ apiKey: 'test-key' }).messages);
+  const create = mock.method(messagesProto, 'create', async () => ({
+    content: [{ type: 'tool_use', input: { summary: 'Left Seller Warranty empty: the listing does not state one.' } }],
+  }));
+  const result = await revision.reviseText({ draft: { title: 'Trim strip', description: 'Blue trim.', aspects: {} }, instruction: 'Fill these empty item specifics: Seller Warranty.' });
+  const prompt = create.mock.calls[0].arguments[0].messages[0].content;
+  assert.match(prompt, /Never invent or infer one it doesn't/);
+  assert.match(prompt, /a returns or postage policy is not a warranty/);
+  assert.deepStrictEqual(result.changes, {});
+});

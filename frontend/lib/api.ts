@@ -915,10 +915,90 @@ export interface AnalyticsSource {
   views: number;
 }
 
-export interface AnalyticsHint {
-  kind: "no_impressions" | "low_ctr" | "no_sales" | "converting";
+// A listing's health over a range (backend listing-health.js): where buyers
+// drop off from search to sale, judged against the account's typical
+// listing, why that's likely, and roughly what it costs.
+export type HealthStage = "new" | "unmeasured" | "low_data" | "not_shown" | "not_clicked" | "not_bought" | "declining" | "converting" | "healthy";
+export type HealthFix = "title" | "description" | "photo" | "photos" | "specifics" | "price" | "offer" | "restock";
+
+export interface HealthReason {
+  key: string;
+  status: "fail" | "warn" | "pass" | "info";
+  text: string;
+  fix?: HealthFix;
+}
+
+export interface HealthRates {
+  impressionsPerDay: number;
+  ctr: number | null;
+  conversion: number | null;
+}
+
+export interface ListingHealth {
+  stage: HealthStage;
   label: string;
+  tone: "good" | "warn" | "bad" | "neutral";
+  problem: boolean; // worth attention: at least half a sale more at stake
+  minor?: boolean; // a weak step, but worth under half a sale over these days
   detail: string;
+  flags: ("restock" | "watchers")[];
+  rates?: HealthRates;
+  normal?: HealthRates; // the account's typical listing
+  opportunity?: { units: number; amount: number }; // more sales at the typical rate, over these days
+  reasons?: HealthReason[];
+}
+
+export interface AnalyticsBenchmarks {
+  impressionsPerDay: number;
+  ctr: number;
+  conversion: number;
+  listings: number; // listings with enough data behind them
+}
+
+// What a deeper check found (the live listing, its category's item
+// specifics, similar listings' prices), or Liston's own draft.
+export interface ListingQuality {
+  source: "draft" | "check";
+  titleLength?: number;
+  photos?: number | null;
+  specificsCount?: number;
+  specificsMissing?: string[] | null;
+  specificsRecommended?: number | null;
+  descriptionLength?: number;
+  categoryId?: string | null;
+  shippingCost?: number | null;
+  dispatchDays?: number | null;
+  returnsAccepted?: boolean | null;
+  currency?: string | null;
+  competitor?: { query?: string; compared?: number; cheapest: number | null; median?: number | null; error?: string } | null;
+}
+
+export interface HealthCheck {
+  checkedAt: string;
+  quality: ListingQuality;
+  calls: number;
+}
+
+export interface ListingEditFigures {
+  days: number;
+  impressionsPerDay: number;
+  viewsPerDay: number;
+  ctr: number | null;
+  soldPerDay: number | null;
+  conversion: number | null;
+}
+
+// A live edit made in Liston and the listing's figures either side of it.
+export interface ListingEdit {
+  id: string;
+  changedAt: string;
+  day: string;
+  fields: ("title" | "main_photo" | "photos" | "price" | "quantity" | "specifics" | "description")[];
+  before: { title?: string; mainPhoto?: string | null; photos?: number; price?: number | null; quantity?: number; specifics?: number };
+  after: { title?: string; mainPhoto?: string | null; photos?: number; price?: number | null; quantity?: number; specifics?: number };
+  figuresBefore: ListingEditFigures | null;
+  figuresAfter: ListingEditFigures | null;
+  waitDays: number; // complete days still needed before "after" is judged
 }
 
 export interface AnalyticsRangeInfo {
@@ -948,7 +1028,7 @@ export interface ListingAnalyticsRow extends AnalyticsMetrics {
   watchers: number | null; // buyers watching it now
   traffic: ListingTrafficState;
   changes: AnalyticsChanges;
-  hint: AnalyticsHint | null;
+  health: ListingHealth | null;
 }
 
 export type AnalyticsStatus = "ok" | "reconnect" | "unsupported";
@@ -987,6 +1067,7 @@ export interface AccountAnalytics {
   leadInSeries?: AnalyticsDay[] | null; // a single-day range: the 14 days ending with it, for the chart
   sources: AnalyticsSource[];
   listings: ListingAnalyticsRow[];
+  benchmarks: AnalyticsBenchmarks | null; // the account's typical listing over this range
   listingReport: ListingReportInfo;
   sync: {
     lastSyncedAt: string | null;
@@ -1025,7 +1106,11 @@ export interface ListingAnalytics {
   previousSeries: AnalyticsDay[];
   leadInSeries?: AnalyticsDay[] | null;
   sources: AnalyticsSource[];
-  hint: AnalyticsHint | null;
+  health: ListingHealth | null;
+  benchmarks: AnalyticsBenchmarks | null;
+  check: HealthCheck | null; // the last deeper check, if one was run
+  checkCalls: { listing: number; competitor: number };
+  edits: ListingEdit[];
   dailyTrafficDays: number; // days in the range with this listing's daily traffic
   comparable: boolean; // false when the listing started after the previous period began
   canRead: boolean; // "Read this listing" is offered (not in the stored days, allowance left)
@@ -1215,6 +1300,8 @@ export const api = {
     request<{ calls: number; listings: number }>(`/api/connections/${id}/analytics/listings/all?range=${range}`, { method: "POST" }),
   readListingAnalytics: (id: string, itemId: string, range: AnalyticsRange) =>
     request<{ calls: number }>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/read?range=${range}`, { method: "POST" }),
+  checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
+    request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
   getListingAnalyticsSummaries: (id: string) => request<ListingAnalyticsSummaries>(`/api/connections/${id}/analytics/listings/summary`),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {

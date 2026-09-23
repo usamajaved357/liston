@@ -10,7 +10,7 @@ import { ListFooter } from "@/components/ListFooter";
 import { readView, writeView } from "@/lib/viewState";
 import { downloadCsv, pct, toCsv } from "@/lib/csv";
 import { MetricKey, metricDef } from "./metrics";
-import { HintTag } from "./InsightCards";
+import { HealthTag } from "./InsightCards";
 import { ListingFilter, actionDef, matchesFilter } from "./insights";
 
 // Every live listing over the chosen range: sortable by any figure,
@@ -106,7 +106,6 @@ export function ListingsTable({
   rows,
   currency,
   compared,
-  days,
   onOpen,
   report,
   partial,
@@ -121,7 +120,6 @@ export function ListingsTable({
   rows: ListingAnalyticsRow[];
   currency: string | null;
   compared: string;
-  days: number; // the range's length, for the stock-cover filter
   onOpen: (itemId: string) => void;
   report: ListingReportInfo;
   partial: boolean; // Today: listing traffic arrives once the day is complete
@@ -184,15 +182,15 @@ export function ListingsTable({
 
   const counts = useMemo(
     () => ({
-      attention: rows.filter((r) => r.hint && r.hint.kind !== "converting").length,
-      converting: rows.filter((r) => r.hint?.kind === "converting").length,
+      attention: rows.filter((r) => r.health?.problem).length,
+      converting: rows.filter((r) => r.health?.stage === "converting").length,
     }),
     [rows]
   );
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    const list = rows.filter((r) => (!needle || r.title.toLowerCase().includes(needle) || r.itemId.includes(needle)) && matchesFilter(r, filter, days));
+    const list = rows.filter((r) => (!needle || r.title.toLowerCase().includes(needle) || r.itemId.includes(needle)) && matchesFilter(r, filter));
     const dir = sort.dir === "desc" ? -1 : 1;
     return [...list].sort((a, b) => {
       if (sort.key === "title") return a.title.localeCompare(b.title) * dir;
@@ -203,7 +201,7 @@ export function ListingsTable({
       if (bv == null) return -1;
       return (av - bv) * dir || (b.impressions ?? 0) - (a.impressions ?? 0);
     });
-  }, [rows, search, filter, sort, days]);
+  }, [rows, search, filter, sort]);
 
   const totalPages = Math.max(1, Math.ceil(visible.length / perPage));
   const current = Math.min(page, totalPages);
@@ -234,7 +232,8 @@ export function ListingsTable({
       `Units sold ${compared} (%)`,
       `Sales ${compared} (%)`,
       `Conversion ${compared} (%)`,
-      "Insight",
+      "Health",
+      `Sales at stake${currency ? ` (${currency})` : ""}`,
       "Traffic note",
       "eBay link",
     ];
@@ -258,7 +257,8 @@ export function ListingsTable({
       pct(r.changes?.sold, 1),
       pct(r.changes?.sales, 1),
       pct(r.changes?.conversion, 1),
-      r.hint ? `${r.hint.label}: ${r.hint.detail}` : "",
+      r.health ? `${r.health.label}: ${r.health.detail}` : "",
+      r.health?.problem && r.health.opportunity ? r.health.opportunity.amount : null,
       traffic[r.traffic as keyof typeof traffic] ?? "",
       r.url,
     ]);
@@ -338,7 +338,7 @@ export function ListingsTable({
     );
   };
 
-  const filterLabel = filter !== "all" && filter !== "attention" && filter !== "converting" ? actionDef(filter).label : null;
+  const filterLabel = filter !== "all" && filter !== "attention" && filter !== "converting" ? (actionDef(filter)?.label ?? null) : null;
 
   return (
     <section ref={sectionRef} className="card -mb-[26px] flex scroll-mt-1.5 flex-col overflow-hidden" id="analytics-listings" style={fitHeight ? { height: fitHeight } : undefined}>
@@ -367,7 +367,7 @@ export function ListingsTable({
               onChange={onFilter}
               options={[
                 { key: "all", label: "All" },
-                { key: "attention", label: `Needs attention${counts.attention ? ` · ${counts.attention}` : ""}`, title: "Few clicks, views without sales, or no impressions" },
+                { key: "attention", label: `Needs attention${counts.attention ? ` · ${counts.attention}` : ""}`, title: "Rarely shown in search, seen but rarely clicked, clicked but not bought, or sales falling: judged against your typical listing" },
                 { key: "converting", label: `Converting${counts.converting ? ` · ${counts.converting}` : ""}` },
               ]}
             />
@@ -434,7 +434,7 @@ export function ListingsTable({
                             <span className={`whitespace-nowrap ${row.quantityAvailable <= 2 ? "font-semibold text-[var(--color-danger)]" : ""}`}>{row.quantityAvailable} in stock</span>
                           </>
                         )}
-                        {row.hint && <HintTag hint={row.hint} />}
+                        {row.health && <HealthTag health={row.health} />}
                       </p>
                     </div>
                   </div>

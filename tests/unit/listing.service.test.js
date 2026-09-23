@@ -1469,3 +1469,20 @@ test('fixPolicyWords still clears the words when the AI editor is unavailable', 
   assert.strictEqual(stored.generated_data.title, 'Eco-friendly Braid');
   assert.strictEqual(stored.generated_data.description, 'Uses weight clips.');
 });
+
+test('a live edit records what buyers would notice changed, with readable before and after', () => {
+  const draft = { title: 'Lamp', imageUrls: ['a.jpg', 'b.jpg'], price: { value: '9.99', currency: 'GBP' }, quantity: 3, aspects: { Brand: ['X'] }, description: 'Bright.' };
+  const before = listingService.editSnapshot(draft);
+  assert.strictEqual(listingService.editDifferences(before, listingService.editSnapshot({ ...draft })), null, 'nothing changed');
+  const after = listingService.editSnapshot({ ...draft, title: 'LED Desk Lamp', imageUrls: ['b.jpg', 'a.jpg'], aspects: { Brand: ['X'], Colour: ['Black'] } });
+  assert.deepStrictEqual(listingService.editDifferences(before, after), {
+    fields: ['title', 'main_photo', 'specifics'],
+    before: { title: 'Lamp', mainPhoto: 'a.jpg', photos: 2, price: 9.99, quantity: 3, specifics: 1 },
+    after: { title: 'LED Desk Lamp', mainPhoto: 'b.jpg', photos: 2, price: 9.99, quantity: 3, specifics: 2 },
+  });
+  const reordered = listingService.editSnapshot({ ...draft, imageUrls: ['a.jpg', 'c.jpg'] });
+  assert.deepStrictEqual(listingService.editDifferences(before, reordered).fields, ['photos'], 'same main photo, different set');
+  const variation = { commonTitle: 'Tee', imageUrls: ['a'], variesBy: { aspects: {} }, variants: [{ price: { value: '5' }, quantity: 2 }, { price: { value: '4' }, quantity: 1 }] };
+  assert.deepStrictEqual([listingService.editSnapshot(variation).price, listingService.editSnapshot(variation).quantity], [4, 3]);
+  assert.strictEqual(listingService.editDifferences(null, after), null, 'an edit started before snapshots were kept');
+});

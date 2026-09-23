@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AccountAnalytics, AnalyticsHint, AnalyticsSource, ListingAnalyticsRow } from "@/lib/api";
+import type { AccountAnalytics, AnalyticsSource, ListingAnalyticsRow, ListingHealth } from "@/lib/api";
+import { formatMoney } from "@/lib/format";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { compactNumber, fullNumber, percent } from "@/components/charts/chart-format";
-import { ACTIONS, ActionKey, HINT_SHORT, TONE, Tone } from "./insights";
+import { ACTIONS, ActionKey, STAGE_TAG, TONE, Tone, atStake } from "./insights";
 
 // The three cards under the chart — what to do next, what's moving, and the
 // listings worth opening — plus the traffic-sources strip under the chart.
@@ -31,9 +32,16 @@ export function StatusTag({ tone, label, title }: { tone: Tone; label: string; t
   );
 }
 
-export function HintTag({ hint }: { hint: AnalyticsHint }) {
-  const short = HINT_SHORT[hint.kind];
-  return <StatusTag tone={short.tone} label={short.label} title={hint.detail} />;
+/** A listing's health as a tag (problems, strong sellers and new listings only). */
+export function HealthTag({ health }: { health: ListingHealth }) {
+  const tag = health.minor ? null : STAGE_TAG[health.stage];
+  return tag ? <StatusTag tone={tag.tone} label={tag.label} title={`${health.label}: ${health.detail}`} /> : null;
+}
+
+/** "£24" at stake, in the account's currency; nothing when it's pennies. */
+export function StakeLabel({ amount, currency, className = "" }: { amount: number; currency: string | null; className?: string }) {
+  if (!(amount >= 1)) return null;
+  return <span className={`tabular-nums ${className}`}>≈ {formatMoney({ amount: Math.round(amount), currency: currency || undefined }).replace(/\.00$/, "")}</span>;
 }
 
 function CardHeader({ title, aside }: { title: string; aside?: React.ReactNode }) {
@@ -58,7 +66,7 @@ function listingFiguresReady(data: AccountAnalytics) {
 
 export function GrowthCard({ data, onPick }: { data: AccountAnalytics; onPick: (key: ActionKey) => void }) {
   const groups = useMemo(
-    () => ACTIONS.map((a) => ({ ...a, rows: data.listings.filter((r) => a.test(r, data.range.days)) })).filter((g) => g.rows.length > 0),
+    () => ACTIONS.map((a) => ({ ...a, rows: data.listings.filter((r) => a.test(r)) })).filter((g) => g.rows.length > 0),
     [data]
   );
   const waiting = listingFiguresReady(data);
@@ -90,11 +98,14 @@ export function GrowthCard({ data, onPick }: { data: AccountAnalytics; onPick: (
                     <span className="block truncate text-[12.5px] font-semibold text-[var(--color-ink)]">{g.label}</span>
                     <span className="block truncate text-[11px] text-[var(--color-muted)]">{g.action}</span>
                   </span>
-                  <span className="flex items-center gap-1 text-[12.5px] font-semibold tabular-nums text-[var(--color-ink)]">
-                    {g.rows.length}
+                  <span className="flex flex-col items-end leading-tight">
+                    <span className="flex items-center gap-1 text-[12.5px] font-semibold tabular-nums text-[var(--color-ink)]">
+                      {g.rows.length}
                     <svg viewBox="0 0 16 16" className="h-3 w-3 text-[var(--color-line-strong)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-primary)]" fill="none" aria-hidden>
                       <path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
+                    </span>
+                    <StakeLabel amount={atStake(g.rows)} currency={data.currency} className="text-[10.5px] font-medium text-[var(--color-muted)]" />
                   </span>
                 </button>
               </li>
@@ -192,55 +203,53 @@ export function TopMoversCard({ data, onOpen }: { data: AccountAnalytics; onOpen
 
 // ---- worth a look ---------------------------------------------------------------------
 
+// The listings where fixing pays most: problems ranked by the sales they'd
+// make at the account's typical rates (not by views), and the best seller.
 export function WorthALookCard({ data, onOpen }: { data: AccountAnalytics; onOpen: (id: string) => void }) {
-  const withHints = data.listings.filter((l) => l.hint);
-  const attention = withHints.filter((l) => l.hint!.kind !== "converting").sort((a, b) => (b.views ?? 0) - (a.views ?? 0));
-  const winners = withHints.filter((l) => l.hint!.kind === "converting").sort((a, b) => (b.sold ?? 0) - (a.sold ?? 0));
-  const picks = [...attention.slice(0, 3), ...winners.slice(0, 2)];
+  const problems = data.listings.filter((l) => l.health?.problem).sort((a, b) => (b.health!.opportunity?.amount ?? 0) - (a.health!.opportunity?.amount ?? 0));
+  const winners = data.listings.filter((l) => l.health?.stage === "converting").sort((a, b) => (b.sold ?? 0) - (a.sold ?? 0));
+  const picks = [...problems.slice(0, 4), ...winners.slice(0, 1)];
+  const total = atStake(problems);
   const waiting = listingFiguresReady(data);
   return (
     <section className="card flex flex-col p-4">
       <CardHeader
         title="Worth a look"
         aside={
-          <span className="flex items-center gap-2 text-[11px] text-[var(--color-muted)]">
-            <span className="inline-flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden />
-              {attention.length}
+          total >= 1 ? (
+            <span className="text-[11px] text-[var(--color-muted)]" title="What these listings would sell over these days at your typical listing's rates">
+              <StakeLabel amount={total} currency={data.currency} className="font-semibold text-[var(--color-ink)]" /> at stake
             </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-              {winners.length}
-            </span>
-          </span>
+          ) : null
         }
       />
       {waiting ? (
         <Quiet>{waiting}</Quiet>
       ) : picks.length === 0 ? (
-        <Quiet>Nothing stands out: every listing is being seen and clicked at a normal rate.</Quiet>
+        <Quiet>Nothing stands out: every listing with enough data is seen, clicked and bought at about your normal rates.</Quiet>
       ) : (
         <ul className="-mx-1.5 mt-2.5 space-y-0.5">
           {picks.map((l) => {
-            const short = HINT_SHORT[l.hint!.kind];
-            const good = l.hint!.kind === "converting";
+            const h = l.health!;
+            const tag = STAGE_TAG[h.stage];
+            const tone = TONE[tag?.tone ?? "neutral"];
+            const reason = h.reasons?.find((r) => r.status === "fail") || h.reasons?.find((r) => r.status === "warn");
             return (
               <li key={l.itemId}>
-                <button type="button" onClick={() => onOpen(l.itemId)} title={l.hint!.detail} className="group flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-[var(--color-paper)]">
+                <button type="button" onClick={() => onOpen(l.itemId)} title={reason ? reason.text : h.detail} className="group flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-[var(--color-paper)]">
                   <span className="relative">
                     <Thumb src={l.imageUrl} size={34} />
-                    <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-[var(--color-panel)] ${TONE[short.tone].dot}`} aria-hidden />
+                    <span className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-[var(--color-panel)] ${tone.dot}`} aria-hidden />
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{l.title}</span>
                     <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
-                      <span className={`font-semibold ${TONE[short.tone].text}`}>{short.label}</span>
+                      <span className={`whitespace-nowrap font-semibold ${tone.text}`}>{h.label}</span>
                       <span aria-hidden>·</span>
-                      <span className="truncate tabular-nums">
-                        {good ? `${fullNumber(l.sold)} sold · ${percent(l.conversion)} of views` : l.hint!.kind === "no_impressions" ? "0 impressions" : `${fullNumber(l.views)} views · ${fullNumber(l.sold)} sold`}
-                      </span>
+                      <span className="truncate tabular-nums">{h.problem ? h.detail : `${fullNumber(l.sold)} sold · ${percent(l.conversion)} of visits buy`}</span>
                     </span>
                   </span>
+                  {h.problem && <StakeLabel amount={h.opportunity?.amount ?? 0} currency={data.currency} className="flex-shrink-0 text-[11.5px] font-semibold text-[var(--color-ink)]" />}
                 </button>
               </li>
             );
