@@ -228,7 +228,7 @@ async function events(req, res, next) {
 
 async function getEarnings(req, res, next) {
   try {
-    const range = EARNINGS_RANGES.includes(req.query.range) ? req.query.range : '7d';
+    const range = EARNINGS_RANGES.includes(req.query.range) ? req.query.range : 'today';
     const { from, to } = req.query;
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {

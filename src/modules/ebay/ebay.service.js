@@ -14,6 +14,7 @@ const ebayNotifications = require('./ebay.notifications');
 const accountEvents = require('./account-events');
 const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
+const analyticsDays = require('../analytics/analytics-days');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -874,11 +875,26 @@ function endOfUtcMonth(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - 1);
 }
 
+// The start of a day in the seller's time zone, as an instant.
+function localMidnight(day, timeZone) {
+  return new Date(`${day}T00:00:00${analyticsDays.offsetAt(day, timeZone)}`);
+}
+
 // Resolves a named range (or explicit custom from/to) to a concrete window.
 // Returns null for 'all_time', which has no single window — see
-// getEarningsSummary, which walks backwards in chunks instead.
-function resolveRangeWindow(range, from, to) {
+// getEarningsSummary, which walks backwards in chunks instead. With the
+// seller's `timeZone`, Today and the months start at their midnight (an
+// order at 00:30 in London is today's, not yesterday's in UTC).
+function resolveRangeWindow(range, from, to, timeZone = null) {
   const now = new Date();
+  if (timeZone && ['today', 'this_month', 'last_month'].includes(range)) {
+    const today = analyticsDays.today(timeZone, now);
+    if (range === 'today') return [localMidnight(today, timeZone), now];
+    const thisMonth = `${today.slice(0, 7)}-01`;
+    if (range === 'this_month') return [localMidnight(thisMonth, timeZone), now];
+    const lastMonth = `${analyticsDays.addDays(thisMonth, -1).slice(0, 7)}-01`;
+    return [localMidnight(lastMonth, timeZone), new Date(localMidnight(thisMonth, timeZone).getTime() - 1)];
+  }
   switch (range) {
     case 'today':
       return [startOfUtcDay(now), now];
@@ -2073,7 +2089,7 @@ async function getEarningsSummary(credentials, { connectionId, range, from, to, 
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
 
   const effectiveRange = range === 'all_time' ? '90d' : range;
-  const [start, end] = resolveRangeWindow(effectiveRange, from, to);
+  const [start, end] = resolveRangeWindow(effectiveRange, from, to, analyticsDays.timeZoneFor(credentials.marketplaceId || 'EBAY_GB'));
   const orders = connectionId
     ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end)
     : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString(), 1, siteId)).orders;
@@ -2088,7 +2104,8 @@ async function getEarningsSummary(credentials, { connectionId, range, from, to, 
   }
 
   return {
-    earnings: { amount: Math.round(amount * 100) / 100, currency },
+    // A day with no orders is still £0.00, not a bare 0.00.
+    earnings: { amount: Math.round(amount * 100) / 100, currency: currency || marketplaces.currencyFor(credentials.marketplaceId || 'EBAY_GB') },
     orderCount: orders.length,
     truncated: range === 'all_time',
     credentialsChanged,
