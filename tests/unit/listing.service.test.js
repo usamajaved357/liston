@@ -84,6 +84,22 @@ test('createEbayDraft refuses to draft when the connection has no policies confi
   );
 });
 
+test('a draft for an account with only push settings (no default policies) says which policies to choose', async () => {
+  mock.method(connectionService, 'getConnectionSummary', async () =>
+    ebayConnection({ settings: { ebay: { marketplaceId: 'EBAY_GB', returnPolicyId: 'r1', userId: 'u1', orderPush: { subscriptionId: 's1' } } } })
+  );
+  const create = mock.method(listingRepository, 'createDraft', async (args) => ({ id: 'listing-9', generated_data: args.generatedData }));
+
+  await listingService.createEbayDraft(CONNECTION_ID, USER_ID, { sku: 'SKU-3', title: 'Lamp' }, { warnings: ['Check the title.'] });
+
+  const saved = create.mock.calls[0].arguments[0].generatedData;
+  assert.deepStrictEqual(saved.listingPolicies, { fulfillmentPolicyId: undefined, paymentPolicyId: undefined, returnPolicyId: 'r1' });
+  assert.deepStrictEqual(saved.warnings, [
+    'Check the title.',
+    'This account has no default postage and payment policy in Settings: choose them here before publishing.',
+  ]);
+});
+
 test('publish rejects a listing that is not pending_review', async () => {
   mock.method(listingRepository, 'findByIdForUser', async () => ({
     id: 'listing-1',

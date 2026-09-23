@@ -139,6 +139,20 @@ async function createEbayDraft(connectionId, userId, draftInput, { sourceData, w
     paymentPolicyId: ebaySettings.paymentPolicyId,
     returnPolicyId: ebaySettings.returnPolicyId,
   };
+  // settings.ebay also holds push bookkeeping, so its existence doesn't mean
+  // defaults were chosen: a policy without one is left for the editor to
+  // ask for, and said so here.
+  const unset = [
+    ['fulfillmentPolicyId', 'postage'],
+    ['paymentPolicyId', 'payment'],
+    ['returnPolicyId', 'returns'],
+  ]
+    .filter(([key]) => !listingPolicies[key])
+    .map(([, name]) => name);
+  if (unset.length) {
+    const list = unset.length > 1 ? `${unset.slice(0, -1).join(', ')} and ${unset[unset.length - 1]}` : unset[0];
+    warnings = [...(warnings || []), `This account has no default ${list} policy in Settings: choose ${unset.length > 1 ? 'them' : 'it'} here before publishing.`];
+  }
 
   return listingRepository.createDraft({
     connectionId,

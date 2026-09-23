@@ -258,7 +258,10 @@ async function update(req, res, next) {
   try {
     const parsed = updateDraftSchema.safeParse(req.body);
     if (!parsed.success) {
-      const { message, path } = validationMessage(parsed.error, req.body, draftFieldLabel);
+      let { message, path } = validationMessage(parsed.error, req.body, draftFieldLabel);
+      // A blank policy is one never chosen on this draft, not one typed empty.
+      const [field, key] = parsed.error.issues[0].path;
+      if (field === 'listingPolicies' && POLICY_LABELS[key]) message = `Choose ${POLICY_LABELS[key].replace(/^The /, 'a ')} for this draft.`;
       logger.warn('Draft save refused', { listingId: req.params.listingId, field: path, code: parsed.error.issues[0].code });
       return res.status(400).json({ error: message, field: path || undefined });
     }

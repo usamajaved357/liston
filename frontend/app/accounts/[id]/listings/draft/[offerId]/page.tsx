@@ -1785,7 +1785,9 @@ export default function DraftEditorPage() {
     if (content && JSON.stringify(images) !== JSON.stringify(content.imageUrls)) patch.imageUrls = images;
     if (aspectsChanged) patch.aspects = editedAspects;
     if (condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW")) patch.condition = condition;
-    if (policiesChanged) patch.listingPolicies = policyIds;
+    // All three or none: a blank one (a draft made before the account had
+    // defaults) is shown as "Choose…" and saved once it's picked.
+    if (policiesChanged && policyIds.fulfillmentPolicyId && policyIds.paymentPolicyId && policyIds.returnPolicyId) patch.listingPolicies = policyIds;
     if (single) {
       if (singlePrice !== single.price.value) patch.price = { value: singlePrice, currency: single.price.currency };
       if (singleQuantity !== String(single.quantity ?? 1)) patch.quantity = Math.max(0, parseInt(singleQuantity, 10) || 0);
@@ -2711,7 +2713,19 @@ export default function DraftEditorPage() {
                       <div key={key}>
                         <label className={labelClass}>{label}</label>
                         {editable && list.length > 0 ? (
-                          <select className="input input-sm mt-1" value={policyIds[key]} onChange={(e) => setPolicyIds((p) => ({ ...p, [key]: e.target.value }))} disabled={busy}>
+                          <select
+                            className={`input input-sm mt-1 ${policyIds[key] ? "" : "!border-[var(--color-danger)] text-[var(--color-muted)]"}`}
+                            value={policyIds[key]}
+                            onChange={(e) => setPolicyIds((p) => ({ ...p, [key]: e.target.value }))}
+                            disabled={busy}
+                            aria-invalid={!policyIds[key]}
+                          >
+                            {/* Without this, a blank policy would show the first option as if chosen. */}
+                            {!policyIds[key] && (
+                              <option value="" disabled>
+                                Choose a {label.toLowerCase()}…
+                              </option>
+                            )}
                             {!list.some((p) => p[key] === policyIds[key]) && policyIds[key] && <option value={policyIds[key]}>{policyIds[key]} (no longer on account)</option>}
                             {list.map((p) => (
                               <option key={p[key]} value={p[key]}>
@@ -2724,6 +2738,7 @@ export default function DraftEditorPage() {
                             {policyName(policies, key, policyIds[key])}
                           </p>
                         )}
+                        {editable && list.length > 0 && !policyIds[key] && <p className="mt-1 text-[11.5px] text-[var(--color-danger)]">Not set on this draft. Choose one to publish.</p>}
                       </div>
                     ))}
                   </div>

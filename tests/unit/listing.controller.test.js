@@ -31,7 +31,7 @@ test('a draft save that is refused says which field and what to do, not Zod’s 
     [{ price: { value: '', currency: 'GBP' } }, 'The price is empty. Fill it in to save.', 'price.value'],
     [{ price: { value: '   ', currency: 'GBP' } }, 'The price is empty. Fill it in to save.', 'price.value'],
     [{ variants: { 2: { price: { value: '', currency: 'GBP' } } } }, "Variation 3's price is empty. Fill it in to save.", 'variants.2.price.value'],
-    [{ listingPolicies: { fulfillmentPolicyId: '', paymentPolicyId: 'p', returnPolicyId: 'r' } }, 'The postage policy is empty. Fill it in to save.', 'listingPolicies.fulfillmentPolicyId'],
+    [{ listingPolicies: { fulfillmentPolicyId: '', paymentPolicyId: 'p', returnPolicyId: 'r' } }, 'Choose a postage policy for this draft.', 'listingPolicies.fulfillmentPolicyId'],
     [{ renameAxisValues: [{ axis: 'Colour', from: 'Red', to: '' }] }, 'The new name for option "Red" (Colour) is empty. Fill it in to save.', 'renameAxisValues.0.to'],
     [{ title: 'x'.repeat(81) }, 'eBay titles are limited to 80 characters', 'title'],
     [{ imageUrls: ['not a link'] }, "Photo 1 isn't a working image link. Remove it or upload the photo again.", 'imageUrls.0'],
