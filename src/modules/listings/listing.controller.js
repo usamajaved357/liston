@@ -1,5 +1,7 @@
 const { z } = require('zod');
 const listingService = require('./listing.service');
+const logger = require('../../utils/logger');
+const { validationMessage } = require('../../utils/validation-message');
 
 // One route, one way to draft: this replaces an earlier hand-typed form
 // (title/description/price/category typed in by the user) — that's exactly
@@ -136,7 +138,63 @@ async function publish(req, res, next) {
   }
 }
 
-const offerPriceSchema = z.object({ value: z.string().min(1), currency: z.string().min(1) });
+const offerPriceSchema = z.object({ value: z.string().trim().min(1), currency: z.string().min(1) });
+
+// The draft editor's fields in the seller's words, for save errors.
+const POLICY_LABELS = { fulfillmentPolicyId: 'The postage policy', paymentPolicyId: 'The payment policy', returnPolicyId: 'The returns policy' };
+function draftFieldLabel(path, body) {
+  const [field, key, sub, leaf] = path;
+  const nth = (i) => Number(i) + 1;
+  switch (field) {
+    case 'title':
+    case 'commonTitle':
+      return 'The title';
+    case 'description':
+    case 'commonDescription':
+      return 'The description';
+    case 'condition':
+      return 'The condition';
+    case 'aspects':
+      return key ? `Item specific "${key}"` : 'Item specifics';
+    case 'imageUrls':
+      return key !== undefined ? `Photo ${nth(key)}` : 'The photos';
+    case 'price':
+      return key === 'currency' ? "The price's currency" : 'The price';
+    case 'quantity':
+      return 'The quantity';
+    case 'listingPolicies':
+      return POLICY_LABELS[key] || 'A business policy';
+    case 'variants': {
+      const row = `Variation ${nth(key)}`;
+      if (sub === 'price') return leaf === 'currency' ? `${row}'s price currency` : `${row}'s price`;
+      if (sub === 'quantity') return `${row}'s quantity`;
+      if (sub === 'imageUrls') return `${row}'s photo`;
+      return row;
+    }
+    case 'renameAxisValues': {
+      const r = body.renameAxisValues?.[key] || {};
+      return r.from ? `The new name for option "${r.from}"${r.axis ? ` (${r.axis})` : ''}` : 'An option\'s new name';
+    }
+    case 'renameAxes': {
+      const r = body.renameAxes?.[key] || {};
+      return r.from ? `The new name for "${r.from}"` : "A variation attribute's new name";
+    }
+    case 'addAxisValues': {
+      const r = body.addAxisValues?.[key] || {};
+      return r.axis ? `The new option for "${r.axis}"` : 'A new option';
+    }
+    case 'sku':
+      return 'The SKU (custom label)';
+    case 'categoryId':
+      return 'The category';
+    case 'secondaryCategoryId':
+      return 'The second category';
+    case 'storeCategoryNames':
+      return key !== undefined ? `Shop category ${nth(key)}` : 'Shop categories';
+    default:
+      return 'A field';
+  }
+}
 
 // Every field is optional: a patch carries only what the editor changed.
 // Deliberately NOT accepting a whole replacement variants array — edits may
@@ -174,15 +232,17 @@ const updateDraftSchema = z
         })
       )
       .optional(),
-    removeAxisValues: z.array(z.object({ axis: z.string().min(1), value: z.string().min(1) })).optional(),
+    // Existing names only identify what's there, so a blank one (a supplier's
+    // unnamed option) can still be renamed or removed; new names must not be blank.
+    removeAxisValues: z.array(z.object({ axis: z.string(), value: z.string() })).optional(),
     // "6 Slot, Clear" → "Clear, 6 slots": the option's name as buyers see it.
-    renameAxisValues: z.array(z.object({ axis: z.string().min(1), from: z.string().min(1), to: z.string().trim().min(1).max(50) })).optional(),
+    renameAxisValues: z.array(z.object({ axis: z.string(), from: z.string(), to: z.string().trim().min(1).max(50) })).optional(),
     // "Color" → "Colour": the attribute the buyer picks from.
-    renameAxes: z.array(z.object({ from: z.string().min(1), to: z.string().trim().min(1).max(65) })).optional(),
+    renameAxes: z.array(z.object({ from: z.string(), to: z.string().trim().min(1).max(65) })).optional(),
     // A new option on an existing attribute ("20" on Unit Quantity): its
     // variations are copied from an existing option's (price, quantity,
     // photo) so the seller edits from something rather than nothing.
-    addAxisValues: z.array(z.object({ axis: z.string().min(1), value: z.string().trim().min(1).max(50), copyFrom: z.string().min(1).optional() })).optional(),
+    addAxisValues: z.array(z.object({ axis: z.string(), value: z.string().trim().min(1).max(50), copyFrom: z.string().optional() })).optional(),
     variantSkusToRemove: z.array(z.string()).optional(),
     // eBay's custom label: up to 50 characters, no whitespace at the ends.
     sku: z.string().trim().min(1).max(50, 'SKUs are limited to 50 characters').optional(),
@@ -198,7 +258,9 @@ async function update(req, res, next) {
   try {
     const parsed = updateDraftSchema.safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.errors[0].message });
+      const { message, path } = validationMessage(parsed.error, req.body, draftFieldLabel);
+      logger.warn('Draft save refused', { listingId: req.params.listingId, field: path, code: parsed.error.issues[0].code });
+      return res.status(400).json({ error: message, field: path || undefined });
     }
 
     const { listing, imageCheck } = await listingService.updateDraft(req.params.listingId, req.ownerId, parsed.data);

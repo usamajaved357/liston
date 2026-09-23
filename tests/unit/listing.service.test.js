@@ -102,7 +102,7 @@ test('publish calls publishDraft for a single-SKU listing and updates status', a
     status: 'pending_review',
     platform_offer_id: 'offer-1',
     platform_group_key: null,
-    generated_data: { marketplaceId: 'EBAY_GB', imageUrls: ['https://i.ebayimg.com/a.jpg'] },
+    generated_data: { marketplaceId: 'EBAY_GB', title: 'Test listing', price: { value: '9.99', currency: 'GBP' }, imageUrls: ['https://i.ebayimg.com/a.jpg'] },
   }));
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
   const publishDraftMock = mock.method(ebayService, 'publishDraft', async (credentials, offerId) => {
@@ -230,14 +230,20 @@ test('generateEbayDraftFromUrls refuses to draft when the shipping location is n
 
 // --- publish now BUILDS on eBay, then publishes ---------------------------
 
+// A draft with what publish needs (a title and prices), which a test's
+// own fields override.
 function pendingDraft(generatedData, overrides = {}) {
+  const variants = Array.isArray(generatedData.variants) ? generatedData.variants : null;
+  const complete = variants?.length
+    ? { commonTitle: 'Test listing', ...generatedData, variants: variants.map((v) => ({ price: { value: '9.99', currency: 'GBP' }, ...v })) }
+    : { title: 'Test listing', price: { value: '9.99', currency: 'GBP' }, ...generatedData };
   return {
     id: 'listing-1',
     connection_id: CONNECTION_ID,
     status: 'pending_review',
     platform_offer_id: null,
     platform_group_key: null,
-    generated_data: generatedData,
+    generated_data: complete,
     ...overrides,
   };
 }
@@ -895,6 +901,35 @@ test("publish turns eBay's 25129 refusal of an option value into the axis, the v
   );
   assert.strictEqual(statusMock.mock.calls[0].arguments[1], 'pending_review');
   assert.match(statusMock.mock.calls[0].arguments[2].errorMessage, /Rename the "Petite" option under Variations/);
+});
+
+test('publish names what the draft still lacks (title, prices, policies, blank option names) before touching eBay', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      commonTitle: ' ',
+      imageUrls: ['https://i.ebayimg.com/a.jpg'],
+      listingPolicies: { fulfillmentPolicyId: 'f', paymentPolicyId: '', returnPolicyId: '' },
+      variesBy: { specifications: [{ name: 'Style', values: ['Logo 1', ''] }] },
+      variants: [
+        { aspects: { Style: ['Logo 1'] }, imageUrls: ['https://i.ebayimg.com/1.jpg'] },
+        { aspects: { Style: [''] }, price: { value: '', currency: 'GBP' }, imageUrls: ['https://i.ebayimg.com/2.jpg'] },
+      ],
+    })
+  );
+  const draftMock = mock.method(ebayService, 'draftListing', async () => ({}));
+  const statusMock = mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(
+    () => listingService.publish('listing-1', USER_ID),
+    (err) =>
+      err.statusCode === 400 &&
+      err.message ===
+        'Before publishing: Add a title. Enter a price for variation 2 in the variations table. Choose a payment and returns policy. ' +
+          '"Style" has an option with no name. Rename or remove it in the variations table.'
+  );
+  assert.strictEqual(draftMock.mock.calls.length, 0, 'nothing was built on eBay');
+  assert.strictEqual(statusMock.mock.calls.length, 0, 'the draft was not touched');
 });
 
 test('publish names a required specific that is still empty instead of letting eBay reject the build', async () => {

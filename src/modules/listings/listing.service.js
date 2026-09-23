@@ -1335,6 +1335,49 @@ async function publish(id, userId) {
   return publishNow(listing, id, userId);
 }
 
+/**
+ * What a draft still lacks before eBay would take it, in the seller's
+ * words and in the editor's terms (title, price, policies, variation
+ * names), so the publish says what to fix instead of eBay's rejection after
+ * the build. Empty when nothing is missing.
+ */
+function draftGaps(draft) {
+  const gaps = [];
+  const variants = Array.isArray(draft.variants) ? draft.variants : [];
+  const isVariation = variants.length > 0;
+  const title = isVariation ? draft.commonTitle ?? draft.title : draft.title;
+  if (!String(title || '').trim()) gaps.push('Add a title.');
+  const priced = (p) => Number(p?.value) > 0;
+  if (isVariation) {
+    const unpriced = variants.map((v, i) => (priced(v.price) ? null : i + 1)).filter(Boolean);
+    if (unpriced.length) gaps.push(`Enter a price for variation${unpriced.length === 1 ? '' : 's'} ${unpriced.join(', ')} in the variations table.`);
+  } else if (!priced(draft.price)) {
+    gaps.push('Enter a price.');
+  }
+  const policies = draft.listingPolicies;
+  if (policies) {
+    const missing = [
+      ['fulfillmentPolicyId', 'postage'],
+      ['paymentPolicyId', 'payment'],
+      ['returnPolicyId', 'returns'],
+    ]
+      .filter(([key]) => !String(policies[key] || '').trim())
+      .map(([, name]) => name);
+    const list = missing.length > 1 ? `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}` : missing[0];
+    if (missing.length) gaps.push(`Choose a ${list} policy.`);
+  }
+  for (const spec of draft.variesBy?.specifications || []) {
+    if (!String(spec.name || '').trim()) {
+      gaps.push('A variation attribute has no name. Rename it in the variations table.');
+      continue;
+    }
+    if ((spec.values || []).some((v) => !String(v || '').trim())) {
+      gaps.push(`"${spec.name}" has an option with no name. Rename or remove it in the variations table.`);
+    }
+  }
+  return gaps;
+}
+
 async function publishNow(listing, id, userId) {
   if (!listing) {
     throw new ListingError('Listing not found', 404);
@@ -1358,6 +1401,9 @@ async function publishNow(listing, id, userId) {
 
   const draft = listing.generated_data || {};
   const marketplaceId = draft.marketplaceId;
+
+  const gaps = draftGaps(draft);
+  if (gaps.length) throw new ListingError(`Before publishing: ${gaps.join(' ')}`, 400);
 
   // A category that refuses variations fails at eBay with an opaque error
   // after minutes of building; say it up front, with the way out.
