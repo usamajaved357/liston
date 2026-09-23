@@ -626,13 +626,6 @@ export default function AccountListingsPage() {
           connectionId={connection.id}
           itemId={analyticsItem}
           onClose={() => setAnalyticsItem(null)}
-          onOpenInListings={() => {
-            if (filter !== "active") changeFilter("active");
-            setSearch(analyticsItem);
-            setDebounced(analyticsItem);
-            setPage(1);
-            setAnalyticsItem(null);
-          }}
         />
       )}
     </AccountShell>

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { AnalyticsBenchmarks, HealthCheck, HealthRates, HealthReason, ListingEdit, ListingEditFigures, ListingHealth } from "@/lib/api";
-import { formatMoney, formatShortDate } from "@/lib/format";
+import { formatDateTime, formatMoney, formatShortDate } from "@/lib/format";
 import { fullNumber } from "@/components/charts/chart-format";
 import { StakeLabel } from "./InsightCards";
 import { TONE, STAGE_TAG } from "./insights";
@@ -165,12 +165,12 @@ const FIELD_LABEL: Record<ListingEdit["fields"][number], string> = {
   description: "Description",
 };
 
-function Movement({ label, before, after, format, perDay }: { label: string; before: number | null; after: number | null; format: (n: number | null) => string; perDay?: boolean }) {
+function Movement({ label, before, after, format, perDay, light }: { label: string; before: number | null; after: number | null; format: (n: number | null) => string; perDay?: boolean; light?: boolean }) {
   if (before == null || after == null) return null;
   const change = before > 0 ? (after - before) / before : null;
   const up = (change ?? 0) > 0;
   return (
-    <div className="rounded-lg bg-[var(--color-paper)] px-2.5 py-1.5">
+    <div className={`rounded-lg px-2.5 py-1.5 ${light ? "bg-white" : "bg-[var(--color-paper)]"}`}>
       <p className="text-[10.5px] text-[var(--color-muted)]">
         {label}
         {perDay ? " a day" : ""}
@@ -183,15 +183,44 @@ function Movement({ label, before, after, format, perDay }: { label: string; bef
   );
 }
 
-function EditRow({ edit, currency }: { edit: ListingEdit; currency: string | null }) {
+// "price and description" from an edit's fields.
+function fieldList(fields: ListingEdit["fields"]): string {
+  const names = fields.map((f, i) => (i === 0 ? FIELD_LABEL[f] : FIELD_LABEL[f].toLowerCase()));
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "Listing";
+}
+
+// A seller-time-zone day ("2026-09-23") plus some days, as "27 Sept": the
+// same days the charts use, whatever the viewer's own time zone.
+function dayLabel(day: string, plus = 0): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + plus)).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+// One edit made in Liston and how the listing's figures moved after it. The
+// newest sits at the top of the check (`latest`), so a change just applied
+// is the first thing seen; older ones are listed at the bottom.
+function EditRow({ edit, currency, latest }: { edit: ListingEdit; currency: string | null; latest?: boolean }) {
   const b: ListingEditFigures | null = edit.figuresBefore;
   const a: ListingEditFigures | null = edit.figuresAfter;
+  const measured = Boolean(a && b);
   const money = (n: number | null | undefined) => (n == null ? "—" : formatMoney({ amount: n, currency: currency || undefined }));
+  const Wrapper = latest ? "div" : "li";
   return (
-    <li className="border-b border-[var(--color-line)] py-3 last:border-0">
+    <Wrapper className={latest ? "mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-3" : "border-b border-[var(--color-line)] py-3 last:border-0"}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-[12.5px] font-semibold text-[var(--color-ink)]">{edit.fields.map((f) => FIELD_LABEL[f]).join(", ")} changed</p>
-        <span className="text-[11px] text-[var(--color-muted)]">{formatShortDate(edit.changedAt)}</span>
+        <p className="flex items-center gap-2 text-[12.5px] font-semibold text-[var(--color-ink)]">
+          {latest && (
+            <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center self-center rounded-full bg-emerald-500 text-white" aria-hidden>
+              <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" fill="none">
+                <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          )}
+          {fieldList(edit.fields)} changed in Liston
+        </p>
+        <span className="text-[11px] text-[var(--color-muted)]" title={formatDateTime(edit.changedAt)}>
+          {dayLabel(edit.day)}
+        </span>
       </div>
       {edit.fields.includes("title") && edit.before.title !== edit.after.title && (
         <p className="mt-1 text-[11.5px] leading-relaxed text-[var(--color-muted)]">
@@ -200,29 +229,39 @@ function EditRow({ edit, currency }: { edit: ListingEdit; currency: string | nul
       )}
       {edit.fields.includes("price") && (
         <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">
-          Price {money(edit.before.price)} → <span className="text-[var(--color-ink)]">{money(edit.after.price)}</span>
+          Price {money(edit.before.price)} → <span className="font-semibold text-[var(--color-ink)]">{money(edit.after.price)}</span>
         </p>
       )}
-      {a && b ? (
-        <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-          <Movement label="Impressions" before={b.impressionsPerDay} after={a.impressionsPerDay} format={(n) => (n == null ? "—" : fullNumber(Math.round(n)))} perDay />
-          <Movement label="Click-through" before={b.ctr} after={a.ctr} format={(n) => pct(n)} />
-          <Movement label="Views" before={b.viewsPerDay} after={a.viewsPerDay} format={(n) => (n == null ? "—" : String(n))} perDay />
-          <Movement label="Sold" before={b.soldPerDay} after={a.soldPerDay} format={(n) => (n == null ? "—" : String(n))} perDay />
-        </div>
+      {edit.fields.includes("specifics") && edit.before.specifics != null && edit.after.specifics != null && edit.before.specifics !== edit.after.specifics && (
+        <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">
+          Item specifics {edit.before.specifics} → <span className="font-semibold text-[var(--color-ink)]">{edit.after.specifics}</span>
+        </p>
+      )}
+      {edit.fields.includes("photos") && edit.before.photos != null && edit.after.photos != null && edit.before.photos !== edit.after.photos && (
+        <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">
+          Photos {edit.before.photos} → <span className="font-semibold text-[var(--color-ink)]">{edit.after.photos}</span>
+        </p>
+      )}
+      {measured && a && b ? (
+        <>
+          <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+            <Movement label="Impressions" before={b.impressionsPerDay} after={a.impressionsPerDay} format={(n) => (n == null ? "—" : fullNumber(Math.round(n)))} perDay light={latest} />
+            <Movement label="Click-through" before={b.ctr} after={a.ctr} format={(n) => pct(n)} light={latest} />
+            <Movement label="Views" before={b.viewsPerDay} after={a.viewsPerDay} format={(n) => (n == null ? "—" : String(n))} perDay light={latest} />
+            <Movement label="Sold" before={b.soldPerDay} after={a.soldPerDay} format={(n) => (n == null ? "—" : String(n))} perDay light={latest} />
+          </div>
+          <p className="mt-1 text-[10.5px] text-[var(--color-muted)]">
+            {b.days} days before against {a.days} days after
+          </p>
+        </>
       ) : (
-        <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
+        <p className="mt-1.5 text-[11.5px] leading-relaxed text-[var(--color-muted)]">
           {edit.waitDays > 0
-            ? `Its effect shows after ${edit.waitDays} more complete day${edit.waitDays === 1 ? "" : "s"}.`
-            : "Not enough stored days either side of the change to compare yet."}
+            ? `Results from ${dayLabel(edit.day, 4)}, once 3 full days have passed${latest ? ". Until then, the check above is from the days before this change." : "."}`
+            : "Not enough stored days either side of the change to compare."}
         </p>
       )}
-      {a && b && (
-        <p className="mt-1 text-[10.5px] text-[var(--color-muted)]">
-          {b.days} days before against {a.days} days after
-        </p>
-      )}
-    </li>
+    </Wrapper>
   );
 }
 
@@ -335,32 +374,34 @@ export function HealthPanel({
           )}
         </div>
 
-        {(plan.instruction || plan.todo.length > 0) && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--color-primary)]/25 bg-[var(--color-primary-soft)]/50 px-4 py-3">
-            <div className="min-w-0">
-              <p className="text-[12.5px] font-semibold text-[var(--color-ink)]">
-                {plan.instruction ? `${plan.auto.size} change${plan.auto.size === 1 ? "" : "s"} Liston can make for you` : "Changes only you can make"}
-              </p>
-              <p className="text-[11.5px] leading-relaxed text-[var(--color-muted)]">
-                {plan.instruction
-                  ? `Applied in the editor for you to review before it goes live${plan.todo.length ? `; ${plan.todo.length} more for you to do` : ""}.`
-                  : "Opens the listing in the editor with the list of what to change."}
-              </p>
-            </div>
-            {plan.instruction ? (
-              <button type="button" onClick={apply} disabled={applying} className="btn btn-primary btn-sm">
-                <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
-                  <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3z" fill="currentColor" />
-                </svg>
-                {applying ? "Opening…" : "Apply recommended changes"}
-              </button>
-            ) : (
-              <button type="button" onClick={apply} disabled={applying} className="btn btn-secondary btn-sm">
-                {applying ? "Opening…" : "Open in editor"}
-              </button>
-            )}
+        {edits[0] && <EditRow edit={edits[0]} currency={currency} latest />}
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--color-primary)]/25 bg-[var(--color-primary-soft)]/50 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[12.5px] font-semibold text-[var(--color-ink)]">
+              {plan.instruction ? `${plan.auto.size} change${plan.auto.size === 1 ? "" : "s"} Liston can make for you` : plan.todo.length ? "Changes only you can make" : "Nothing to fix right now"}
+            </p>
+            <p className="text-[11.5px] leading-relaxed text-[var(--color-muted)]">
+              {plan.instruction
+                ? `Applied in the editor for you to review before it goes live${plan.todo.length ? `; ${plan.todo.length} more for you to do` : ""}.`
+                : plan.todo.length
+                  ? "Opens the listing in the editor with the list of what to change."
+                  : "Open the listing in the editor to change anything yourself."}
+            </p>
           </div>
-        )}
+          {plan.instruction ? (
+            <button type="button" onClick={apply} disabled={applying} className="btn btn-primary btn-sm">
+              <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
+                <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3z" fill="currentColor" />
+              </svg>
+              {applying ? "Opening…" : "Apply recommended changes"}
+            </button>
+          ) : (
+            <button type="button" onClick={apply} disabled={applying} className="btn btn-secondary btn-sm">
+              {applying ? "Opening…" : "Open in editor"}
+            </button>
+          )}
+        </div>
 
         {rates && normal && (
           <div className="mt-4 space-y-3">
@@ -434,11 +475,11 @@ export function HealthPanel({
         {check && <CheckSummary check={check} currency={currency} />}
       </div>
 
-      {edits.length > 0 && (
+      {edits.length > 1 && (
         <div className="border-t border-[var(--color-line)] px-5 py-3">
-          <p className="pt-1 text-[12.5px] font-semibold text-[var(--color-ink)]">Changes made in Liston</p>
+          <p className="pt-1 text-[12.5px] font-semibold text-[var(--color-ink)]">Earlier changes made in Liston</p>
           <ul>
-            {edits.map((e) => (
+            {edits.slice(1).map((e) => (
               <EditRow key={e.id} edit={e} currency={currency} />
             ))}
           </ul>
