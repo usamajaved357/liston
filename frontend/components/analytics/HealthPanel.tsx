@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { AnalyticsBenchmarks, HealthCheck, HealthFix, HealthRates, HealthReason, ListingEdit, ListingEditFigures, ListingHealth } from "@/lib/api";
+import type { AnalyticsBenchmarks, HealthCheck, HealthRates, HealthReason, ListingEdit, ListingEditFigures, ListingHealth } from "@/lib/api";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { fullNumber } from "@/components/charts/chart-format";
 import { StakeLabel } from "./InsightCards";
@@ -14,22 +14,107 @@ import { TONE, STAGE_TAG } from "./insights";
 
 const pct = (n: number | null | undefined, digits = 1) => (n == null ? "—" : `${(n * 100).toFixed(digits)}%`);
 
-// What the editor's Ask AI proposes for a fix as it opens (the seller accepts it or not).
-const FIX_INSTRUCTION: Partial<Record<HealthFix, string>> = {
-  title: "Rewrite the title to use close to 80 characters, with the words buyers search for first. Keep every word accurate.",
-  specifics: "Fill every empty item specific eBay recommends for this category, using only facts already in the listing.",
-  description: "Expand the description with size, material, what's in the box and compatibility, using only facts already in the listing.",
-};
-const FIX_LABEL: Record<HealthFix, string> = {
-  title: "Improve title with AI",
-  specifics: "Fill specifics with AI",
-  description: "Expand with AI",
-  photo: "Change main photo",
-  photos: "Add photos",
-  price: "Edit price",
-  restock: "Update stock",
-  offer: "Send an offer in Seller Hub",
-};
+// Specifics only the seller can answer: never asked of the AI.
+const SELLER_ONLY_SPECIFICS = ["seller warranty", "manufacturer part number", "mpn", "ean", "upc", "isbn", "gtin"];
+
+export interface HealthPlan {
+  instruction: string | null; // what Ask AI applies in the editor, in one go
+  auto: Set<string>; // reason keys it covers
+  todo: string[]; // what only the seller can do (stock, photos, policies…)
+  todoKeys: Set<string>;
+}
+
+/**
+ * The recommended changes for a listing, from its health reasons (and the
+ * deeper check): the ones the AI can make — title, missing specifics the
+ * listing's facts support, description, a price move to match similar
+ * listings — as one instruction, and the rest as a to-do for the seller.
+ */
+export function healthPlan(health: ListingHealth, check: HealthCheck | null, price: number | null, currency: string | null): HealthPlan {
+  const steps: string[] = [];
+  const auto = new Set<string>();
+  const todo: string[] = [];
+  const todoKeys = new Set<string>();
+  const money = (n: number) => formatMoney({ amount: n, currency: currency || undefined });
+  const you = (key: string, text: string) => {
+    todo.push(text);
+    todoKeys.add(key);
+  };
+  for (const r of health.reasons || []) {
+    if (r.status === "pass") continue;
+    switch (r.key) {
+      case "title":
+        steps.push("Rewrite the title to use close to 80 characters, with the words buyers search for first. Keep every word accurate.");
+        auto.add(r.key);
+        break;
+      case "specifics": {
+        const missing = check?.quality.specificsMissing;
+        if (missing?.length) {
+          const aiCan = missing.filter((n) => !SELLER_ONLY_SPECIFICS.includes(n.toLowerCase()));
+          const sellerOnly = missing.filter((n) => SELLER_ONLY_SPECIFICS.includes(n.toLowerCase()));
+          if (aiCan.length) {
+            steps.push(`Fill these empty item specifics eBay recommends for this category: ${aiCan.join(", ")}. Use only facts the listing states; leave out any it doesn't.`);
+            auto.add(r.key);
+          }
+          if (sellerOnly.length) you(r.key, `Add ${sellerOnly.join(", ")} if you have them (only you know these).`);
+        } else {
+          steps.push("Fill any empty item specifics eBay recommends for this category that the listing's facts support.");
+          auto.add(r.key);
+        }
+        break;
+      }
+      case "description":
+        steps.push("Expand the description with size, material, what's in the box and compatibility, using only facts already in the listing.");
+        auto.add(r.key);
+        break;
+      case "competitor": {
+        const cheapest = check?.quality.competitor?.cheapest;
+        const postage = check?.quality.shippingCost ?? 0;
+        if (price != null && cheapest != null && price + postage > cheapest) {
+          // Match the cheapest similar listing, delivered, but never cut more than a fifth at once.
+          const drop = Math.min(price + postage - cheapest, price * 0.2);
+          const target = Math.max(0.01, Math.round((price - drop) * 100) / 100);
+          steps.push(`Lower the price by ${money(drop)} to ${money(target)} (every variation by the same amount), to match the cheapest similar listing delivered.`);
+          auto.add(r.key);
+        }
+        break;
+      }
+      case "stock":
+        you(r.key, "Put it back in stock: eBay hides it from search until then.");
+        break;
+      case "photo":
+        you(r.key, "Try a stronger main photo: it decides the click in search.");
+        break;
+      case "photos":
+        you(r.key, "Add more photos (eBay allows 24).");
+        break;
+      case "price":
+        you(r.key, "Check the price against your other listings in this category.");
+        break;
+      case "postage":
+        you(r.key, "Consider free postage (set in your postage policy).");
+        break;
+      case "dispatch":
+        you(r.key, "Shorten the dispatch time (set in your postage policy).");
+        break;
+      case "returns":
+        you(r.key, "Accept returns (set in your returns policy).");
+        break;
+      case "decline":
+        you(r.key, "Check what changed recently: price, stock or a competitor.");
+        break;
+      case "watchers":
+        you(r.key, "Send the watchers an offer in Seller Hub.");
+        break;
+      default:
+        break;
+    }
+  }
+  const instruction = steps.length
+    ? `Apply these recommended changes from the listing's health check, and leave everything else as it is:\n${steps.map((t, i) => `${i + 1}. ${t}`).join("\n")}`
+    : null;
+  return { instruction, auto, todo, todoKeys };
+}
 
 function Step({ label, value, normal, weak, format }: { label: string; value: number | null; normal: number | null; weak: boolean; format: (n: number | null) => string }) {
   const max = Math.max(value ?? 0, normal ?? 0) || 1;
@@ -177,7 +262,8 @@ export function HealthPanel({
   edits,
   currency,
   sellerHubUrl,
-  onFix,
+  price,
+  onApply,
   onCheck,
 }: {
   health: ListingHealth;
@@ -187,14 +273,16 @@ export function HealthPanel({
   edits: ListingEdit[];
   currency: string | null;
   sellerHubUrl: string | null;
-  onFix: (fix: HealthFix, instruction: string | null) => Promise<void> | void;
+  price: number | null; // the listing's price (the lowest, for variations)
+  onApply: (plan: HealthPlan) => Promise<void> | void;
   onCheck: (competitor: boolean) => Promise<void>;
 }) {
   // Similar listings' prices cost a second call: only when the seller asks.
   const [competitor, setCompetitor] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
-  const [fixing, setFixing] = useState<HealthFix | null>(null);
+  const [applying, setApplying] = useState(false);
+  const plan = healthPlan(health, check, price, currency);
   const tone = TONE[STAGE_TAG[health.stage]?.tone ?? (health.tone === "good" ? "good" : "neutral")];
   const rates: HealthRates | undefined = health.rates;
   const normal: HealthRates | undefined = health.normal;
@@ -214,19 +302,12 @@ export function HealthPanel({
     }
   }
 
-  async function fix(key: HealthFix) {
-    setFixing(key);
-    // Specifics: name the empty ones the deeper check found, so the AI fills
-    // those rather than guessing which.
-    const missing = check?.quality.specificsMissing;
-    const instruction =
-      key === "specifics" && missing?.length
-        ? `Fill these empty item specifics eBay recommends for this category: ${missing.join(", ")}. Use only facts already in the listing (title, description, photos); leave any the listing can't support empty.`
-        : (FIX_INSTRUCTION[key] ?? null);
+  async function apply() {
+    setApplying(true);
     try {
-      await onFix(key, instruction);
+      await onApply(plan);
     } finally {
-      setFixing(null);
+      setApplying(false);
     }
   }
 
@@ -254,6 +335,33 @@ export function HealthPanel({
           )}
         </div>
 
+        {(plan.instruction || plan.todo.length > 0) && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--color-primary)]/25 bg-[var(--color-primary-soft)]/50 px-4 py-3">
+            <div className="min-w-0">
+              <p className="text-[12.5px] font-semibold text-[var(--color-ink)]">
+                {plan.instruction ? `${plan.auto.size} change${plan.auto.size === 1 ? "" : "s"} Liston can make for you` : "Changes only you can make"}
+              </p>
+              <p className="text-[11.5px] leading-relaxed text-[var(--color-muted)]">
+                {plan.instruction
+                  ? `Applied in the editor for you to review before it goes live${plan.todo.length ? `; ${plan.todo.length} more for you to do` : ""}.`
+                  : "Opens the listing in the editor with the list of what to change."}
+              </p>
+            </div>
+            {plan.instruction ? (
+              <button type="button" onClick={apply} disabled={applying} className="btn btn-primary btn-sm">
+                <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
+                  <path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8L12 3z" fill="currentColor" />
+                </svg>
+                {applying ? "Opening…" : "Apply recommended changes"}
+              </button>
+            ) : (
+              <button type="button" onClick={apply} disabled={applying} className="btn btn-secondary btn-sm">
+                {applying ? "Opening…" : "Open in editor"}
+              </button>
+            )}
+          </div>
+        )}
+
         {rates && normal && (
           <div className="mt-4 space-y-3">
             <div className="flex items-center justify-end gap-4 text-[10.5px] text-[var(--color-muted)]">
@@ -278,19 +386,15 @@ export function HealthPanel({
               <li key={r.key} className="flex items-start gap-2.5">
                 <ReasonIcon status={r.status} />
                 <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-[var(--color-ink)]">{r.text}</p>
-                {r.fix && r.status !== "pass" && (
-                  r.fix === "offer" ? (
-                    sellerHubUrl && (
-                      <a href={sellerHubUrl} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm flex-shrink-0">
-                        {FIX_LABEL.offer}
-                      </a>
-                    )
-                  ) : (
-                    <button type="button" onClick={() => fix(r.fix!)} disabled={fixing !== null} className="btn btn-secondary btn-sm flex-shrink-0">
-                      {fixing === r.fix ? "Opening…" : FIX_LABEL[r.fix]}
-                    </button>
-                  )
-                )}
+                {plan.auto.has(r.key) ? (
+                  <span className="mt-0.5 flex-shrink-0 whitespace-nowrap rounded-full bg-[var(--color-primary-soft)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--color-primary)]">Applied for you</span>
+                ) : r.key === "watchers" && sellerHubUrl ? (
+                  <a href={sellerHubUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 flex-shrink-0 whitespace-nowrap text-[11.5px] font-semibold text-[var(--color-primary)] hover:underline">
+                    Seller Hub ↗
+                  </a>
+                ) : plan.todoKeys.has(r.key) ? (
+                  <span className="mt-0.5 flex-shrink-0 whitespace-nowrap rounded-full bg-[var(--color-paper)] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--color-muted)]">For you</span>
+                ) : null}
               </li>
             ))}
           </ul>

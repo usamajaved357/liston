@@ -1496,6 +1496,12 @@ export default function DraftEditorPage() {
   // page first renders.
   const searchParams = useSearchParams();
   const [askPrefill] = useState(() => searchParams.get("ask"));
+  // With ?apply=1 (the health check's "Apply recommended changes") the
+  // proposal is applied to the editor at once; ?todo= lists what only the
+  // seller can do (stock, photos…), shown with what was applied.
+  const [applyAsked] = useState(() => searchParams.get("apply") === "1");
+  const [todoAsked] = useState(() => (searchParams.get("todo") || "").split("|").filter(Boolean));
+  const [appliedNote, setAppliedNote] = useState<{ summary: string; rows: ChangeRow[]; todo: string[]; working: boolean } | null>(null);
   const askedRef = useRef(false);
 
   const [listing, setListing] = useState<DraftListing | null>(null);
@@ -2230,9 +2236,12 @@ export default function DraftEditorPage() {
     setAiBusy(true);
     setError(null);
     try {
-      setTextProposal(await api.reviseDraftText(listing.id, instruction, currentStateForAi()));
+      const proposal = await api.reviseDraftText(listing.id, instruction, currentStateForAi());
+      setTextProposal(proposal);
+      return proposal;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The AI couldn't make that change.");
+      return null;
     } finally {
       setAiBusy(false);
     }
@@ -2241,11 +2250,34 @@ export default function DraftEditorPage() {
   // title state matches the loaded draft); ?ask= is then dropped so a reload
   // doesn't ask again.
   const editorReady = Boolean(content) && title === (content ? (isVariationDraft(content) ? content.commonTitle : content.title) : null);
+  // Only a to-do (nothing the AI can change): shown as it opens.
+  useEffect(() => {
+    if (askPrefill || !applyAsked || !todoAsked.length || askedRef.current || !editorReady) return;
+    askedRef.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    setAppliedNote({ summary: "Nothing here can be changed automatically; the list below is for you.", rows: [], todo: todoAsked, working: false });
+  }, [askPrefill, applyAsked, todoAsked, editorReady]);
+
   useEffect(() => {
     if (!askPrefill || askedRef.current || !editable || !editorReady || !listing) return;
     askedRef.current = true;
     setAiScope("text");
     window.history.replaceState(null, "", window.location.pathname);
+    if (applyAsked) {
+      // Applied straight into the editor; the note at the top says what.
+      setAppliedNote({ summary: "", rows: [], todo: todoAsked, working: true });
+      proposeText(askPrefill).then((proposal) => {
+        if (!proposal || proposal.cannotDo) {
+          setAppliedNote({ summary: proposal?.summary || "", rows: [], todo: todoAsked, working: false });
+          return;
+        }
+        const rows = changeRowsFor(proposal);
+        if (rows.length) applyTextChanges(proposal.changes);
+        setTextProposal(null);
+        setAppliedNote({ summary: proposal.summary, rows, todo: todoAsked, working: false });
+      });
+      return;
+    }
     const show = () => document.getElementById("ask-ai")?.scrollIntoView({ behavior: "smooth", block: "start" });
     setTimeout(show, 150);
     proposeText(askPrefill).then(() => setTimeout(show, 50));
@@ -2281,9 +2313,9 @@ export default function DraftEditorPage() {
   };
 
   // The proposal, as rows the panel can show: field, before, after.
-  const textRows = useMemo<ChangeRow[]>(() => {
-    if (!textProposal) return [];
-    const c = textProposal.changes;
+  // What a text proposal would change, against the editor as it is now.
+  function changeRowsFor(proposal: TextProposal): ChangeRow[] {
+    const c = proposal.changes;
     const rows: ChangeRow[] = [];
     const newTitle = c.title ?? c.commonTitle;
     const newDesc = c.description ?? c.commonDescription;
@@ -2327,11 +2359,19 @@ export default function DraftEditorPage() {
     }
     if (c.storeCategoryNames) rows.push({ label: "Shop categories", from: storeCategoryNames.join(", ") || "—", to: c.storeCategoryNames.join(", ") || "none" });
     return rows;
-  }, [textProposal, title, description, editedAspects, condition, single, singlePrice, singleQuantity, sku, variation, priceOverrides, quantityOverrides, policies, policyIds, storeCategoryNames]);
+  }
+  const textRows = textProposal ? changeRowsFor(textProposal) : [];
 
   function acceptText() {
     if (!textProposal || !content) return;
-    const c = textProposal.changes;
+    applyTextChanges(textProposal.changes);
+    setTextProposal(null);
+  }
+
+  // Puts a proposal's changes into the editor (saved as a draft; nothing
+  // reaches eBay until Publish).
+  function applyTextChanges(c: TextProposal["changes"]) {
+    if (!content) return;
     const newTitle = c.title ?? c.commonTitle;
     const newDesc = c.description ?? c.commonDescription;
     if (newTitle !== undefined) setTitle(newTitle);
@@ -2394,7 +2434,6 @@ export default function DraftEditorPage() {
     if (c.removeVariants?.length) setRemovedRows((s) => new Set([...s, ...c.removeVariants!]));
     if (c.listingPolicies) setPolicyIds((p) => ({ ...p, ...c.listingPolicies }));
     if (c.storeCategoryNames) setStoreCategoryNames(c.storeCategoryNames);
-    setTextProposal(null);
   }
   async function acceptImage() {
     if (!listing || !imageProposal || !imageProposalTarget) return;
@@ -2482,6 +2521,78 @@ export default function DraftEditorPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1360px] px-5 py-4">
+          {appliedNote && (
+            <div className="mb-3 overflow-hidden rounded-2xl border border-[var(--color-primary)]/30 bg-[var(--color-panel)] shadow-[var(--shadow-card)]">
+              <div className="flex items-start gap-3 bg-[var(--color-primary-soft)]/60 px-4 py-3">
+                <span className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary)] text-white">
+                  {appliedNote.working ? (
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                  ) : (
+                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden>
+                      <path d="M4 8.5l2.5 2.5L12 5.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13.5px] font-semibold text-[var(--color-ink)]">
+                    {appliedNote.working
+                      ? "Applying the recommended changes…"
+                      : appliedNote.rows.length
+                        ? `${appliedNote.rows.length} recommended change${appliedNote.rows.length === 1 ? "" : "s"} applied`
+                        : "Nothing to change automatically"}
+                  </p>
+                  <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--color-muted)]">
+                    {appliedNote.working
+                      ? "The AI is working through the health check's recommendations."
+                      : appliedNote.rows.length
+                        ? "Not on eBay yet: review them below, then Publish changes. Discard changes drops them all."
+                        : appliedNote.summary}
+                  </p>
+                </div>
+                {!appliedNote.working && (
+                  <button type="button" onClick={() => setAppliedNote(null)} aria-label="Dismiss" className="text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+                    {Icon.close}
+                  </button>
+                )}
+              </div>
+              {!appliedNote.working && (appliedNote.rows.length > 0 || appliedNote.todo.length > 0) && (
+                <div className="grid gap-4 px-4 py-3 md:grid-cols-2">
+                  {appliedNote.rows.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {appliedNote.rows.map((row, i) => (
+                        <li key={i} className="text-[12px] leading-snug">
+                          <span className="font-semibold text-[var(--color-ink)]">{row.label}</span>
+                          <span className="text-[var(--color-muted)]"> · </span>
+                          {row.long ? (
+                            <span className="text-[var(--color-ink)]">rewritten</span>
+                          ) : (
+                            <>
+                              {row.from && <span className="text-[var(--color-muted)] line-through decoration-[var(--color-muted)]/60">{row.from}</span>}
+                              {row.from && <span className="mx-1 text-[var(--color-muted)]">→</span>}
+                              <span className="font-medium text-[var(--color-ink)]">{row.to}</span>
+                            </>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {appliedNote.todo.length > 0 && (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">For you to do</p>
+                      <ul className="mt-1 space-y-1">
+                        {appliedNote.todo.map((t) => (
+                          <li key={t} className="flex gap-1.5 text-[12px] leading-snug text-[var(--color-ink)]">
+                            <span className="text-[var(--color-muted)]">•</span>
+                            {t}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {(error || policyFixNote || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published" || (editable && policyTriggers.length > 0)) && (
             <div className="mb-3 space-y-2">
               {editable && policyTriggers.length > 0 && (
