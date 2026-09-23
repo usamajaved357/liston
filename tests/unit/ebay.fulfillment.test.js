@@ -75,3 +75,15 @@ test('a 403 insufficient-permissions answer is surfaced as a missing scope', asy
     fetchMock.mock.restore();
   }
 });
+
+// "For KIA … Key Fob Case", 2 × £4.74 with a multi-buy discount: eBay's
+// lineItemCost is the line (£9.48), the total after the discount £9.00.
+test('an order line shows the price of one unit, and the line total after discounts', () => {
+  const order = ebayFulfillment.mapOrder({
+    orderId: '1',
+    pricingSummary: { total: { value: '9.00', currency: 'GBP' } },
+    lineItems: [{ lineItemId: 'l1', legacyItemId: '406937363308', quantity: 2, lineItemCost: { value: '9.48', currency: 'GBP' }, total: { value: '9.00', currency: 'GBP' } }],
+  });
+  assert.deepStrictEqual(order.lineItems[0].unitPrice, { value: 4.74, currency: 'GBP' });
+  assert.deepStrictEqual(order.lineItems[0].total, { value: 9, currency: 'GBP' });
+});

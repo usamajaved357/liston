@@ -100,14 +100,18 @@ function mapAddress(shipTo) {
 }
 
 function mapLineItem(li) {
+  const quantity = Number(li.quantity ?? 1);
+  // lineItemCost is the whole line (unit price × quantity, before any
+  // discount); Seller Hub's "Item price" is one unit.
+  const cost = amount(li.lineItemCost);
   return {
     lineItemId: li.lineItemId,
     itemId: li.legacyItemId ? String(li.legacyItemId) : null,
     legacyVariationId: li.legacyVariationId ? String(li.legacyVariationId) : null,
     sku: li.sku || null,
     title: li.title || null,
-    quantity: Number(li.quantity ?? 1),
-    unitPrice: amount(li.lineItemCost),
+    quantity,
+    unitPrice: cost && quantity > 1 ? { value: Math.round((cost.value / quantity) * 100) / 100, currency: cost.currency } : cost,
     total: amount(li.total),
     deliveryCost: amount(li.deliveryCost?.shippingCost),
     variation: (li.variationAspects || []).map((v) => ({ name: v.name, value: v.value })),

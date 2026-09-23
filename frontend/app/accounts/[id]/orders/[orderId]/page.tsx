@@ -804,11 +804,6 @@ export default function OrderDetailPage() {
                           )}
                         </div>
                       )}
-                      {ebayOrderUrl && (
-                        <a href={ebayOrderUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-[13px] text-[var(--color-ink)] underline print:hidden">
-                          View more details
-                        </a>
-                      )}
                     </div>
                   )}
                 </div>
