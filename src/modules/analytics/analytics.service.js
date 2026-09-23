@@ -1015,44 +1015,6 @@ async function readListing(connectionId, ownerId, itemId, { range = '30d' } = {}
 }
 
 /**
- * The last 30 complete days per live listing (views, impressions), units
- * sold and watchers, for the Listings tab's rows. From the stored days;
- * never reads eBay.
- */
-async function getListingSummaries(connectionId, ownerId) {
-  return connectionService.withDecryptedCredentials(connectionId, ownerId, async (credentials, connection) => {
-    const inputs = await ebayService.analyticsInputs(credentials, connectionId, { push: ebayService.pushEnabled(connection) });
-    const base = { credentialsChanged: inputs.credentialsChanged, credentials: inputs.credentials };
-    const status = statusOf(inputs);
-    const timeZone = d.timeZoneFor(inputs.marketplaceId) || 'Europe/London';
-    const { today, lastFinal } = contextFor(timeZone);
-    const win = d.rangeWindow('30d', { today, lastFinal });
-    let reports = [];
-    let history = null;
-    if (status === 'ok') {
-      const state = await repo.getSyncState(connectionId);
-      history = await historyFor(connectionId, win.from, win.to, listedOnMap(inputs.items, timeZone), state.history_from);
-      const args = { connectionId, inputs, timeZone, lastFinal, from: win.from, to: win.to };
-      reports = history.complete ? [history] : [history, await reportFor({ ...args, scope: 'all' }), await reportFor({ ...args, scope: 'top' })];
-    }
-    const sales = d.salesIndex(inputs.orders, timeZone);
-    const items = {};
-    for (const item of inputs.items) {
-      const id = String(item.itemId);
-      const t = listingTraffic(reports, id, history);
-      items[id] = {
-        traffic: t.state,
-        views: t.state === 'measured' ? t.traffic.views : null,
-        impressions: t.state === 'measured' ? t.traffic.total_impressions : null,
-        sold: d.salesWithin(sales.byListingDay.get(id), win.from, win.to).units,
-        watchers: item.watchCount ?? null,
-      };
-    }
-    return { ...base, data: { status: status === 'ok' ? 'ok' : 'reconnect', from: win.from, to: win.to, items } };
-  });
-}
-
-/**
  * For the admin's usage page: the traffic allowance today, by kind and by
  * account, and where each account's stored figures stand.
  */
@@ -1087,7 +1049,6 @@ module.exports = {
   loadAllListings,
   getListingAnalytics,
   readListing,
-  getListingSummaries,
   adminUsage,
   isDue,
   nightlyReserve,

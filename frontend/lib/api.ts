@@ -233,7 +233,12 @@ export interface Listing {
   viewItemUrl: string | null;
   startTime: string | null;
   endTime: string | null;
+  lastSoldAt?: string | null; // its latest sale in the orders Liston holds (90 days)
+  lastEditedAt?: string | null; // its latest edit from Liston
 }
+
+// The Listings tab's orders (backend listing-sort.js).
+export type ListingSort = "newest" | "edited" | "best_selling" | "last_sold" | "not_selling" | "low_stock" | "price_high" | "price_low";
 
 export interface OrderLineItem {
   itemId: string | null;
@@ -1129,12 +1134,6 @@ export interface ListingAnalytics {
   sync: { finalThrough: string | null };
 }
 
-export interface ListingAnalyticsSummaries {
-  status: "ok" | "reconnect";
-  from: string;
-  to: string;
-  items: Record<string, { traffic: ListingTrafficState; views: number | null; impressions: number | null; sold: number; watchers: number | null }>;
-}
 
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
 
@@ -1230,10 +1229,10 @@ export const api = {
 
   deleteAvatar: () => request<{ message: string }>("/api/users/me/avatar", { method: "DELETE" }),
 
-  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "") => {
-    const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage) });
+  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "", sort: ListingSort = "newest") => {
+    const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage), sort });
     if (search) params.set("q", search);
-    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number; syncedAt: string | null }>(
+    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; sort: ListingSort; allCount: number; syncedAt: string | null }>(
       `/api/connections/${id}/listings?${params.toString()}`
     );
   },
@@ -1313,7 +1312,6 @@ export const api = {
     request<{ calls: number }>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/read?range=${range}`, { method: "POST" }),
   checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
     request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
-  getListingAnalyticsSummaries: (id: string) => request<ListingAnalyticsSummaries>(`/api/connections/${id}/analytics/listings/summary`),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });

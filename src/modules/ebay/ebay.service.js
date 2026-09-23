@@ -1127,6 +1127,23 @@ async function listListingsDetailed(credentials, { connectionId, status = 'activ
   };
 }
 
+// Each listing's latest sale in the mirrored orders (eBay keeps 90 days):
+// itemId -> ISO time. Cancelled orders aren't sales. Reads the mirror only.
+async function lastSalesByItem(credentials, { connectionId, push = false }) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const orders = await getOrdersLast90Cached(String(connectionId), accessToken, siteId, push).catch(() => []);
+  const last = new Map();
+  for (const order of orders || []) {
+    if (order.cancelStatus && !['NotApplicable', 'None', 'CancelFailed'].includes(order.cancelStatus)) continue;
+    if (!order.createdAt) continue;
+    for (const line of order.lineItems || []) {
+      const id = line.itemId ? String(line.itemId) : null;
+      if (id && !(last.get(id) >= order.createdAt)) last.set(id, order.createdAt);
+    }
+  }
+  return last;
+}
+
 // The account's best sellers, for the "More from our store" row in every
 // description: ranked by units sold in the last 90 days (from the mirrored
 // orders), then by the listing's lifetime sold count, then by recency. Reads
@@ -2192,6 +2209,7 @@ module.exports = {
   isInventoryManagedError,
   conditionIdFor,
   listListingsDetailed,
+  lastSalesByItem,
   invalidateListings,
   removeListingFromMirror,
   endLiveListing,

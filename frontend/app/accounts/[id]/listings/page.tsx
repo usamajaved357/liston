@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingAnalyticsSummaries, ListingStatusFilter } from "@/lib/api";
+import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingSort, ListingStatusFilter } from "@/lib/api";
+import { readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -14,7 +15,6 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SyncStatus } from "@/components/SyncStatus";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
-import { compactNumber } from "@/components/charts/chart-format";
 
 type Tab = ListingStatusFilter | "draft";
 const TrashIcon = (
@@ -36,6 +36,24 @@ function Thumb({ src }: { src: string | null }) {
     </div>
   );
 }
+
+// The Listings tab's orders, sorted over the whole list before paging
+// (backend listing-sort.js). eBay's own order is "time left", which for
+// Good 'Til Cancelled listings is only the day each one renews.
+const SORT_OPTIONS: { key: ListingSort; label: string }[] = [
+  { key: "newest", label: "Newest listed" },
+  { key: "edited", label: "Recently edited" },
+  { key: "best_selling", label: "Best selling" },
+  { key: "last_sold", label: "Last sold" },
+  { key: "not_selling", label: "Not selling" },
+  { key: "low_stock", label: "Low stock" },
+  { key: "price_high", label: "Price: high to low" },
+  { key: "price_low", label: "Price: low to high" },
+];
+const INACTIVE_SORT_OPTIONS: { key: ListingSort; label: string }[] = [
+  { key: "newest", label: "Recently ended" },
+  ...SORT_OPTIONS.filter((o) => !["newest", "not_selling", "low_stock"].includes(o.key)),
+];
 
 // Stock reads at a glance: a dot that turns amber when a listing is about to
 // run dry and red once it has.
@@ -61,7 +79,6 @@ function ListingRow({
   editing,
   onDelete,
   onEnd,
-  stats,
   onAnalytics,
 }: {
   item: Listing;
@@ -69,8 +86,6 @@ function ListingRow({
   editing: boolean;
   onDelete?: () => void;
   onEnd?: () => void;
-  // The last 30 days, from stored analytics (no eBay call per row).
-  stats?: { views: number | null; sold: number; watchers: number | null } | null;
   onAnalytics?: () => void;
 }) {
   const open = () => {
@@ -86,28 +101,27 @@ function ListingRow({
         <p className="truncate text-[13.5px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{item.title}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-muted)]">
           <StockBadge available={item.quantityAvailable} />
-          <span>{item.quantitySold} sold</span>
-          {stats && (
-            <span className="inline-flex items-center gap-1 text-[var(--color-ink)]" title="The last 30 complete days: views from eBay, units sold from your orders; watchers now">
-              <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-muted)]" aria-hidden>
-                <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" stroke="currentColor" strokeWidth="1.8" />
-                <circle cx="12" cy="12" r="2.8" stroke="currentColor" strokeWidth="1.8" />
-              </svg>
-              {stats.views != null && (
-                <>
-                  <span className="font-medium tabular-nums">{compactNumber(stats.views)}</span>
-                  <span className="text-[var(--color-muted)]">views ·</span>
-                </>
-              )}
-              <span className="text-[var(--color-muted)]">
-                {stats.sold} sold in 30 days
-                {stats.watchers != null && ` · ${stats.watchers} watching`}
-              </span>
-            </span>
-          )}
           <span className="font-mono text-[11.5px] tracking-tight">#{item.itemId}</span>
           {item.sku && <span className="truncate">SKU {item.sku}</span>}
-          {item.startTime && <span>Listed {formatShortDate(item.startTime)}</span>}
+          {item.startTime && <span className="font-medium text-[var(--color-ink)]">Listed {formatShortDate(item.startTime)}</span>}
+          {item.lastEditedAt && <span className="font-medium text-[var(--color-ink)]" title="Last edited from Liston">Edited {formatShortDate(item.lastEditedAt)}</span>}
+          {/* Sales last: eBay's lifetime count and, from the orders Liston holds, the latest sale. */}
+          {/* eBay's ended-listings list can report 0 sold for one that did sell: an order Liston holds says otherwise. */}
+          <span className={item.quantitySold > 0 || item.lastSoldAt ? "text-[var(--color-ink)]" : "font-medium text-[var(--color-danger)]"}>
+            {item.quantitySold > 0 ? (
+              <>
+                <span className="font-semibold tabular-nums">{item.quantitySold} sold</span>
+                {item.lastSoldAt && <span className="text-[var(--color-muted)]"> · last {formatShortDate(item.lastSoldAt)}</span>}
+              </>
+            ) : item.lastSoldAt ? (
+              <>
+                <span className="font-semibold">Sold</span>
+                <span className="text-[var(--color-muted)]"> · last {formatShortDate(item.lastSoldAt)}</span>
+              </>
+            ) : (
+              "No sales yet"
+            )}
+          </span>
         </div>
       </div>
       <p className="w-20 flex-shrink-0 text-right text-[14px] font-medium tracking-tight text-[var(--color-ink)]">{formatMoney(item.price)}</p>
@@ -236,6 +250,16 @@ export default function AccountListingsPage() {
   const [search, setSearch] = useState(urlSearch);
   const [debounced, setDebounced] = useState(urlSearch.trim());
   const [page, setPage] = useState(1);
+  // The order per tab, remembered for this account (lib/viewState).
+  const sortKey = `listings-sort:${params.id}`;
+  const [sorts, setSorts] = useState<{ active?: ListingSort; inactive?: ListingSort }>(() => readView<{ active: ListingSort; inactive: ListingSort }>(sortKey));
+  const sort: ListingSort = (filter === "inactive" ? sorts.inactive : sorts.active) || "newest";
+  function changeSort(next: ListingSort) {
+    const tab = filter === "inactive" ? "inactive" : "active";
+    setSorts((s) => ({ ...s, [tab]: next }));
+    writeView(sortKey, { [tab]: next });
+    setPage(1);
+  }
   const [perPage, setPerPage] = useState<number | "all">(25);
   const [items, setItems] = useState<Listing[]>([]);
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
@@ -252,7 +276,6 @@ export default function AccountListingsPage() {
   const [draftToDelete, setDraftToDelete] = useState<string | null>(null);
   const [deletingDraft, setDeletingDraft] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
-  const [summaries, setSummaries] = useState<ListingAnalyticsSummaries | null>(null);
   const [analyticsItem, setAnalyticsItem] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<Listing | null>(null);
   const [itemToEnd, setItemToEnd] = useState<Listing | null>(null);
@@ -284,7 +307,7 @@ export default function AccountListingsPage() {
         .catch(() => done(() => { setError("Couldn't load your draft listings. Try again."); setLoading(false); }));
     } else {
       api
-        .getConnectionListings(connection.id, filter, page, perPage, debounced)
+        .getConnectionListings(connection.id, filter, page, perPage, debounced, sort)
         .then((data) =>
           done(() => {
             setItems(data.items);
@@ -301,26 +324,14 @@ export default function AccountListingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [connection, filter, page, perPage, debounced, reloadKey]);
+  }, [connection, filter, page, perPage, debounced, sort, reloadKey]);
 
   // eBay (or one of our own publishes) changed this account: show it now.
   useAccountEvents(connection?.id, (event) => {
     if (event.kind === "listings" && filter !== "draft") setReloadKey((k) => k + 1);
   });
 
-  // Last-30-day views per live listing, from stored analytics only.
   const canSeeAnalytics = connection ? connection.permissions === undefined || Boolean(connection.permissions.analytics) : false;
-  useEffect(() => {
-    if (!connection || !canSeeAnalytics || filter !== "active") return;
-    let cancelled = false;
-    api
-      .getListingAnalyticsSummaries(connection.id)
-      .then((d) => !cancelled && setSummaries(d))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [connection, canSeeAnalytics, filter, reloadKey]);
 
   async function handleRefresh() {
     if (!connection) return;
@@ -481,6 +492,21 @@ export default function AccountListingsPage() {
               Draft a listing
             </Link>
           )}
+          {filter !== "draft" && (
+            <label className="relative flex items-center">
+              <span className="sr-only">Sort listings</span>
+              <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 h-3.5 w-3.5 text-[var(--color-muted)]" aria-hidden>
+                <path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <select value={sort} onChange={(e) => changeSort(e.target.value as ListingSort)} className="input input-sm w-auto cursor-pointer !pl-8 !pr-8" title="Sort listings">
+                {(filter === "inactive" ? INACTIVE_SORT_OPTIONS : SORT_OPTIONS).map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         <div className="relative w-72 max-w-full">
           <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
             <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
@@ -575,11 +601,6 @@ export default function AccountListingsPage() {
               <ListingRow
                 key={item.itemId}
                 item={item}
-                stats={
-                  filter === "active" && summaries?.status === "ok" && summaries.items[item.itemId]
-                    ? summaries.items[item.itemId]
-                    : null
-                }
                 onAnalytics={filter === "active" && canSeeAnalytics ? () => setAnalyticsItem(item.itemId) : undefined}
                 editing={editingItemId === item.itemId}
                 onEdit={() => openLiveEdit(item.itemId)}

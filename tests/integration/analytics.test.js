@@ -12,6 +12,7 @@ const budget = require('../../src/modules/ebay/analytics-budget');
 const repo = require('../../src/modules/analytics/analytics.repository');
 const service = require('../../src/modules/analytics/analytics.service');
 const days = require('../../src/modules/analytics/analytics-days');
+const listingRepository = require('../../src/modules/listings/listing.repository');
 
 // Against the real local DB (fixture users are @example.com, removed by
 // tests/cleanup.js). eBay is mocked twice over: the account's cached
@@ -183,9 +184,7 @@ test('the Analytics tab: every range, and its comparison, is added up from store
   const panel = await service.getListingAnalytics(connectionId, userId, '222', { range: '30d' });
   assert.strictEqual(panel.data.traffic, 'measured');
   assert.strictEqual(panel.data.dailyTrafficDays, 30, 'a figure every day: zero before it was listed');
-  const summary = await service.getListingSummaries(connectionId, userId);
-  assert.strictEqual(summary.data.items['111'].views, listedDays * 6, 'the Listings tab: the same 30 days');
-  assert.strictEqual(calls.length - before, 0, 'every range, the panel and the Listings tab: no eBay calls');
+  assert.strictEqual(calls.length - before, 0, 'every range and the panel: no eBay calls');
 });
 
 test('a store of 300: each day reads every listing (2 calls), so ranges are exact for all of them', async () => {
@@ -317,7 +316,6 @@ test('a later day reads only the new day; a filter the history doesn’t reach s
 
 // ---- listing health ----------------------------------------------------------------
 
-const listingRepository = require('../../src/modules/listings/listing.repository');
 
 // Six seasoned listings and one new one. Per day: 111 600 impressions (0.6%
 // of search clicked), 222 400 (0.33%), the 9000s ~298 (1%): the account's

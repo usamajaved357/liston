@@ -17,6 +17,7 @@ const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const textGenerator = require('../ai-generation/text-generator.service');
 const governor = require('../ebay/request-governor');
 const analyticsService = require('../analytics/analytics.service');
+const listingSort = require('./listing-sort');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -1218,6 +1219,43 @@ function editDifferences(before, after) {
   return { fields, before: readable(before), after: readable(after) };
 }
 
+/**
+ * One page of the account's live (or ended) listings for the Listings tab,
+ * in the chosen order (listing-sort.js), each with its latest sale and its
+ * latest edit from Liston. The whole list is sorted before paging, so page
+ * 1 is the top of everything; no eBay call beyond the cached list.
+ */
+async function pageOfListings(credentials, { connectionId, status, search, sort, page = 1, perPage = 25, hiddenItemIds = [], push = false }) {
+  const all = await ebayService.listListingsDetailed(credentials, { connectionId, status, search, page: 1, perPage: 0, hiddenItemIds, push });
+  const current = all.credentialsChanged ? all.credentials : credentials;
+  const [lastSold, edits] = await Promise.all([
+    ebayService.lastSalesByItem(current, { connectionId, push }).catch(() => new Map()),
+    listingRepository.latestChanges(connectionId, new Date(0)).catch(() => new Map()),
+  ]);
+  const items = all.items.map((item) => ({
+    ...item,
+    lastSoldAt: lastSold.get(String(item.itemId)) || null,
+    lastEditedAt: edits.get(String(item.itemId))?.changed_at || null,
+  }));
+  const sortKey = listingSort.sortFor(sort, status);
+  const sorted = listingSort.sortListings(items, sortKey, status);
+  const size = perPage > 0 ? perPage : Math.max(1, sorted.length);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / size));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  return {
+    items: sorted.slice((safePage - 1) * size, safePage * size),
+    totalEntries: sorted.length,
+    totalPages,
+    page: safePage,
+    perPage: size,
+    sort: sortKey,
+    allCount: all.allCount,
+    syncedAt: all.syncedAt,
+    credentialsChanged: all.credentialsChanged,
+    credentials: all.credentials,
+  };
+}
+
 async function publishLiveEdit(listing, userId) {
   const draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
@@ -1854,6 +1892,7 @@ function withSkus(draft, connectionId) {
 }
 
 module.exports = {
+  pageOfListings,
   editSnapshot,
   editDifferences,
   renderDraftDescription,

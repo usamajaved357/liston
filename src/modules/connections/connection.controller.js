@@ -110,15 +110,17 @@ async function getListings(req, res, next) {
     // perPage=all puts everything on one page.
     const perPage = req.query.perPage === 'all' ? 0 : Math.min(200, Math.max(1, parseInt(req.query.perPage, 10) || 25));
     const search = typeof req.query.q === 'string' ? req.query.q : '';
+    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Listings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listListingsDetailed(credentials, {
+      return listingService.pageOfListings(credentials, {
         connectionId: req.params.id,
         status,
         search,
+        sort,
         page,
         perPage,
         hiddenItemIds: status === 'inactive' ? connection.settings?.hiddenItemIds || [] : [],
@@ -132,6 +134,7 @@ async function getListings(req, res, next) {
       totalPages: result.totalPages,
       page: result.page,
       perPage: result.perPage,
+      sort: result.sort,
       allCount: result.allCount,
       syncedAt: result.syncedAt ? new Date(result.syncedAt).toISOString() : null,
     });

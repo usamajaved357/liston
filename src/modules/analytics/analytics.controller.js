@@ -73,13 +73,4 @@ async function checkListing(req, res, next) {
   }
 }
 
-async function getListingSummaries(req, res, next) {
-  try {
-    const result = await analyticsService.getListingSummaries(req.params.id, req.ownerId);
-    res.status(200).json(result.data);
-  } catch (err) {
-    next(err);
-  }
-}
-
-module.exports = { getAnalytics, loadAllListings, getListingAnalytics, readListing, checkListing, getListingSummaries };
+module.exports = { getAnalytics, loadAllListings, getListingAnalytics, readListing, checkListing };
