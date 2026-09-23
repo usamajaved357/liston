@@ -39,6 +39,12 @@ export function formatShortDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** A calendar day ("2026-09-23") plus some days, as "27 Sept", whatever the viewer's time zone. */
+export function formatDay(day: string, plus = 0): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + plus)).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
 export function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);

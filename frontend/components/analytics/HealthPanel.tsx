@@ -2,10 +2,10 @@
 
 import { useState } from "react";
 import type { AnalyticsBenchmarks, HealthCheck, HealthRates, HealthReason, ListingEdit, ListingEditFigures, ListingHealth } from "@/lib/api";
-import { formatDateTime, formatMoney, formatShortDate } from "@/lib/format";
+import { formatDateTime, formatDay, formatMoney, formatShortDate } from "@/lib/format";
 import { fullNumber } from "@/components/charts/chart-format";
 import { StakeLabel } from "./InsightCards";
-import { TONE, STAGE_TAG } from "./insights";
+import { TONE, STAGE_TAG, editedFields } from "./insights";
 
 // A listing's health check in its panel: the verdict and what's at stake,
 // its path from search to sale against the account's typical listing,
@@ -155,16 +155,6 @@ function ReasonIcon({ status }: { status: HealthReason["status"] }) {
   );
 }
 
-const FIELD_LABEL: Record<ListingEdit["fields"][number], string> = {
-  title: "Title",
-  main_photo: "Main photo",
-  photos: "Photos",
-  price: "Price",
-  quantity: "Stock",
-  specifics: "Item specifics",
-  description: "Description",
-};
-
 function Movement({ label, before, after, format, perDay, light }: { label: string; before: number | null; after: number | null; format: (n: number | null) => string; perDay?: boolean; light?: boolean }) {
   if (before == null || after == null) return null;
   const change = before > 0 ? (after - before) / before : null;
@@ -181,19 +171,6 @@ function Movement({ label, before, after, format, perDay, light }: { label: stri
       </p>
     </div>
   );
-}
-
-// "price and description" from an edit's fields.
-function fieldList(fields: ListingEdit["fields"]): string {
-  const names = fields.map((f, i) => (i === 0 ? FIELD_LABEL[f] : FIELD_LABEL[f].toLowerCase()));
-  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "Listing";
-}
-
-// A seller-time-zone day ("2026-09-23") plus some days, as "27 Sept": the
-// same days the charts use, whatever the viewer's own time zone.
-function dayLabel(day: string, plus = 0): string {
-  const [y, m, d] = day.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + plus)).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 // One edit made in Liston and how the listing's figures moved after it. The
@@ -216,10 +193,10 @@ function EditRow({ edit, currency, latest }: { edit: ListingEdit; currency: stri
               </svg>
             </span>
           )}
-          {fieldList(edit.fields)} changed in Liston
+          {editedFields(edit.fields)} changed in Liston
         </p>
         <span className="text-[11px] text-[var(--color-muted)]" title={formatDateTime(edit.changedAt)}>
-          {dayLabel(edit.day)}
+          {formatDay(edit.day)}
         </span>
       </div>
       {edit.fields.includes("title") && edit.before.title !== edit.after.title && (
@@ -257,7 +234,7 @@ function EditRow({ edit, currency, latest }: { edit: ListingEdit; currency: stri
       ) : (
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-[var(--color-muted)]">
           {edit.waitDays > 0
-            ? `Results from ${dayLabel(edit.day, 4)}, once 3 full days have passed${latest ? ". Until then, the check above is from the days before this change." : "."}`
+            ? `Results from ${formatDay(edit.day, 4)}, once 3 full days have passed${latest ? ". Until then, the check above is from the days before this change." : "."}`
             : "Not enough stored days either side of the change to compare."}
         </p>
       )}

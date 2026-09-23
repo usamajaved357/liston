@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AccountAnalytics, AnalyticsSource, ListingAnalyticsRow, ListingHealth } from "@/lib/api";
-import { formatMoney } from "@/lib/format";
+import type { AccountAnalytics, AnalyticsSource, ListingAnalyticsRow, ListingHealth, ListingLastEdit } from "@/lib/api";
+import { formatDay, formatMoney } from "@/lib/format";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { compactNumber, fullNumber, percent } from "@/components/charts/chart-format";
-import { ACTIONS, ActionKey, STAGE_TAG, TONE, Tone, atStake } from "./insights";
+import { ACTIONS, ActionKey, STAGE_TAG, TONE, Tone, atStake, editedFields, needsAttention } from "./insights";
 
 // The three cards under the chart — what to do next, what's moving, and the
 // listings worth opening — plus the traffic-sources strip under the chart.
@@ -36,6 +36,33 @@ export function StatusTag({ tone, label, title }: { tone: Tone; label: string; t
 export function HealthTag({ health }: { health: ListingHealth }) {
   const tag = health.minor ? null : STAGE_TAG[health.stage];
   return tag ? <StatusTag tone={tag.tone} label={tag.label} title={`${health.label}: ${health.detail}`} /> : null;
+}
+
+/**
+ * A listing updated from Liston: "Updated · results 27 Sept" while its
+ * results aren't in (it's out of Needs attention until then), then a quiet
+ * "✓ Updated 23 Sept" beside its health tag.
+ */
+export function EditTag({ edit }: { edit: ListingLastEdit }) {
+  const title = `${editedFields(edit.fields)} changed in Liston on ${formatDay(edit.day)}${
+    edit.waiting ? `. Its results show from ${formatDay(edit.resultsFrom)}; until then it's kept out of Needs attention.` : "."
+  }`;
+  const check = (
+    <svg viewBox="0 0 16 16" className="h-2.5 w-2.5" fill="none" aria-hidden>
+      <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+  return edit.waiting ? (
+    <span title={title} className="inline-flex h-[18px] items-center gap-1 whitespace-nowrap rounded-full bg-emerald-50 px-1.5 text-[10.5px] font-semibold text-emerald-700">
+      {check}
+      Updated · results {formatDay(edit.resultsFrom)}
+    </span>
+  ) : (
+    <span title={title} className="inline-flex items-center gap-1 whitespace-nowrap text-[10.5px] font-medium text-emerald-700">
+      {check}
+      Updated {formatDay(edit.day)}
+    </span>
+  );
 }
 
 /** "£24" at stake, in the account's currency; nothing when it's pennies. */
@@ -206,7 +233,7 @@ export function TopMoversCard({ data, onOpen }: { data: AccountAnalytics; onOpen
 // The listings where fixing pays most: problems ranked by the sales they'd
 // make at the account's typical rates (not by views), and the best seller.
 export function WorthALookCard({ data, onOpen }: { data: AccountAnalytics; onOpen: (id: string) => void }) {
-  const problems = data.listings.filter((l) => l.health?.problem).sort((a, b) => (b.health!.opportunity?.amount ?? 0) - (a.health!.opportunity?.amount ?? 0));
+  const problems = data.listings.filter(needsAttention).sort((a, b) => (b.health!.opportunity?.amount ?? 0) - (a.health!.opportunity?.amount ?? 0));
   const winners = data.listings.filter((l) => l.health?.stage === "converting").sort((a, b) => (b.sold ?? 0) - (a.sold ?? 0));
   const picks = [...problems.slice(0, 4), ...winners.slice(0, 1)];
   const total = atStake(problems);

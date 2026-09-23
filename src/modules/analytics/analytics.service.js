@@ -541,6 +541,32 @@ async function checkAfterEdit(connectionId, itemId, draft) {
 const EDIT_WINDOW = 14;
 const EDIT_MIN_DAYS = 3;
 
+// Where an edit stands: its day in the seller's time zone, the complete
+// days after it so far, and the day its effect is first judged.
+function editTiming(changedAt, { timeZone, lastFinal }) {
+  const day = d.dayOf(changedAt, timeZone);
+  const afterTo = [d.addDays(day, EDIT_WINDOW), lastFinal].sort()[0];
+  const afterDays = afterTo > day ? d.dayCount(d.addDays(day, 1), afterTo) : 0;
+  return { day, afterTo, afterDays, waitDays: Math.max(0, EDIT_MIN_DAYS - afterDays), resultsFrom: d.addDays(day, EDIT_MIN_DAYS + 1) };
+}
+
+/**
+ * Each listing's latest edit from Liston in the last EDIT_WINDOW days, for
+ * the Analytics table: "Updated 23 Sept", and while its results aren't in
+ * (`waiting`) it is kept out of Needs attention — its verdict is from
+ * before the fix.
+ */
+async function recentEdits(connectionId, { timeZone, lastFinal }) {
+  const since = new Date(Date.now() - (EDIT_WINDOW + 1) * 864e5);
+  const latest = await listingRepository.latestChanges(connectionId, since);
+  const out = new Map();
+  for (const [itemId, c] of latest) {
+    const t = editTiming(c.changed_at, { timeZone, lastFinal });
+    out.set(itemId, { changedAt: c.changed_at, day: t.day, fields: c.fields, waiting: t.waitDays > 0, resultsFrom: t.resultsFrom });
+  }
+  return out;
+}
+
 /**
  * A listing's recent live edits with its figures in the days before and
  * after each ("title changed on 12 Sept: click-through 0.8% → 1.9%").
@@ -570,9 +596,7 @@ async function editEffects(connectionId, itemId, { timeZone, lastFinal, listingS
   };
   return Promise.all(
     changes.map(async (c) => {
-      const day = d.dayOf(c.changed_at, timeZone);
-      const afterTo = [d.addDays(day, EDIT_WINDOW), lastFinal].sort()[0];
-      const afterDays = afterTo > day ? d.dayCount(d.addDays(day, 1), afterTo) : 0;
+      const { day, afterTo, afterDays, waitDays } = editTiming(c.changed_at, { timeZone, lastFinal });
       return {
         id: String(c.id),
         changedAt: c.changed_at,
@@ -582,7 +606,7 @@ async function editEffects(connectionId, itemId, { timeZone, lastFinal, listingS
         after: c.after,
         figuresBefore: await figures(d.addDays(day, -EDIT_WINDOW), d.addDays(day, -1)),
         figuresAfter: afterDays >= EDIT_MIN_DAYS ? await figures(d.addDays(day, 1), afterTo) : null,
-        waitDays: Math.max(0, EDIT_MIN_DAYS - afterDays),
+        waitDays,
       };
     })
   );
@@ -748,7 +772,7 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
     };
 
     const { entries, current, history } = await listingFigures({ connectionId, inputs, status, state, timeZone, win, lastFinal, sales, ordersFrom });
-    const { byId: healthById, bench } = await healthFor(connectionId, entries, { win, today, timeZone });
+    const [{ byId: healthById, bench }, edited] = await Promise.all([healthFor(connectionId, entries, { win, today, timeZone }), recentEdits(connectionId, { timeZone, lastFinal })]);
     const listings = entries.map(({ item, m, t, prev }) => {
       const id = String(item.itemId);
       return {
@@ -766,6 +790,7 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
         // null in listingMetrics, and a change with a null side is null.
         changes: withChanges(m, prev),
         health: healthById.get(id) || null,
+        lastEdit: edited.get(id) || null,
       };
     });
 

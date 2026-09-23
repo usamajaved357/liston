@@ -170,7 +170,17 @@ async function listingChanges(connectionId, itemId, limit = 5) {
   return result.rows;
 }
 
+/** Each listing's latest change since a time: itemId -> { changed_at, fields }. */
+async function latestChanges(connectionId, since) {
+  const result = await query(
+    'SELECT DISTINCT ON (item_id) item_id, changed_at, fields FROM listing_changes WHERE connection_id = $1 AND changed_at >= $2 ORDER BY item_id, changed_at DESC',
+    [connectionId, since]
+  );
+  return new Map(result.rows.map((r) => [r.item_id, r]));
+}
+
 module.exports = {
+  latestChanges,
   findPublishedDataByItemIds,
   recordListingChange,
   listingChanges,

@@ -3,10 +3,10 @@
 // clear action each, shared by the "Growth opportunities" card and the
 // Listings table's filter, so a group clicked in the card is exactly what
 // the table then shows.
-import type { HealthStage, ListingAnalyticsRow } from "@/lib/api";
+import type { HealthStage, ListingAnalyticsRow, ListingEdit } from "@/lib/api";
 
 export type ActionKey = "restock" | "watchers" | "not_shown" | "not_clicked" | "not_bought" | "declining";
-export type ListingFilter = "all" | "attention" | "converting" | ActionKey;
+export type ListingFilter = "all" | "attention" | "updated" | "converting" | ActionKey;
 export type Tone = "brand" | "good" | "warn" | "bad" | "neutral";
 
 export interface ActionDef {
@@ -17,6 +17,11 @@ export interface ActionDef {
   icon: string; // an SVG path on a 16×16 grid
   test: (row: ListingAnalyticsRow) => boolean;
 }
+
+// Updated in Liston and its results not in yet: its verdict is from the
+// days before the fix, so it waits under "Updated", not Needs attention.
+export const waitingOnEdit = (r: ListingAnalyticsRow) => Boolean(r.lastEdit?.waiting);
+export const needsAttention = (r: ListingAnalyticsRow) => Boolean(r.health?.problem) && !waitingOnEdit(r);
 
 // In the order they cost money: not seen at all, seen but passed over,
 // visited but not bought, then what's falling; stock and watchers first
@@ -44,7 +49,7 @@ export const ACTIONS: ActionDef[] = [
     action: "Fill item specifics and use more of the title",
     tone: "bad",
     icon: "M7 12.5a5.5 5.5 0 100-11 5.5 5.5 0 000 11z M11 11l3.5 3.5 M5 5l4 4 M9 5L5 9",
-    test: (r) => r.health?.stage === "not_shown" && r.health.problem,
+    test: (r) => r.health?.stage === "not_shown" && needsAttention(r),
   },
   {
     key: "not_clicked",
@@ -52,7 +57,7 @@ export const ACTIONS: ActionDef[] = [
     action: "A stronger main photo and a sharper title",
     tone: "warn",
     icon: "M8 2.5l1.6 3.4 3.7.4-2.8 2.5.8 3.7L8 10.6l-3.3 1.9.8-3.7-2.8-2.5 3.7-.4z",
-    test: (r) => r.health?.stage === "not_clicked" && r.health.problem,
+    test: (r) => r.health?.stage === "not_clicked" && needsAttention(r),
   },
   {
     key: "not_bought",
@@ -60,7 +65,7 @@ export const ACTIONS: ActionDef[] = [
     action: "Check price, postage and photos against similar listings",
     tone: "warn",
     icon: "M2 3h1.8l1.6 7.2h7.1L14 5H5 M6.5 13.5h.01 M11.5 13.5h.01",
-    test: (r) => r.health?.stage === "not_bought" && r.health.problem,
+    test: (r) => r.health?.stage === "not_bought" && needsAttention(r),
   },
   {
     key: "declining",
@@ -68,7 +73,7 @@ export const ACTIONS: ActionDef[] = [
     action: "Check what changed: price, stock or a competitor",
     tone: "warn",
     icon: "M2 4l4.5 4.5 3-3L14 10 M10 10h4V6",
-    test: (r) => r.health?.stage === "declining" && r.health.problem,
+    test: (r) => r.health?.stage === "declining" && needsAttention(r),
   },
 ];
 
@@ -76,14 +81,15 @@ export const actionDef = (key: ActionKey) => ACTIONS.find((a) => a.key === key);
 
 export function matchesFilter(row: ListingAnalyticsRow, filter: ListingFilter): boolean {
   if (filter === "all") return true;
-  if (filter === "attention") return Boolean(row.health?.problem);
+  if (filter === "attention") return needsAttention(row);
+  if (filter === "updated") return row.lastEdit != null;
   if (filter === "converting") return row.health?.stage === "converting";
   // An unknown group (a filter saved before the groups changed) shows everything.
   return actionDef(filter)?.test(row) ?? true;
 }
 
 /** The money a group of listings could make at the account's typical rates. */
-export const atStake = (rows: ListingAnalyticsRow[]) => rows.reduce((sum, r) => sum + (r.health?.problem ? (r.health.opportunity?.amount ?? 0) : 0), 0);
+export const atStake = (rows: ListingAnalyticsRow[]) => rows.reduce((sum, r) => sum + (needsAttention(r) ? (r.health?.opportunity?.amount ?? 0) : 0), 0);
 
 export const TONE: Record<Tone, { dot: string; soft: string; text: string }> = {
   brand: { dot: "bg-[var(--color-primary)]", soft: "bg-[var(--color-primary-soft)]", text: "text-[var(--color-primary)]" },
@@ -103,3 +109,19 @@ export const STAGE_TAG: Partial<Record<HealthStage, { label: string; tone: Tone 
   converting: { label: "Selling well", tone: "good" },
   new: { label: "Settling in", tone: "neutral" },
 };
+
+const FIELD_LABEL: Record<ListingEdit["fields"][number], string> = {
+  title: "Title",
+  main_photo: "Main photo",
+  photos: "Photos",
+  price: "Price",
+  quantity: "Stock",
+  specifics: "Item specifics",
+  description: "Description",
+};
+
+/** An edit's fields as words: "Price and description". */
+export function editedFields(fields: ListingEdit["fields"]): string {
+  const names = fields.map((f, i) => (i === 0 ? FIELD_LABEL[f] : FIELD_LABEL[f].toLowerCase()));
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "Listing");
+}

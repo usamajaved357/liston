@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AnalyticsHistory, ListingAnalyticsRow, ListingReportInfo } from "@/lib/api";
-import { formatMoney } from "@/lib/format";
+import { formatDay, formatMoney } from "@/lib/format";
 import { DeltaBadge } from "@/components/charts/DeltaBadge";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { compactNumber, fullNumber } from "@/components/charts/chart-format";
@@ -10,8 +10,8 @@ import { ListFooter } from "@/components/ListFooter";
 import { readView, writeView } from "@/lib/viewState";
 import { downloadCsv, pct, toCsv } from "@/lib/csv";
 import { MetricKey, metricDef } from "./metrics";
-import { HealthTag } from "./InsightCards";
-import { ListingFilter, actionDef, matchesFilter } from "./insights";
+import { EditTag, HealthTag } from "./InsightCards";
+import { ListingFilter, actionDef, editedFields, matchesFilter, needsAttention } from "./insights";
 
 // Every live listing over the chosen range: sortable by any figure,
 // searchable, filterable to the ones worth a look (or to one group from the
@@ -182,7 +182,8 @@ export function ListingsTable({
 
   const counts = useMemo(
     () => ({
-      attention: rows.filter((r) => r.health?.problem).length,
+      attention: rows.filter(needsAttention).length,
+      updated: rows.filter((r) => r.lastEdit).length,
       converting: rows.filter((r) => r.health?.stage === "converting").length,
     }),
     [rows]
@@ -234,6 +235,7 @@ export function ListingsTable({
       `Conversion ${compared} (%)`,
       "Health",
       `Sales at stake${currency ? ` (${currency})` : ""}`,
+      "Updated in Liston",
       "Traffic note",
       "eBay link",
     ];
@@ -258,7 +260,8 @@ export function ListingsTable({
       pct(r.changes?.sales, 1),
       pct(r.changes?.conversion, 1),
       r.health ? `${r.health.label}: ${r.health.detail}` : "",
-      r.health?.problem && r.health.opportunity ? r.health.opportunity.amount : null,
+      needsAttention(r) && r.health?.opportunity ? r.health.opportunity.amount : null,
+      r.lastEdit ? `${editedFields(r.lastEdit.fields)} changed ${formatDay(r.lastEdit.day)}${r.lastEdit.waiting ? `; results from ${formatDay(r.lastEdit.resultsFrom)}` : ""}` : "",
       traffic[r.traffic as keyof typeof traffic] ?? "",
       r.url,
     ]);
@@ -338,7 +341,7 @@ export function ListingsTable({
     );
   };
 
-  const filterLabel = filter !== "all" && filter !== "attention" && filter !== "converting" ? (actionDef(filter)?.label ?? null) : null;
+  const filterLabel = filter !== "all" && filter !== "attention" && filter !== "updated" && filter !== "converting" ? (actionDef(filter)?.label ?? null) : null;
 
   return (
     <section ref={sectionRef} className="card -mb-[26px] flex scroll-mt-1.5 flex-col overflow-hidden" id="analytics-listings" style={fitHeight ? { height: fitHeight } : undefined}>
@@ -368,6 +371,9 @@ export function ListingsTable({
               options={[
                 { key: "all", label: "All" },
                 { key: "attention", label: `Needs attention${counts.attention ? ` · ${counts.attention}` : ""}`, title: "Rarely shown in search, seen but rarely clicked, clicked but not bought, or sales falling: judged against your typical listing" },
+                ...(counts.updated || filter === "updated"
+                  ? [{ key: "updated" as const, label: `Updated${counts.updated ? ` · ${counts.updated}` : ""}`, title: "Changed in Liston in the last 2 weeks. Until 3 full days have passed, a listing waits here rather than under Needs attention." }]
+                  : []),
                 { key: "converting", label: `Converting${counts.converting ? ` · ${counts.converting}` : ""}` },
               ]}
             />
@@ -434,7 +440,14 @@ export function ListingsTable({
                             <span className={`whitespace-nowrap ${row.quantityAvailable <= 2 ? "font-semibold text-[var(--color-danger)]" : ""}`}>{row.quantityAvailable} in stock</span>
                           </>
                         )}
-                        {row.health && <HealthTag health={row.health} />}
+                        {row.lastEdit?.waiting ? (
+                          <EditTag edit={row.lastEdit} />
+                        ) : (
+                          <>
+                            {row.health && <HealthTag health={row.health} />}
+                            {row.lastEdit && <EditTag edit={row.lastEdit} />}
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>

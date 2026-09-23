@@ -1019,6 +1019,15 @@ export interface AnalyticsRangeInfo {
 // store's listing outside eBay's busiest 200 on some day.
 export type ListingTrafficState = "measured" | "pending" | "below" | "unknown";
 
+// A listing's latest edit from Liston, for the Analytics table.
+export interface ListingLastEdit {
+  changedAt: string;
+  day: string; // in the seller's time zone
+  fields: ListingEdit["fields"];
+  waiting: boolean; // its results aren't in yet: kept out of Needs attention
+  resultsFrom: string; // the day its effect is first judged
+}
+
 export interface ListingAnalyticsRow extends AnalyticsMetrics {
   itemId: string;
   title: string;
@@ -1030,6 +1039,7 @@ export interface ListingAnalyticsRow extends AnalyticsMetrics {
   traffic: ListingTrafficState;
   changes: AnalyticsChanges;
   health: ListingHealth | null;
+  lastEdit: ListingLastEdit | null; // its latest edit from Liston in the last 2 weeks
 }
 
 export type AnalyticsStatus = "ok" | "reconnect" | "unsupported";

@@ -458,3 +458,19 @@ test('an edit published from Liston brings the saved deeper check up to date, wi
 
   assert.strictEqual(await service.checkAfterEdit(connectionId, '999', edited), null, 'a listing never checked has nothing to update');
 });
+
+test('the Analytics table knows which listings were updated in Liston and which are still waiting for results', async () => {
+  const { userId, connectionId } = await healthFixture();
+  await listingRepository.recordListingChange(connectionId, '111', { fields: ['title'], before: { title: 'A' }, after: { title: 'B' } });
+  await pool.query(`UPDATE listing_changes SET changed_at = now() - interval '8 days' WHERE connection_id = $1`, [connectionId]);
+  await listingRepository.recordListingChange(connectionId, '222', { fields: ['specifics'], before: { specifics: 1 }, after: { specifics: 3 } });
+  await listingRepository.recordListingChange(connectionId, '9001', { fields: ['price'], before: { price: 5 }, after: { price: 4 } });
+  await pool.query(`UPDATE listing_changes SET changed_at = now() - interval '30 days' WHERE connection_id = $1 AND item_id = '9001'`, [connectionId]);
+
+  const { data } = await service.getAnalytics(connectionId, userId, { range: '7d' });
+  const edit = Object.fromEntries(data.listings.map((l) => [l.itemId, l.lastEdit]));
+  assert.deepStrictEqual([edit['222'].fields, edit['222'].waiting], [['specifics'], true], 'just edited: its results are not in yet');
+  assert.strictEqual(edit['222'].resultsFrom, days.addDays(edit['222'].day, 4));
+  assert.strictEqual(edit['111'].waiting, false, 'a week on, its results are in');
+  assert.strictEqual(edit['9001'], null, 'an edit older than two weeks is no longer shown');
+});
