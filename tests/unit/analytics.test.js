@@ -86,7 +86,25 @@ test('sales count units and item revenue per seller day and listing, without can
   ];
   const idx = days.salesIndex(orders, UK);
   assert.deepStrictEqual(days.salesWithin(idx.byDay, '2026-09-21', '2026-09-21'), { units: 2, amount: 9, orders: 1 });
-  assert.deepStrictEqual(days.salesWithin(idx.byListingDay.get('222'), '2026-09-22', '2026-09-22'), { units: 1, amount: 10, orders: 0 }, 'after 23:00 UTC is the next UK day');
+  assert.deepStrictEqual(days.salesWithin(idx.byListingDay.get('222'), '2026-09-22', '2026-09-22'), { units: 1, amount: 10, orders: 1 }, 'after 23:00 UTC is the next UK day');
+});
+
+test('a listing counts each order once, however many of its lines the order has', () => {
+  const orders = [
+    {
+      createdAt: '2026-09-21T10:00:00Z',
+      lineItems: [
+        { itemId: '111', quantityPurchased: 1, price: { amount: 5, currency: 'GBP' } }, // one variation
+        { itemId: '111', quantityPurchased: 2, price: { amount: 6, currency: 'GBP' } }, // another of the same listing
+        { itemId: '222', quantityPurchased: 1, price: { amount: 10, currency: 'GBP' } },
+      ],
+    },
+    { createdAt: '2026-09-21T12:00:00Z', lineItems: [{ itemId: '111', quantityPurchased: 1, price: { amount: 5, currency: 'GBP' } }] },
+  ];
+  const idx = days.salesIndex(orders, UK);
+  assert.deepStrictEqual(days.salesWithin(idx.byListingDay.get('111'), '2026-09-21', '2026-09-21'), { units: 4, amount: 22, orders: 2 });
+  assert.deepStrictEqual(days.salesWithin(idx.byListingDay.get('222'), '2026-09-21', '2026-09-21'), { units: 1, amount: 10, orders: 1 });
+  assert.deepStrictEqual(days.salesWithin(idx.byDay, '2026-09-21', '2026-09-21'), { units: 5, amount: 32, orders: 2 });
 });
 
 test('hints need enough traffic to mean something', () => {

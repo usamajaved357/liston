@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, AccountAnalytics, AnalyticsRange } from "@/lib/api";
 import { cacheResponse, cachedResponse, readView, writeView } from "@/lib/viewState";
+import { slug } from "@/lib/csv";
 import { useConnection } from "@/lib/useConnection";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { AccountShell } from "@/components/AccountShell";
@@ -236,6 +237,8 @@ function AnalyticsPageInner() {
 
   const compared = comparedFor(range);
   const rangeLabel = data ? dayRangeLabel(data.range.from, data.range.to) : "";
+  // Downloads are named for the account and the dates they cover.
+  const csvBase = data ? `${slug(connection.label)}-${data.range.from}-to-${data.range.to}` : undefined;
 
   return (
     <AccountShell
@@ -313,6 +316,7 @@ function AnalyticsPageInner() {
             previousRange={data?.range.previous ?? null}
             loading={!data && !loadError}
             trafficUnavailable={data ? data.status !== "ok" || !data.sync.finalThrough : false}
+            csvName={csvBase}
           />
 
           {data && (
@@ -337,6 +341,8 @@ function AnalyticsPageInner() {
               filter={listingFilter}
               onFilter={setListingFilter}
               viewKey={`${viewKey}:table`}
+              history={data.sync.history}
+              csvName={csvBase && `${slug(connection.label)}-listings-${data.range.from}-to-${data.range.to}`}
             />
           )}
         </div>

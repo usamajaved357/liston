@@ -196,6 +196,7 @@ export function ListingAnalyticsPanel({
             series={view?.series ?? []}
             previousSeries={view?.previousSeries ?? null}
             leadInSeries={view?.leadInSeries ?? null}
+            csvName={view ? `listing-${itemId}-${view.range.from}-to-${view.range.to}` : undefined}
             currency={view?.currency ?? null}
             range={range}
             rangeLabel={rangeLabel}

@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ListingAnalyticsRow, ListingReportInfo } from "@/lib/api";
+import type { AnalyticsHistory, ListingAnalyticsRow, ListingReportInfo } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 import { DeltaBadge } from "@/components/charts/DeltaBadge";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { compactNumber, fullNumber } from "@/components/charts/chart-format";
 import { ListFooter } from "@/components/ListFooter";
 import { readView, writeView } from "@/lib/viewState";
+import { downloadCsv, pct, toCsv } from "@/lib/csv";
 import { MetricKey, metricDef } from "./metrics";
 import { HintTag } from "./InsightCards";
 import { ListingFilter, actionDef, matchesFilter } from "./insights";
@@ -53,12 +54,14 @@ function ReportNote({
   belowCount,
   onLoadAll,
   loadingAll,
+  history,
 }: {
   report: ListingReportInfo;
   partial: boolean;
   belowCount: number;
   onLoadAll: () => void;
   loadingAll: boolean;
+  history?: AnalyticsHistory | null;
 }) {
   let text: React.ReactNode = null;
   if (partial) {
@@ -68,7 +71,16 @@ function ReportNote({
   } else if (report.state === "error") {
     text = "eBay didn’t return listing traffic for this range. Sales, units and watchers are exact.";
   } else if (report.state === "filling") {
-    text = "Listing traffic for this range appears once its days are stored. Sales, units and watchers are exact now.";
+    // eBay gives a range's per-listing figures as one total for exactly
+    // those dates, so a load of 90 days can't answer 7; the daily history
+    // can, and fills itself for free.
+    text = (
+      <>
+        Listing traffic for this range appears by itself once its days are stored
+        {history && !history.complete ? ` (${history.stored} of ${history.needed} days so far, filled from spare allowance each morning)` : ""}. Sales, units and watchers are exact
+        now. Load all reads eBay&apos;s total for exactly these dates, so another range needs its own read.
+      </>
+    );
   } else if (report.state === "ok" && report.busiest && belowCount > 0) {
     text = `Traffic shown for your busiest listings; the other ${fullNumber(belowCount)} weren’t among eBay’s 200 busiest every day of this range.`;
   } else if (report.state === "ok" && report.cutoff != null && report.scope !== "all" && belowCount > 0) {
@@ -103,6 +115,8 @@ export function ListingsTable({
   filter,
   onFilter,
   viewKey,
+  csvName,
+  history,
 }: {
   rows: ListingAnalyticsRow[];
   currency: string | null;
@@ -116,6 +130,8 @@ export function ListingsTable({
   filter: ListingFilter;
   onFilter: (f: ListingFilter) => void;
   viewKey?: string; // remembers search, sort, page and scroll for coming back
+  csvName?: string; // the downloaded file's name (account and dates)
+  history?: AnalyticsHistory | null; // how much daily listing history is stored
 }) {
   const [saved] = useState(() => (viewKey ? readView<TableView>(viewKey) : {}));
   const [sort, setSort] = useState<{ key: SortKey; dir: "desc" | "asc" }>(saved.sort ?? { key: "impressions", dir: "desc" });
@@ -193,6 +209,63 @@ export function ListingsTable({
   const current = Math.min(page, totalPages);
   const pageRows = visible.slice((current - 1) * perPage, current * perPage);
 
+  // Every row the current range, group, search and sort show (all pages),
+  // with raw numbers for a spreadsheet; built from what's on screen, so it
+  // costs no eBay call.
+  function exportCsv() {
+    const traffic = { measured: "", pending: "Not stored yet", below: "Not among eBay's busiest 200", unknown: "" } as const;
+    const header = [
+      "Item ID",
+      "Title",
+      "Price",
+      "Currency",
+      "Available",
+      "Watchers",
+      "Impressions",
+      "Views",
+      "Click-through (%)",
+      "Units sold",
+      "Orders",
+      "Sales",
+      "Conversion (%)",
+      `Impressions ${compared} (%)`,
+      `Views ${compared} (%)`,
+      `Click-through ${compared} (%)`,
+      `Units sold ${compared} (%)`,
+      `Sales ${compared} (%)`,
+      `Conversion ${compared} (%)`,
+      "Insight",
+      "Traffic note",
+      "eBay link",
+    ];
+    const rowsOut = visible.map((r) => [
+      r.itemId,
+      r.title,
+      r.price?.amount ?? null,
+      r.price?.currency ?? currency,
+      r.quantityAvailable,
+      r.watchers,
+      r.impressions,
+      r.views,
+      pct(r.ctr),
+      r.sold,
+      r.orders,
+      r.sales,
+      pct(r.conversion),
+      pct(r.changes?.impressions, 1),
+      pct(r.changes?.views, 1),
+      pct(r.changes?.ctr, 1),
+      pct(r.changes?.sold, 1),
+      pct(r.changes?.sales, 1),
+      pct(r.changes?.conversion, 1),
+      r.hint ? `${r.hint.label}: ${r.hint.detail}` : "",
+      traffic[r.traffic as keyof typeof traffic] ?? "",
+      r.url,
+    ]);
+    const suffix = [filter !== "all" ? filter.replace(/_/g, "-") : "", search.trim() ? "search" : ""].filter(Boolean).join("-");
+    downloadCsv(`${csvName || "listings"}${suffix ? `-${suffix}` : ""}.csv`, toCsv(header, rowsOut));
+  }
+
   function toggleSort(key: SortKey) {
     setSort((s) => (s.key === key ? { key, dir: s.dir === "desc" ? "asc" : "desc" } : { key, dir: key === "title" ? "asc" : "desc" }));
   }
@@ -202,12 +275,21 @@ export function ListingsTable({
   const header = (key: SortKey, label: string, align: "left" | "center" = "center") => {
     const on = sort.key === key;
     const arrow = (
-      <svg viewBox="0 0 10 10" className={`absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 ${align === "center" ? "-right-3" : "-right-3.5"} ${on ? "opacity-100" : "opacity-0 group-hover/th:opacity-40"}`} aria-hidden>
+      <svg
+        viewBox="0 0 10 10"
+        className={`absolute top-1/2 h-2.5 w-2.5 -translate-y-1/2 ${align === "center" ? "-right-3" : "-right-3.5"} ${on ? "opacity-100" : "opacity-0 group-hover/th:opacity-40"}`}
+        aria-hidden
+      >
         <path d={on && sort.dir === "asc" ? "M5 2.5L8 7H2z" : "M5 7.5L8 3H2z"} fill="currentColor" />
       </svg>
     );
     return (
-      <th key={key} scope="col" aria-sort={on ? (sort.dir === "desc" ? "descending" : "ascending") : "none"} className={`group/th px-1.5 py-2.5 font-semibold ${align === "center" ? "text-center" : "pl-4 text-left"}`}>
+      <th
+        key={key}
+        scope="col"
+        aria-sort={on ? (sort.dir === "desc" ? "descending" : "ascending") : "none"}
+        className={`group/th px-1.5 py-2.5 font-semibold ${align === "center" ? "text-center" : "pl-4 text-left"}`}
+      >
         <button
           type="button"
           onClick={() => toggleSort(key)}
@@ -225,7 +307,11 @@ export function ListingsTable({
       return <span className="font-semibold tabular-nums text-[var(--color-ink)]">{row.watchers == null ? "—" : fullNumber(row.watchers)}</span>;
     }
     if (row.traffic === "pending" && TRAFFIC_KEYS.includes(key)) {
-      return <span className="text-[var(--color-line-strong)]" title="Appears once this range's days are stored">—</span>;
+      return (
+        <span className="text-[var(--color-line-strong)]" title="Appears once this range's days are stored">
+          —
+        </span>
+      );
     }
     if (row.traffic === "below" && TRAFFIC_KEYS.includes(key)) {
       return report.cutoff != null && key === "impressions" ? (
@@ -293,10 +379,20 @@ export function ListingsTable({
             </svg>
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search listings" aria-label="Search listings" className="input input-sm w-44 !pl-8" />
           </div>
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={visible.length === 0}
+            className="btn btn-secondary btn-sm"
+            title={`Download the ${fullNumber(visible.length)} ${visible.length === 1 ? "listing" : "listings"} shown (every page) as a CSV file`}
+          >
+            <DownloadIcon />
+            CSV
+          </button>
         </div>
       </div>
 
-      <ReportNote report={report} partial={partial} belowCount={rows.filter((r) => r.traffic === "below").length} onLoadAll={onLoadAll} loadingAll={loadingAll} />
+      <ReportNote report={report} partial={partial} history={history} belowCount={rows.filter((r) => r.traffic === "below").length} onLoadAll={onLoadAll} loadingAll={loadingAll} />
 
       {/* Rows scroll inside the card under a pinned header; the pages stay at its foot. */}
       {/* Wide enough for every column from ~900px; below that the rows scroll sideways inside the card. */}
@@ -353,7 +449,9 @@ export function ListingsTable({
           </tbody>
         </table>
         {visible.length === 0 && (
-          <p className="px-5 py-10 text-center text-[13px] text-[var(--color-muted)]">{search ? "No listings match that search." : filter !== "all" ? "No listings in this group for this range." : "No listings to show."}</p>
+          <p className="px-5 py-10 text-center text-[13px] text-[var(--color-muted)]">
+            {search ? "No listings match that search." : filter !== "all" ? "No listings in this group for this range." : "No listings to show."}
+          </p>
         )}
       </div>
 
@@ -377,5 +475,13 @@ export function ListingsTable({
         </div>
       )}
     </section>
+  );
+}
+
+export function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
+      <path d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }

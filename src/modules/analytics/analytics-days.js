@@ -217,7 +217,7 @@ function isCancelled(order) {
  */
 function salesIndex(orders, timeZone) {
   const byDay = new Map(); // day -> { units, amount, orders }
-  const byListingDay = new Map(); // itemId -> Map(day -> { units, amount })
+  const byListingDay = new Map(); // itemId -> Map(day -> { units, amount, orders })
   let currency = null;
   for (const order of orders || []) {
     if (isCancelled(order)) continue;
@@ -225,6 +225,7 @@ function salesIndex(orders, timeZone) {
     if (!day) continue;
     const dayTotal = byDay.get(day) || { units: 0, amount: 0, orders: 0 };
     dayTotal.orders += 1;
+    const counted = new Set(); // an order counts once per listing, however many lines it has of it
     for (const line of order.lineItems || []) {
       const units = Number(line.quantityPurchased) || 1;
       const amount = (Number(line.price?.amount) || 0) * units;
@@ -233,9 +234,13 @@ function salesIndex(orders, timeZone) {
       dayTotal.amount += amount;
       if (!line.itemId) continue;
       const perDay = byListingDay.get(String(line.itemId)) || new Map();
-      const cell = perDay.get(day) || { units: 0, amount: 0 };
+      const cell = perDay.get(day) || { units: 0, amount: 0, orders: 0 };
       cell.units += units;
       cell.amount += amount;
+      if (!counted.has(String(line.itemId))) {
+        counted.add(String(line.itemId));
+        cell.orders += 1;
+      }
       perDay.set(day, cell);
       byListingDay.set(String(line.itemId), perDay);
     }
