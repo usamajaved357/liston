@@ -1718,8 +1718,12 @@ export default function DraftEditorPage() {
   const stableAspects = (a: Record<string, string[]>) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]]));
   const aspectsChanged = stableAspects(editedAspects) !== stableAspects(originalAspects);
 
+  // All three or none: a blank one (a draft made before the account had
+  // defaults) is shown as "Choose…" and only counts as a change, and is
+  // saved, once all three are picked.
   const policiesChanged =
     !!content?.listingPolicies &&
+    !!(policyIds.fulfillmentPolicyId && policyIds.paymentPolicyId && policyIds.returnPolicyId) &&
     (policyIds.fulfillmentPolicyId !== content.listingPolicies.fulfillmentPolicyId ||
       policyIds.paymentPolicyId !== content.listingPolicies.paymentPolicyId ||
       policyIds.returnPolicyId !== content.listingPolicies.returnPolicyId);
@@ -1785,9 +1789,7 @@ export default function DraftEditorPage() {
     if (content && JSON.stringify(images) !== JSON.stringify(content.imageUrls)) patch.imageUrls = images;
     if (aspectsChanged) patch.aspects = editedAspects;
     if (condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW")) patch.condition = condition;
-    // All three or none: a blank one (a draft made before the account had
-    // defaults) is shown as "Choose…" and saved once it's picked.
-    if (policiesChanged && policyIds.fulfillmentPolicyId && policyIds.paymentPolicyId && policyIds.returnPolicyId) patch.listingPolicies = policyIds;
+    if (policiesChanged) patch.listingPolicies = policyIds;
     if (single) {
       if (singlePrice !== single.price.value) patch.price = { value: singlePrice, currency: single.price.currency };
       if (singleQuantity !== String(single.quantity ?? 1)) patch.quantity = Math.max(0, parseInt(singleQuantity, 10) || 0);
