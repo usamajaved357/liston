@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { EditorSkeleton } from "@/components/Skeleton";
 import {
   api,
@@ -1491,7 +1491,11 @@ export default function DraftEditorPage() {
   // once the listing is loaded, Ask AI proposes it straight away and the
   // proposal waits for the seller to Accept — nothing changes on eBay until
   // they accept and update the listing.
-  const [askPrefill] = useState(() => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("ask")));
+  // Read through Next's router, not window.location: arriving by a click
+  // inside the app, the address bar may not show the new URL yet when this
+  // page first renders.
+  const searchParams = useSearchParams();
+  const [askPrefill] = useState(() => searchParams.get("ask"));
   const askedRef = useRef(false);
 
   const [listing, setListing] = useState<DraftListing | null>(null);
