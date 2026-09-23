@@ -237,4 +237,33 @@ function qualityFromItem(item, schema, competitor) {
   };
 }
 
-module.exports = { qualityFromDraft, qualityFromItem, MIN_STAKE_UNITS, STAGES, MIN_AGE_DAYS, MIN_IMPRESSIONS, MIN_VIEWS, FALLBACK, median, benchmarks, diagnose, reasonsFor };
+/**
+ * A deeper check brought up to date with an edit published from Liston,
+ * without reading eBay again: the title, photos, description and item
+ * specifics are now what the edit sent (so a specific it filled is no
+ * longer "empty"). Postage, returns and similar listings' prices stay as
+ * checked, since a live edit doesn't change them.
+ */
+function qualityAfterEdit(quality, draft) {
+  if (!quality || !draft) return quality;
+  const variation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const aspects = (variation ? draft.variesBy?.aspects : draft.aspects) || {};
+  const filled = new Set(
+    Object.entries(aspects)
+      .filter(([, v]) => (Array.isArray(v) ? v.some((x) => String(x).trim()) : String(v || '').trim()))
+      .map(([k]) => k.toLowerCase())
+  );
+  if (variation) for (const s of draft.variesBy?.specifications || []) if (s?.name) filled.add(String(s.name).toLowerCase());
+  const now = qualityFromDraft(draft);
+  return {
+    ...quality,
+    titleLength: now.titleLength,
+    photos: now.photos ?? quality.photos,
+    specificsCount: filled.size,
+    specificsMissing: Array.isArray(quality.specificsMissing) ? quality.specificsMissing.filter((name) => !filled.has(String(name).toLowerCase())) : quality.specificsMissing,
+    descriptionLength: now.descriptionLength,
+    editedAt: new Date().toISOString(),
+  };
+}
+
+module.exports = { qualityFromDraft, qualityFromItem, qualityAfterEdit, MIN_STAKE_UNITS, STAGES, MIN_AGE_DAYS, MIN_IMPRESSIONS, MIN_VIEWS, FALLBACK, median, benchmarks, diagnose, reasonsFor };

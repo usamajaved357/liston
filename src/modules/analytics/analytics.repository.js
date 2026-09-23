@@ -207,8 +207,15 @@ async function saveHealthCheck(connectionId, itemId, result) {
   return rows[0];
 }
 
+/** A saved check's result replaced, keeping when eBay was read for it. */
+async function updateHealthCheckResult(connectionId, itemId, result) {
+  const { rows } = await query('UPDATE listing_health_checks SET result = $3 WHERE connection_id = $1 AND item_id = $2 RETURNING checked_at, result', [connectionId, String(itemId), result]);
+  return rows[0] || null;
+}
+
 module.exports = {
   getHealthCheck,
+  updateHealthCheckResult,
   healthChecksFor,
   saveHealthCheck,
   upsertTraffic,

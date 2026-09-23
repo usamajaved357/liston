@@ -455,7 +455,9 @@ export function HealthPanel({
           <div className="min-w-0">
             <p className="text-[12.5px] font-semibold text-[var(--color-ink)]">Deeper check</p>
             <p className="text-[11.5px] text-[var(--color-muted)]">
-              {check ? `Checked ${formatShortDate(check.checkedAt)} · ${check.calls} eBay call${check.calls === 1 ? "" : "s"}` : "Reads the live listing from eBay. Nothing is read until you press it."}
+              {check
+                ? `Checked ${formatShortDate(check.checkedAt)} · ${check.calls} eBay call${check.calls === 1 ? "" : "s"}${check.quality.editedAt ? ` · updated with your edit on ${formatShortDate(check.quality.editedAt)}` : ""}`
+                : "Reads the live listing from eBay. Nothing is read until you press it."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">

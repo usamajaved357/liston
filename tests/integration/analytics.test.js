@@ -421,3 +421,40 @@ test('a live edit’s effect: the listing’s figures in the days before and aft
   assert.strictEqual(earlier.figuresAfter.impressionsPerDay, 400);
   assert.strictEqual(earlier.figuresAfter.ctr, earlier.figuresBefore.ctr);
 });
+
+test('an edit published from Liston brings the saved deeper check up to date, without reading eBay', async () => {
+  const { userId, connectionId } = await healthFixture();
+  mock.method(ebayService, 'getLiveItem', async () => ({
+    itemId: '222',
+    title: 'Fishing line',
+    imageUrls: ['a'],
+    specifics: { Brand: ['X'] },
+    variationSpecificsSet: {},
+    description: '<p>Strong.</p>',
+    categoryId: '1',
+    currency: 'GBP',
+    shipping: { cost: 0, dispatchDays: 4 },
+    returnsAccepted: true,
+  }));
+  mock.method(ebayService, 'categoryAspectSchema', async () => [{ name: 'Brand', required: true }, { name: 'Material', recommended: true }, { name: 'Length', recommended: true }]);
+  await service.checkListing(connectionId, userId, '222');
+  const before = await repo.getHealthCheck(connectionId, '222');
+  assert.deepStrictEqual(before.result.quality.specificsMissing, ['Material', 'Length']);
+
+  const edited = { title: 'Fishing line braid 100m strong nylon', imageUrls: ['a', 'b'], aspects: { Brand: ['X'], material: ['Nylon'] }, description: '<p>Strong and long.</p>' };
+  await service.checkAfterEdit(connectionId, '222', edited);
+
+  const after = await repo.getHealthCheck(connectionId, '222');
+  const q = after.result.quality;
+  assert.deepStrictEqual(q.specificsMissing, ['Length'], 'a specific the edit filled is no longer empty');
+  assert.deepStrictEqual([q.titleLength, q.photos, q.specificsCount], [edited.title.length, 2, 2]);
+  assert.deepStrictEqual([q.dispatchDays, q.shippingCost], [4, 0], 'what a live edit cannot change stays as checked');
+  assert.ok(q.editedAt);
+  assert.strictEqual(after.checked_at.getTime(), before.checked_at.getTime(), 'still says when eBay was read');
+  assert.strictEqual(ebayService.getLiveItem.mock.calls.length, 1, 'no eBay call');
+
+  const { data } = await service.getListingAnalytics(connectionId, userId, '222', { range: '7d' });
+  assert.ok(!data.health.reasons.some((r) => r.key === 'specifics' && /Material/.test(r.text)), 'its reasons stop asking for it');
+
+  assert.strictEqual(await service.checkAfterEdit(connectionId, '999', edited), null, 'a listing never checked has nothing to update');
+});

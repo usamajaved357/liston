@@ -16,6 +16,7 @@ const descriptionTemplate = require('./description-template');
 const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const textGenerator = require('../ai-generation/text-generator.service');
 const governor = require('../ebay/request-governor');
+const analyticsService = require('../analytics/analytics.service');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -1305,6 +1306,11 @@ async function publishLiveEdit(listing, userId) {
       .recordListingChange(listing.connection_id, listing.edit_of_item_id, changed)
       .catch((err) => logger.warn('Listing change not recorded', { itemId: listing.edit_of_item_id, error: err.message }));
   }
+  // The listing's deeper check follows the edit, so its health stops
+  // asking for fixes that just went live.
+  await analyticsService
+    .checkAfterEdit(listing.connection_id, listing.edit_of_item_id, draft)
+    .catch((err) => logger.warn('Health check not updated after edit', { itemId: listing.edit_of_item_id, error: err.message }));
   // Liston's record of the published listing follows the edit, so the next
   // edit starts from what is live and the draft never contradicts eBay.
   if (own) {

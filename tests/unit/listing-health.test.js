@@ -100,3 +100,13 @@ test('a weak step worth under half a sale is noted on the listing but kept out o
   const big = diagnose({ m: m({ ctr: 0.008, views: 24, sold: 1, conversion: 1 / 24 }) });
   assert.deepStrictEqual([big.problem, big.minor], [true, false]);
 });
+
+test('a deeper check follows a published edit: filled specifics, title, photos; postage and prices stay as checked', () => {
+  const quality = { source: 'check', titleLength: 20, photos: 3, specificsCount: 4, specificsMissing: ['Colour', 'Size', 'Number of Lights'], descriptionLength: 50, dispatchDays: 4, competitor: { cheapest: 5 } };
+  const q = health.qualityAfterEdit(quality, { title: 'A much longer, better title', imageUrls: ['a', 'b', 'c', 'd'], aspects: { colour: ['Red'], 'Number of Lights': ['20'], Brand: [''] }, description: 'x' });
+  assert.deepStrictEqual(q.specificsMissing, ['Size']);
+  assert.deepStrictEqual([q.titleLength, q.photos, q.specificsCount, q.dispatchDays, q.competitor.cheapest], [27, 4, 2, 4, 5]);
+  const v = health.qualityAfterEdit(quality, { variants: [{}], commonTitle: 'T', variesBy: { aspects: { Brand: ['X'] }, specifications: [{ name: 'Size', values: ['S'] }] } });
+  assert.deepStrictEqual(v.specificsMissing, ['Colour', 'Number of Lights'], "a variation's own axis counts as filled");
+  assert.strictEqual(health.qualityAfterEdit(null, {}), null);
+});

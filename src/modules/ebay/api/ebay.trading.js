@@ -82,14 +82,20 @@ async function tradingRequestNow(accessToken, callName, bodyXml, siteId = 0) {
   // only says so here. Logged, and handed to callers that can tell the
   // seller.
   if (body.Ack === 'Warning') {
-    const warnings = toArray(body.Errors).map((e) => e.LongMessage || e.ShortMessage).filter(Boolean);
-    if (warnings.length) {
-      logger.warn(`eBay ${callName} completed with warnings`, { warnings });
-      body._warnings = warnings;
-    }
+    const all = toArray(body.Errors).map((e) => e.LongMessage || e.ShortMessage).filter(Boolean);
+    const warnings = all.filter((w) => !NOTICE_ONLY.some((re) => re.test(w)));
+    if (all.length) logger.warn(`eBay ${callName} completed with warnings`, { warnings: all });
+    if (warnings.length) body._warnings = warnings;
   }
   return body;
 }
+
+// Warnings eBay attaches to a call that did everything asked: kept in the
+// log, never shown to the seller as if part of an edit was dropped. eBay
+// sends the business-policies one on every revise of a listing that still
+// carries old-style postage/payment/returns fields from when it was listed
+// (Liston's revise sends none of those; the policies stay as they were).
+const NOTICE_ONLY = [/opted into business policies/i];
 
 function toArray(value) {
   if (value === undefined || value === null) return [];

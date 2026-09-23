@@ -179,3 +179,35 @@ test('reviseListing passes eBay\'s warnings back instead of swallowing them', as
   assert.strictEqual(result.itemId, '407219164790');
   assert.deepStrictEqual(result.warnings, ['The description cannot be changed on a listing that has sales; the rest of the revision was applied.']);
 });
+
+// eBay's business-policies notice comes with every revise of a listing that
+// still carries old-style postage/payment/returns fields. The revise sent
+// none of those and everything applied, so the seller isn't told otherwise.
+test('reviseListing drops eBay\'s business-policies notice but keeps real warnings', async () => {
+  mock.method(global, 'fetch', async () =>
+    fakeResponse(`<?xml version="1.0"?>
+      <ReviseFixedPriceItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+        <Ack>Warning</Ack>
+        <Errors><SeverityCode>Warning</SeverityCode><ShortMessage>Business policies.</ShortMessage><LongMessage>Seller has opted into business policies. Please use policy IDs rather than legacy fields for Shipping, Payments or Returns or new policies may be automatically created seller's behalf.</LongMessage></Errors>
+        <Errors><SeverityCode>Warning</SeverityCode><ShortMessage>Description not revised.</ShortMessage><LongMessage>The description cannot be changed on a listing that has sales; the rest of the revision was applied.</LongMessage></Errors>
+        <ItemID>407219072490</ItemID>
+      </ReviseFixedPriceItemResponse>`)
+  );
+
+  const result = await ebayTrading.reviseListing('token', '407219072490', { title: 'T' });
+  assert.deepStrictEqual(result.warnings, ['The description cannot be changed on a listing that has sales; the rest of the revision was applied.']);
+});
+
+test('reviseListing with only the business-policies notice returns no warnings', async () => {
+  mock.method(global, 'fetch', async () =>
+    fakeResponse(`<?xml version="1.0"?>
+      <ReviseFixedPriceItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+        <Ack>Warning</Ack>
+        <Errors><SeverityCode>Warning</SeverityCode><LongMessage>Seller has opted into business policies. Please use policy IDs rather than legacy fields for Shipping, Payments or Returns or new policies may be automatically created seller's behalf.</LongMessage></Errors>
+        <ItemID>407219072490</ItemID>
+      </ReviseFixedPriceItemResponse>`)
+  );
+
+  const result = await ebayTrading.reviseListing('token', '407219072490', { title: 'T' });
+  assert.deepStrictEqual(result.warnings, []);
+});

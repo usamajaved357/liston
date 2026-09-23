@@ -522,6 +522,21 @@ async function checkListing(connectionId, ownerId, itemId, { competitor = false 
   });
 }
 
+/**
+ * After a live edit is published from Liston: the listing's saved deeper
+ * check, if it has one, updated to what the edit sent (no eBay call), so
+ * its reasons — and "Apply recommended changes" — don't ask again for a
+ * fix that is already live.
+ */
+async function checkAfterEdit(connectionId, itemId, draft) {
+  const saved = await repo.getHealthCheck(connectionId, itemId);
+  if (!saved?.result?.quality) return null;
+  const quality = health.qualityAfterEdit(saved.result.quality, draft);
+  const updated = await repo.updateHealthCheckResult(connectionId, itemId, { ...saved.result, quality });
+  accountEvents.emitUpdated(connectionId, 'analytics');
+  return updated;
+}
+
 // Days either side of an edit that its effect is measured over.
 const EDIT_WINDOW = 14;
 const EDIT_MIN_DAYS = 3;
@@ -1038,6 +1053,7 @@ async function adminUsage(labels) {
 }
 
 module.exports = {
+  checkAfterEdit,
   checkListing,
   CHECK_CALLS,
   AnalyticsError,

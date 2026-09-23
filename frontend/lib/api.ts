@@ -971,6 +971,7 @@ export interface ListingQuality {
   returnsAccepted?: boolean | null;
   currency?: string | null;
   competitor?: { query?: string; compared?: number; cheapest: number | null; median?: number | null; error?: string } | null;
+  editedAt?: string; // brought up to date by an edit published from Liston (no eBay call)
 }
 
 export interface HealthCheck {
