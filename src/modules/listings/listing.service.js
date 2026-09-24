@@ -467,6 +467,42 @@ function removeAxisValue(draft, axisName, value) {
   };
 }
 
+// Puts removed variations back (`indexes` into draft.removedVariants): each
+// returns to the list, and any option it carries that its attribute no
+// longer lists (the whole value was removed) is listed again. One that
+// matches a variation already there (the seller re-added it by hand) isn't
+// doubled.
+function restoreVariants(draft, indexes) {
+  const removed = draft.removedVariants || [];
+  const wanted = new Set(indexes.map(Number));
+  const keyOf = (variant) => JSON.stringify(Object.entries(variant.aspects || {}).sort(([a], [b]) => a.localeCompare(b)));
+  const present = new Set((draft.variants || []).map(keyOf));
+  const back = [];
+  for (const [index, entry] of removed.entries()) {
+    if (!wanted.has(index)) continue;
+    const { removedAt, ...variant } = entry;
+    void removedAt;
+    if (present.has(keyOf(variant))) continue;
+    present.add(keyOf(variant));
+    back.push(variant);
+  }
+  let specifications = draft.variesBy?.specifications || [];
+  for (const variant of back) {
+    for (const [axis, [value]] of Object.entries(variant.aspects || {})) {
+      if (value === undefined) continue;
+      const spec = specifications.find((s) => s.name === axis);
+      if (!spec) specifications = [...specifications, { name: axis, values: [value] }];
+      else if (!spec.values.includes(value)) specifications = specifications.map((s) => (s === spec ? { ...s, values: [...s.values, value] } : s));
+    }
+  }
+  return {
+    ...draft,
+    variants: [...(draft.variants || []), ...back],
+    removedVariants: removed.filter((_, index) => !wanted.has(index)),
+    ...(draft.variesBy ? { variesBy: { ...draft.variesBy, specifications } } : {}),
+  };
+}
+
 /**
  * Applies an edit to a draft. The patch carries only what changed; anything
  * absent is left alone.
@@ -503,9 +539,11 @@ async function updateDraft(id, userId, patch) {
       (variant) => variant.aspects?.[rename.axis]?.[0] === rename.to && variant.aspects?.[rename.axis]?.[0] !== rename.from
     );
     if (clash) throw new ListingError(`"${rename.to}" is already an option on ${rename.axis}.`, 400);
-    draft.variants = (draft.variants || []).map((variant) =>
-      variant.aspects?.[rename.axis]?.[0] === rename.from ? { ...variant, aspects: { ...variant.aspects, [rename.axis]: [rename.to] } } : variant
-    );
+    const renameValue = (variant) =>
+      variant.aspects?.[rename.axis]?.[0] === rename.from ? { ...variant, aspects: { ...variant.aspects, [rename.axis]: [rename.to] } } : variant;
+    draft.variants = (draft.variants || []).map(renameValue);
+    // A removed variation put back later must match the names it returns to.
+    if (draft.removedVariants?.length) draft.removedVariants = draft.removedVariants.map(renameValue);
     if (draft.variesBy?.specifications) {
       draft.variesBy = {
         ...draft.variesBy,
@@ -532,12 +570,14 @@ async function updateDraft(id, userId, patch) {
         400
       );
     }
-    draft.variants = (draft.variants || []).map((variant) => {
+    const renameAxis = (variant) => {
       if (!variant.aspects || !(rename.from in variant.aspects)) return variant;
       const aspects = {};
       for (const [name, values] of Object.entries(variant.aspects)) aspects[name === rename.from ? rename.to : name] = values;
       return { ...variant, aspects };
-    });
+    };
+    draft.variants = (draft.variants || []).map(renameAxis);
+    if (draft.removedVariants?.length) draft.removedVariants = draft.removedVariants.map(renameAxis);
     if (draft.variesBy) {
       draft.variesBy = {
         ...draft.variesBy,
@@ -571,14 +611,26 @@ async function updateDraft(id, userId, patch) {
     }
   }
 
+  // Removed variations are kept on the draft (removedVariants) until it's
+  // published, so the editor can put one back; eBay is never sent them.
+  const before = draft.variants || [];
   if (patch.variantSkusToRemove?.length) {
     const drop = new Set(patch.variantSkusToRemove);
-    draft.variants = (draft.variants || []).filter((_, index) => !drop.has(String(index)));
+    draft.variants = before.filter((_, index) => !drop.has(String(index)));
   }
 
   for (const removal of patch.removeAxisValues || []) {
     draft = removeAxisValue(draft, removal.axis, removal.value);
   }
+  const kept = new Set(draft.variants || []);
+  const removedNow = before.filter((variant) => !kept.has(variant));
+  if (removedNow.length) {
+    const at = new Date().toISOString();
+    draft.removedVariants = [...(draft.removedVariants || []), ...removedNow.map((variant) => ({ ...variant, removedAt: at }))];
+  }
+
+  // Putting removed variations back (by their place in removedVariants).
+  if (patch.restoreVariants?.length) draft = restoreVariants(draft, patch.restoreVariants);
 
   for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'imageUrls', 'sku', 'storeCategoryNames']) {
     if (patch[field] !== undefined) draft[field] = patch[field];
@@ -825,9 +877,17 @@ async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex
   const listing = await loadEditableDraft(id, userId);
   const draft = { ...(listing.generated_data || {}) };
 
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl || '');
-  if (!match) throw new ListingError('Upload a JPG, PNG, GIF or WEBP image.', 400);
-  const buffer = Buffer.from(match[2], 'base64');
+  // Whatever the browser labelled it — AI tools save .avif, .jfif, .webp, or
+  // a file with no type at all — the bytes decide: anything that reads as a
+  // picture is taken, and a format eBay doesn't take is sent as a JPEG.
+  const match = /^data:[^,]*;base64,(.+)$/is.exec(dataUrl || '');
+  if (!match) throw new ListingError('Choose a photo to upload.', 400);
+  const buffer = await imageOps.toUploadable(Buffer.from(match[1], 'base64')).catch(() => {
+    throw new ListingError(
+      "That file couldn't be read as a picture. Save it as JPG or PNG and upload it again (iPhone HEIC photos need converting first).",
+      400
+    );
+  });
   const check = await imageOps.validate(buffer);
   if (!check.ok) throw new ListingError(check.errors.join(' '), 400);
   const source = await imageOps.validateSource(buffer);

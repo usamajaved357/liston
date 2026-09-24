@@ -18,6 +18,7 @@ import {
   RevisionCurrentState,
   StoreCategory,
   TextProposal,
+  VariationDraftContent,
   VariationDraftVariant,
   VariationFixes,
   isVariationDraft,
@@ -223,7 +224,77 @@ function policyName(
 // which needs the whole set in view. The first tile is the main image (the
 // search thumbnail).
 
-const IMAGE_ACCEPT = "image/jpeg,image/png,image/gif,image/webp";
+// Variations removed from this draft, kept until it's published: each can
+// be put back (it saves like any other edit). Nothing here goes to eBay.
+function RemovedVariations({
+  removed,
+  restoring,
+  onRestore,
+  disabled,
+}: {
+  removed: NonNullable<VariationDraftContent["removedVariants"]>;
+  restoring: number[];
+  onRestore: (indexes: number[]) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+  const waiting = removed.map((v, index) => ({ v, index })).filter(({ index }) => !restoring.includes(index));
+  if (!waiting.length) return null;
+  const label = (v: VariationDraftVariant) => Object.values(v.aspects || {}).map((values) => values[0]).join(" / ");
+  return (
+    <section className="card mt-4 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3">
+        <button type="button" onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 text-left" aria-expanded={open}>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden className={`h-4 w-4 text-[var(--color-muted)] transition-transform ${open ? "rotate-90" : ""}`}>
+            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="text-[14px] font-semibold text-[var(--color-ink)]">Removed variations</span>
+          <span className="rounded-full bg-[var(--color-paper)] px-2 py-0.5 text-[12px] font-medium text-[var(--color-muted)]">{waiting.length}</span>
+        </button>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-[12px] text-[var(--color-muted)] sm:inline">Kept until you publish; not sent to eBay</span>
+          {waiting.length > 1 && (
+            <button type="button" onClick={() => onRestore(waiting.map((w) => w.index))} disabled={disabled} className="btn btn-secondary btn-sm">
+              Undo all
+            </button>
+          )}
+        </div>
+      </div>
+      {open && (
+        <ul className="divide-y divide-[var(--color-line)]">
+          {waiting.map(({ v, index }) => (
+            <li key={index} className="flex items-center gap-3 px-4 py-2.5">
+              {v.imageUrls?.[0] ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={v.imageUrls[0]} alt="" className="h-10 w-10 shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-contain opacity-70" />
+              ) : (
+                <span className="h-10 w-10 shrink-0 rounded-lg border border-dashed border-[var(--color-line)]" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13.5px] font-medium text-[var(--color-muted)] line-through decoration-[var(--color-line-strong)]">{label(v) || "Variation"}</span>
+                <span className="text-[12px] text-[var(--color-muted)]">
+                  {formatPrice(v.price.value, v.price.currency)} · {v.quantity} in stock
+                </span>
+              </span>
+              <button type="button" onClick={() => onRestore([index])} disabled={disabled} className="btn btn-ghost btn-sm text-[var(--color-primary)]">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-4 w-4">
+                  <path d="M9 14L4 9l5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M4 9h10.5a5.5 5.5 0 010 11H11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+                Undo
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// Every picture type, by type and by extension: AI tools and phones save
+// .avif, .jfif, .heic and the like, which a picker limited to JPG/PNG/GIF/WebP
+// greyed out. The server reads the file itself and converts what eBay needs.
+const IMAGE_ACCEPT = "image/*,.jpg,.jpeg,.jfif,.pjpeg,.png,.gif,.webp,.avif,.heic,.heif,.bmp,.tif,.tiff";
 
 function FileButton({
   label,
@@ -1545,6 +1616,8 @@ export default function DraftEditorPage() {
   const [images, setImages] = useState<string[]>([]);
   const [selectedImage, setSelectedImage] = useState(0);
   const [removedRows, setRemovedRows] = useState<Set<number>>(new Set());
+  // Removed variations (kept on the draft until it's published) being put back.
+  const [restoreQueue, setRestoreQueue] = useState<number[]>([]);
   const [removedAxisValues, setRemovedAxisValues] = useState<AxisRemoval[]>([]);
   // Renamed option and attribute names, keyed by the draft's current names.
   const [valueRenames, setValueRenames] = useState<Renames>({});
@@ -1833,6 +1906,7 @@ export default function DraftEditorPage() {
     }
     if (Object.keys(variantChanges).length) patch.variants = variantChanges;
     if (removedRows.size) patch.variantSkusToRemove = [...removedRows].map(String);
+    if (restoreQueue.length) patch.restoreVariants = restoreQueue;
     // Renames are applied first on the server, so removals are expressed in
     // the renamed names.
     const renameAxisValues = Object.entries(valueRenames).flatMap(([axis, map]) => Object.entries(map).map(([from, to]) => ({ axis, from, to })));
@@ -1980,6 +2054,7 @@ export default function DraftEditorPage() {
       setListing(data.listing);
       setImageCheck(data.imageCheck);
       setRemovedRows(new Set());
+      setRestoreQueue([]);
       setRemovedAxisValues([]);
       setValueRenames({});
       setAxisRenames({});
@@ -3082,6 +3157,14 @@ export default function DraftEditorPage() {
                   accountId={params.id}
                   onApplyAll={applyToAllVariants}
                   disabled={!editable || busy}
+                />
+              )}
+              {variation && editable && (variation.removedVariants?.length ?? 0) > 0 && (
+                <RemovedVariations
+                  removed={variation.removedVariants!}
+                  restoring={restoreQueue}
+                  onRestore={(indexes) => setRestoreQueue((q) => [...new Set([...q, ...indexes])])}
+                  disabled={busy}
                 />
               )}
             </div>

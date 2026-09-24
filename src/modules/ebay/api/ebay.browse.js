@@ -66,12 +66,29 @@ function getItemsByItemGroup(itemGroupId, marketplaceId) {
   return request('/buy/browse/v1/item/get_items_by_item_group', { item_group_id: itemGroupId }, marketplaceId);
 }
 
-function searchItemSummaries({ q, limit = 25, filter, categoryIds, sort }, marketplaceId) {
+// fieldgroups "MATCHING_ITEMS,ASPECT_REFINEMENTS" adds, in the same call,
+// how the results split by category and by item specific (Brand included).
+function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort, fieldgroups }, marketplaceId) {
   return request(
     '/buy/browse/v1/item_summary/search',
-    { q, limit, ...(filter ? { filter } : {}), ...(categoryIds ? { category_ids: categoryIds } : {}), ...(sort ? { sort } : {}) },
+    {
+      q,
+      limit,
+      ...(offset ? { offset } : {}),
+      ...(filter ? { filter } : {}),
+      ...(categoryIds ? { category_ids: categoryIds } : {}),
+      ...(sort ? { sort } : {}),
+      ...(fieldgroups ? { fieldgroups } : {}),
+    },
     marketplaceId
   );
+}
+
+// One listing (or one variation of one) by its RESTful id, "v1|123|0". Its
+// estimatedAvailabilities carry eBay's count of how many have sold.
+// (The bulk version, getItems, is a restricted API this app can't use.)
+function getItem(itemId, marketplaceId) {
+  return request(`/buy/browse/v1/item/${encodeURIComponent(itemId)}`, {}, marketplaceId);
 }
 
 module.exports = {
@@ -79,4 +96,5 @@ module.exports = {
   getItemByLegacyId,
   getItemsByItemGroup,
   searchItemSummaries,
+  getItem,
 };

@@ -115,6 +115,123 @@ export interface AccountOverview {
   financesAccess: boolean;
 }
 
+// Product research: live eBay listings for a search on the account's site.
+export interface ResearchItem {
+  itemId: string;
+  legacyItemId: string | null;
+  title: string;
+  image: string | null;
+  url: string | null;
+  price: { value: number; currency: string } | null;
+  shipping: { cost: number; free: boolean; type: string | null } | null;
+  seller: { username: string; feedbackScore: number | null; feedbackPercentage: number | null; business: boolean } | null;
+  location: { country: string | null; postalCode: string | null } | null;
+  condition: string | null;
+  category: string | null;
+  categoryId: string | null;
+  createdAt: string | null;
+  hasVariations: boolean;
+  topRated: boolean;
+  // eBay's count of how many have sold (read for the top listings; null otherwise).
+  sold: number | null;
+  soldPerMonth: number | null;
+  // Sold × today's price with postage (eBay gives no sale prices), or null.
+  revenue: number | null;
+  daysLive: number | null;
+}
+
+export interface ResearchSummary {
+  total: number;
+  sampled: number;
+  price: { min: number; max: number; median: number; average: number } | null;
+  // to: null is the top band, everything from `from` up.
+  bands: { from: number; to: number | null; count: number }[];
+  sellers: number;
+  // sold/revenue: across the seller's listings whose sold count was read.
+  topSellers: { username: string; listings: number; feedbackScore: number | null; feedbackPercentage: number | null; sold: number | null; revenue: number | null }[];
+  topSellerShare: number;
+  freePostage: number;
+  domestic: number;
+  newInLast30Days: number;
+  sold: { read: number; total: number; perMonth: number; selling: number; revenue: number; revenuePerMonth: number } | null;
+}
+
+export type ResearchRiskLevel = "ok" | "warn" | "bad" | "unknown";
+export interface ResearchRisk {
+  key: "history" | "words" | "brand" | "safety";
+  label: string;
+  level: ResearchRiskLevel;
+  detail: string;
+  // history: the refused drafts; brand: the brands at issue.
+  items?: { title: string; account: string; at: string; reason: string; kind: "ip" | "words" | "policy" }[];
+  brands?: string[];
+}
+
+export interface ResearchPrice {
+  recommended: number;
+  low: number;
+  high: number;
+  salesMiddle: number;
+  // "sales": weighted by what each listing sells; "listings": too few sales, every listing counts once.
+  basis: "sales" | "listings";
+  basedOn: number;
+  confidence: "high" | "medium" | "low";
+  // What's left after eBay's ads, final value and fixed fees, and the most a
+  // supplier can cost for the account's target return.
+  afterFees: number;
+  maxCost: number;
+  targetRoiPercent: number;
+  fees: { adsPercent: number; processingPercent: number; fixed: number; shipping: number };
+}
+
+export interface ResearchKeyword {
+  term: string;
+  share: number;
+  inQuery: boolean;
+}
+
+export interface ResearchVerdict {
+  status: "healthy" | "caution" | "unhealthy";
+  label: string;
+  score: number;
+  reasons: { tone: "good" | "warn" | "bad"; text: string }[];
+}
+
+export interface ResearchAnalysis {
+  price: ResearchPrice | null;
+  keywords: { words: ResearchKeyword[]; phrases: ResearchKeyword[] };
+  breakdown: { brands: { name: string; count: number; unbranded: boolean }[]; categories: { id: string; name: string; count: number }[]; categoryId: string | null } | null;
+  risks: ResearchRisk[];
+  verdict: ResearchVerdict;
+}
+
+export interface ResearchAdvice {
+  title: string;
+  keywords: string[];
+  brandRisk: { level: "none" | "low" | "high"; brands: string[]; reason: string };
+  safetyRisk: { level: "none" | "low" | "high"; reason: string };
+  summary: string;
+}
+
+export interface ResearchBudget {
+  used: number;
+  limit: number;
+  remaining: number;
+}
+
+export interface ResearchResult {
+  query: string;
+  market: Marketplace;
+  total: number;
+  summary: ResearchSummary;
+  analysis: ResearchAnalysis;
+  // The AI's reading, when one was written for this search today.
+  advice: ResearchAdvice | null;
+  items: ResearchItem[];
+  soldLimited: boolean;
+  budget: ResearchBudget;
+}
+
 export interface OverviewMarket {
   id: string;
   label: string;
@@ -798,6 +915,9 @@ export interface VariationDraftContent {
     specifications: { name: string; values: string[] }[];
   };
   variants: VariationDraftVariant[];
+  // Variations removed in the editor, kept until the draft is published so
+  // one can be put back (never sent to eBay).
+  removedVariants?: (VariationDraftVariant & { removedAt?: string })[];
   categoryId: string;
   categoryPath?: string[];
   categorySuggestions?: CategorySuggestion[];
@@ -950,6 +1070,8 @@ export interface DraftPatch {
   renameAxes?: { from: string; to: string }[];
   addAxisValues?: { axis: string; value: string; copyFrom?: string }[];
   variantSkusToRemove?: string[];
+  // Removed variations to put back, by their place in removedVariants.
+  restoreVariants?: number[];
   sku?: string;
   categoryId?: string;
   secondaryCategoryId?: string | null;
@@ -1481,6 +1603,28 @@ export const api = {
     request<{ calls: number }>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/read?range=${range}`, { method: "POST" }),
   checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
     request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
+
+  researchSearch: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+    const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
+    if (params.minPrice) query.set("minPrice", params.minPrice);
+    if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    return request<ResearchResult>(`/api/connections/${id}/research?${query.toString()}`);
+  },
+  // The AI's reading of a search (title, keywords, brand and safety risk) and
+  // the analysis redone with it; reuses the search's kept eBay reads.
+  researchAdvice: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+    const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
+    if (params.minPrice) query.set("minPrice", params.minPrice);
+    if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    return request<{ advice: ResearchAdvice | null; analysis: ResearchAnalysis; budget: ResearchBudget }>(`/api/connections/${id}/research/advice?${query.toString()}`);
+  },
+  // Sold counts for more listings of a search (up to 20 at a time).
+  researchSold: (id: string, items: Pick<ResearchItem, "itemId" | "legacyItemId" | "hasVariations" | "createdAt">[]) =>
+    request<{ items: { itemId: string; sold: number | null; soldPerMonth: number | null }[]; soldLimited: boolean; budget: ResearchBudget }>(
+      `/api/connections/${id}/research/sold`,
+      { method: "POST", body: JSON.stringify({ items }) }
+    ),
+  researchBudget: (id: string) => request<ResearchBudget>(`/api/connections/${id}/research/budget`),
 
   getAccountOverview: (id: string, range: string) => request<AccountOverview>(`/api/connections/${id}/overview?range=${range}`),
 

@@ -206,7 +206,24 @@ async function countListingWork(connectionId, start, end) {
   return rows[0] || { drafted: 0, published: 0, waiting: 0 };
 }
 
+// Drafts on any of the owner's accounts that eBay refused for a policy
+// reason (brand/VeRO, hazardous words, prohibited items), newest first:
+// { title, message, account, at }. Product research checks a product
+// against them.
+const POLICY_REFUSAL = '(VeRO|intellectual property|trademark|counterfeit|replica|copyright|brand|Hazardous|PI_HAZ|improper words|policy|prohibited|restricted|not allowed)';
+async function findPolicyRefusals(ownerId, limit = 500) {
+  const { rows } = await query(
+    `SELECT COALESCE(l.generated_data->>'commonTitle', l.generated_data->>'title') AS title, l.error_message AS message, c.label AS account, l.updated_at AS at
+       FROM listings l JOIN connections c ON c.id = l.connection_id
+      WHERE c.user_id = $1 AND l.error_message ~* $2
+      ORDER BY l.updated_at DESC LIMIT $3`,
+    [ownerId, POLICY_REFUSAL, limit]
+  );
+  return rows;
+}
+
 module.exports = {
+  findPolicyRefusals,
   countListingWork,
   latestChanges,
   findPublishedDataByItemIds,

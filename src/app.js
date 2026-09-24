@@ -35,15 +35,18 @@ function createApp() {
     })
   );
   // 2mb accommodates base64 profile-photo uploads (src/modules/users) on top of normal JSON bodies
-  app.use(
-    express.json({
-      limit: '2mb',
-      // eBay's REST push is verified against the exact bytes it signed.
-      verify: (req, res, buf) => {
-        if (req.originalUrl.startsWith('/api/ebay/commerce-notifications')) req.rawBody = buf.toString('utf8');
-      },
-    })
-  );
+  const jsonBody = express.json({
+    limit: '2mb',
+    // eBay's REST push is verified against the exact bytes it signed.
+    verify: (req, res, buf) => {
+      if (req.originalUrl.startsWith('/api/ebay/commerce-notifications')) req.rawBody = buf.toString('utf8');
+    },
+  });
+  // A listing photo upload parses its own, larger body (a base64 photo runs
+  // to ~16MB for eBay's 12MB cap). Parsed here first, anything over 2MB was
+  // refused before it reached that route — every AI-made PNG, in practice.
+  const OWN_BODY = /^\/api\/listings\/[^/]+\/images\/upload(?:\?|$)/;
+  app.use((req, res, next) => (OWN_BODY.test(req.originalUrl) ? next() : jsonBody(req, res, next)));
 
   // Lightweight request log — no bodies (may contain passwords/credentials)
   app.use((req, res, next) => {

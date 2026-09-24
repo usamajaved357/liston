@@ -480,6 +480,68 @@ test('when every supplier photo is branded or foreign, they are still listed wit
   assert.match(warnings.join(' '), /Every supplier photo carries supplier branding/);
 });
 
+test('photos with text or branding are kept at the end of the gallery, clean ones first, and the draft says so', async () => {
+  const source = await makeImage(900, 900);
+  mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
+  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
+  const clean = { hasTextOrGraphics: false, overlayTextLanguage: 'none', hasSupplierBranding: false, isCollage: false, kind: 'product_photo', showsWholeProduct: true };
+  mock.method(screen, 'screenImages', async (images) =>
+    images.map((i) => ({ ...i, screen: /slide/.test(i.sourceUrl) ? { ...clean, hasTextOrGraphics: true, overlayTextLanguage: 'other' } : clean }))
+  );
+  mock.method(eps, 'uploadAll', async (token, prepared) => prepared.map((p) => p.sourceUrl));
+
+  const { imageUrls, warnings } = await pipeline.buildGalleryImages({
+    sourceImageUrls: ['https://example.com/slide1.jpg', 'https://example.com/a.jpg', 'https://example.com/slide2.jpg', 'https://example.com/b.jpg'],
+    accessToken: 't',
+    marketplaceId: 'EBAY_GB',
+    categoryId: '20349',
+  });
+  assert.strictEqual(imageUrls.length, 4, 'none left out');
+  assert.deepStrictEqual(imageUrls.slice(0, 2).sort(), ['https://example.com/a.jpg', 'https://example.com/b.jpg']);
+  assert.deepStrictEqual(imageUrls.slice(2).sort(), ['https://example.com/slide1.jpg', 'https://example.com/slide2.jpg']);
+  assert.match(warnings.join(' '), /The last 2 photos carry text/);
+});
+
+test('a photo just under eBay\'s 500px minimum is enlarged rather than lost; a thumbnail is still skipped', async () => {
+  const small = await makeImage(400, 300);
+  const thumb = await makeImage(48, 48);
+  mock.method(global, 'fetch', async (url) => ({ ok: true, status: 200, arrayBuffer: async () => (/thumb/.test(String(url)) ? thumb : small) }));
+  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
+  mock.method(screen, 'screenImages', async (images) => images.map((i) => ({ ...i, screen: null })));
+  let uploaded = [];
+  mock.method(eps, 'uploadAll', async (token, prepared) => {
+    uploaded = prepared;
+    return prepared.map((p) => p.sourceUrl);
+  });
+  const { imageUrls, warnings } = await pipeline.buildGalleryImages({
+    sourceImageUrls: ['https://example.com/small.jpg', 'https://example.com/thumb.jpg'],
+    accessToken: 't',
+    marketplaceId: 'EBAY_GB',
+    categoryId: '20349',
+  });
+  assert.deepStrictEqual(imageUrls, ['https://example.com/small.jpg']);
+  const meta = await sharp(uploaded[0].buffer).metadata();
+  assert.strictEqual(Math.max(meta.width, meta.height), 800);
+  assert.match(warnings.join(' '), /1 small photo was enlarged/);
+  assert.match(warnings.join(' '), /1 of the supplier's 2 photos couldn't be used/);
+});
+
+test('an AliExpress image is asked for as the product page would, and a failed download is tried once more', async () => {
+  const source = await makeImage(900, 900);
+  let calls = 0;
+  const seen = [];
+  mock.method(global, 'fetch', async (url, init) => {
+    calls += 1;
+    seen.push(init.headers);
+    if (calls === 1) throw new Error('socket hang up');
+    return { ok: true, status: 200, arrayBuffer: async () => source };
+  });
+  const buffer = await imageOps.download('https://ae01.alicdn.com/kf/S1.jpg');
+  assert.ok(buffer.length > 0);
+  assert.strictEqual(calls, 2);
+  assert.strictEqual(seen[1].Referer, 'https://www.aliexpress.com/');
+});
+
 test('a variant image is its own supplier photo, uploaded as-is', async () => {
   const source = await makeImage(900, 900);
   mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
@@ -529,4 +591,17 @@ test('brandHero draws the enabled badges and leaves the image alone when none ar
   assert.notDeepStrictEqual(at(after, 1400, 1492), at(before, 1400, 1492), 'label drawn bottom-right');
   assert.deepStrictEqual(at(after, 800, 800).map((v) => Math.round(v / 8)), at(before, 800, 800).map((v) => Math.round(v / 8)), 'centre untouched');
   assert.deepStrictEqual(heroBadges.activeBadges({ addUkFlag: true, addFreeShippingLabel: false, addGlowBorder: true }), ['UK flag', 'border']);
+});
+
+test('a seller\'s photo is taken by its content: JPG/PNG/GIF as they are, WebP/TIFF as a JPEG, anything else refused', async () => {
+  const png = await sharp({ create: { width: 600, height: 600, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toBuffer();
+  assert.strictEqual(await imageOps.toUploadable(png), png, 'PNG untouched');
+  for (const make of [(s) => s.webp(), (s) => s.tiff()]) {
+    const odd = await make(sharp({ create: { width: 600, height: 400, channels: 3, background: '#336699' } })).toBuffer();
+    const out = await imageOps.toUploadable(odd);
+    const meta = await sharp(out).metadata();
+    assert.strictEqual(meta.format, 'jpeg');
+    assert.deepStrictEqual([meta.width, meta.height], [600, 400]);
+  }
+  await assert.rejects(imageOps.toUploadable(Buffer.from('not a picture at all')));
 });

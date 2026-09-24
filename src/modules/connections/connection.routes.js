@@ -40,6 +40,12 @@ router.post('/:id/template/preview', requireAuth, requireOwner, express.json({ l
 router.get('/:id/store-reviews', requireAuth, requireOwner, connectionController.storeReviews);
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
 // Category picker data. Anyone who can edit listings can browse categories.
+// Product research on the account's eBay site (Browse API; see modules/research).
+const researchController = require('../research/research.controller');
+router.get('/:id/research', requireAuth, requireFeature('listings'), researchController.search);
+router.get('/:id/research/advice', requireAuth, requireFeature('listings'), researchController.advice);
+router.post('/:id/research/sold', requireAuth, requireFeature('listings'), researchController.soldCounts);
+router.get('/:id/research/budget', requireAuth, requireFeature('listings'), researchController.budget);
 router.get('/:id/categories/search', requireAuth, requireFeature('listings'), connectionController.searchCategories);
 router.get('/:id/categories/children', requireAuth, requireFeature('listings'), connectionController.categoryChildren);
 router.get('/:id/categories/:categoryId', requireAuth, requireFeature('listings'), connectionController.categoryDetail);

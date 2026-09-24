@@ -132,6 +132,12 @@ const config = {
   // default unless it has granted more; the daily read can be switched off
   // on a machine that shares production's eBay keys (a dev laptop), since
   // every read counts against the same app-wide allowance.
+  research: {
+    // Of the Browse API's 5,000 calls a day (shared with drafting, which
+    // reads the competitor listing through it), how many product research
+    // may spend.
+    dailyCalls: parseInt(process.env.RESEARCH_DAILY_CALLS || '3000', 10),
+  },
   analytics: {
     dailyLimit: parseInt(process.env.EBAY_ANALYTICS_DAILY_LIMIT || '100', 10),
     schedulerEnabled: process.env.ANALYTICS_SCHEDULER !== 'off',

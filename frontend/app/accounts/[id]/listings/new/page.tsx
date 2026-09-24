@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { EditorHeader, Stepper } from "@/components/EditorHeader";
 import { Alert } from "@/components/Alert";
@@ -84,7 +84,9 @@ export default function DraftListingPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
 
-  const [competitorUrl, setCompetitorUrl] = useState("");
+  // "Draft this" on the Research page arrives with the competitor listing.
+  const searchParams = useSearchParams();
+  const [competitorUrl, setCompetitorUrl] = useState(() => searchParams.get("competitor") || "");
   const [sourceUrl, setSourceUrl] = useState("");
   const [preview, setPreview] = useState<DraftPreview | null>(null);
   // { axisName: Set of ticked values }

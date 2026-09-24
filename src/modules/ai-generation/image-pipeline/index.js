@@ -76,11 +76,17 @@ async function buildGalleryImages({ sourceImageUrls, accessToken, marketplaceId,
       'Every supplier photo carries supplier branding or non-English text. They are used as-is because nothing ' +
         'cleaner exists — replace them with your own photos before publishing.'
     );
-  } else if (!imageScreen.isHeroEligible(chosen[0].screen)) {
-    warnings.push(
-      'No clean photo of the whole product was found for the main image, so the best available one is used — ' +
-        "eBay's picture policy is strictest on the main photo; consider replacing it."
-    );
+  } else {
+    if (!imageScreen.isHeroEligible(chosen[0].screen)) {
+      warnings.push(
+        'No clean photo of the whole product was found for the main image, so the best available one is used — ' +
+          "eBay's picture policy is strictest on the main photo; consider replacing it."
+      );
+    }
+    // Every supplier photo is kept (the seller wants all of them): the ones
+    // carrying text, prices or another seller's branding go last, so the
+    // main photo and the first few stay clean, and the seller decides.
+    if (rejected.length) chosen = [...usable, ...rankRejectedForListing(rejected)];
   }
 
   const finished = chosen.slice(0, plan.recommendedImages);
@@ -100,10 +106,19 @@ async function buildGalleryImages({ sourceImageUrls, accessToken, marketplaceId,
   }
 
   const skipped = sourceImageUrls.length - screened.length;
-  if (skipped > 0) warnings.push(`${skipped} of the supplier's ${sourceImageUrls.length} photos were too small to use.`);
+  if (skipped > 0) {
+    warnings.push(
+      `${skipped} of the supplier's ${sourceImageUrls.length} photos couldn't be used: too small for eBay (under 250px) or they wouldn't download.`
+    );
+  }
+  const enlarged = finished.filter((image) => image.enlargedFrom).length;
+  if (enlarged) {
+    warnings.push(`${enlarged} small photo${enlarged === 1 ? ' was' : 's were'} enlarged to eBay's 500px minimum, so ${enlarged === 1 ? 'it' : 'they'}'ll look soft.`);
+  }
   if (usable.length && rejected.length) {
     warnings.push(
-      `${rejected.length} of the supplier's photos carried supplier branding, prices or non-English text and were left out.`
+      `The last ${rejected.length} photo${rejected.length === 1 ? '' : 's'} carr${rejected.length === 1 ? 'ies' : 'y'} text, prices or another seller's branding. ` +
+        'eBay can show listings with text on their photos lower, so delete them in the editor if you want.'
     );
   }
   const soft = finished.filter(

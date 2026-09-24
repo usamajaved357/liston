@@ -118,6 +118,20 @@ export function AccountShell({
               }
             />
           )}
+          {canShow("listings") && (
+            <NavItem
+              href={`${base}/research`}
+              active={pathname.startsWith(`${base}/research`)}
+              label="Research"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M15.5 15.5L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M7.5 12l2-2.5 2 1.5 2-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+          )}
           {canShow("orders") && (
             <NavItem
               href={`${base}/orders`}

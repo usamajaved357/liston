@@ -114,10 +114,34 @@ async function validate(buffer) {
   return { ok: errors.length === 0, errors, warnings, meta };
 }
 
+// AliExpress's image CDN turns away requests that don't look like they came
+// from its own pages (a Referer ACL), and drops the odd one mid-transfer; so
+// images are asked for the way a browser on the product page would, and a
+// failed one is asked for once more.
+const DOWNLOAD_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+  Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+};
+function headersFor(url) {
+  try {
+    return /alicdn\.com|aliexpress/i.test(new URL(url).hostname) ? { ...DOWNLOAD_HEADERS, Referer: 'https://www.aliexpress.com/' } : DOWNLOAD_HEADERS;
+  } catch {
+    return DOWNLOAD_HEADERS;
+  }
+}
+
 async function download(url) {
-  const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!res.ok) throw new Error(`Couldn't download image (${res.status})`);
-  return Buffer.from(await res.arrayBuffer());
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const res = await fetch(url, { headers: headersFor(url), signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (!res.ok) throw new Error(`Couldn't download image (${res.status})`);
+      return Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 // The SOURCE has to clear the resolution bar, not the padded output — padding
@@ -136,15 +160,45 @@ async function validateSource(buffer) {
   return { ok: true, meta };
 }
 
+// A seller's own photo, ready for eBay: JPG, PNG and GIF go as they are;
+// anything else that reads as a picture (WebP, AVIF, HEIF, TIFF, SVG…) is
+// turned into a JPEG on white, the right way up. Throws when the bytes
+// aren't a picture at all.
+const EBAY_FORMATS = new Set(['jpeg', 'png', 'gif']);
+async function toUploadable(buffer) {
+  const { format } = await sharp(buffer).metadata();
+  if (!format) throw new Error('Not an image');
+  if (EBAY_FORMATS.has(format)) return buffer;
+  return sharp(buffer, { density: 300 }).rotate().flatten({ background: { r: 255, g: 255, b: 255 } }).jpeg({ quality: 92 }).toBuffer();
+}
+
+// Photos this far below eBay's minimum are still worth enlarging; smaller
+// ones are thumbnails and tracking pixels (a live gallery had a 48×48 one).
+const ENLARGE_FROM = 250;
+const ENLARGE_TO = 800;
+async function enlargeable(buffer) {
+  const meta = await describe(buffer).catch(() => ({}));
+  const longest = Math.max(meta.width || 0, meta.height || 0);
+  return longest >= ENLARGE_FROM && longest < MIN_LONGEST_SIDE ? longest : null;
+}
+
 // Download → check the source is worth using → normalize → check what we'll
 // send. Returns null rather than throwing when an individual image can't be
 // used: one bad photo out of eight shouldn't cost the seller the whole draft.
 // The caller decides whether what survived is enough (see gates.js).
 async function prepare(url) {
   try {
-    const original = await download(url);
+    let original = await download(url);
 
-    const source = await validateSource(original);
+    let source = await validateSource(original);
+    const enlargedFrom = source.ok ? null : await enlargeable(original);
+    if (enlargedFrom) {
+      // A usable photo just under eBay's 500px minimum (supplier galleries
+      // have a few): enlarged to fit rather than lost. It'll look soft, and
+      // the draft says so.
+      original = await sharp(original).rotate().resize({ width: ENLARGE_TO, height: ENLARGE_TO, fit: 'inside', kernel: 'lanczos3' }).jpeg({ quality: 92 }).toBuffer();
+      source = await validateSource(original);
+    }
     if (!source.ok) {
       logger.warn('Skipped a source image that is too small to list', { url, reason: source.reason });
       return null;
@@ -167,7 +221,7 @@ async function prepare(url) {
       );
     }
 
-    return { buffer: normalized, original, sourceUrl: url, meta: result.meta, sourceMeta: source.meta, warnings };
+    return { buffer: normalized, original, sourceUrl: url, meta: result.meta, sourceMeta: source.meta, warnings, enlargedFrom };
   } catch (err) {
     logger.warn('Could not prepare an image', { url, error: err.message });
     return null;
@@ -175,6 +229,7 @@ async function prepare(url) {
 }
 
 module.exports = {
+  toUploadable,
   MIN_LONGEST_SIDE,
   TARGET_SIZE,
   MAX_DIMENSION,

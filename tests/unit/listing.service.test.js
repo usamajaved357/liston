@@ -1752,3 +1752,47 @@ test('a photo picked on one row of a Colour × Size draft is saved on every size
   assert.deepStrictEqual(draft.variants.map((v) => v.imageUrls[0]), ['https://i.ebayimg.com/red.jpg', 'https://i.ebayimg.com/red.jpg', 'https://i.ebayimg.com/main.jpg']);
   assert.deepStrictEqual(draft.variesBy.aspectsImageVariesBy, ['Colour']);
 });
+
+test('a removed variation is kept on the draft, follows renames, and can be put back until publish', async () => {
+  let stored = {
+    imageUrls: ['https://i.ebayimg.com/a.jpg'],
+    variants: [
+      { aspects: { Colour: ['Red'], Size: ['S'] }, imageUrls: ['https://i.ebayimg.com/r.jpg'], quantity: 3 },
+      { aspects: { Colour: ['Red'], Size: ['M'] }, imageUrls: ['https://i.ebayimg.com/r.jpg'], quantity: 3 },
+      { aspects: { Colour: ['Pink'], Size: ['S'] }, imageUrls: ['https://i.ebayimg.com/p.jpg'], quantity: 2 },
+    ],
+    variesBy: { aspectsImageVariesBy: ['Colour'], specifications: [{ name: 'Colour', values: ['Red', 'Pink'] }, { name: 'Size', values: ['S', 'M'] }] },
+  };
+  mock.method(listingRepository, 'findByIdForUser', async () => pendingDraft(stored));
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => {
+    stored = data;
+    return { id, generated_data: data };
+  });
+
+  // One row, then a whole colour.
+  await listingService.updateDraft('listing-1', USER_ID, { variantSkusToRemove: ['1'] });
+  await listingService.updateDraft('listing-1', USER_ID, { removeAxisValues: [{ axis: 'Colour', value: 'Pink' }] });
+  assert.deepStrictEqual(stored.variants.map((v) => v.aspects.Size[0]), ['S']);
+  assert.deepStrictEqual(stored.removedVariants.map((v) => `${v.aspects.Colour[0]}/${v.aspects.Size[0]}`), ['Red/M', 'Pink/S']);
+  assert.ok(stored.removedVariants.every((v) => v.removedAt));
+  assert.deepStrictEqual(stored.variesBy.specifications.find((s) => s.name === 'Colour').values, ['Red']);
+
+  // Renaming the attribute renames the removed ones too.
+  await listingService.updateDraft('listing-1', USER_ID, { renameAxes: [{ from: 'Colour', to: 'Color' }] });
+  assert.deepStrictEqual(stored.removedVariants[1].aspects.Color, ['Pink']);
+
+  // Undo Pink: it's back, its option is listed again, and the bin keeps Red/M.
+  await listingService.updateDraft('listing-1', USER_ID, { restoreVariants: [1] });
+  const back = stored.variants.find((v) => v.aspects.Color[0] === 'Pink');
+  assert.ok(back);
+  assert.strictEqual(back.removedAt, undefined);
+  assert.strictEqual(back.quantity, 2);
+  assert.deepStrictEqual(stored.variesBy.specifications.find((s) => s.name === 'Color').values, ['Red', 'Pink']);
+  assert.deepStrictEqual(stored.removedVariants.map((v) => v.aspects.Size[0]), ['M']);
+
+  // Putting back one that's already there again doesn't double it.
+  stored = { ...stored, removedVariants: [...stored.removedVariants, { ...back, removedAt: 'x' }] };
+  await listingService.updateDraft('listing-1', USER_ID, { restoreVariants: [1] });
+  assert.strictEqual(stored.variants.filter((v) => v.aspects.Color[0] === 'Pink').length, 1);
+  assert.strictEqual(stored.removedVariants.length, 1);
+});

@@ -270,6 +270,8 @@ const updateDraftSchema = z
     // photo) so the seller edits from something rather than nothing.
     addAxisValues: z.array(z.object({ axis: z.string(), value: z.string().trim().min(1).max(50), copyFrom: z.string().optional() })).optional(),
     variantSkusToRemove: z.array(z.string()).optional(),
+    // Removed variations to put back, by their place in removedVariants.
+    restoreVariants: z.array(z.coerce.number().int().min(0)).optional(),
     // eBay's custom label: up to 50 characters, no whitespace at the ends.
     sku: z.string().trim().min(1).max(50, 'SKUs are limited to 50 characters').optional(),
     // Changing the primary category refits title/specifics/description (see
