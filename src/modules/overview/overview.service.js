@@ -15,6 +15,8 @@ const mirror = require('../ebay/ebay-mirror.repository');
 const orderRepository = require('../orders/order.repository');
 const marketplaces = require('../ebay/marketplaces');
 const moneySummary = require('./money-summary');
+const exchangeRates = require('../rates/exchange-rates');
+const listingRepository = require('../listings/listing.repository');
 const { query } = require('../../db/client');
 const logger = require('../../utils/logger');
 
@@ -46,10 +48,14 @@ async function accountFigures(connection, ownerId, { range, timeZone }) {
     ]);
     return { listings: count.totalEntries || 0, orders: inRange, credentialsChanged: count.credentialsChanged, credentials: count.credentials };
   });
+  // Listing work in the same dates, in the same time zone as the orders.
+  const [start, end] = ebayService.resolveRangeWindow(range, null, null, timeZone || marketplaces.timeZoneOf(connection.marketplace?.id || marketplaces.DEFAULT_ID));
+  const work = await listingRepository.countListingWork(connection.id, start, end);
   const orderIds = orders.map((o) => o.orderId);
   const [moneyByOrder, costs] = await Promise.all([mirror.loadOrderFinances(connection.id, orderIds), orderRepository.sourceCostsByOrder(connection.id, orderIds)]);
   return {
     activeListings: listings,
+    listings: { live: listings, drafted: work.drafted, published: work.published, waiting: work.waiting },
     money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled }),
     financesPending: !settled,
     // Linked before Liston asked eBay for its finances permission: fees and
@@ -70,7 +76,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
         return { ...base, ok: true, ...(await accountFigures(connection, ownerId, { range: effectiveRange, timeZone })) };
       } catch (err) {
         logger.warn('Overview: account could not be read', { connectionId: connection.id, error: err.message });
-        return { ...base, ok: false, error: err.message, activeListings: 0, money: null, financesPending: false, financesAccess: true };
+        return { ...base, ok: false, error: err.message, activeListings: 0, listings: null, money: null, financesPending: false, financesAccess: true };
       }
     })
   );
@@ -93,10 +99,32 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
         currency: summary.currency,
         accounts: accounts.length,
         activeListings: accounts.reduce((sum, a) => sum + a.activeListings, 0),
+        listings: ['live', 'drafted', 'published', 'waiting'].reduce(
+          (acc, key) => ({ ...acc, [key]: accounts.reduce((sum, a) => sum + (a.listings?.[key] || 0), 0) }),
+          {}
+        ),
         money: moneySummary.addUp(accounts.map((a) => a.money).filter(Boolean), summary.currency),
       };
     })
     .sort((a, b) => b.accounts - a.accounts || b.money.sales - a.money.sales);
+
+  // Every market as one figure, in the currency most accounts sell in, the
+  // others converted at the day's ECB reference rate. Without a rate there
+  // is no combined figure (the page shows each currency apart instead).
+  let combined = null;
+  if (markets.length) {
+    const base = markets[0].currency;
+    const fx = await exchangeRates.ratesFor(base, markets.map((m) => m.currency));
+    if (fx) {
+      const converted = markets.map((m) => (m.currency === base ? m.money : moneySummary.convert(m.money, fx.rates[m.currency], base)));
+      combined = {
+        money: moneySummary.addUp(converted, base),
+        // What was converted, and at what: { USD: 1.322, … } per 1 of base.
+        rates: fx.rates,
+        ratesDate: fx.date,
+      };
+    }
+  }
 
   const connectionIds = connections.map((c) => c.id);
   const { rows } = connectionIds.length
@@ -116,6 +144,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
     drafts: byStatus.pending_review || 0,
     publishedViaListon: byStatus.published || 0,
     markets,
+    combined,
     // Some accounts' fees and earnings were still being read from eBay.
     financesPending: perAccount.some((a) => a.financesPending),
     perAccount,

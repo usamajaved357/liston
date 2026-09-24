@@ -191,7 +191,23 @@ async function latestChanges(connectionId, since) {
   return new Map(result.rows.map((r) => [r.item_id, r]));
 }
 
+// An account's listing work for the Overview: drafts created and listings
+// published from Liston between two times, and drafts waiting now. Edits of
+// live listings (edit_of_item_id) aren't new listings and don't count.
+async function countListingWork(connectionId, start, end) {
+  const { rows } = await query(
+    `SELECT
+       count(*) FILTER (WHERE created_at >= $2 AND created_at < $3)::int AS drafted,
+       count(*) FILTER (WHERE status = 'published' AND updated_at >= $2 AND updated_at < $3)::int AS published,
+       count(*) FILTER (WHERE status = 'pending_review')::int AS waiting
+     FROM listings WHERE connection_id = $1 AND edit_of_item_id IS NULL`,
+    [connectionId, start, end]
+  );
+  return rows[0] || { drafted: 0, published: 0, waiting: 0 };
+}
+
 module.exports = {
+  countListingWork,
   latestChanges,
   findPublishedDataByItemIds,
   recordListingChange,

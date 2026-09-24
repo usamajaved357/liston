@@ -77,4 +77,16 @@ function addUp(summaries, currency) {
   return { currency, ...total, margin: marginOf(total.profit, total.settledSales) };
 }
 
-module.exports = { summarise, addUp };
+const MONEY_KEYS = ['sales', 'fees', 'adFees', 'refunds', 'earnings', 'sourceCost', 'profit', 'settledSales'];
+
+/**
+ * A summary's money in another currency: `rate` is how many of the
+ * summary's currency one unit of `currency` buys (1 GBP = 1.322 USD), so
+ * each amount is divided by it. Counts and the margin (a ratio) don't change.
+ */
+function convert(summary, rate, currency) {
+  const converted = Object.fromEntries(MONEY_KEYS.map((k) => [k, round((summary[k] || 0) / rate)]));
+  return { ...summary, ...converted, currency };
+}
+
+module.exports = { summarise, addUp, convert };

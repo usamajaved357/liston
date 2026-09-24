@@ -88,3 +88,16 @@ test('order money rows are stored per order, updated in place, and read back wit
   assert.deepStrictEqual(costs.get('O-1'), { value: 3.75, currency: 'GBP' });
   assert.strictEqual(costs.has('O-2'), false);
 });
+
+test('an account\'s listing work counts drafts made and listings published in the dates, and drafts waiting now', async () => {
+  const connectionId = await fixtureConnection();
+  const listingRepository = require('../../src/modules/listings/listing.repository');
+  const add = (status, createdAt, updatedAt, editOf = null) =>
+    pool.query(`INSERT INTO listings (connection_id, status, created_at, updated_at, edit_of_item_id) VALUES ($1, $2, $3, $4, $5)`, [connectionId, status, createdAt, updatedAt, editOf]);
+  await add('pending_review', '2026-09-10T10:00:00Z', '2026-09-10T10:00:00Z'); // drafted in range, waiting
+  await add('published', '2026-09-05T10:00:00Z', '2026-09-12T10:00:00Z'); // drafted and published in range
+  await add('published', '2026-08-01T10:00:00Z', '2026-08-02T10:00:00Z'); // both before the range
+  await add('pending_review', '2026-09-11T10:00:00Z', '2026-09-11T10:00:00Z', '406000000001'); // an edit of a live listing: not new
+  const work = await listingRepository.countListingWork(connectionId, new Date('2026-09-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
+  assert.deepStrictEqual(work, { drafted: 2, published: 1, waiting: 1 });
+});

@@ -7,8 +7,9 @@ import { api, ApiError, Overview, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { MetricCards, MetricTabs, Metric } from "@/components/overview/OverviewMoney";
+import { ListingCards, MetricCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
 import { cacheUser, useCachedUser } from "@/lib/session";
+import { currencySymbol } from "@/lib/format";
 import { ebayConnectError } from "@/lib/connect-errors";
 
 // The business Overview: the money across every connected account for a
@@ -55,7 +56,7 @@ export default function DashboardPage() {
   const [liveUser, setUser] = useState<User | null>(null);
   const user = liveUser ?? cachedUser;
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [range, setRange] = useState("30d");
+  const [range, setRange] = useState("today");
   // "all", or one eBay site (EBAY_GB…): the busiest one until the viewer picks.
   const [market, setMarket] = useState<string | null>(null);
   const [metric, setMetric] = useState<Metric>("sales");
@@ -96,7 +97,7 @@ export default function DashboardPage() {
         }
         setUser(user);
         cacheUser(user);
-        return loadOverview("30d");
+        return loadOverview("today");
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
@@ -167,9 +168,30 @@ export default function DashboardPage() {
   const current = market ?? (markets.length > 1 ? markets[0].id : "all");
   const inView = current === "all" ? markets : markets.filter((m) => m.id === current);
   const accounts = (o?.perAccount ?? []).filter((a) => current === "all" || (a.marketplace?.id ?? "EBAY_GB") === current);
-  const needReconnect = accounts.filter((a) => a.ok && !a.financesAccess);
+  // Only the money tabs lean on eBay's finances.
+  const needReconnect = metric === "listings" ? [] : accounts.filter((a) => a.ok && !a.financesAccess);
   const failedHere = accounts.filter((a) => !a.ok);
-  const listed = inView.reduce((sum, m) => sum + m.activeListings, 0);
+  // Money in view: one market's own figures, or every market as one figure
+  // converted into the main currency (each currency apart if no rate).
+  const combined = current === "all" && markets.length > 1 ? o?.combined ?? null : null;
+  const moneyInView = combined ? [combined.money] : inView.map((m) => m.money);
+  const others = markets.filter((m) => combined && m.currency !== combined.money.currency).map((m) => m.label);
+  const listed = others.length > 1 ? `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}` : others[0];
+  const converted = combined
+    ? `${listed} figures converted to ${currencySymbol(combined.money.currency)} at the European Central Bank rate${
+        combined.ratesDate ? ` of ${new Date(combined.ratesDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""
+      }: ${Object.entries(combined.rates)
+        .map(([code, rate]) => `${formatAmount(1, combined.money.currency).replace(/\.00$/, "")} = ${formatAmount(rate, code)}`)
+        .join(" · ")}. Pick a market for its exact figures.`
+    : null;
+
+  // The markets in view's listing work, added up (counts, not money).
+  const listingWork = inView.length
+    ? inView.reduce(
+        (sum, m) => ({ live: sum.live + m.listings.live, waiting: sum.waiting + m.listings.waiting, drafted: sum.drafted + m.listings.drafted, published: sum.published + m.listings.published }),
+        { live: 0, waiting: 0, drafted: 0, published: 0 }
+      )
+    : null;
   // One name per account, its markets after it ("Minsu LTD (UK, AU)") when
   // every market is in view: one reconnect covers all of them.
   const names = (list: typeof accounts) => {
@@ -234,7 +256,7 @@ export default function DashboardPage() {
           </div>
           <MetricTabs metric={metric} onMetric={setMetric} />
           <div className="mt-5">
-            <MetricCards metric={metric} summaries={[]} loading />
+            {metric === "listings" ? <ListingCards work={null} loading /> : <MetricCards metric={metric} summaries={[]} loading />}
           </div>
         </>
       ) : o.accounts.total === 0 ? (
@@ -299,13 +321,16 @@ export default function DashboardPage() {
 
           <MetricTabs metric={metric} onMetric={setMetric} />
           <div className="mt-5">
-            <MetricCards metric={metric} summaries={inView.map((m) => m.money)} />
+            {metric === "listings" ? <ListingCards work={listingWork} /> : <MetricCards metric={metric} summaries={moneyInView} />}
           </div>
+          {converted && metric !== "listings" && (
+            <p className="mt-3 text-[12px] text-[var(--color-muted)]">{converted}</p>
+          )}
 
           {/* The one thing to know about what the figures leave out. */}
-          {(needReconnect.length > 0 || failedHere.length > 0 || o.financesPending) && (
+          {(needReconnect.length > 0 || failedHere.length > 0 || (o.financesPending && metric !== "listings")) && (
             <div className="mt-5 rounded-xl border border-[#fde68a] bg-[var(--color-warning-soft)] px-4 py-3 text-[13px] text-[#92400e]">
-              {o.financesPending && <p>Reading fees and earnings from eBay. The figures update by themselves.</p>}
+              {o.financesPending && metric !== "listings" && <p>Reading fees and earnings from eBay. The figures update by themselves.</p>}
               {needReconnect.length > 0 && (
                 <p>
                   {accountCount(needReconnect) === 1
@@ -327,11 +352,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          <p className="mt-6 text-[13px] text-[var(--color-muted)]">
-            <span className="font-medium text-[var(--color-ink)]">{listed.toLocaleString("en-GB")}</span> live listings ·{" "}
-            <span className="font-medium text-[var(--color-ink)]">{o.drafts}</span> drafts waiting ·{" "}
-            <span className="font-medium text-[var(--color-ink)]">{o.publishedViaListon}</span> published with Liston
-          </p>
         </>
       )}
 

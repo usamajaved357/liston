@@ -79,6 +79,15 @@ export interface MoneySummary {
   margin: number | null;
 }
 
+// Listing work for the Overview: live on eBay now, drafts waiting now, and
+// drafts created / listings published from Liston in the chosen dates.
+export interface ListingWork {
+  live: number;
+  waiting: number;
+  drafted: number;
+  published: number;
+}
+
 export interface OverviewAccount {
   id: string;
   label: string;
@@ -87,6 +96,7 @@ export interface OverviewAccount {
   ok: boolean;
   error?: string;
   activeListings: number;
+  listings: ListingWork | null;
   money: MoneySummary | null;
   financesPending: boolean;
   // False: linked before Liston asked eBay for its finances permission, so
@@ -102,6 +112,7 @@ export interface OverviewMarket {
   currency: string;
   accounts: number;
   activeListings: number;
+  listings: ListingWork;
   money: MoneySummary;
 }
 
@@ -114,6 +125,10 @@ export interface Overview {
   publishedViaListon: number;
   // Busiest first; each in its own currency.
   markets: OverviewMarket[];
+  // Every market as one figure in the busiest market's currency, the others
+  // converted at the day's ECB rate (rates: how many of each currency 1 of
+  // it buys). Null when no rate could be had.
+  combined: { money: MoneySummary; rates: Record<string, number>; ratesDate: string | null } | null;
   // Some accounts' fees and earnings were still being read from eBay.
   financesPending: boolean;
   perAccount: OverviewAccount[];
