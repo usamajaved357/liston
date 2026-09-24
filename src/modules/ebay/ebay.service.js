@@ -736,12 +736,52 @@ async function reviseLiveListing(credentials, itemId, payload) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// Where a listing another tool made through the Inventory API lives, from
+// its SKUs: a variation's group (the inventory item names it in groupIds),
+// or a single listing's SKU. Null when eBay has no inventory item for them.
+async function inventoryRefForSkus(credentials, { skus, isVariation }) {
+  const { accessToken } = await ensureValidAccessToken(credentials);
+  const first = (skus || []).find(Boolean);
+  if (!first) return null;
+  const item = await ebayClient.getInventoryItem(accessToken, first).catch(() => null);
+  if (!item) return null;
+  if (!isVariation) return { sku: first };
+  const groupKey = (item.groupIds || [])[0];
+  return groupKey ? { groupKey } : null;
+}
+
+// Puts an ended listing back on eBay (a new item number) with the edit's
+// fields; the ended one leaves the Inactive mirror.
+async function relistLiveListing(credentials, connectionId, itemId, payload) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.relistListing(accessToken, itemId, payload, { siteId });
+  removeListingFromMirror(connectionId, itemId);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
 // A listing Liston published through the Inventory API can't be revised
 // through the Trading API — eBay answers "Inventory-based listing
 // management is not currently supported by this tool". Such a listing is
 // revised the way it was made: the inventory item(s), the offer(s) and (for
 // variations) the group are replaced, then the offer/group is published
 // again, which pushes the changes to the live item.
+// eBay's refusal to put up a listing identical to one this seller already
+// has live ("…an item you already have on eBay: <title> (<item id>)…").
+// Returns the live item's number, or null when it isn't that refusal.
+function duplicateListingOf(err) {
+  const texts = [err?.message, ...((err?.details || []).map((e) => e.LongMessage || e.ShortMessage))].filter(Boolean).join(' ');
+  if (!/identical items from the same seller|already have on eBay/i.test(texts)) return null;
+  const m = texts.match(/\((\d{9,15})\)/);
+  return m ? m[1] : '';
+}
+
+// eBay's refusal to revise a listing that has already ended ("You are not
+// allowed to revise ended listings", error 291).
+function isEndedListingError(err) {
+  const codes = (err?.details || []).map((e) => String(e.ErrorCode ?? ''));
+  return codes.includes('291') || /revise ended|listing (has )?ended|auction (has )?ended/i.test(err?.message || '');
+}
+
 function isInventoryManagedError(err) {
   return /Inventory-based listing management/i.test(err?.message || '');
 }
@@ -2213,6 +2253,10 @@ module.exports = {
   isInventoryManagedError,
   conditionIdFor,
   listListingsDetailed,
+  relistLiveListing,
+  inventoryRefForSkus,
+  duplicateListingOf,
+  isEndedListingError,
   lastSalesByItem,
   invalidateListings,
   removeListingFromMirror,

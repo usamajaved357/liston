@@ -1148,9 +1148,24 @@ function draftFromLiveItem(item, marketplaceId) {
   };
 }
 
-async function startLiveEdit(connectionId, userId, itemId) {
+// `fromInactive`: opened from the Inactive tab, i.e. to relist it.
+async function startLiveEdit(connectionId, userId, itemId, { fromInactive = false } = {}) {
   const existing = await listingRepository.findLiveEdit(connectionId, userId, itemId);
-  if (existing) return existing;
+  if (existing) {
+    // An unfinished edit is resumed, but whether the listing is still live
+    // is read again when it's unknown (a copy from before Liston recorded
+    // it) or when it's opened to relist and not yet marked ended — so a
+    // stale copy never opens an ended listing as live (1 GetItem).
+    const known = existing.source_data && 'liveStatus' in existing.source_data;
+    if (known && !(fromInactive && !existing.source_data.ended)) return existing;
+    return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials) => {
+      const item = await ebayService.getLiveItem(credentials, itemId);
+      const ended = Boolean(item.listingStatus && item.listingStatus !== 'Active');
+      const { ended: _was, ...rest } = existing.source_data || {};
+      const sourceData = { ...rest, liveStatus: item.listingStatus || null, ...(ended ? { ended: true } : {}) };
+      return listingRepository.updateSourceData(existing.id, sourceData);
+    });
+  }
 
   return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
     const item = await ebayService.getLiveItem(credentials, itemId);
@@ -1174,8 +1189,16 @@ async function startLiveEdit(connectionId, userId, itemId) {
     }
 
     // The listing as it was, so publishing the edit can record what changed
-    // (for its before/after figures in Analytics).
-    return listingRepository.createLiveEdit({ connectionId, itemId, sku: item.sku, generatedData: draft, sourceData: { liveOriginal: editSnapshot(draft) } });
+    // (for its before/after figures in Analytics). An ended listing is
+    // marked: publishing it relists it rather than revising.
+    const ended = Boolean(item.listingStatus && item.listingStatus !== 'Active');
+    return listingRepository.createLiveEdit({
+      connectionId,
+      itemId,
+      sku: item.sku,
+      generatedData: draft,
+      sourceData: { liveOriginal: editSnapshot(draft), liveStatus: item.listingStatus || null, ...(ended ? { ended: true } : {}) },
+    });
   });
 }
 
@@ -1259,8 +1282,15 @@ async function pageOfListings(credentials, { connectionId, status, search, sort,
 async function publishLiveEdit(listing, userId) {
   const draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  // An ended listing can't be revised (eBay refuses any change to it); it
+  // is relisted instead, with the edit's fields, as a new item.
+  let relist = Boolean(listing.source_data?.ended);
   const imageCheck = imageGates.checkDraftImages(draft);
   if (!imageCheck.ok) throw new ListingError(imageCheck.errors.join(' '), 400);
+  if (relist) {
+    const stock = isVariation ? draft.variants.reduce((sum, v) => sum + (Number(v.quantity) || 0), 0) : Number(draft.quantity) || 0;
+    if (stock <= 0) throw new ListingError('Set the quantity above 0 before relisting: eBay won’t relist a listing with no stock.', 400);
+  }
 
   const html = await renderDraftDescription(listing, userId);
   // Same readiness rules as a new publish (no axis in the shared set,
@@ -1319,14 +1349,42 @@ async function publishLiveEdit(listing, userId) {
     });
   const revised = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
     if (inventoryRef) return reviseViaInventory(credentials, inventoryRef);
+    return reviseOrRelist(credentials);
+  }).catch((err) => {
+    // eBay won't have two identical listings from one seller live at once:
+    // say which one is live and what to do, not eBay's paragraph.
+    const liveId = relist ? ebayService.duplicateListingOf(err) : null;
+    if (liveId === null) throw err;
+    throw new ListingError(
+      `eBay won't relist this: the same item is already live on this account${liveId ? ` as #${liveId}` : ''}. Add stock or variations to that listing instead, or end it first and relist this one.`,
+      409
+    );
+  });
+  async function reviseOrRelist(credentials) {
     try {
-      return await ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload);
+      if (relist) return await ebayService.relistLiveListing(credentials, listing.connection_id, listing.edit_of_item_id, payload);
+      try {
+        return await ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload);
+      } catch (err) {
+        // It ended after the edit was opened: put it back instead.
+        if (!ebayService.isEndedListingError(err)) throw err;
+        relist = true;
+        return await ebayService.relistLiveListing(credentials, listing.connection_id, listing.edit_of_item_id, payload);
+      }
     } catch (err) {
-      const guessed = ebayService.isInventoryManagedError(err) ? guessInventoryRef(readied.draft, listing) : null;
+      // Liston's SKU scheme gives the inventory objects away; failing that
+      // (another tool's SKUs), eBay's inventory item says which group.
+      let guessed = ebayService.isInventoryManagedError(err) ? guessInventoryRef(readied.draft, listing) : null;
+      if (!guessed && ebayService.isInventoryManagedError(err)) {
+        const skus = isVariation ? readied.draft.variants.map((v) => v.sku) : [readied.draft.sku || listing.sku];
+        guessed = await ebayService.inventoryRefForSkus(credentials, { skus, isVariation }).catch(() => null);
+      }
       if (!guessed) {
         if (ebayService.isInventoryManagedError(err)) {
           throw new ListingError(
-            "This listing was created through eBay's Inventory API by another tool, and eBay only lets that tool revise it. Edit it there, or end it and relist it from Liston.",
+            relist
+              ? "This listing was created through eBay's Inventory API by another tool, and eBay only lets that tool relist it. Relist it there, or draft it again in Liston."
+              : "This listing was created through eBay's Inventory API by another tool, and eBay only lets that tool revise it. Edit it there, or end it and relist it from Liston.",
             400
           );
         }
@@ -1334,8 +1392,9 @@ async function publishLiveEdit(listing, userId) {
       }
       return reviseViaInventory(credentials, guessed);
     }
-  });
+  }
   resyncListings(listing.connection_id, userId);
+  if (relist) return finishRelist(listing, draft, own, revised);
   // What changed, for the listing's before/after figures in Analytics. A
   // failure to record never fails the edit itself.
   const changed = editDifferences(listing.source_data?.liveOriginal, editSnapshot(draft));
@@ -1361,6 +1420,23 @@ async function publishLiveEdit(listing, userId) {
   // refused to replace, for one). The seller must hear that, or they trust
   // a preview that never went live.
   return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, warnings: revised.warnings || [] };
+}
+
+// After a relist: eBay's new item number (from the Trading relist, or the
+// Inventory publish for a listing Liston made) becomes the one Liston's
+// record points at, the ended one leaves the Inactive tab, and the working
+// copy goes. A relist is a new listing, so no before/after is recorded.
+async function finishRelist(listing, draft, own, revised) {
+  const newItemId = String(revised.relistedFrom ? revised.itemId : revised.listingId || listing.edit_of_item_id);
+  ebayService.removeListingFromMirror(listing.connection_id, listing.edit_of_item_id);
+  if (own) {
+    const { liveItemId, ...edited } = draft;
+    await listingRepository.updateGeneratedData(own.id, { ...(own.generated_data || {}), ...edited }).catch(() => {});
+    if (newItemId !== String(listing.edit_of_item_id)) await listingRepository.setExternalProductId(own.id, newItemId).catch(() => {});
+  }
+  await listingRepository.deleteById(listing.id);
+  logger.info('Ended listing relisted', { connectionId: listing.connection_id, from: listing.edit_of_item_id, to: newItemId });
+  return { ...listing, status: 'published', external_product_id: newItemId, relisted: true, relistedFrom: String(listing.edit_of_item_id), deleted: true, warnings: revised.warnings || [] };
 }
 
 // Where on eBay's Inventory system a Liston-published listing lives, from

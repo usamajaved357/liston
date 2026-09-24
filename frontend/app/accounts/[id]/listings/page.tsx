@@ -77,6 +77,7 @@ const ChartIcon = (
 function ListingRow({
   item,
   onEdit,
+  relist,
   editing,
   onDelete,
   onEnd,
@@ -84,6 +85,7 @@ function ListingRow({
 }: {
   item: Listing;
   onEdit: () => void;
+  relist?: boolean; // an ended listing: opens it to relist
   editing: boolean;
   onDelete?: () => void;
   onEnd?: () => void;
@@ -149,7 +151,7 @@ function ListingRow({
         disabled={editing}
         className="btn flex-shrink-0 !h-7 !px-3 !text-[12px] bg-[var(--color-primary-soft)] font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white"
       >
-        {editing ? "Opening…" : "Edit"}
+        {editing ? "Opening…" : relist ? "Relist" : "Edit"}
       </button>
       {onEnd && (
         <button
@@ -244,6 +246,8 @@ export default function AccountListingsPage() {
   const updatedItemId = searchParams.get("updated");
   const updateWarning = searchParams.get("warning");
   const endedItemId = searchParams.get("ended");
+  const relistedItemId = searchParams.get("relisted");
+  const relistedFrom = searchParams.get("from");
   const [filter, setFilter] = useState<Tab>(urlFilter === "draft" || urlFilter === "inactive" ? urlFilter : "active");
   // ?q= opens the tab already searched (the analytics panel's "Open in
   // Listings" passes the item number).
@@ -363,7 +367,7 @@ export default function AccountListingsPage() {
     setEditingItemId(itemId);
     setError(null);
     try {
-      const { listing } = await api.startLiveEdit(connection.id, itemId);
+      const { listing } = await api.startLiveEdit(connection.id, itemId, { inactive: filter === "inactive" });
       router.push(`/accounts/${connection.id}/listings/draft/${listing.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't open this listing for editing. Try again.");
@@ -545,6 +549,15 @@ export default function AccountListingsPage() {
           <span className="flex-1">Listing #{endedItemId} has been ended on eBay. It now sits under Inactive.</span>
         </div>
       )}
+      {relistedItemId && (
+        <div className={`notice ${updateWarning ? "notice-warning" : "notice-success"} mb-4`}>
+          <span className="flex-1">
+            Relisted on eBay as #{relistedItemId}
+            {relistedFrom ? ` (was #${relistedFrom})` : ""}. It can take a minute to show under Active.
+            {updateWarning ? ` eBay noted: ${updateWarning}` : ""}
+          </span>
+        </div>
+      )}
       {updatedItemId && !updateWarning && (
         <div className="notice notice-success mb-4">
           <span className="flex-1">Listing #{updatedItemId} has been updated on eBay. It can take a minute to show here.</span>
@@ -593,6 +606,7 @@ export default function AccountListingsPage() {
                 onAnalytics={filter === "active" && canSeeAnalytics ? () => setAnalyticsItem(item.itemId) : undefined}
                 editing={editingItemId === item.itemId}
                 onEdit={() => openLiveEdit(item.itemId)}
+                relist={filter === "inactive"}
                 onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
                 onEnd={filter === "active" ? () => setItemToEnd(item) : undefined}
               />
@@ -614,7 +628,7 @@ export default function AccountListingsPage() {
       <ConfirmDialog
         open={itemToEnd !== null}
         title="End this listing on eBay?"
-        description={`"${itemToEnd?.title || ""}" comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it; you can relist it from eBay later.`}
+        description={`"${itemToEnd?.title || ""}" comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it; you can relist it from the Inactive tab later.`}
         confirmLabel="End listing"
         danger
         loading={endingItem}

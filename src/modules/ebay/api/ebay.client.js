@@ -181,6 +181,10 @@ function createOffer(accessToken, offer) {
 
 // The unpublished/published offers already on a SKU (eBay allows one per
 // marketplace). Used to recover from "offer already exists" on a retry.
+function getInventoryItem(accessToken, sku) {
+  return request(accessToken, 'GET', `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`);
+}
+
 function getInventoryItemGroup(accessToken, groupKey) {
   return request(accessToken, 'GET', `/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
 }
@@ -269,6 +273,7 @@ module.exports = {
   createOrReplaceInventoryItem,
   createOrReplaceInventoryItemGroup,
   getInventoryItemGroup,
+  getInventoryItem,
   createOffer,
   getOffersBySku,
   getOffer,

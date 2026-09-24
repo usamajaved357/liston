@@ -78,7 +78,8 @@ async function startLiveEdit(req, res, next) {
     if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
       return res.status(400).json({ error: 'That does not look like an eBay item number.' });
     }
-    const listing = await listingService.startLiveEdit(req.params.id, req.ownerId, String(req.params.itemId));
+    const fromInactive = req.query.inactive === '1' || req.body?.inactive === true;
+    const listing = await listingService.startLiveEdit(req.params.id, req.ownerId, String(req.params.itemId), { fromInactive });
     res.status(200).json({ listing });
   } catch (err) {
     next(err);

@@ -118,6 +118,18 @@ async function updateGeneratedData(id, generatedData) {
 }
 
 // Recorded only once publish has actually created the objects on eBay.
+/** A working copy's notes (the live snapshot, whether the listing had ended). */
+async function updateSourceData(id, sourceData) {
+  const result = await query('UPDATE listings SET source_data = $1, updated_at = now() WHERE id = $2 RETURNING *', [sourceData, id]);
+  return result.rows[0];
+}
+
+/** A published listing now lives under a new eBay item number (after a relist). */
+async function setExternalProductId(id, itemId) {
+  const result = await query('UPDATE listings SET external_product_id = $1, updated_at = now() WHERE id = $2 RETURNING *', [String(itemId), id]);
+  return result.rows[0];
+}
+
 async function setPlatformIds(id, { platformOfferId, platformGroupKey }) {
   const result = await query(
     `UPDATE listings
@@ -197,5 +209,7 @@ module.exports = {
   updateStatus,
   updateGeneratedData,
   setPlatformIds,
+  setExternalProductId,
+  updateSourceData,
   deleteDraft,
 };

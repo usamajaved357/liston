@@ -1593,6 +1593,9 @@ export default function DraftEditorPage() {
   // A live listing opened for editing: only two ways out, discard or push
   // the changes to eBay. No draft is kept either way.
   const isLiveEdit = Boolean(listing?.edit_of_item_id);
+  // An ended listing opened from Inactive: publishing puts it back on eBay
+  // (a relist, new item number), and it can go back up unchanged.
+  const isRelist = isLiveEdit && Boolean(listing?.source_data?.ended);
 
   // The category schema in force, for resetFrom to merge unfilled rows in.
   // A ref, kept in step wherever categoryInfo is set, so a save (which also
@@ -2081,6 +2084,11 @@ export default function DraftEditorPage() {
         resetFrom(saved.listing);
       }
       const data = await api.publishDraftListing(listing.id);
+      if (data.listing.relisted) {
+        const warning = data.warnings?.length ? `&warning=${encodeURIComponent(data.warnings.join(" "))}` : "";
+        router.push(`/accounts/${params.id}/listings?relisted=${data.listing.external_product_id}&from=${data.listing.relistedFrom}${warning}`);
+        return;
+      }
       if (isLiveEdit) {
         // eBay may have applied only part of the revision; say so on the way out.
         const warning = data.warnings?.length ? `&warning=${encodeURIComponent(data.warnings.join(" "))}` : "";
@@ -2125,7 +2133,7 @@ export default function DraftEditorPage() {
     setDeleting(true);
     try {
       await api.deleteDraftListing(listing.id);
-      router.push(`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`);
+      router.push(`/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't delete this draft.");
       setDeleting(false);
@@ -2484,9 +2492,9 @@ export default function DraftEditorPage() {
   return (
     <main className="flex h-screen flex-col bg-[var(--color-paper)]">
       <EditorHeader
-        backHref={`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`}
+        backHref={`/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`}
         backLabel={isLiveEdit ? "Back to listings" : "Back to drafts"}
-        title={isLiveEdit ? "Edit live listing" : editable ? "Edit listing" : "Listing"}
+        title={isRelist ? "Relist listing" : isLiveEdit ? "Edit live listing" : editable ? "Edit listing" : "Listing"}
         chips={
           notes.length > 0 ? (
             <button
@@ -2508,8 +2516,8 @@ export default function DraftEditorPage() {
         }
         actions={
           isLiveEdit ? (
-            <span className="chip font-medium" title="eBay item number">
-              Live · #{listing.edit_of_item_id}
+            <span className="chip font-medium" title={isRelist ? "The ended eBay item; relisting gives it a new number" : "eBay item number"}>
+              {isRelist ? "Ended" : "Live"} · #{listing.edit_of_item_id}
             </span>
           ) : editable ? (
             <span className="chip text-xs font-medium text-[var(--color-muted)]" aria-live="polite">
@@ -3084,9 +3092,9 @@ export default function DraftEditorPage() {
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
                 {Icon.trash}
-                <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
+                <span>{isRelist ? "Cancel" : isLiveEdit ? "Discard changes" : "Delete draft"}</span>
               </button>
-              {isLiveEdit && (
+              {isLiveEdit && !isRelist && (
                 <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now">
                   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                     <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
@@ -3097,7 +3105,20 @@ export default function DraftEditorPage() {
               )}
             </div>
             <div className="flex items-center gap-3">
-              {isLiveEdit ? (
+              {isRelist ? (
+                <>
+                  <span className="text-xs text-[var(--color-muted)]">{dirty ? "Relisted with your changes" : "Change anything first, or relist it as it was"}</span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPublish(true)}
+                    disabled={!editable || busy || title.length > TITLE_MAX}
+                    title={title.length > TITLE_MAX ? "Shorten the title first" : undefined}
+                    className="btn btn-primary"
+                  >
+                    {publishing ? "Relisting…" : "Relist on eBay"}
+                  </button>
+                </>
+              ) : isLiveEdit ? (
                 <>
                   {dirty && <span className="text-xs text-[var(--color-muted)]">Changes go live on eBay when you publish</span>}
                   <button
@@ -3166,13 +3187,15 @@ export default function DraftEditorPage() {
       )}
       <ConfirmDialog
         open={confirmPublish}
-        title={isLiveEdit ? "Publish these changes?" : "Publish this listing?"}
+        title={isRelist ? "Relist this on eBay?" : isLiveEdit ? "Publish these changes?" : "Publish this listing?"}
         description={
-          isLiveEdit
+          isRelist
+            ? "It goes back on sale on eBay now as a new listing with a new item number. eBay charges its usual listing fees, if any. The ended listing stays ended."
+            : isLiveEdit
             ? "The live eBay listing is updated in place. Buyers see the new title, photos, price, stock and description straight away."
             : `It goes live on eBay immediately${variation ? `, with ${variation.variants.length} variations` : ""}. Publishing creates the listing on eBay now, so this can take a minute or two for large variation sets.`
         }
-        confirmLabel={isLiveEdit ? "Publish changes" : "Publish"}
+        confirmLabel={isRelist ? "Relist" : isLiveEdit ? "Publish changes" : "Publish"}
         loading={publishing}
         onCancel={() => setConfirmPublish(false)}
         onConfirm={handlePublish}
@@ -3180,7 +3203,7 @@ export default function DraftEditorPage() {
       <ConfirmDialog
         open={confirmEnd}
         title="End this listing on eBay?"
-        description="It comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it, and the changes you were making here are dropped. You can relist it from eBay later."
+        description="It comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it, and the changes you were making here are dropped. You can relist it from the Inactive tab later."
         confirmLabel="End listing"
         danger
         loading={ending}

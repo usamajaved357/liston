@@ -211,3 +211,34 @@ test('reviseListing with only the business-policies notice returns no warnings',
   const result = await ebayTrading.reviseListing('token', '407219072490', { title: 'T' });
   assert.deepStrictEqual(result.warnings, []);
 });
+
+test('relistListing sends the edit to RelistFixedPriceItem and returns eBay\'s new item number', async () => {
+  let body;
+  mock.method(global, 'fetch', async (url, init) => {
+    body = init.body;
+    return fakeResponse(`<?xml version="1.0"?>
+      <RelistFixedPriceItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+        <Ack>Success</Ack>
+        <ItemID>407999999999</ItemID>
+      </RelistFixedPriceItemResponse>`);
+  });
+  const result = await ebayTrading.relistListing('token', '407000000001', { title: 'Back again', price: { amount: 6.99, currency: 'GBP' }, quantity: 3 });
+  assert.match(body, /<RelistFixedPriceItemRequest/);
+  assert.match(body, /<ItemID>407000000001<\/ItemID><Title>Back again<\/Title>/);
+  assert.match(body, /<Quantity>3<\/Quantity>/);
+  assert.deepStrictEqual(result, { itemId: '407999999999', relistedFrom: '407000000001', warnings: [] });
+});
+
+test("eBay's refusal is shown to the seller, not hidden as an internal error", async () => {
+  mock.method(global, 'fetch', async () =>
+    fakeResponse(`<?xml version="1.0"?>
+      <RelistFixedPriceItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+        <Ack>Failure</Ack>
+        <Errors><ErrorCode>21919067</ErrorCode><LongMessage>It looks like this listing is for an item you already have on eBay: Case (800680929541).</LongMessage></Errors>
+      </RelistFixedPriceItemResponse>`)
+  );
+  await assert.rejects(
+    () => ebayTrading.relistListing('token', '800539509961', { title: 'Case' }),
+    (err) => err.expose === true && /already have on eBay/.test(err.message)
+  );
+});

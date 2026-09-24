@@ -885,6 +885,8 @@ export interface DraftListing {
   updated_at: string;
   // Set when this row is a live listing opened for editing (never a draft).
   edit_of_item_id?: string | null;
+  // `ended`: the listing had ended when opened, so publishing relists it.
+  source_data?: { ended?: boolean } | null;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
@@ -1401,8 +1403,9 @@ export const api = {
     request<{ itemId: string; endTime: string | null; warnings: string[] }>(`/api/connections/${connectionId}/listings/${itemId}/end`, { method: "POST" }),
 
   // Opens a live eBay listing in the editor; returns the transient working copy.
-  startLiveEdit: (connectionId: string, itemId: string) =>
-    request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit`, { method: "POST" }),
+  // `inactive`: opened from the Inactive tab to relist it.
+  startLiveEdit: (connectionId: string, itemId: string, { inactive = false }: { inactive?: boolean } = {}) =>
+    request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit${inactive ? "?inactive=1" : ""}`, { method: "POST" }),
 
   listDraftListings: (connectionId: string) =>
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
@@ -1436,7 +1439,7 @@ export const api = {
     request<StoreCategoriesResponse>(`/api/connections/${connectionId}/store-categories`, { method: "POST", body: JSON.stringify(input) }),
 
   publishDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; warnings?: string[] }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
+    request<{ listing: DraftListing & { relisted?: boolean; relistedFrom?: string }; warnings?: string[] }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
 
   // A draft lives only in Liston until Publish, so every edit below is a
   // plain update — nothing touches eBay until the seller decides to go live.
