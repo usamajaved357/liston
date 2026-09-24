@@ -4,6 +4,7 @@ const ebayOauth = require('../ebay/api/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
+const ebayPush = require('../ebay/ebay-push');
 const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const descriptionTemplate = require('../listings/description-template');
 const listingService = require('../listings/listing.service');
@@ -94,6 +95,31 @@ async function getOne(req, res, next) {
       userId: req.userId,
     });
     res.status(200).json({ connection });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// The eBay sites this account sells on, and which connection holds each.
+async function listSites(req, res, next) {
+  try {
+    const sites = await connectionService.ebaySites(req.ownerId, req.params.id, ebayService);
+    res.status(200).json({ sites });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const addSiteSchema = z.object({ marketplaceId: z.enum(marketplaces.MARKETPLACES.map((m) => m.id)) });
+
+// Another site of this account, as its own connection (no eBay sign-in).
+async function addSite(req, res, next) {
+  try {
+    const parsed = addSiteSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Pick an eBay site Liston sells on.' });
+    const connection = await connectionService.addEbaySite(req.ownerId, req.params.id, parsed.data.marketplaceId, ebayService);
+    ebayPush.subscribeInBackground(connection.id, req.ownerId);
+    res.status(201).json({ connection: await connectionService.getConnectionSummary(connection.id, req.ownerId) });
   } catch (err) {
     next(err);
   }
@@ -263,7 +289,7 @@ async function getEarnings(req, res, next) {
       return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to, push: ebayService.pushEnabled(connection) });
     });
 
-    res.status(200).json({ earnings: result.earnings, orderCount: result.orderCount, truncated: result.truncated });
+    res.status(200).json({ earnings: result.earnings, otherEarnings: result.otherEarnings, orderCount: result.orderCount, truncated: result.truncated });
   } catch (err) {
     next(err);
   }
@@ -655,6 +681,8 @@ module.exports = {
   remove,
   startEbayAuth,
   reauthorizeEbay,
+  listSites,
+  addSite,
   getListings,
   getOrders,
   getEarnings,

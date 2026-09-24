@@ -126,3 +126,38 @@ test('an account linked on two sites shows each connection only its own site\'s 
   const count = await ebayService.countActiveListings(credentials(), 'mkt-uk');
   assert.strictEqual(count.totalEntries, 2);
 });
+
+test('amounts in different currencies are totalled apart, never added', () => {
+  const money = require('../../src/utils/money');
+  const split = money.splitByCurrency([{ amount: 10, currency: 'GBP' }, { amount: 191.19, currency: 'AUD' }, { amount: 5.5, currency: 'GBP' }, null], 'GBP');
+  assert.deepStrictEqual(split, { main: { amount: 15.5, currency: 'GBP' }, others: [{ amount: 191.19, currency: 'AUD' }] });
+  assert.deepStrictEqual(money.splitByCurrency([], 'AUD'), { main: { amount: 0, currency: 'AUD' }, others: [] });
+});
+
+test('earnings are in the account\'s own currency, with other sites\' sales beside them', async () => {
+  mock.method(connectionRepository, 'findMarketScope', async () => ({ own: 'EBAY_GB', claimed: [] }));
+  mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [order('UK-1', { site: 'UK' }), order('AU-1', { site: 'Australia', currency: 'AUD' }), order('AU-2', { site: 'Australia', currency: 'AUD' })],
+    totalEntries: 3,
+    totalPages: 1,
+  }));
+  const result = await ebayService.getEarningsSummary(credentials(), { connectionId: 'earn-uk', range: '7d' });
+  assert.deepStrictEqual(result.earnings, { amount: 10, currency: 'GBP' });
+  assert.deepStrictEqual(result.otherEarnings, [{ amount: 20, currency: 'AUD' }]);
+  assert.strictEqual(result.orderCount, 3);
+});
+
+test('an account\'s sites are counted from everything eBay sent, whatever the connection keeps', async () => {
+  mock.method(connectionRepository, 'findMarketScope', async () => ({ own: 'EBAY_GB', claimed: ['EBAY_AU'] }));
+  mock.method(ebayTrading, 'getActiveListings', async () => ({
+    items: [listing('1', 'www.ebay.co.uk', 'GBP'), listing('2', 'www.ebay.com.au', 'AUD'), listing('3', 'www.ebay.com.au', 'AUD')],
+    totalEntries: 3,
+    totalPages: 1,
+  }));
+  mock.method(ebayTrading, 'getOrders', async () => ({ orders: [order('AU-1', { site: 'Australia', currency: 'AUD' })], totalEntries: 1, totalPages: 1 }));
+  const sites = await ebayService.accountSites(credentials(), 'sites-uk');
+  assert.deepStrictEqual(sites, [
+    { marketplaceId: 'EBAY_AU', listings: 2, orders: 1 },
+    { marketplaceId: 'EBAY_GB', listings: 1, orders: 0 },
+  ]);
+});

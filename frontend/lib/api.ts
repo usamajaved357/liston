@@ -59,6 +59,8 @@ export interface Overview {
   accounts: { total: number; active: number; needsAttention: number };
   activeListings: number;
   earnings: { amount: number; currency: string };
+  // Sales in other currencies (accounts on other eBay sites), never added in.
+  otherEarnings?: { amount: number; currency: string }[];
   orders: number;
   drafts: number;
   publishedViaListon: number;
@@ -70,6 +72,7 @@ export interface Overview {
     error?: string;
     activeListings: number;
     earnings: { amount: number; currency: string } | null;
+    otherEarnings?: { amount: number; currency: string }[];
     orders: number;
   }[];
 }
@@ -258,6 +261,15 @@ export interface PermissionUpdate {
   // global default itself (connectionId: null) must be a real boolean,
   // since there's nothing higher for it to defer to.
   allowed: boolean | null;
+}
+
+// One eBay site an account sells on, as eBay's copies show it, and the
+// connection holding it (null: not linked separately yet).
+export interface EbaySite {
+  marketplace: Marketplace;
+  listings: number;
+  orders: number;
+  connectionId: string | null;
 }
 
 export interface Platform {
@@ -1289,6 +1301,12 @@ export const api = {
       body: JSON.stringify({ label, marketplaceId }),
     }),
 
+  getEbaySites: (id: string) => request<{ sites: EbaySite[] }>(`/api/connections/${id}/sites`),
+
+  // Another site of the account as its own connection; no eBay sign-in.
+  addEbaySite: (id: string, marketplaceId: string) =>
+    request<{ connection: Connection }>(`/api/connections/${id}/sites`, { method: "POST", body: JSON.stringify({ marketplaceId }) }),
+
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: "DELETE" }),
 
   // Re-runs eBay's consent for an existing account so its token gains the
@@ -1399,7 +1417,9 @@ export const api = {
       params.set("from", custom.from);
       params.set("to", custom.to);
     }
-    return request<{ earnings: Money; orderCount: number; truncated: boolean }>(
+    // `otherEarnings`: sales on the account's other eBay sites (not linked
+    // separately), in their own currencies; never added into `earnings`.
+    return request<{ earnings: Money; otherEarnings?: Money[]; orderCount: number; truncated: boolean }>(
       `/api/connections/${id}/earnings?${params.toString()}`
     );
   },

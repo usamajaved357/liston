@@ -269,7 +269,89 @@ async function deleteConnection(id, userId) {
   }
 }
 
+// The seller behind a connection ({ userId, username }), asked of eBay and
+// recorded the first time it's needed.
+async function sellerOf(connection, ownerId, ebayService) {
+  const known = { userId: connection.settings?.ebay?.userId || null, username: connection.settings?.ebay?.username || null };
+  if (known.userId || known.username) return known;
+  const seller = await withDecryptedCredentials(connection.id, ownerId, async (credentials) => {
+    const found = await ebayService.identifySeller(credentials);
+    await connectionRepository.mergeEbaySettings(connection.id, {
+      ...(found.userId ? { userId: found.userId } : {}),
+      ...(found.username ? { username: found.username } : {}),
+    });
+    return found;
+  });
+  ebayService.forgetMarketScopes();
+  return { userId: seller.userId || null, username: seller.username || null };
+}
+
+/**
+ * The eBay sites a connection's account sells on, as eBay's copies show
+ * them, each with the connection that holds it (this one, a sibling, or
+ * none yet): [{ marketplace, listings, orders, connectionId }].
+ */
+async function ebaySites(ownerId, connectionId, ebayService) {
+  const connection = await connectionRepository.findByIdForUser(connectionId, ownerId);
+  if (!connection) throw new ConnectionError('Connection not found', 404);
+  if (connection.platform_key !== 'ebay') return [];
+  const own = connection.settings?.ebay?.marketplaceId || null;
+  const seller = await sellerOf(connection, ownerId, ebayService).catch(() => ({}));
+  const siblings = await connectionRepository.findOwnerEbayAccount(ownerId, seller, connection.id);
+  const found = await withDecryptedCredentials(connection.id, ownerId, (credentials) => ebayService.accountSites(credentials, connection.id));
+  const holder = (market) => (market === own ? connection.id : siblings.find((c) => c.settings?.ebay?.marketplaceId === market)?.id || null);
+  return found
+    .filter((site) => marketplaces.byId(site.marketplaceId))
+    .map((site) => ({ marketplace: marketplaces.summary(site.marketplaceId), listings: site.listings, orders: site.orders, connectionId: holder(site.marketplaceId) }));
+}
+
+const SHARED_PRICING = ['targetRoiPercent', 'adsFeePercent', 'processingFeePercent', 'roundTo99', 'followCompetitorPrice'];
+function sharedPricing(pricing = {}) {
+  return Object.fromEntries(SHARED_PRICING.filter((key) => pricing?.[key] !== undefined).map((key) => [key, pricing[key]]));
+}
+
+/**
+ * Another eBay site of a connected account, as a connection of its own —
+ * no second eBay sign-in: eBay's token is the account's, for every site.
+ * Named like the first, priced in the site's currency, and worked by the
+ * same team (members' grants are copied). Takes no plan slot.
+ */
+async function addEbaySite(ownerId, connectionId, marketplaceId, ebayService) {
+  const market = marketplaces.byId(marketplaceId);
+  if (!market) throw new ConnectionError('Liston doesn’t sell on that eBay site.', 400);
+  const source = await getConnectionWithDecryptedCredentials(connectionId, ownerId);
+  if (source.platform_key !== 'ebay') throw new ConnectionError('Only eBay accounts have eBay sites.', 400);
+  if (source.settings?.ebay?.marketplaceId === market.id) throw new ConnectionError(`This account is already the ${market.name} one.`, 400);
+  const seller = await sellerOf(source, ownerId, ebayService);
+  if (!seller.userId && !seller.username) throw new ConnectionError("eBay didn't say which seller this is. Try again in a minute.", 502);
+  const taken = (await connectionRepository.findOwnerEbayAccount(ownerId, seller)).find((c) => c.settings?.ebay?.marketplaceId === market.id);
+  if (taken) throw new ConnectionError(`${market.name} is already connected for this account.`, 409);
+
+  const { marketplaceId: ownSite, ...credentials } = source.credentials;
+  void ownSite;
+  const connection = await createConnection(
+    ownerId,
+    {
+      platformKey: 'ebay',
+      label: source.label,
+      credentials,
+      settings: {
+        ebay: { marketplaceId: market.id, ...(seller.userId ? { userId: seller.userId } : {}), ...(seller.username ? { username: seller.username } : {}) },
+        // The first site's percentages carry over; its fixed fees are in
+        // its own currency, so they're left for the seller to set.
+        pricing: { ...sharedPricing(source.settings?.pricing), currency: market.currency },
+      },
+    },
+    { planChecked: true }
+  );
+  await teamRepository.copyConnectionPermissions(source.id, connection.id);
+  ebayService.forgetMarketScopes();
+  return connection;
+}
+
 module.exports = {
+  ebaySites,
+  addEbaySite,
   listPlatforms,
   listConnections,
   assertUnderPlanLimit,

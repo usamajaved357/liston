@@ -15,6 +15,9 @@ router.post('/ebay/authorize', requireAuth, requireOwner, connectionController.s
 router.get('/:id', requireAuth, requireAnyFeature(KNOWN_FEATURES), connectionController.getOne);
 router.post('/:id/reauthorize', requireAuth, requireAnyFeature(KNOWN_FEATURES), connectionController.reauthorizeEbay);
 router.delete('/:id', requireAuth, requireOwner, connectionController.remove);
+// The eBay sites the account sells on; another one split off as its own connection.
+router.get('/:id/sites', requireAuth, requireOwner, connectionController.listSites);
+router.post('/:id/sites', requireAuth, requireOwner, connectionController.addSite);
 router.get('/:id/listings', requireAuth, requireFeature('listings'), connectionController.getListings);
 router.get('/:id/orders', requireAuth, requireFeature('orders'), connectionController.getOrders);
 router.use('/:id/orders', require('../orders/order.routes'));

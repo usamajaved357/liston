@@ -148,7 +148,9 @@ function MemberAccountPicker({ user, connections }: { user: User; connections: C
                   <PlatformIcon platformKey={connection.platform_key} size={40} />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-bold text-[var(--color-ink)] truncate">{connection.label}</p>
-                    <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
+                    <p className="text-xs text-[var(--color-muted)]">
+                      {connection.marketplace ? `${connection.marketplace.flag} ${connection.marketplace.name} · ${connection.marketplace.currency}` : connection.platform_name}
+                    </p>
                   </div>
                   <StatusPill status={connection.status} />
                 </Link>

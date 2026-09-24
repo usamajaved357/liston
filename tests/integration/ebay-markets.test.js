@@ -112,3 +112,44 @@ test('without a chosen site the account\'s home site is used', async () => {
   const stored = await connectionRepository.findByIdForUser(connection.id, ownerId);
   assert.strictEqual(stored.settings.ebay.marketplaceId, 'EBAY_GB');
 });
+
+test('another site of a linked account is split off as its own connection, with the team and no second sign-in', async () => {
+  const ownerId = await owner();
+  const seller = `split-${crypto.randomUUID()}`;
+  const ebay = {
+    ...fakeEbay(),
+    accountSites: async () => [
+      { marketplaceId: 'EBAY_GB', listings: 360, orders: 297 },
+      { marketplaceId: 'EBAY_AU', listings: 292, orders: 151 },
+    ],
+  };
+  // Linked before sellers were recorded, on UK, with pricing set.
+  const uk = await connectionService.createConnection(ownerId, { platformKey: 'ebay', label: 'Minsu LTD', credentials: tokens(seller) });
+  await connectionRepository.updateSettings(uk.id, {
+    ebay: { marketplaceId: 'EBAY_GB' },
+    pricing: { targetRoiPercent: 60, adsFeePercent: 5, processingFeePercent: 3, fixedFeePerOrder: 0.3, shippingCostPerOrder: 2, currency: 'GBP', roundTo99: true },
+  });
+  const member = await owner();
+  await pool.query(`INSERT INTO member_permissions (member_user_id, connection_id, feature, allowed) VALUES ($1, $2, 'orders', true)`, [member, uk.id]);
+
+  let sites = await connectionService.ebaySites(ownerId, uk.id, ebay);
+  assert.deepStrictEqual(sites.map((s) => [s.marketplace.id, s.listings, s.connectionId]), [['EBAY_GB', 360, uk.id], ['EBAY_AU', 292, null]]);
+
+  const au = await connectionService.addEbaySite(ownerId, uk.id, 'EBAY_AU', ebay);
+  const stored = await connectionService.getConnectionWithDecryptedCredentials(au.id, ownerId);
+  assert.strictEqual(stored.label, 'Minsu LTD');
+  assert.strictEqual(stored.settings.ebay.marketplaceId, 'EBAY_AU');
+  assert.strictEqual(stored.settings.ebay.userId, seller);
+  assert.strictEqual(stored.credentials.refreshToken, 'r'); // the account's own sign-in
+  assert.deepStrictEqual(stored.settings.pricing, { targetRoiPercent: 60, adsFeePercent: 5, processingFeePercent: 3, roundTo99: true, currency: 'AUD' });
+  const perms = await pool.query('SELECT feature FROM member_permissions WHERE connection_id = $1 AND member_user_id = $2', [au.id, member]);
+  assert.deepStrictEqual(perms.rows.map((r) => r.feature), ['orders']);
+
+  sites = await connectionService.ebaySites(ownerId, uk.id, ebay);
+  assert.strictEqual(sites.find((s) => s.marketplace.id === 'EBAY_AU').connectionId, au.id);
+  assert.deepStrictEqual(await connectionRepository.findMarketScope(uk.id), { own: 'EBAY_GB', claimed: ['EBAY_AU'] });
+
+  // Twice, or the account's own site: refused.
+  await assert.rejects(connectionService.addEbaySite(ownerId, uk.id, 'EBAY_AU', ebay), (err) => err.statusCode === 409);
+  await assert.rejects(connectionService.addEbaySite(ownerId, uk.id, 'EBAY_GB', ebay), (err) => err.statusCode === 400);
+});

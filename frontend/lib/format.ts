@@ -1,6 +1,6 @@
 import { Money } from "@/lib/api";
 
-const CURRENCY_SYMBOLS: Record<string, string> = { GBP: "£", USD: "$", EUR: "€" };
+const CURRENCY_SYMBOLS: Record<string, string> = { GBP: "£", USD: "$", EUR: "€", AUD: "A$", CAD: "C$" };
 
 export function formatMoney(money: Money | null | undefined): string {
   if (!money) return "—";

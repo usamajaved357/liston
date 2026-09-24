@@ -18,6 +18,7 @@ const marketplaces = require('./marketplaces');
 const analyticsDays = require('../analytics/analytics-days');
 const orderSort = require('../orders/order-sort');
 const marketScope = require('./market-scope');
+const money = require('../../utils/money');
 const connectionRepository = require('../connections/connection.repository');
 
 class EbayError extends Error {
@@ -1177,6 +1178,31 @@ function scopeOf(connectionId) {
   return scope;
 }
 
+/**
+ * Which eBay sites this account's listings and orders are on, from the
+ * copies eBay sent (all sites, whatever the connection's own): [{
+ * marketplaceId, listings, orders }], busiest first. Reads only the copies.
+ */
+async function accountSites(credentials, connectionId) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const ctx = { accessToken, siteId, connectionId: id };
+  const [items, orders] = await Promise.all([
+    listingsCache.get(listingsKey(id, 'active'), { ...ctx, status: 'active' }).catch(() => []),
+    ordersCache.get(id, ctx).catch(() => []),
+  ]);
+  const sites = new Map();
+  const bump = (market, key) => {
+    if (!market) return;
+    const site = sites.get(market) || { marketplaceId: market, listings: 0, orders: 0 };
+    site[key] += 1;
+    sites.set(market, site);
+  };
+  for (const item of items || []) bump(marketScope.marketOfListing(item), 'listings');
+  for (const order of orders || []) bump(marketScope.marketOfOrder(order), 'orders');
+  return [...sites.values()].sort((a, b) => b.listings + b.orders - (a.listings + a.orders));
+}
+
 /** After a connection is added, removed or tagged with its site or seller. */
 function forgetMarketScopes() {
   scopes.clear();
@@ -2284,18 +2310,17 @@ async function getEarningsSummary(credentials, { connectionId, range, from, to, 
     ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end)
     : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString(), 1, siteId)).orders;
 
-  let amount = 0;
-  let currency = null;
-  for (const order of orders) {
-    if (order.total) {
-      amount += order.total.amount;
-      currency = currency || order.total.currency;
-    }
-  }
+  // In the account's own currency; sales in another (a site of the account
+  // not linked separately) are totalled beside it, never added in.
+  // A day with no orders is still £0.00, not a bare 0.00.
+  const { main, others } = money.splitByCurrency(
+    orders.map((order) => order.total),
+    marketplaces.currencyFor(credentials.marketplaceId || 'EBAY_GB')
+  );
 
   return {
-    // A day with no orders is still £0.00, not a bare 0.00.
-    earnings: { amount: Math.round(amount * 100) / 100, currency: currency || marketplaces.currencyFor(credentials.marketplaceId || 'EBAY_GB') },
+    earnings: main,
+    otherEarnings: others,
     orderCount: orders.length,
     truncated: range === 'all_time',
     credentialsChanged,
@@ -2402,6 +2427,7 @@ module.exports = {
   listOrdersDetailed,
   awaitingDelivery,
   forgetMarketScopes,
+  accountSites,
   setDeliveryCheckInterval,
   getEarningsSummary,
   resolveRangeWindow,

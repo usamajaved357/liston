@@ -28,5 +28,6 @@ export function useAccountRefresh(connectionId: string | undefined) {
     }
   }
 
-  return { sync: { syncedAt, onRefresh, refreshing, note }, setSyncedAt, reloadKey };
+  // `reload`: load the page again without asking eBay (the account changed in Liston).
+  return { sync: { syncedAt, onRefresh, refreshing, note }, setSyncedAt, reloadKey, reload: () => setReloadKey((k) => k + 1) };
 }

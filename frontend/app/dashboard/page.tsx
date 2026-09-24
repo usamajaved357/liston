@@ -293,7 +293,12 @@ export default function DashboardPage() {
             <Stat
               label="Earnings"
               value={o ? money(o.earnings.amount) : "—"}
-              hint={o ? `${o.orders} order${o.orders === 1 ? "" : "s"} ${rangePhrase}` : undefined}
+              hint={
+                o
+                  ? `${o.orders} order${o.orders === 1 ? "" : "s"} ${rangePhrase}` +
+                    (o.otherEarnings?.length ? ` · + ${o.otherEarnings.map((m) => formatPrice(m.amount, m.currency)).join(" + ")}` : "")
+                  : undefined
+              }
               tone="accent"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
@@ -386,7 +391,12 @@ export default function DashboardPage() {
                       </td>
                       <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{a.activeListings}</td>
                       <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{a.orders}</td>
-                      <td className="px-3 py-2.5 text-center font-medium tabular-nums text-[var(--color-ink)]">{a.earnings ? formatPrice(a.earnings.amount, a.earnings.currency) : "—"}</td>
+                      <td className="px-3 py-2.5 text-center font-medium tabular-nums text-[var(--color-ink)]">{a.earnings ? formatPrice(a.earnings.amount, a.earnings.currency) : "—"}
+                        {a.otherEarnings?.map((m) => (
+                          <span key={m.currency} className="block text-[11px] font-normal text-[var(--color-muted)]">
+                            + {formatPrice(m.amount, m.currency)}
+                          </span>
+                        ))}</td>
                     </tr>
                   ))}
                 </tbody>

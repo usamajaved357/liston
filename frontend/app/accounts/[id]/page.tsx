@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, EarningsRange, Money, OrderCounts, OrderStatusFilter } from "@/lib/api";
+import { api, ApiError, EarningsRange, EbaySite, Money, OrderCounts, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -184,7 +184,7 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
   const [range, setRange] = useState<EarningsRange>("today");
   // Keyed by range so switching ranges shows the skeleton without a
   // synchronous reset inside the effect.
-  const [earningsByRange, setEarningsByRange] = useState<Record<string, { amount: Money; orders: number; truncated: boolean } | { error: string }>>({});
+  const [earningsByRange, setEarningsByRange] = useState<Record<string, { amount: Money; others: Money[]; orders: number; truncated: boolean } | { error: string }>>({});
   const loaded = earningsByRange[range];
   const earnings = loaded && !("error" in loaded) ? loaded : null;
   const earningsError = loaded && "error" in loaded ? loaded.error : null;
@@ -204,7 +204,7 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
     let cancelled = false;
     api
       .getConnectionEarnings(connectionId, range)
-      .then((d) => !cancelled && setEarningsByRange((m) => ({ ...m, [range]: { amount: d.earnings, orders: d.orderCount, truncated: d.truncated } })))
+      .then((d) => !cancelled && setEarningsByRange((m) => ({ ...m, [range]: { amount: d.earnings, others: d.otherEarnings ?? [], orders: d.orderCount, truncated: d.truncated } })))
       .catch((err) => !cancelled && setEarningsByRange((m) => ({ ...m, [range]: { error: err instanceof ApiError ? err.message : "Couldn't load earnings from eBay." } })));
     return () => {
       cancelled = true;
@@ -263,7 +263,18 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
         )}
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Earnings" value={earnings ? formatMoney(earnings.amount) : "—"} hint={`Revenue ${RANGE_PHRASE[range] ?? rangeLabel}`} tone="accent" icon={Icons.money} loading={!earnings && !earningsError} />
+          <Stat
+            label="Earnings"
+            value={earnings ? formatMoney(earnings.amount) : "—"}
+            hint={
+              earnings?.others.length
+                ? `+ ${earnings.others.map(formatMoney).join(" + ")} on other eBay sites`
+                : `Revenue ${RANGE_PHRASE[range] ?? rangeLabel}`
+            }
+            tone="accent"
+            icon={Icons.money}
+            loading={!earnings && !earningsError}
+          />
           <Stat
             label="Orders"
             value={earnings ? String(earnings.orders) : "—"}
@@ -316,6 +327,67 @@ function MemberDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) 
   return <OrderQueue connectionId={connectionId} counts={counts} loading={!counts && !error} error={error} />;
 }
 
+// An account selling on more eBay sites than it's linked for: eBay sends
+// every site's listings and orders to it, so they show here together. Each
+// site can become an account of its own in one click (same eBay sign-in).
+function OtherSitesNotice({ connectionId, label, onAdded }: { connectionId: string; label: string; onAdded: () => void }) {
+  const [sites, setSites] = useState<EbaySite[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [added, setAdded] = useState<{ id: string; name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .getEbaySites(connectionId)
+      .then((d) => setSites(d.sites))
+      .catch(() => setSites([]));
+  }, [connectionId, added]);
+
+  const unlinked = sites.filter((s) => !s.connectionId);
+
+  async function add(site: EbaySite) {
+    setAdding(site.marketplace.id);
+    setError(null);
+    try {
+      const { connection } = await api.addEbaySite(connectionId, site.marketplace.id);
+      setAdded({ id: connection.id, name: site.marketplace.name });
+      onAdded();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't add that site. Try again.");
+    } finally {
+      setAdding(null);
+    }
+  }
+
+  if (!added && !unlinked.length) return null;
+  return (
+    <div className="mb-6 space-y-2">
+      {added && (
+        <Alert variant="success">
+          {added.name} is now its own account; its listings and orders moved there.{" "}
+          <Link href={`/accounts/${added.id}`} className="font-medium underline">
+            Open {label} · {added.name}
+          </Link>
+        </Alert>
+      )}
+      {unlinked.map((site) => (
+        <div
+          key={site.marketplace.id}
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-[#fde68a] bg-[var(--color-warning-soft)] px-4 py-3 text-[13px] text-[#92400e]"
+        >
+          <span className="min-w-[240px] flex-1">
+            {label} also sells on {site.marketplace.flag} {site.marketplace.name}: {site.listings} listing{site.listings === 1 ? "" : "s"} and {site.orders} order
+            {site.orders === 1 ? "" : "s"} from there are showing in this account, in {site.marketplace.currency}.
+          </span>
+          <button type="button" onClick={() => add(site)} disabled={adding !== null} className="btn btn-primary btn-sm">
+            {adding === site.marketplace.id ? "Adding…" : `Add ${site.marketplace.name} as its own account`}
+          </button>
+        </div>
+      ))}
+      {error && <Alert>{error}</Alert>}
+    </div>
+  );
+}
+
 function ShellSkeleton() {
   return (
     <main className="min-h-screen bg-[var(--color-paper)] p-10">
@@ -334,7 +406,7 @@ function ShellSkeleton() {
 export default function AccountOverviewPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
-  const { sync, setSyncedAt, reloadKey } = useAccountRefresh(connection?.id);
+  const { sync, setSyncedAt, reloadKey, reload } = useAccountRefresh(connection?.id);
   // Back from linking a site this account already had: its sign-in was
   // refreshed instead of a copy being added.
   const alreadyConnected = useSearchParams().get("alreadyConnected") === "1";
@@ -378,6 +450,7 @@ export default function AccountOverviewPage() {
           </Alert>
         </div>
       )}
+      {isOwner && connection.platform_key === "ebay" && <OtherSitesNotice connectionId={connection.id} label={connection.label} onAdded={reload} />}
       {isOwner ? (
         <OwnerDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
       ) : connection.permissions?.orders ? (

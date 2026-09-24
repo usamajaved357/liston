@@ -6,6 +6,7 @@ const connectionService = require('../connections/connection.service');
 const ebayService = require('../ebay/ebay.service');
 const { query } = require('../../db/client');
 const logger = require('../../utils/logger');
+const money = require('../../utils/money');
 
 const RANGES = new Set(['today', '7d', '30d', '90d', 'this_month', 'last_month']);
 
@@ -25,6 +26,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
           return {
             activeListings: listings.totalEntries || 0,
             earnings: earnings.earnings,
+            otherEarnings: earnings.otherEarnings || [],
             orders: earnings.orderCount,
             // Whichever call refreshed the token wins; both would carry the same new token.
             credentialsChanged: listings.credentialsChanged || earnings.credentialsChanged,
@@ -34,7 +36,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
         return { id: connection.id, label: connection.label, status: connection.status, ok: true, ...result };
       } catch (err) {
         logger.warn('Overview: account could not be read', { connectionId: connection.id, error: err.message });
-        return { id: connection.id, label: connection.label, status: connection.status, ok: false, error: err.message, activeListings: 0, earnings: null, orders: 0 };
+        return { id: connection.id, label: connection.label, status: connection.status, ok: false, error: err.message, activeListings: 0, earnings: null, otherEarnings: [], orders: 0 };
       }
     })
   );
@@ -45,8 +47,11 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
     : { rows: [] };
   const byStatus = Object.fromEntries(rows.map((r) => [r.status, r.n]));
 
-  const currency = perAccount.find((a) => a.earnings?.currency)?.earnings?.currency || 'GBP';
-  const earningsAmount = perAccount.reduce((sum, a) => sum + (a.earnings?.amount || 0), 0);
+  // Accounts on different eBay sites earn in different currencies: the
+  // total is in the currency most accounts use, the rest beside it.
+  const byCurrency = perAccount.reduce((acc, a) => (a.earnings ? { ...acc, [a.earnings.currency]: (acc[a.earnings.currency] || 0) + 1 } : acc), {});
+  const currency = Object.entries(byCurrency).sort((a, b) => b[1] - a[1])[0]?.[0] || 'GBP';
+  const totals = money.splitByCurrency(perAccount.flatMap((a) => [a.earnings, ...(a.otherEarnings || [])]), currency);
 
   return {
     range: effectiveRange,
@@ -56,7 +61,8 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
       needsAttention: connections.filter((c) => c.status !== 'active').length,
     },
     activeListings: perAccount.reduce((sum, a) => sum + a.activeListings, 0),
-    earnings: { amount: Math.round(earningsAmount * 100) / 100, currency },
+    earnings: totals.main,
+    otherEarnings: totals.others,
     orders: perAccount.reduce((sum, a) => sum + a.orders, 0),
     drafts: byStatus.pending_review || 0,
     publishedViaListon: byStatus.published || 0,
