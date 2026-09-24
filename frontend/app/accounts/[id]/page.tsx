@@ -3,39 +3,28 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, EarningsRange, EbaySite, Money, OrderCounts, OrderStatusFilter } from "@/lib/api";
+import { AccountOverview, api, ApiError, EbaySite, OrderCounts, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
-import { formatMoney } from "@/lib/format";
+import { ListingCards, MetricCards, MetricTabs, Metric } from "@/components/overview/OverviewMoney";
 import { AccountShell } from "@/components/AccountShell";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { useAccountRefresh } from "@/lib/useAccountRefresh";
 import { Alert } from "@/components/Alert";
 
-// The account dashboard: money in and orders for a chosen window, the live
-// catalogue and what's waiting in drafts, then the order queue by state.
-// Inbox and Campaigns are shown dimmed so the shape of the page is already
-// there when those land.
+// The account's Overview: the same figures as the business Overview — a tab
+// per figure (sales, fees, earnings, source cost, profit, listings) and cards
+// breaking it down — in the account's own currency and time zone, then what
+// needs doing (late dispatches, orders not yet bought from the supplier) and
+// the order queue by state.
 
-const RANGES: { key: EarningsRange; label: string }[] = [
-  { key: "today", label: "Today" },
-  { key: "7d", label: "7 days" },
-  { key: "30d", label: "30 days" },
-  { key: "this_month", label: "This month" },
-  { key: "last_month", label: "Last month" },
-  { key: "all_time", label: "All time" },
+const RANGES: { key: string; label: string; phrase: string }[] = [
+  { key: "today", label: "Today", phrase: "today" },
+  { key: "7d", label: "7 days", phrase: "in the last 7 days" },
+  { key: "30d", label: "30 days", phrase: "in the last 30 days" },
+  { key: "this_month", label: "This month", phrase: "this month" },
+  { key: "last_month", label: "Last month", phrase: "last month" },
+  { key: "90d", label: "90 days", phrase: "in the last 90 days" },
 ];
-
-// "today", "in the last 7 days", "this month": how each range reads in a sentence.
-const RANGE_PHRASE: Record<EarningsRange, string> = {
-  today: "today",
-  "7d": "in the last 7 days",
-  "30d": "in the last 30 days",
-  "90d": "in the last 90 days",
-  this_month: "this month",
-  last_month: "last month",
-  all_time: "in the last 90 days",
-  custom: "in this period",
-};
 
 const SUMMARY_RANGE = "90d";
 
@@ -46,73 +35,36 @@ const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint
   { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-muted)]" },
 ];
 
-function Stat({
-  label,
-  value,
-  hint,
-  icon,
-  tone = "default",
-  href,
-  loading,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  icon: React.ReactNode;
-  tone?: "default" | "primary" | "accent";
-  href?: string;
-  loading?: boolean;
-}) {
-  const iconBg = {
-    default: "bg-[var(--color-paper)] text-[var(--color-muted)]",
-    primary: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
-    accent: "bg-[var(--color-accent-soft)] text-[var(--color-accent)]",
-  }[tone];
-  const body = (
-    <>
-      <div className="flex items-center justify-between">
-        <span className="text-[13px] font-medium text-[var(--color-muted)]">{label}</span>
-        <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconBg}`}>{icon}</span>
-      </div>
-      {loading ? (
-        <div className="mt-4 h-7 w-24 animate-pulse rounded-md bg-[var(--color-line)]" />
-      ) : (
-        <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight text-[var(--color-ink)]">{value}</p>
-      )}
-      {hint && <p className="mt-2 text-[12px] text-[var(--color-muted)]">{hint}</p>}
-    </>
-  );
-  return href ? (
-    <Link href={href} className="card block p-5 transition-colors hover:border-[var(--color-line-strong)]">
-      {body}
-    </Link>
-  ) : (
-    <div className="card p-5">{body}</div>
-  );
-}
+type Attention = { overdue: number; notOrdered: number | null };
 
-function ComingSoonCard({ title, blurb, icon }: { title: string; blurb: string; icon: React.ReactNode }) {
-  return (
-    <div className="card flex items-center gap-4 p-4 opacity-60">
-      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--color-paper)] text-[var(--color-muted)]">{icon}</span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-[var(--color-ink)]">{title}</p>
-        <p className="truncate text-[12.5px] text-[var(--color-muted)]">{blurb}</p>
-      </div>
-      <span className="flex-shrink-0 rounded-full bg-[var(--color-paper)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
-        Coming soon
-      </span>
-    </div>
-  );
-}
-
-function OrderQueue({ connectionId, counts, loading, error }: { connectionId: string; counts: OrderCounts | null; loading: boolean; error: string | null }) {
+// The order queue by state, and above it what needs doing now.
+function OrderQueue({ connectionId, counts, attention, loading, error }: { connectionId: string; counts: OrderCounts | null; attention: Attention | null; loading: boolean; error: string | null }) {
+  const todo = [
+    attention?.overdue ? { n: attention.overdue, text: `past ${attention.overdue === 1 ? "its" : "their"} dispatch-by date`, tone: "danger" } : null,
+    attention?.notOrdered ? { n: attention.notOrdered, text: "paid but not yet ordered from the supplier", tone: "warning" } : null,
+  ].filter(Boolean) as { n: number; text: string; tone: string }[];
   return (
     <section>
       <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">Order queue</h2>
+        <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Order queue</h2>
         <span className="text-[12px] text-[var(--color-muted)]">Last 90 days</span>
       </div>
+      {todo.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {todo.map((t) => (
+            <Link
+              key={t.text}
+              href={`/accounts/${connectionId}/orders?status=awaiting_dispatch&range=${SUMMARY_RANGE}`}
+              className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 ring-inset transition-colors ${
+                t.tone === "danger" ? "bg-rose-50 text-rose-700 ring-rose-200 hover:ring-rose-300" : "bg-amber-50 text-amber-800 ring-amber-200 hover:ring-amber-300"
+              }`}
+            >
+              <span className="tabular-nums font-semibold">{t.n}</span> order{t.n === 1 ? "" : "s"} {t.text}
+              <span aria-hidden>→</span>
+            </Link>
+          ))}
+        </div>
+      )}
       {error ? (
         <Alert>{error}</Alert>
       ) : (
@@ -126,7 +78,7 @@ function OrderQueue({ connectionId, counts, loading, error }: { connectionId: st
               {loading ? (
                 <div className="h-7 w-12 animate-pulse rounded-md bg-[var(--color-line)]" />
               ) : (
-                <p className={`text-[28px] font-semibold leading-none tracking-tight ${tile.tone}`}>{counts?.[tile.key] ?? 0}</p>
+                <p className={`text-[28px] font-semibold leading-none tracking-tight tabular-nums ${tile.tone}`}>{(counts?.[tile.key] ?? 0).toLocaleString("en-GB")}</p>
               )}
               <p className="mt-3 text-sm font-medium text-[var(--color-ink)]">{tile.label}</p>
               <p className="text-[12px] text-[var(--color-muted)]">{tile.hint}</p>
@@ -138,116 +90,107 @@ function OrderQueue({ connectionId, counts, loading, error }: { connectionId: st
   );
 }
 
-const Icons = {
-  money: (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path d="M4 17l5-5 4 4 7-8M15 8h5v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-  orders: (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path d="M3.5 8L12 3.5 20.5 8v8L12 20.5 3.5 16V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M3.5 8L12 12.5 20.5 8M12 12.5v8" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-    </svg>
-  ),
-  listings: (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <circle cx="8" cy="8" r="1.4" fill="currentColor" />
-    </svg>
-  ),
-  drafts: (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M12.5 7.5l4 4" stroke="currentColor" strokeWidth="1.8" />
-    </svg>
-  ),
-  inbox: (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  ),
-  campaigns: (
-    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-      <path d="M4 10.5v3a1.5 1.5 0 001.5 1.5H8l6 4V5L8 9H5.5A1.5 1.5 0 004 10.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-      <path d="M17.5 9.5a3.5 3.5 0 010 5M8 15v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-    </svg>
-  ),
-};
+// The queue's counts and what needs doing, for owners and members alike.
+function useOrderQueue(connectionId: string, reloadKey: number, liveKey: number, onSynced: (syncedAt: string | null) => void) {
+  const [counts, setCounts] = useState<OrderCounts | null>(null);
+  const [attention, setAttention] = useState<Attention | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
+      .then((d) => {
+        if (cancelled) return;
+        setCounts(d.counts);
+        setAttention(d.attention ?? null);
+        onSynced(d.syncedAt);
+      })
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, reloadKey, liveKey]);
+  return { counts, attention, error };
+}
 
 // `reloadKey` bumps after the header's refresh; `onSynced` reports how fresh
 // the account's orders are, for that header.
 type DashboardProps = { connectionId: string; reloadKey: number; onSynced: (syncedAt: string | null) => void };
 
 function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
-  const [range, setRange] = useState<EarningsRange>("today");
-  // Keyed by range so switching ranges shows the skeleton without a
-  // synchronous reset inside the effect.
-  const [earningsByRange, setEarningsByRange] = useState<Record<string, { amount: Money; others: Money[]; orders: number; truncated: boolean } | { error: string }>>({});
-  const loaded = earningsByRange[range];
-  const earnings = loaded && !("error" in loaded) ? loaded : null;
-  const earningsError = loaded && "error" in loaded ? loaded.error : null;
-  const [live, setLive] = useState<number | null>(null);
-  const [drafts, setDrafts] = useState<number | null>(null);
-  const [counts, setCounts] = useState<OrderCounts | null>(null);
-  const [countsError, setCountsError] = useState<string | null>(null);
+  const [range, setRange] = useState("today");
+  const [metric, setMetric] = useState<Metric>("sales");
+  // Keyed by range, so switching shows the skeleton without a reset in the effect.
+  const [byRange, setByRange] = useState<Record<string, AccountOverview | { error: string }>>({});
+  const loaded = byRange[range];
+  const data = loaded && !("error" in loaded) ? loaded : null;
+  const dataError = loaded && "error" in loaded ? loaded.error : null;
 
-  // Live: a sale or a publish re-reads the account; the tiles follow.
+  // Live: a sale or a publish re-reads the account; the figures follow.
   const [liveKey, setLiveKey] = useState(0);
   useAccountEvents(connectionId, () => {
-    setEarningsByRange({});
+    setByRange({});
     setLiveKey((k) => k + 1);
   });
+  const queue = useOrderQueue(connectionId, reloadKey, liveKey, onSynced);
 
   useEffect(() => {
     let cancelled = false;
     api
-      .getConnectionEarnings(connectionId, range)
-      .then((d) => !cancelled && setEarningsByRange((m) => ({ ...m, [range]: { amount: d.earnings, others: d.otherEarnings ?? [], orders: d.orderCount, truncated: d.truncated } })))
-      .catch((err) => !cancelled && setEarningsByRange((m) => ({ ...m, [range]: { error: err instanceof ApiError ? err.message : "Couldn't load earnings from eBay." } })));
+      .getAccountOverview(connectionId, range)
+      .then((d) => !cancelled && setByRange((m) => ({ ...m, [range]: d })))
+      .catch((err) => !cancelled && setByRange((m) => ({ ...m, [range]: { error: err instanceof ApiError ? err.message : "Couldn't load this account's figures." } })));
     return () => {
       cancelled = true;
     };
   }, [connectionId, range, liveKey, reloadKey]);
 
+  // Fees and earnings are read from eBay in the background; ask again while they come.
+  const [polls, setPolls] = useState(0);
   useEffect(() => {
-    let cancelled = false;
-    api.getConnectionListings(connectionId, "active", 1).then((d) => !cancelled && setLive(d.totalEntries)).catch(() => !cancelled && setLive(0));
-    api.listDraftListings(connectionId).then((d) => !cancelled && setDrafts(d.drafts.length)).catch(() => !cancelled && setDrafts(0));
-    api
-      .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
-      .then((d) => {
-        if (cancelled) return;
-        setCounts(d.counts);
-        onSynced(d.syncedAt);
-      })
-      .catch((err) => !cancelled && setCountsError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, liveKey, reloadKey]);
+    if (!data?.financesPending || polls >= 6) return;
+    const timer = setTimeout(() => {
+      setPolls((n) => n + 1);
+      setByRange((m) => {
+        const next = { ...m };
+        delete next[range];
+        return next;
+      });
+      setLiveKey((k) => k + 1);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [data, polls, range]);
 
-  const rangeLabel = RANGES.find((r) => r.key === range)?.label.toLowerCase() || range;
-  const base = `/accounts/${connectionId}`;
+  const phrase = RANGES.find((r) => r.key === range)?.phrase ?? "";
+  const moneyTab = metric !== "sales" && metric !== "listings";
+
+  async function reconnect() {
+    try {
+      const { authorizeUrl } = await api.reauthorizeConnection(connectionId, `/accounts/${connectionId}`);
+      window.location.href = authorizeUrl;
+    } catch {
+      /* stays on the page */
+    }
+  }
 
   return (
     <div className="space-y-8">
       <section>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-[13px] text-[var(--color-muted)]">
-            Sales for <span className="font-medium text-[var(--color-ink)]">{(RANGE_PHRASE[range] ?? rangeLabel).replace(/^in /, "")}</span>
-            {earnings?.truncated && <span className="ml-2">· eBay only keeps 90 days of orders</span>}
+            Figures for <span className="font-medium text-[var(--color-ink)]">{phrase.replace(/^in /, "")}</span>
           </p>
-          <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+          <div role="radiogroup" aria-label="Dates" className="inline-flex flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
             {RANGES.map((r) => (
               <button
                 key={r.key}
                 type="button"
+                role="radio"
+                aria-checked={range === r.key}
                 onClick={() => setRange(r.key)}
                 className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
-                  range === r.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  range === r.key ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
                 }`}
               >
                 {r.label}
@@ -256,75 +199,43 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
           </div>
         </div>
 
-        {earningsError && (
-          <div className="notice notice-danger mb-4">
-            <span className="flex-1">{earningsError}</span>
+        <MetricTabs metric={metric} onMetric={setMetric} />
+        <div className="mt-5">
+          {dataError ? (
+            <Alert>{dataError}</Alert>
+          ) : metric === "listings" ? (
+            <ListingCards work={data?.listings ?? null} loading={!data} />
+          ) : (
+            <MetricCards metric={metric} summaries={data ? [data.money] : []} loading={!data} unavailable={data ? !data.financesAccess : false} />
+          )}
+        </div>
+
+        {data && moneyTab && !data.financesAccess && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-[#fde68a] bg-[var(--color-warning-soft)] px-4 py-3 text-[13px] text-[#92400e]">
+            <span className="min-w-[240px] flex-1">
+              This account was connected before Liston could read eBay&apos;s finances, so its fees, earnings and profit can&apos;t show yet. Reconnect it once
+              to include them.
+            </span>
+            <button type="button" onClick={reconnect} className="btn btn-primary btn-sm">
+              Reconnect to eBay
+            </button>
           </div>
         )}
-
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat
-            label="Earnings"
-            value={earnings ? formatMoney(earnings.amount) : "—"}
-            hint={
-              earnings?.others.length
-                ? `+ ${earnings.others.map(formatMoney).join(" + ")} on other eBay sites`
-                : `Revenue ${RANGE_PHRASE[range] ?? rangeLabel}`
-            }
-            tone="accent"
-            icon={Icons.money}
-            loading={!earnings && !earningsError}
-          />
-          <Stat
-            label="Orders"
-            value={earnings ? String(earnings.orders) : "—"}
-            hint={`Placed ${RANGE_PHRASE[range] ?? rangeLabel}`}
-            tone="primary"
-            icon={Icons.orders}
-            href={`${base}/orders`}
-            loading={!earnings && !earningsError}
-          />
-          <Stat label="Live listings" value={live === null ? "—" : String(live)} hint="Active on eBay right now" icon={Icons.listings} href={`${base}/listings`} loading={live === null} />
-          <Stat
-            label="Drafts waiting"
-            value={drafts === null ? "—" : String(drafts)}
-            hint={drafts ? "Ready to review and publish" : "Nothing waiting to publish"}
-            icon={Icons.drafts}
-            href={`${base}/listings?filter=draft`}
-            loading={drafts === null}
-          />
-        </div>
+        {data && moneyTab && data.financesAccess && data.financesPending && (
+          <p className="mt-3 text-[12.5px] text-[var(--color-muted)]">Reading fees and earnings from eBay. The figures update by themselves.</p>
+        )}
       </section>
 
-      <OrderQueue connectionId={connectionId} counts={counts} loading={!counts && !countsError} error={countsError} />
-
-      <section>
-        <h2 className="mb-3 text-[13px] font-semibold text-[var(--color-ink)]">On the way</h2>
-        <div className="grid gap-4 md:grid-cols-2">
-          <ComingSoonCard title="Inbox" blurb="Buyer messages from eBay in one place, with suggested replies." icon={Icons.inbox} />
-          <ComingSoonCard title="Campaigns" blurb="Promoted listings and sales events, with what each one earned." icon={Icons.campaigns} />
-        </div>
-      </section>
+      <OrderQueue connectionId={connectionId} counts={queue.counts} attention={queue.attention} loading={!queue.counts && !queue.error} error={queue.error} />
     </div>
   );
 }
 
 // A team member granted Orders is doing fulfilment work — revenue isn't
-// theirs to see, so they get the queue and nothing else.
+// theirs to see, so they get what needs doing and the queue, nothing else.
 function MemberDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
-  const [counts, setCounts] = useState<OrderCounts | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    api
-      .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
-      .then((d) => {
-        setCounts(d.counts);
-        onSynced(d.syncedAt);
-      })
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, reloadKey]);
-  return <OrderQueue connectionId={connectionId} counts={counts} loading={!counts && !error} error={error} />;
+  const queue = useOrderQueue(connectionId, reloadKey, 0, onSynced);
+  return <OrderQueue connectionId={connectionId} counts={queue.counts} attention={queue.attention} loading={!queue.counts && !queue.error} error={queue.error} />;
 }
 
 // An account selling on more eBay sites than it's linked for: eBay sends

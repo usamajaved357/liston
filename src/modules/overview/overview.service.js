@@ -151,4 +151,16 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
   };
 }
 
-module.exports = { getOverview };
+/**
+ * One account's Overview: its money and listing work for a range, the same
+ * figures as the business Overview, counted in the account's own site's
+ * time zone and currency (account pages follow the account's site).
+ */
+async function getAccountOverview(ownerId, connectionId, { range = 'today' } = {}) {
+  const effectiveRange = RANGES.has(range) ? range : 'today';
+  const connection = await connectionService.getConnectionSummary(connectionId, ownerId);
+  const figures = await accountFigures(connection, ownerId, { range: effectiveRange, timeZone: null });
+  return { range: effectiveRange, ...figures };
+}
+
+module.exports = { getOverview, getAccountOverview };

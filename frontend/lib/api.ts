@@ -104,6 +104,17 @@ export interface OverviewAccount {
   financesAccess: boolean;
 }
 
+// One account's Overview: its money and listing work for a range, in its
+// own currency and time zone.
+export interface AccountOverview {
+  range: string;
+  activeListings: number;
+  listings: ListingWork;
+  money: MoneySummary;
+  financesPending: boolean;
+  financesAccess: boolean;
+}
+
 export interface OverviewMarket {
   id: string;
   label: string;
@@ -1407,6 +1418,9 @@ export const api = {
     return request<{
       orders: Order[];
       counts: OrderCounts;
+      // Among paid orders waiting to ship: past their dispatch-by date, and
+      // not yet ordered from the supplier (null when unknown).
+      attention?: { overdue: number; notOrdered: number | null };
       supplier?: SupplierFilter;
       // Orders in the chosen tab at each supplier state.
       supplierCounts?: Partial<Record<SupplierFilter, number>> | null;
@@ -1467,6 +1481,8 @@ export const api = {
     request<{ calls: number }>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/read?range=${range}`, { method: "POST" }),
   checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
     request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
+
+  getAccountOverview: (id: string, range: string) => request<AccountOverview>(`/api/connections/${id}/overview?range=${range}`),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });

@@ -12,4 +12,14 @@ async function getOverview(req, res, next) {
   }
 }
 
-module.exports = { getOverview };
+// One account's money and listing work (its own Overview page).
+async function getAccountOverview(req, res, next) {
+  try {
+    const range = typeof req.query.range === 'string' ? req.query.range : 'today';
+    res.status(200).json(await overviewService.getAccountOverview(req.ownerId, req.params.id, { range }));
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getOverview, getAccountOverview };

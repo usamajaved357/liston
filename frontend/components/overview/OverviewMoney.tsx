@@ -111,13 +111,37 @@ export function MetricTabs({ metric, onMetric }: { metric: Metric; onMetric: (m:
   );
 }
 
-export function MetricCards({ metric, summaries, loading }: { metric: Exclude<Metric, "listings">; summaries: MoneySummary[]; loading?: boolean }) {
+// Cards that come from eBay's finances (everything but sales and the
+// source cost total itself): an account that can't read them shows "—".
+const FROM_EBAY = (metric: Metric, index: number) => metric !== "sales" && !(metric === "sourceCost" && index === 0);
+
+export function MetricCards({
+  metric,
+  summaries,
+  loading,
+  unavailable,
+}: {
+  metric: Exclude<Metric, "listings">;
+  summaries: MoneySummary[];
+  loading?: boolean;
+  // eBay's finances can't be read (the account needs a reconnect).
+  unavailable?: boolean;
+}) {
   const [main, ...others] = summaries;
   const total = (of: (m: MoneySummary) => number) => summaries.reduce((sum, m) => sum + of(m), 0);
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {CARDS[metric].map((card) => {
+      {CARDS[metric].map((card, index) => {
         const figure = card.figure;
+        if (unavailable && FROM_EBAY(metric, index) && main && !loading) {
+          return (
+            <div key={card.label} className="card flex min-h-[136px] flex-col p-5">
+              <span className="text-[13px] font-medium text-[var(--color-muted)]">{card.label}</span>
+              <span className="mt-2.5 text-[28px] font-semibold leading-none text-[var(--color-line-strong)]">—</span>
+              <span className="mt-auto pt-3 text-[12px] text-[var(--color-muted)]">Needs the account reconnected</span>
+            </div>
+          );
+        }
         const warn = main ? card.warn?.(main) : false;
         const negative = main && figure.kind === "money" && figure.of(main) < 0;
         return (

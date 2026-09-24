@@ -2237,6 +2237,15 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
 
   let filtered = status && status !== 'all' ? tagged.filter((o) => o.derivedStatus === status) : tagged;
 
+  // What needs doing among the paid orders waiting to ship: past their
+  // dispatch-by date, and not yet ordered from the supplier.
+  const awaiting = tagged.filter((o) => o.derivedStatus === 'awaiting_dispatch');
+  const nowMs = Date.now();
+  const attention = {
+    overdue: awaiting.filter((o) => o.dispatchByTime && new Date(o.dispatchByTime).getTime() < nowMs).length,
+    notOrdered: supplierStateOf ? awaiting.filter((o) => supplierStateOf(o) === 'pending').length : null,
+  };
+
   let supplierCounts = null;
   if (supplierStateOf) {
     const states = new Map(filtered.map((o) => [o.orderId, supplierStateOf(o)]));
@@ -2280,6 +2289,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   return {
     orders: enrichedOrders,
     counts,
+    attention,
     supplierCounts,
     supplier: supplierStateOf ? supplier || 'any' : 'any',
     totalEntries,

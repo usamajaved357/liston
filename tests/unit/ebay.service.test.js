@@ -921,3 +921,21 @@ test('dispatched orders not yet delivered are re-read by number every few hours,
   const tooOld = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
   assert.strictEqual(ebayService.awaitingDelivery([makeOrder({ orderId: 'OLD', shippedTime: tooOld })]).length, 0);
 });
+
+test('listOrdersDetailed says what needs doing: paid orders past dispatch-by, and not yet ordered from the supplier', async () => {
+  const hour = 60 * 60 * 1000;
+  const late = makeOrder({ orderId: 'LATE', shippedTime: null, dispatchByTime: new Date(Date.now() - hour).toISOString() });
+  const onTime = makeOrder({ orderId: 'ONTIME', shippedTime: null, dispatchByTime: new Date(Date.now() + hour).toISOString() });
+  const shipped = makeOrder({ orderId: 'SHIPPED', dispatchByTime: new Date(Date.now() - 48 * hour).toISOString() });
+  mock.method(ebayTrading, 'getOrders', async () => ({ orders: [late, onTime, shipped], totalEntries: 3, totalPages: 1 }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const result = await ebayService.listOrdersDetailed(freshCredentials(), {
+    connectionId: 'test-conn-attention',
+    range: '30d',
+    status: 'all',
+    page: 1,
+    perPage: 25,
+    supplierStateOf: (o) => (o.orderId === 'ONTIME' ? 'ordered' : 'pending'),
+  });
+  assert.deepStrictEqual(result.attention, { overdue: 1, notOrdered: 1 });
+});

@@ -214,6 +214,7 @@ async function getOrders(req, res, next) {
     res.status(200).json({
       orders: result.orders.map((o) => ({ ...o, sourcing: sourcingByOrder[o.orderId] || [] })),
       counts: result.counts,
+      attention: result.attention,
       supplier: result.supplier,
       supplierCounts: result.supplierCounts,
       sort: result.sort,
