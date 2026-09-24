@@ -12,7 +12,7 @@ import { KpiTile } from "@/components/charts/KpiTile";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
 import { cacheUser, useCachedUser } from "@/lib/session";
-import { formatDateTime, formatMoney, formatShortDate } from "@/lib/format";
+import { formatMoney, formatShortDate } from "@/lib/format";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, timeAgo } from "@/components/team/team-shared";
 
@@ -218,6 +218,18 @@ function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (ki
   );
 }
 
+// A moment in the owner's time zone — the same days the figures and charts
+// count in, whatever the viewer's own clock says.
+function inZone(iso: string, timeZone: string | undefined) {
+  const d = new Date(iso);
+  const tz = timeZone ? { timeZone } : {};
+  return {
+    label: `${d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...tz })}, ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...tz })}`,
+    date: d.toLocaleDateString("en-CA", tz),
+    time: d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", ...tz }),
+  };
+}
+
 function subjectLink(item: MemberActivityItem): string | null {
   if (!item.connectionId) return null;
   if (item.subjectType === "order") return `/accounts/${item.connectionId}/orders/${encodeURIComponent(item.subjectId)}`;
@@ -243,6 +255,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
   const [more, setMore] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [timeZone, setTimeZone] = useState<string | undefined>(undefined);
   const params = useMemo(() => ({ range, ...(range === "custom" ? custom : {}), kind: kind || undefined, connectionId: connectionId || undefined }), [range, custom, kind, connectionId]);
 
   useEffect(() => {
@@ -255,6 +268,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
         if (cancelled) return;
         setItems(d.items);
         setNext(d.next);
+        setTimeZone(d.range.timeZone);
       })
       .catch((err) => !cancelled && setError(err instanceof ApiError ? err.message : "Couldn't load the activity."))
       .finally(() => !cancelled && setLoading(false));
@@ -281,10 +295,10 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
     try {
       const d = await api.getMemberActivity(memberId, { ...params, limit: 5000 });
       const rows = d.items.map((i) => {
-        const at = new Date(i.at);
+        const at = inZone(i.at, d.range.timeZone);
         return [
-          at.toLocaleDateString("en-CA"),
-          at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+          at.date,
+          at.time,
           i.connectionLabel,
           i.label,
           i.subjectType === "order" ? i.subjectId : null,
@@ -296,7 +310,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
         ];
       });
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "member";
-      downloadCsv(`${slug}-activity-${d.range.from}-to-${d.range.to}.csv`, toCsv(["Date", "Time", "eBay account", "Action", "Order", "Order line", "Item number", "Title", "Amount", "Currency"], rows));
+      downloadCsv(`${slug}-activity-${d.range.from}-to-${d.range.to}.csv`, toCsv([`Date (${d.range.timeZone})`, "Time", "eBay account", "Action", "Order", "Order line", "Item number", "Title", "Amount", "Currency"], rows));
     } finally {
       setExporting(false);
     }
@@ -354,7 +368,9 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
             const subject = i.subjectType === "order" ? `Order ${i.subjectId}` : i.subjectType === "listing" ? `#${i.subjectId}` : "Draft";
             return (
               <li key={i.id} className="flex items-start gap-3 px-4 py-2.5">
-                <span className="w-24 flex-shrink-0 pt-px text-[11.5px] tabular-nums text-[var(--color-muted)]">{formatDateTime(i.at)}</span>
+                <span className="w-24 flex-shrink-0 pt-px text-[11.5px] tabular-nums text-[var(--color-muted)]" title={timeZone ? `${timeZone} time` : undefined}>
+                  {inZone(i.at, timeZone).label}
+                </span>
                 <div className="min-w-0 flex-1">
                   <p className="text-[12.5px] text-[var(--color-ink)]">
                     <span className="font-medium">{i.label}</span>
