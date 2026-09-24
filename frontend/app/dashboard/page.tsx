@@ -14,11 +14,12 @@ import { cacheUser, useCachedUser } from "@/lib/session";
 // Plan/usage rings are gone until billing exists — the numbers that matter
 // day to day are listings live, money in, and what's waiting in drafts.
 
-const RANGES: { key: string; label: string }[] = [
-  { key: "7d", label: "7 days" },
-  { key: "30d", label: "30 days" },
-  { key: "this_month", label: "This month" },
-  { key: "90d", label: "90 days" },
+const RANGES: { key: string; label: string; phrase: string }[] = [
+  { key: "today", label: "Today", phrase: "today" },
+  { key: "7d", label: "7 days", phrase: "in the last 7 days" },
+  { key: "30d", label: "30 days", phrase: "in the last 30 days" },
+  { key: "this_month", label: "This month", phrase: "this month" },
+  { key: "90d", label: "90 days", phrase: "in the last 90 days" },
 ];
 
 function Stat({
@@ -86,7 +87,7 @@ export default function DashboardPage() {
   const [liveUser, setUser] = useState<User | null>(null);
   const user = liveUser ?? cachedUser;
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [range, setRange] = useState("7d");
+  const [range, setRange] = useState("today");
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
@@ -124,7 +125,7 @@ export default function DashboardPage() {
         }
         setUser(user);
         cacheUser(user);
-        return loadOverview("7d");
+        return loadOverview("today");
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
@@ -177,6 +178,7 @@ export default function DashboardPage() {
   const o = overview;
   const money = (n: number) => formatPrice(n, o?.earnings.currency || "GBP");
   const rangeLabel = RANGES.find((r) => r.key === range)?.label.toLowerCase() || range;
+  const rangePhrase = RANGES.find((r) => r.key === range)?.phrase || `in the last ${rangeLabel}`;
   const failed = o?.perAccount.filter((a) => !a.ok) || [];
 
   return (
@@ -267,7 +269,7 @@ export default function DashboardPage() {
         <>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <p className="text-[13px] text-[var(--color-muted)]">
-              Sales figures for the last <span className="font-medium text-[var(--color-ink)]">{rangeLabel}</span>
+              Sales figures for <span className="font-medium text-[var(--color-ink)]">{rangePhrase.replace(/^in /, "")}</span>
               {refreshing && <span className="ml-2 text-[var(--color-muted)]">· updating…</span>}
             </p>
             <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
@@ -290,7 +292,7 @@ export default function DashboardPage() {
             <Stat
               label="Earnings"
               value={o ? money(o.earnings.amount) : "—"}
-              hint={o ? `${o.orders} order${o.orders === 1 ? "" : "s"} in the last ${rangeLabel}` : undefined}
+              hint={o ? `${o.orders} order${o.orders === 1 ? "" : "s"} ${rangePhrase}` : undefined}
               tone="accent"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
@@ -348,7 +350,7 @@ export default function DashboardPage() {
             <Stat
               label="Orders"
               value={o ? String(o.orders) : "—"}
-              hint={`In the last ${rangeLabel}`}
+              hint={rangePhrase.charAt(0).toUpperCase() + rangePhrase.slice(1)}
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                   <path d="M6 3h12l1 5H5l1-5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />

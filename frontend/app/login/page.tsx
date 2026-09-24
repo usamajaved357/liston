@@ -8,6 +8,7 @@ import { Field } from "@/components/Field";
 import { PasswordInput } from "@/components/PasswordInput";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Alert } from "@/components/Alert";
+import { offerToSaveLogin } from "@/lib/savedLogin";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,6 +24,7 @@ export default function LoginPage() {
     try {
       const { user, token } = await api.login(email, password);
       localStorage.setItem("token", token);
+      await offerToSaveLogin(email, password, user.name || undefined);
       // A team member has no plan/billing of their own and can't manage
       // connections — send them straight to their accessible account(s)
       // instead of the owner-only overview dashboard.

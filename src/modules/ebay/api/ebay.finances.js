@@ -37,6 +37,10 @@ const FEE_LABELS = {
   PAYMENT_DISPUTE_FEE: 'Payment dispute fee',
 };
 
+// Seller Hub lists the fees in this order; anything else after them.
+const FEE_ORDER = ['Transaction fees', 'Regulatory operating fee', 'Ad fee general', 'Ad fee advanced', 'International fee'];
+const feeRank = (label) => (FEE_ORDER.includes(label) ? FEE_ORDER.indexOf(label) : FEE_ORDER.length);
+
 function humanise(code) {
   return String(code || '')
     .toLowerCase()
@@ -54,37 +58,59 @@ const FUNDS_STATUS = {
 };
 
 // { fundsStatus, fundsStatusCode, payoutId, fees: [{ code, label, amount }],
-//   totalFees, earnings } for an order, or null when eBay recorded no sale
-// against it yet (payment still settling).
+//   totalFees, gross, earnings } for an order, or null when eBay recorded no
+// sale against it yet (payment still settling).
+//
+// Confirmed against live orders: a SALE's `amount` is what reaches the
+// seller — already net of the fees listed on it — and `totalFeeBasisAmount`
+// is the order total those fees were worked out on (Seller Hub's "Order
+// total"). Promoted-listing ad fees are not on the sale: eBay charges them
+// as a separate NON_SALE_CHARGE (feeType AD_FEE) against the same order, and
+// Seller Hub takes them off the earnings too.
 function mapOrderEarnings(response) {
-  const sales = (response?.transactions || []).filter((t) => t.transactionType === 'SALE');
+  const transactions = response?.transactions || [];
+  const sales = transactions.filter((t) => t.transactionType === 'SALE');
   if (!sales.length) return null;
   const currency = sales[0].amount?.currency || sales[0].totalFeeAmount?.currency || null;
   const byLabel = new Map();
   let totalFees = 0;
   let gross = 0;
+  const addFee = (code, amountNode, sign = 1) => {
+    const label = FEE_LABELS[code] || humanise(code);
+    const value = sign * Number(amountNode?.value || 0);
+    if (!value) return;
+    totalFees += value;
+    const entry = byLabel.get(label) || { code, label, amount: { value: 0, currency: amountNode?.currency || currency } };
+    entry.amount.value = Math.round((entry.amount.value + value) * 100) / 100;
+    byLabel.set(label, entry);
+  };
   for (const sale of sales) {
-    gross += Number(sale.amount?.value || 0);
+    let saleFees = 0;
     for (const line of sale.orderLineItems || []) {
       for (const fee of line.marketplaceFees || []) {
-        const label = FEE_LABELS[fee.feeType] || humanise(fee.feeType);
-        const value = Number(fee.amount?.value || 0);
-        totalFees += value;
-        const entry = byLabel.get(label) || { code: fee.feeType, label, amount: { value: 0, currency: fee.amount?.currency || currency } };
-        entry.amount.value = Math.round((entry.amount.value + value) * 100) / 100;
-        byLabel.set(label, entry);
+        addFee(fee.feeType, fee.amount);
+        saleFees += Number(fee.amount?.value || 0);
       }
     }
+    const fees = sale.totalFeeAmount ? Number(sale.totalFeeAmount.value || 0) : saleFees;
+    const net = Number(sale.amount?.value || 0);
+    gross += sale.totalFeeBasisAmount ? Number(sale.totalFeeBasisAmount.value || 0) : net + fees;
+  }
+  // Fees charged apart from the sale (ad fees), and any credited back.
+  for (const t of transactions) {
+    if (t.transactionType !== 'NON_SALE_CHARGE' || !t.feeType) continue;
+    addFee(t.feeType, t.amount, t.bookingEntry === 'CREDIT' ? -1 : 1);
   }
   const status = sales[0].transactionStatus || null;
+  const round = (n) => Math.round(n * 100) / 100;
   return {
     fundsStatus: FUNDS_STATUS[status] || humanise(status),
     fundsStatusCode: status,
     payoutId: sales[0].payoutId || null,
-    fees: [...byLabel.values()],
-    totalFees: { value: Math.round(totalFees * 100) / 100, currency },
-    gross: { value: Math.round(gross * 100) / 100, currency },
-    earnings: { value: Math.round((gross - totalFees) * 100) / 100, currency },
+    fees: [...byLabel.values()].filter((f) => f.amount.value !== 0).sort((a, b) => feeRank(a.label) - feeRank(b.label)),
+    totalFees: { value: round(totalFees), currency },
+    gross: { value: round(gross), currency },
+    earnings: { value: round(gross - totalFees), currency },
   };
 }
 

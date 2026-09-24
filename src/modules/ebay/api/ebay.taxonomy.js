@@ -89,7 +89,8 @@ const MAX_VALUES_IN_PROMPT = 25;
 function summarizeAspects(aspects) {
   return aspects.map((aspect) => {
     const constraint = aspect.aspectConstraint || {};
-    const values = (aspect.aspectValues || []).map((v) => v.localizedValue);
+    // eBay's lists can repeat a value ("250 V" twice); each once.
+    const values = [...new Set((aspect.aspectValues || []).map((v) => v.localizedValue))];
     return {
       name: aspect.localizedAspectName,
       required: Boolean(constraint.aspectRequired),
@@ -300,7 +301,8 @@ async function getEditorAspectSchema(marketplaceId, categoryId) {
     const aspects = await getItemAspectsForCategory(marketplaceId, categoryId);
     return aspects.map((aspect) => {
       const constraint = aspect.aspectConstraint || {};
-      const values = (aspect.aspectValues || []).map((v) => v.localizedValue);
+      // eBay's lists can repeat a value ("250 V" twice); each once.
+      const values = [...new Set((aspect.aspectValues || []).map((v) => v.localizedValue))];
       return {
         name: aspect.localizedAspectName,
         required: Boolean(constraint.aspectRequired),

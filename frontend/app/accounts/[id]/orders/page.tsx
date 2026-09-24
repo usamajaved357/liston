@@ -3,7 +3,8 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, Order, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
+import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter } from "@/lib/api";
+import { readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate, internationalPhone } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -11,7 +12,19 @@ import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton, ListSkeleton } from "@/components/Skeleton";
 import { ListFooter } from "@/components/ListFooter";
 import { SyncStatus } from "@/components/SyncStatus";
+import { ViewMenu } from "@/components/ViewMenu";
 import { useAccountEvents } from "@/lib/useAccountEvents";
+
+// How the list is ordered, apart from which days it covers. Each status tab
+// keeps its own choice; untouched, Awaiting dispatch shows the nearest
+// dispatch deadline first and the rest newest first.
+const SORT_LABELS: Record<OrderSort, string> = {
+  newest: "Newest",
+  oldest: "Oldest",
+  dispatch_soonest: "Dispatch soonest",
+  total_high: "Highest total",
+};
+const defaultSort = (status: OrderStatusFilter): OrderSort => (status === "awaiting_dispatch" ? "dispatch_soonest" : "newest");
 
 const RANGE_LABELS: Record<OrderRange, string> = {
   "7d": "Last 7 days",
@@ -287,6 +300,14 @@ function AccountOrdersContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const sortKey = `orders-sort:${params.id}`;
+  const [sorts, setSorts] = useState<Partial<Record<OrderStatusFilter, OrderSort>>>(() => readView<Record<OrderStatusFilter, OrderSort>>(sortKey));
+  const sort: OrderSort = sorts[status] || defaultSort(status);
+  function changeSort(next: OrderSort) {
+    setSorts((s) => ({ ...s, [status]: next }));
+    writeView(sortKey, { [status]: next });
+    setPage(1);
+  }
   // Orders the team put away (Seller Hub's "Archive"): shown on their own.
   const [archived, setArchived] = useState(false);
   const [archivedCount, setArchivedCount] = useState(0);
@@ -296,7 +317,7 @@ function AccountOrdersContent() {
     setLoading(true);
     setError(null);
     api
-      .getConnectionOrders(connection.id, { range, status, search, page, perPage, archived })
+      .getConnectionOrders(connection.id, { range, status, search, sort, page, perPage, archived })
       .then((data) => {
         setOrders(data.orders);
         setCounts(data.counts);
@@ -307,7 +328,7 @@ function AccountOrdersContent() {
       })
       .catch(() => setError("Couldn't load orders from eBay. Try again."))
       .finally(() => setLoading(false));
-  }, [connection, range, status, search, page, perPage, archived, reloadKey]);
+  }, [connection, range, status, search, sort, page, perPage, archived, reloadKey]);
 
   useAccountEvents(connection?.id, (event) => {
     if (event.kind === "orders") setReloadKey((k) => k + 1);
@@ -386,7 +407,7 @@ function AccountOrdersContent() {
         </div>
       }
       subheader={
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="inline-flex flex-shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
             {STATUS_TABS.map((tab) => (
               <button
@@ -401,7 +422,7 @@ function AccountOrdersContent() {
               </button>
             ))}
           </div>
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
             <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
             {(archivedCount > 0 || archived) && (
               <button
@@ -416,13 +437,13 @@ function AccountOrdersContent() {
                 Archived{archivedCount ? ` · ${archivedCount}` : ""}
               </button>
             )}
-            <select value={range} onChange={(e) => changeRange(e.target.value as OrderRange)} className="input input-sm w-auto flex-shrink-0 !pr-8" aria-label="Period">
-              {(Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => (
-                <option key={key} value={key}>
-                  {RANGE_LABELS[key]}
-                </option>
-              ))}
-            </select>
+            <ViewMenu
+              title="Period and sort"
+              sections={[
+                { label: "Period", value: range, options: (Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => ({ key, label: RANGE_LABELS[key] })), onChange: (k) => changeRange(k as OrderRange) },
+                { label: "Sort", value: sort, options: (Object.keys(SORT_LABELS) as OrderSort[]).map((key) => ({ key, label: SORT_LABELS[key] })), onChange: (k) => changeSort(k as OrderSort) },
+              ]}
+            />
             <form onSubmit={handleSearchSubmit} className="relative w-56 min-w-[160px] flex-shrink">
               <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
                 <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />

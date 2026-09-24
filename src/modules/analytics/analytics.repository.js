@@ -182,7 +182,42 @@ async function allSyncStates() {
   return rows;
 }
 
+// ---- listing health checks (migration 020) --------------------------------------
+
+/** The deeper check saved for a listing, or null. */
+async function getHealthCheck(connectionId, itemId) {
+  const { rows } = await query('SELECT checked_at, result FROM listing_health_checks WHERE connection_id = $1 AND item_id = $2', [connectionId, String(itemId)]);
+  return rows[0] || null;
+}
+
+/** Saved checks for these listings: itemId -> { checked_at, result }. */
+async function healthChecksFor(connectionId, itemIds) {
+  if (!itemIds.length) return new Map();
+  const { rows } = await query('SELECT item_id, checked_at, result FROM listing_health_checks WHERE connection_id = $1 AND item_id = ANY($2)', [connectionId, itemIds.map(String)]);
+  return new Map(rows.map((r) => [r.item_id, r]));
+}
+
+async function saveHealthCheck(connectionId, itemId, result) {
+  const { rows } = await query(
+    `INSERT INTO listing_health_checks (connection_id, item_id, result, checked_at) VALUES ($1, $2, $3, now())
+     ON CONFLICT (connection_id, item_id) DO UPDATE SET result = EXCLUDED.result, checked_at = now()
+     RETURNING checked_at, result`,
+    [connectionId, String(itemId), result]
+  );
+  return rows[0];
+}
+
+/** A saved check's result replaced, keeping when eBay was read for it. */
+async function updateHealthCheckResult(connectionId, itemId, result) {
+  const { rows } = await query('UPDATE listing_health_checks SET result = $3 WHERE connection_id = $1 AND item_id = $2 RETURNING checked_at, result', [connectionId, String(itemId), result]);
+  return rows[0] || null;
+}
+
 module.exports = {
+  getHealthCheck,
+  updateHealthCheckResult,
+  healthChecksFor,
+  saveHealthCheck,
   upsertTraffic,
   clearListingDay,
   accountDays,

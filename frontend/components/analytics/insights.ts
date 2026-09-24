@@ -1,12 +1,13 @@
-// What to do next, from the figures already on the page (no eBay calls):
-// groups of listings with one clear action each, shared by the "Growth
-// opportunities" card and the Listings table's filter, so a group clicked
-// in the card is exactly what the table then shows.
-import type { AnalyticsHint, ListingAnalyticsRow } from "@/lib/api";
+// What to do next, from each listing's health (backend listing-health.js,
+// worked out from figures Liston already has): groups of listings with one
+// clear action each, shared by the "Growth opportunities" card and the
+// Listings table's filter, so a group clicked in the card is exactly what
+// the table then shows.
+import type { HealthStage, ListingAnalyticsRow, ListingEdit } from "@/lib/api";
 
-export type ActionKey = "restock" | "watchers" | "no_sales" | "low_ctr" | "no_impressions";
-export type ListingFilter = "all" | "attention" | "converting" | ActionKey;
-export type Tone = "brand" | "good" | "warn" | "bad";
+export type ActionKey = "restock" | "watchers" | "not_shown" | "not_clicked" | "not_bought" | "declining";
+export type ListingFilter = "all" | "attention" | "updated" | "converting" | ActionKey;
+export type Tone = "brand" | "good" | "warn" | "bad" | "neutral";
 
 export interface ActionDef {
   key: ActionKey;
@@ -14,16 +15,17 @@ export interface ActionDef {
   action: string; // what to do, one line
   tone: Tone;
   icon: string; // an SVG path on a 16×16 grid
-  test: (row: ListingAnalyticsRow, days: number) => boolean;
+  test: (row: ListingAnalyticsRow) => boolean;
 }
 
-/** Days of stock left at this range's pace, or null when it isn't selling. */
-export function daysOfStock(row: ListingAnalyticsRow, days: number): number | null {
-  if (row.quantityAvailable == null || !row.sold || days <= 0) return null;
-  return row.quantityAvailable / (row.sold / days);
-}
+// Updated in Liston and its results not in yet: its verdict is from the
+// days before the fix, so it waits under "Updated", not Needs attention.
+export const waitingOnEdit = (r: ListingAnalyticsRow) => Boolean(r.lastEdit?.waiting);
+export const needsAttention = (r: ListingAnalyticsRow) => Boolean(r.health?.problem) && !waitingOnEdit(r);
 
-// In order of what's worth money soonest.
+// In the order they cost money: not seen at all, seen but passed over,
+// visited but not bought, then what's falling; stock and watchers first
+// because they're the quickest wins.
 export const ACTIONS: ActionDef[] = [
   {
     key: "restock",
@@ -31,62 +33,95 @@ export const ACTIONS: ActionDef[] = [
     action: "Restock before your best sellers run out",
     tone: "brand",
     icon: "M3 6.5L8 3l5 3.5v6L8 16l-5-3.5z M8 9.5V16 M3 6.5l5 3 5-3",
-    test: (r, days) => (r.sold ?? 0) >= 2 && r.quantityAvailable != null && (r.quantityAvailable <= 2 || (daysOfStock(r, days) ?? Infinity) < 10),
+    test: (r) => Boolean(r.health?.flags.includes("restock")),
   },
   {
     key: "watchers",
     label: "Watched, not bought",
-    action: "Send watchers an offer from Seller Hub",
+    action: "Send the watchers an offer",
     tone: "brand",
     icon: "M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z M8 10a2 2 0 100-4 2 2 0 000 4z",
-    test: (r) => (r.watchers ?? 0) >= 3 && (r.sold ?? 0) === 0,
+    test: (r) => Boolean(r.health?.flags.includes("watchers")),
   },
   {
-    key: "no_sales",
-    label: "Viewed, not selling",
-    action: "Compare price and postage with similar listings",
-    tone: "warn",
-    icon: "M2 3h1.8l1.6 7.2h7.1L14 5H5 M6.5 13.5h.01 M11.5 13.5h.01",
-    test: (r) => r.hint?.kind === "no_sales",
-  },
-  {
-    key: "low_ctr",
-    label: "Seen, rarely clicked",
-    action: "Try a stronger main photo or a sharper title",
-    tone: "warn",
-    icon: "M8 2.5l1.6 3.4 3.7.4-2.8 2.5.8 3.7L8 10.6l-3.3 1.9.8-3.7-2.8-2.5 3.7-.4z",
-    test: (r) => r.hint?.kind === "low_ctr",
-  },
-  {
-    key: "no_impressions",
-    label: "Not showing in search",
-    action: "Fix title, category and item specifics",
+    key: "not_shown",
+    label: "Rarely shown in search",
+    action: "Fill item specifics and use more of the title",
     tone: "bad",
     icon: "M7 12.5a5.5 5.5 0 100-11 5.5 5.5 0 000 11z M11 11l3.5 3.5 M5 5l4 4 M9 5L5 9",
-    test: (r) => r.hint?.kind === "no_impressions",
+    test: (r) => r.health?.stage === "not_shown" && needsAttention(r),
+  },
+  {
+    key: "not_clicked",
+    label: "Seen, rarely clicked",
+    action: "A stronger main photo and a sharper title",
+    tone: "warn",
+    icon: "M8 2.5l1.6 3.4 3.7.4-2.8 2.5.8 3.7L8 10.6l-3.3 1.9.8-3.7-2.8-2.5 3.7-.4z",
+    test: (r) => r.health?.stage === "not_clicked" && needsAttention(r),
+  },
+  {
+    key: "not_bought",
+    label: "Clicked, not bought",
+    action: "Check price, postage and photos against similar listings",
+    tone: "warn",
+    icon: "M2 3h1.8l1.6 7.2h7.1L14 5H5 M6.5 13.5h.01 M11.5 13.5h.01",
+    test: (r) => r.health?.stage === "not_bought" && needsAttention(r),
+  },
+  {
+    key: "declining",
+    label: "Sales falling",
+    action: "Check what changed: price, stock or a competitor",
+    tone: "warn",
+    icon: "M2 4l4.5 4.5 3-3L14 10 M10 10h4V6",
+    test: (r) => r.health?.stage === "declining" && needsAttention(r),
   },
 ];
 
-export const actionDef = (key: ActionKey) => ACTIONS.find((a) => a.key === key)!;
+export const actionDef = (key: ActionKey) => ACTIONS.find((a) => a.key === key);
 
-export function matchesFilter(row: ListingAnalyticsRow, filter: ListingFilter, days: number): boolean {
+export function matchesFilter(row: ListingAnalyticsRow, filter: ListingFilter): boolean {
   if (filter === "all") return true;
-  if (filter === "attention") return row.hint != null && row.hint.kind !== "converting";
-  if (filter === "converting") return row.hint?.kind === "converting";
-  return actionDef(filter).test(row, days);
+  if (filter === "attention") return needsAttention(row);
+  if (filter === "updated") return row.lastEdit != null;
+  if (filter === "converting") return row.health?.stage === "converting";
+  // An unknown group (a filter saved before the groups changed) shows everything.
+  return actionDef(filter)?.test(row) ?? true;
 }
+
+/** The money a group of listings could make at the account's typical rates. */
+export const atStake = (rows: ListingAnalyticsRow[]) => rows.reduce((sum, r) => sum + (needsAttention(r) ? (r.health?.opportunity?.amount ?? 0) : 0), 0);
 
 export const TONE: Record<Tone, { dot: string; soft: string; text: string }> = {
   brand: { dot: "bg-[var(--color-primary)]", soft: "bg-[var(--color-primary-soft)]", text: "text-[var(--color-primary)]" },
   good: { dot: "bg-emerald-500", soft: "bg-emerald-50", text: "text-emerald-700" },
   warn: { dot: "bg-amber-500", soft: "bg-[var(--color-warning-soft)]", text: "text-[#92400e]" },
   bad: { dot: "bg-[var(--color-danger)]", soft: "bg-[var(--color-danger-soft)]", text: "text-[var(--color-danger)]" },
+  neutral: { dot: "bg-slate-400", soft: "bg-[var(--color-paper)]", text: "text-[var(--color-muted)]" },
 };
 
-// The table's insight, short enough to sit beside the price.
-export const HINT_SHORT: Record<AnalyticsHint["kind"], { label: string; tone: Tone }> = {
-  converting: { label: "Converting well", tone: "good" },
-  no_sales: { label: "Not selling", tone: "warn" },
-  low_ctr: { label: "Few clicks", tone: "warn" },
-  no_impressions: { label: "No impressions", tone: "bad" },
+// The table's tag for a listing's health, short enough to sit beside the
+// price: problems and strong sellers only (a healthy listing needs no tag).
+export const STAGE_TAG: Partial<Record<HealthStage, { label: string; tone: Tone }>> = {
+  not_shown: { label: "Rarely shown", tone: "bad" },
+  not_clicked: { label: "Few clicks", tone: "warn" },
+  not_bought: { label: "Not buying", tone: "warn" },
+  declining: { label: "Sales falling", tone: "warn" },
+  converting: { label: "Selling well", tone: "good" },
+  new: { label: "Settling in", tone: "neutral" },
 };
+
+const FIELD_LABEL: Record<ListingEdit["fields"][number], string> = {
+  title: "Title",
+  main_photo: "Main photo",
+  photos: "Photos",
+  price: "Price",
+  quantity: "Stock",
+  specifics: "Item specifics",
+  description: "Description",
+};
+
+/** An edit's fields as words: "Price and description". */
+export function editedFields(fields: ListingEdit["fields"]): string {
+  const names = fields.map((f, i) => (i === 0 ? FIELD_LABEL[f] : FIELD_LABEL[f].toLowerCase()));
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] ?? "Listing");
+}

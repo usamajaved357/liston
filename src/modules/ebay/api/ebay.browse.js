@@ -66,10 +66,10 @@ function getItemsByItemGroup(itemGroupId, marketplaceId) {
   return request('/buy/browse/v1/item/get_items_by_item_group', { item_group_id: itemGroupId }, marketplaceId);
 }
 
-function searchItemSummaries({ q, limit = 25, filter }, marketplaceId) {
+function searchItemSummaries({ q, limit = 25, filter, categoryIds, sort }, marketplaceId) {
   return request(
     '/buy/browse/v1/item_summary/search',
-    { q, limit, ...(filter ? { filter } : {}) },
+    { q, limit, ...(filter ? { filter } : {}), ...(categoryIds ? { category_ids: categoryIds } : {}), ...(sort ? { sort } : {}) },
     marketplaceId
   );
 }

@@ -590,7 +590,7 @@ test('startLiveEdit maps a variation listing with per-value pictures and prefers
 });
 
 test('startLiveEdit resumes an unfinished edit instead of creating a second copy', async () => {
-  mock.method(listingRepository, 'findLiveEdit', async () => ({ id: 'edit-existing' }));
+  mock.method(listingRepository, 'findLiveEdit', async () => ({ id: 'edit-existing', source_data: { liveStatus: 'Active' } }));
   const create = mock.method(listingRepository, 'createLiveEdit', async () => ({ id: 'edit-new' }));
   const row = await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001');
   assert.strictEqual(row.id, 'edit-existing');
@@ -1468,4 +1468,182 @@ test('fixPolicyWords still clears the words when the AI editor is unavailable', 
   assert.deepStrictEqual(result.remaining, []);
   assert.strictEqual(stored.generated_data.title, 'Eco-friendly Braid');
   assert.strictEqual(stored.generated_data.description, 'Uses weight clips.');
+});
+
+test('a live edit records what buyers would notice changed, with readable before and after', () => {
+  const draft = { title: 'Lamp', imageUrls: ['a.jpg', 'b.jpg'], price: { value: '9.99', currency: 'GBP' }, quantity: 3, aspects: { Brand: ['X'] }, description: 'Bright.' };
+  const before = listingService.editSnapshot(draft);
+  assert.strictEqual(listingService.editDifferences(before, listingService.editSnapshot({ ...draft })), null, 'nothing changed');
+  const after = listingService.editSnapshot({ ...draft, title: 'LED Desk Lamp', imageUrls: ['b.jpg', 'a.jpg'], aspects: { Brand: ['X'], Colour: ['Black'] } });
+  assert.deepStrictEqual(listingService.editDifferences(before, after), {
+    fields: ['title', 'main_photo', 'specifics'],
+    before: { title: 'Lamp', mainPhoto: 'a.jpg', photos: 2, price: 9.99, quantity: 3, specifics: 1 },
+    after: { title: 'LED Desk Lamp', mainPhoto: 'b.jpg', photos: 2, price: 9.99, quantity: 3, specifics: 2 },
+  });
+  const reordered = listingService.editSnapshot({ ...draft, imageUrls: ['a.jpg', 'c.jpg'] });
+  assert.deepStrictEqual(listingService.editDifferences(before, reordered).fields, ['photos'], 'same main photo, different set');
+  const variation = { commonTitle: 'Tee', imageUrls: ['a'], variesBy: { aspects: {} }, variants: [{ price: { value: '5' }, quantity: 2 }, { price: { value: '4' }, quantity: 1 }] };
+  assert.deepStrictEqual([listingService.editSnapshot(variation).price, listingService.editSnapshot(variation).quantity], [4, 3]);
+  assert.strictEqual(listingService.editDifferences(null, after), null, 'an edit started before snapshots were kept');
+});
+
+// An ended listing opened from the Inactive tab: eBay refuses to revise it,
+// so publishing relists it (a new item number) with the edit's fields.
+function endedEditRow(extra = {}) {
+  return { ...liveEditRow(extra), source_data: { liveOriginal: null, ended: true } };
+}
+
+test('startLiveEdit marks a listing that has ended, so publishing it relists', async () => {
+  mock.method(listingRepository, 'findLiveEdit', async () => null);
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getLiveItem', async () => liveItem({ listingStatus: 'Completed' }));
+  const create = mock.method(listingRepository, 'createLiveEdit', async (args) => ({ id: 'edit-1', ...args }));
+  await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001');
+  assert.strictEqual(create.mock.calls[0].arguments[0].sourceData.ended, true);
+
+  mock.method(ebayService, 'getLiveItem', async () => liveItem({ listingStatus: 'Active' }));
+  await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001');
+  assert.strictEqual(create.mock.calls[1].arguments[0].sourceData.ended, undefined);
+});
+
+test('publish on an ended listing made elsewhere relists it through Trading and points Liston at the new item', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => endedEditRow());
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  const revise = mock.method(ebayService, 'reviseLiveListing', async () => {
+    throw new Error('should not revise an ended listing');
+  });
+  const relist = mock.method(ebayService, 'relistLiveListing', async (credentials, connectionId, itemId, payload) => {
+    assert.strictEqual(itemId, '407000000001');
+    assert.strictEqual(payload.title, 'New title');
+    assert.strictEqual(payload.quantity, 5);
+    return { itemId: '407999999999', relistedFrom: itemId, warnings: [] };
+  });
+  mock.method(ebayService, 'removeListingFromMirror', () => {});
+  const recorded = mock.method(listingRepository, 'recordListingChange', async () => {});
+  const del = mock.method(listingRepository, 'deleteById', async () => {});
+
+  const result = await listingService.publish('edit-1', USER_ID);
+  assert.strictEqual(revise.mock.calls.length, 0);
+  assert.strictEqual(relist.mock.calls.length, 1);
+  assert.deepStrictEqual([result.relisted, result.external_product_id, result.relistedFrom], [true, '407999999999', '407000000001']);
+  assert.strictEqual(recorded.mock.calls.length, 0, 'a relist is a new listing: no before/after');
+  assert.strictEqual(del.mock.calls[0].arguments[0], 'edit-1');
+});
+
+test('publish on an ended Liston-published listing relists it through the Inventory API and records the new item number', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => endedEditRow());
+  mock.method(listingRepository, 'findPublishedByItemId', async () => ({ id: 'own-1', platform_offer_id: 'offer-7', sku: 'Liston-1-AB12', generated_data: { title: 'Old' } }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  mock.method(ebayService, 'reviseInventoryListing', async () => ({ listingId: '407888888888', warnings: [] }));
+  mock.method(ebayService, 'removeListingFromMirror', () => {});
+  mock.method(listingRepository, 'updateGeneratedData', async () => ({}));
+  const moved = mock.method(listingRepository, 'setExternalProductId', async () => ({}));
+  mock.method(listingRepository, 'deleteById', async () => {});
+
+  const result = await listingService.publish('edit-1', USER_ID);
+  assert.strictEqual(result.external_product_id, '407888888888');
+  assert.deepStrictEqual(moved.mock.calls[0].arguments, ['own-1', '407888888888']);
+});
+
+test('an ended listing with no stock is refused before eBay, with what to change', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => endedEditRow({ quantity: 0 }));
+  const relist = mock.method(ebayService, 'relistLiveListing', async () => ({}));
+  await assert.rejects(() => listingService.publish('edit-1', USER_ID), /quantity above 0/);
+  assert.strictEqual(relist.mock.calls.length, 0);
+});
+
+test('a listing that ended while it was being edited is relisted when eBay refuses the revise', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => liveEditRow());
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  mock.method(ebayService, 'reviseLiveListing', async () => {
+    const err = new Error('You are not allowed to revise ended listings.');
+    err.details = [{ ErrorCode: '291' }];
+    throw err;
+  });
+  const relist = mock.method(ebayService, 'relistLiveListing', async () => ({ itemId: '407777777777', relistedFrom: '407000000001', warnings: [] }));
+  mock.method(ebayService, 'removeListingFromMirror', () => {});
+  mock.method(listingRepository, 'deleteById', async () => {});
+
+  const result = await listingService.publish('edit-1', USER_ID);
+  assert.strictEqual(relist.mock.calls.length, 1);
+  assert.deepStrictEqual([result.relisted, result.external_product_id], [true, '407777777777']);
+});
+
+test('an unfinished edit from before Liston recorded the listing status is re-checked, so an ended listing opens to relist', async () => {
+  const stale = { id: 'edit-old', edit_of_item_id: '407000000001', source_data: null, status: 'pending_review' };
+  mock.method(listingRepository, 'findLiveEdit', async () => stale);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  const getItem = mock.method(ebayService, 'getLiveItem', async () => liveItem({ listingStatus: 'Completed' }));
+  const update = mock.method(listingRepository, 'updateSourceData', async (id, sourceData) => ({ ...stale, source_data: sourceData }));
+  const create = mock.method(listingRepository, 'createLiveEdit', async () => ({}));
+
+  const row = await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001', { fromInactive: true });
+  assert.strictEqual(create.mock.calls.length, 0, 'the edit is resumed, not duplicated');
+  assert.deepStrictEqual([update.mock.calls[0].arguments[0], row.source_data.ended, row.source_data.liveStatus], ['edit-old', true, 'Completed']);
+
+  // Once known, a live one resumes without asking eBay again.
+  mock.method(listingRepository, 'findLiveEdit', async () => ({ ...stale, source_data: { liveStatus: 'Active' } }));
+  await listingService.startLiveEdit(CONNECTION_ID, USER_ID, '407000000001');
+  assert.strictEqual(getItem.mock.calls.length, 1);
+});
+
+test('an ended variation listing another tool made through the Inventory API is relisted through its inventory group', async () => {
+  const variants = [
+    { sku: 'e01ed291-ea33-43fb', price: { value: '9.99', currency: 'GBP' }, quantity: 1, aspects: { Colour: ['Pink'] }, condition: 'NEW', imageUrls: ['https://i.ebayimg.com/p.jpg'] },
+    { sku: '105aa986-0399-431e', price: { value: '9.99', currency: 'GBP' }, quantity: 1, aspects: { Colour: ['Green'] }, condition: 'NEW', imageUrls: ['https://i.ebayimg.com/g.jpg'] },
+  ];
+  mock.method(listingRepository, 'findByIdForUser', async () => ({
+    ...endedEditRow(),
+    generated_data: { commonTitle: 'Joypad shell', commonDescription: 'Case only', imageUrls: ['https://i.ebayimg.com/1.jpg'], variants, variesBy: { specifications: [{ name: 'Colour', values: ['Pink', 'Green'] }], aspects: { Brand: ['Unbranded'] } }, categoryId: '123' },
+  }));
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  mock.method(ebayService, 'relistLiveListing', async () => {
+    throw new Error('Inventory-based listing management is not currently supported by this tool.');
+  });
+  const lookup = mock.method(ebayService, 'inventoryRefForSkus', async (credentials, { skus, isVariation }) => {
+    assert.deepStrictEqual([skus[0], isVariation], ['e01ed291-ea33-43fb', true]);
+    return { groupKey: 'other-tool-group' };
+  });
+  const inventory = mock.method(ebayService, 'reviseInventoryListing', async (credentials, input) => {
+    assert.strictEqual(input.groupKey, 'other-tool-group');
+    return { listingId: '800600000001', warnings: [] };
+  });
+  mock.method(ebayService, 'removeListingFromMirror', () => {});
+  mock.method(listingRepository, 'deleteById', async () => {});
+
+  const result = await listingService.publish('edit-1', USER_ID);
+  assert.strictEqual(lookup.mock.calls.length, 1);
+  assert.strictEqual(inventory.mock.calls.length, 1);
+  assert.deepStrictEqual([result.relisted, result.external_product_id], [true, '800600000001']);
+});
+
+test('eBay refusing a relist because the same item is already live says which listing, not "internal error"', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => endedEditRow());
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'listActiveListings', async () => ({ items: [] }));
+  mock.method(ebayService, 'relistLiveListing', async () => {
+    const err = new Error(
+      "It looks like this listing is for an item you already have on eBay: For Nintendo Switch Joypad Controller Shell Case (800680929541). We don't allow listings for identical items from the same seller to appear on eBay at the same time."
+    );
+    err.statusCode = 502;
+    throw err;
+  });
+  await assert.rejects(
+    () => listingService.publish('edit-1', USER_ID),
+    (err) => err.statusCode === 409 && /already live on this account as #800680929541/.test(err.message)
+  );
 });

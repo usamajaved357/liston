@@ -9,7 +9,7 @@ const KNOWN_FEATURES = ['orders', 'listings', 'analytics', 'inbox', 'campaigns']
 
 async function listMembers(ownerId) {
   const result = await query(
-    `SELECT id, email, name, created_at
+    `SELECT id, email, name, created_at, last_login_at, deactivated_at
      FROM users WHERE parent_user_id = $1 AND role = 'member'
      ORDER BY created_at ASC`,
     [ownerId]
@@ -29,9 +29,17 @@ async function createMember({ ownerId, email, name, passwordHash }) {
 
 async function findMemberForOwner(id, ownerId) {
   const result = await query(
-    `SELECT id, email, name, created_at
+    `SELECT id, email, name, created_at, last_login_at, deactivated_at
      FROM users WHERE id = $1 AND parent_user_id = $2 AND role = 'member'`,
     [id, ownerId]
+  );
+  return result.rows[0] || null;
+}
+
+async function findRemovedMemberByEmail(ownerId, email) {
+  const result = await query(
+    `SELECT id, name FROM users WHERE lower(email) = lower($2) AND parent_user_id = $1 AND role = 'member' AND deactivated_at IS NOT NULL`,
+    [ownerId, email]
   );
   return result.rows[0] || null;
 }
@@ -45,9 +53,13 @@ async function setMemberPassword(id, ownerId, passwordHash) {
   return result.rowCount > 0;
 }
 
-async function deleteMember(id, ownerId) {
+// Removing a member takes their login away but keeps them (and their
+// activity, which salaries are worked out from); their access settings stay
+// for a restore.
+async function setMemberDeactivated(id, ownerId, deactivated) {
   const result = await query(
-    `DELETE FROM users WHERE id = $1 AND parent_user_id = $2 AND role = 'member'`,
+    `UPDATE users SET deactivated_at = ${deactivated ? 'now()' : 'NULL'}, updated_at = now()
+     WHERE id = $1 AND parent_user_id = $2 AND role = 'member'`,
     [id, ownerId]
   );
   return result.rowCount > 0;
@@ -144,7 +156,8 @@ module.exports = {
   listMembers,
   createMember,
   findMemberForOwner,
-  deleteMember,
+  setMemberDeactivated,
+  findRemovedMemberByEmail,
   setMemberPassword,
   getPermissions,
   setPermission,

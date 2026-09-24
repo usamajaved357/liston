@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const listingService = require('./listing.service');
+const activityRepository = require('../team/activity.repository');
 const logger = require('../../utils/logger');
 const { validationMessage } = require('../../utils/validation-message');
 
@@ -57,6 +58,7 @@ async function generateDraft(req, res, next) {
     }
 
     const listing = await listingService.generateEbayDraftFromUrls(req.params.id, req.ownerId, parsed.data);
+    await activityRepository.record({ actorUserId: req.userId, connectionId: listing.connection_id, kind: 'listing.drafted', subjectType: 'draft', subjectId: listing.id, ...listingFacts(listing.generated_data) });
     res.status(201).json({ listing });
   } catch (err) {
     next(err);
@@ -78,7 +80,8 @@ async function startLiveEdit(req, res, next) {
     if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
       return res.status(400).json({ error: 'That does not look like an eBay item number.' });
     }
-    const listing = await listingService.startLiveEdit(req.params.id, req.ownerId, String(req.params.itemId));
+    const fromInactive = req.query.inactive === '1' || req.body?.inactive === true;
+    const listing = await listingService.startLiveEdit(req.params.id, req.ownerId, String(req.params.itemId), { fromInactive });
     res.status(200).json({ listing });
   } catch (err) {
     next(err);
@@ -91,6 +94,7 @@ async function endLive(req, res, next) {
       return res.status(400).json({ error: 'That does not look like an eBay item number.' });
     }
     const result = await listingService.endLiveListing(req.params.id, req.ownerId, String(req.params.itemId));
+    await activityRepository.record({ actorUserId: req.userId, connectionId: req.params.id, kind: 'listing.ended', subjectType: 'listing', subjectId: String(req.params.itemId), title: req.body?.title || null });
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -128,9 +132,31 @@ async function descriptionPreview(req, res, next) {
   }
 }
 
+// A listing's title and (lowest) price, for the team activity record.
+function listingFacts(draft = {}) {
+  const variants = Array.isArray(draft.variants) ? draft.variants : [];
+  const prices = (variants.length ? variants.map((v) => v.price) : [draft.price]).map((p) => Number(p?.value)).filter((n) => Number.isFinite(n) && n > 0);
+  const currency = (variants[0]?.price || draft.price)?.currency || null;
+  return { title: (variants.length ? draft.commonTitle : draft.title) || draft.title || null, amount: prices.length ? Math.min(...prices) : null, currency: prices.length ? currency : null };
+}
+
+// Publishing is one of three kinds of work: a new listing, an edit to a
+// live one, or putting an ended one back.
+async function recordPublish(actorUserId, listing) {
+  const base = { actorUserId, connectionId: listing.connection_id, subjectType: 'listing', ...listingFacts(listing.generated_data) };
+  if (listing.relisted) {
+    await activityRepository.record({ ...base, kind: 'listing.relisted', subjectId: listing.external_product_id, detail: { from: listing.relistedFrom } });
+  } else if (listing.edit_of_item_id) {
+    await activityRepository.record({ ...base, kind: 'listing.edited', subjectId: listing.edit_of_item_id, detail: { fields: listing.changedFields || [] } });
+  } else if (listing.external_product_id) {
+    await activityRepository.record({ ...base, kind: 'listing.published', subjectId: listing.external_product_id });
+  }
+}
+
 async function publish(req, res, next) {
   try {
     const listing = await listingService.publish(req.params.listingId, req.ownerId);
+    await recordPublish(req.userId, listing);
     const { warnings = [], ...row } = listing;
     res.status(200).json({ listing: row, warnings });
   } catch (err) {
@@ -421,7 +447,11 @@ async function splitVariant(req, res, next) {
 
 async function remove(req, res, next) {
   try {
-    await listingService.removeDraft(req.params.listingId, req.ownerId);
+    const draft = await listingService.removeDraft(req.params.listingId, req.ownerId);
+    // Discarding a live listing's working copy isn't work to record; a draft is.
+    if (draft && !draft.edit_of_item_id) {
+      await activityRepository.record({ actorUserId: req.userId, connectionId: draft.connection_id, kind: 'listing.draft_deleted', subjectType: 'draft', subjectId: draft.id, ...listingFacts(draft.generated_data) });
+    }
     res.status(204).send();
   } catch (err) {
     next(err);

@@ -110,15 +110,17 @@ async function getListings(req, res, next) {
     // perPage=all puts everything on one page.
     const perPage = req.query.perPage === 'all' ? 0 : Math.min(200, Math.max(1, parseInt(req.query.perPage, 10) || 25));
     const search = typeof req.query.q === 'string' ? req.query.q : '';
+    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Listings aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listListingsDetailed(credentials, {
+      return listingService.pageOfListings(credentials, {
         connectionId: req.params.id,
         status,
         search,
+        sort,
         page,
         perPage,
         hiddenItemIds: status === 'inactive' ? connection.settings?.hiddenItemIds || [] : [],
@@ -132,6 +134,7 @@ async function getListings(req, res, next) {
       totalPages: result.totalPages,
       page: result.page,
       perPage: result.perPage,
+      sort: result.sort,
       allCount: result.allCount,
       syncedAt: result.syncedAt ? new Date(result.syncedAt).toISOString() : null,
     });
@@ -148,13 +151,14 @@ async function getOrders(req, res, next) {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
     const archived = req.query.archived === '1' || req.query.archived === 'true';
+    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
     const archivedOrderIds = await require('../orders/order.service').archivedOrderIds(req.params.id).catch(() => []);
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived });
     });
 
     // Each row's supplier-order state, so the list can show it and take a
@@ -166,6 +170,7 @@ async function getOrders(req, res, next) {
     res.status(200).json({
       orders: result.orders.map((o) => ({ ...o, sourcing: sourcingByOrder[o.orderId] || [] })),
       counts: result.counts,
+      sort: result.sort,
       totalEntries: result.totalEntries,
       totalPages: result.totalPages,
       page: result.page,
@@ -228,7 +233,7 @@ async function events(req, res, next) {
 
 async function getEarnings(req, res, next) {
   try {
-    const range = EARNINGS_RANGES.includes(req.query.range) ? req.query.range : '7d';
+    const range = EARNINGS_RANGES.includes(req.query.range) ? req.query.range : 'today';
     const { from, to } = req.query;
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {

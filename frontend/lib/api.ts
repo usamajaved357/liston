@@ -193,7 +193,49 @@ export interface TeamMember {
   email: string;
   name: string | null;
   created_at: string;
+  last_login_at?: string | null;
+  deactivated_at?: string | null; // removed: no login, history kept
+  lastActiveAt?: string | null; // their last recorded action
+  today?: TeamMetrics; // what they've done today (Team page cards)
   permissions: TeamMemberPermission[];
+}
+
+// A member's figures (backend team/activity.js METRICS). An order line or
+// listing counts once per range, however often it was touched.
+export type TeamMetricKey = "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted";
+export type TeamMetrics = Record<TeamMetricKey, number>;
+export type TeamRange = "today" | "yesterday" | "7d" | "30d" | "this_month" | "last_month" | "custom";
+
+export interface MemberOverview {
+  member: TeamMember & { lastActiveAt: string | null };
+  recordingSince: string | null; // when Liston started noting who did what (listing work before it isn't attributed)
+  range: { key: TeamRange; from: string; to: string; days: number; timeZone: string; previous: { from: string; to: string } };
+  metrics: { key: TeamMetricKey; label: string }[];
+  totals: TeamMetrics;
+  previous: TeamMetrics;
+  actions: number; // every recorded action in the range
+  series: ({ day: string } & TeamMetrics)[];
+  previousSeries: ({ day: string } & TeamMetrics)[]; // the period before, lined up day by day
+  accounts: ({ connectionId: string | null; label: string; actions: number } & TeamMetrics)[];
+  permissions: TeamMemberPermission[];
+  connections: { id: string; label: string }[];
+  knownFeatures: string[];
+}
+
+export interface MemberActivityItem {
+  id: string;
+  kind: string;
+  label: string;
+  subjectType: "order" | "listing" | "draft";
+  subjectId: string;
+  subjectPart: string | null;
+  title: string | null;
+  amount: number | null;
+  currency: string | null;
+  detail: Record<string, unknown>;
+  connectionId: string | null;
+  connectionLabel: string | null;
+  at: string;
 }
 
 export interface PermissionUpdate {
@@ -233,7 +275,16 @@ export interface Listing {
   viewItemUrl: string | null;
   startTime: string | null;
   endTime: string | null;
+  lastSoldAt?: string | null; // its latest sale in the orders Liston holds (90 days)
+  lastEditedAt?: string | null; // its latest edit from Liston
 }
+
+// The Orders page's orders (backend orders/order-sort.js). Left unset, the
+// backend picks: the nearest dispatch deadline on Awaiting dispatch, else newest.
+export type OrderSort = "newest" | "oldest" | "dispatch_soonest" | "total_high";
+
+// The Listings tab's orders (backend listing-sort.js).
+export type ListingSort = "newest" | "edited" | "best_selling" | "last_sold" | "not_selling" | "low_stock" | "price_high" | "price_low";
 
 export interface OrderLineItem {
   itemId: string | null;
@@ -876,6 +927,8 @@ export interface DraftListing {
   updated_at: string;
   // Set when this row is a live listing opened for editing (never a draft).
   edit_of_item_id?: string | null;
+  // `ended`: the listing had ended when opened, so publishing relists it.
+  source_data?: { ended?: boolean } | null;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
@@ -915,10 +968,91 @@ export interface AnalyticsSource {
   views: number;
 }
 
-export interface AnalyticsHint {
-  kind: "no_impressions" | "low_ctr" | "no_sales" | "converting";
+// A listing's health over a range (backend listing-health.js): where buyers
+// drop off from search to sale, judged against the account's typical
+// listing, why that's likely, and roughly what it costs.
+export type HealthStage = "new" | "unmeasured" | "low_data" | "not_shown" | "not_clicked" | "not_bought" | "declining" | "converting" | "healthy";
+export type HealthFix = "title" | "description" | "photo" | "photos" | "specifics" | "price" | "offer" | "restock";
+
+export interface HealthReason {
+  key: string;
+  status: "fail" | "warn" | "pass" | "info";
+  text: string;
+  fix?: HealthFix;
+}
+
+export interface HealthRates {
+  impressionsPerDay: number;
+  ctr: number | null;
+  conversion: number | null;
+}
+
+export interface ListingHealth {
+  stage: HealthStage;
   label: string;
+  tone: "good" | "warn" | "bad" | "neutral";
+  problem: boolean; // worth attention: at least half a sale more at stake
+  minor?: boolean; // a weak step, but worth under half a sale over these days
   detail: string;
+  flags: ("restock" | "watchers")[];
+  rates?: HealthRates;
+  normal?: HealthRates; // the account's typical listing
+  opportunity?: { units: number; amount: number }; // more sales at the typical rate, over these days
+  reasons?: HealthReason[];
+}
+
+export interface AnalyticsBenchmarks {
+  impressionsPerDay: number;
+  ctr: number;
+  conversion: number;
+  listings: number; // listings with enough data behind them
+}
+
+// What a deeper check found (the live listing, its category's item
+// specifics, similar listings' prices), or Liston's own draft.
+export interface ListingQuality {
+  source: "draft" | "check";
+  titleLength?: number;
+  photos?: number | null;
+  specificsCount?: number;
+  specificsMissing?: string[] | null;
+  specificsRecommended?: number | null;
+  descriptionLength?: number;
+  categoryId?: string | null;
+  shippingCost?: number | null;
+  dispatchDays?: number | null;
+  returnsAccepted?: boolean | null;
+  currency?: string | null;
+  competitor?: { query?: string; compared?: number; cheapest: number | null; median?: number | null; error?: string } | null;
+  editedAt?: string; // brought up to date by an edit published from Liston (no eBay call)
+}
+
+export interface HealthCheck {
+  checkedAt: string;
+  quality: ListingQuality;
+  calls: number;
+}
+
+export interface ListingEditFigures {
+  days: number;
+  impressionsPerDay: number;
+  viewsPerDay: number;
+  ctr: number | null;
+  soldPerDay: number | null;
+  conversion: number | null;
+}
+
+// A live edit made in Liston and the listing's figures either side of it.
+export interface ListingEdit {
+  id: string;
+  changedAt: string;
+  day: string;
+  fields: ("title" | "main_photo" | "photos" | "price" | "quantity" | "specifics" | "description")[];
+  before: { title?: string; mainPhoto?: string | null; photos?: number; price?: number | null; quantity?: number; specifics?: number };
+  after: { title?: string; mainPhoto?: string | null; photos?: number; price?: number | null; quantity?: number; specifics?: number };
+  figuresBefore: ListingEditFigures | null;
+  figuresAfter: ListingEditFigures | null;
+  waitDays: number; // complete days still needed before "after" is judged
 }
 
 export interface AnalyticsRangeInfo {
@@ -938,6 +1072,15 @@ export interface AnalyticsRangeInfo {
 // store's listing outside eBay's busiest 200 on some day.
 export type ListingTrafficState = "measured" | "pending" | "below" | "unknown";
 
+// A listing's latest edit from Liston, for the Analytics table.
+export interface ListingLastEdit {
+  changedAt: string;
+  day: string; // in the seller's time zone
+  fields: ListingEdit["fields"];
+  waiting: boolean; // its results aren't in yet: kept out of Needs attention
+  resultsFrom: string; // the day its effect is first judged
+}
+
 export interface ListingAnalyticsRow extends AnalyticsMetrics {
   itemId: string;
   title: string;
@@ -948,7 +1091,8 @@ export interface ListingAnalyticsRow extends AnalyticsMetrics {
   watchers: number | null; // buyers watching it now
   traffic: ListingTrafficState;
   changes: AnalyticsChanges;
-  hint: AnalyticsHint | null;
+  health: ListingHealth | null;
+  lastEdit: ListingLastEdit | null; // its latest edit from Liston in the last 2 weeks
 }
 
 export type AnalyticsStatus = "ok" | "reconnect" | "unsupported";
@@ -987,6 +1131,7 @@ export interface AccountAnalytics {
   leadInSeries?: AnalyticsDay[] | null; // a single-day range: the 14 days ending with it, for the chart
   sources: AnalyticsSource[];
   listings: ListingAnalyticsRow[];
+  benchmarks: AnalyticsBenchmarks | null; // the account's typical listing over this range
   listingReport: ListingReportInfo;
   sync: {
     lastSyncedAt: string | null;
@@ -1025,7 +1170,11 @@ export interface ListingAnalytics {
   previousSeries: AnalyticsDay[];
   leadInSeries?: AnalyticsDay[] | null;
   sources: AnalyticsSource[];
-  hint: AnalyticsHint | null;
+  health: ListingHealth | null;
+  benchmarks: AnalyticsBenchmarks | null;
+  check: HealthCheck | null; // the last deeper check, if one was run
+  checkCalls: { listing: number; competitor: number };
+  edits: ListingEdit[];
   dailyTrafficDays: number; // days in the range with this listing's daily traffic
   comparable: boolean; // false when the listing started after the previous period began
   canRead: boolean; // "Read this listing" is offered (not in the stored days, allowance left)
@@ -1033,12 +1182,6 @@ export interface ListingAnalytics {
   sync: { finalThrough: string | null };
 }
 
-export interface ListingAnalyticsSummaries {
-  status: "ok" | "reconnect";
-  from: string;
-  to: string;
-  items: Record<string, { traffic: ListingTrafficState; views: number | null; impressions: number | null; sold: number; watchers: number | null }>;
-}
 
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
 
@@ -1134,10 +1277,10 @@ export const api = {
 
   deleteAvatar: () => request<{ message: string }>("/api/users/me/avatar", { method: "DELETE" }),
 
-  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "") => {
-    const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage) });
+  getConnectionListings: (id: string, status: ListingStatusFilter, page = 1, perPage: number | "all" = 25, search = "", sort: ListingSort = "newest") => {
+    const params = new URLSearchParams({ status, page: String(page), perPage: String(perPage), sort });
     if (search) params.set("q", search);
-    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; allCount: number; syncedAt: string | null }>(
+    return request<{ items: Listing[]; totalEntries: number; totalPages: number; page: number; perPage: number; sort: ListingSort; allCount: number; syncedAt: string | null }>(
       `/api/connections/${id}/listings?${params.toString()}`
     );
   },
@@ -1147,7 +1290,7 @@ export const api = {
 
   getConnectionOrders: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; page?: number; perPage?: number; archived?: boolean }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean }
   ) => {
     const query = new URLSearchParams({
       range: params.range,
@@ -1156,6 +1299,7 @@ export const api = {
       perPage: String(params.perPage ?? 25),
     });
     if (params.search) query.set("search", params.search);
+    if (params.sort) query.set("sort", params.sort);
     if (params.archived) query.set("archived", "1");
     return request<{
       orders: Order[];
@@ -1215,7 +1359,8 @@ export const api = {
     request<{ calls: number; listings: number }>(`/api/connections/${id}/analytics/listings/all?range=${range}`, { method: "POST" }),
   readListingAnalytics: (id: string, itemId: string, range: AnalyticsRange) =>
     request<{ calls: number }>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/read?range=${range}`, { method: "POST" }),
-  getListingAnalyticsSummaries: (id: string) => request<ListingAnalyticsSummaries>(`/api/connections/${id}/analytics/listings/summary`),
+  checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
+    request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
 
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });
@@ -1300,8 +1445,9 @@ export const api = {
     request<{ itemId: string; endTime: string | null; warnings: string[] }>(`/api/connections/${connectionId}/listings/${itemId}/end`, { method: "POST" }),
 
   // Opens a live eBay listing in the editor; returns the transient working copy.
-  startLiveEdit: (connectionId: string, itemId: string) =>
-    request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit`, { method: "POST" }),
+  // `inactive`: opened from the Inactive tab to relist it.
+  startLiveEdit: (connectionId: string, itemId: string, { inactive = false }: { inactive?: boolean } = {}) =>
+    request<{ listing: DraftListing }>(`/api/connections/${connectionId}/listings/${itemId}/edit${inactive ? "?inactive=1" : ""}`, { method: "POST" }),
 
   listDraftListings: (connectionId: string) =>
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
@@ -1335,7 +1481,7 @@ export const api = {
     request<StoreCategoriesResponse>(`/api/connections/${connectionId}/store-categories`, { method: "POST", body: JSON.stringify(input) }),
 
   publishDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; warnings?: string[] }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
+    request<{ listing: DraftListing & { relisted?: boolean; relistedFrom?: string }; warnings?: string[] }>(`/api/listings/${listingId}/publish`, { method: "POST" }),
 
   // A draft lives only in Liston until Publish, so every edit below is a
   // plain update — nothing touches eBay until the seller decides to go live.
@@ -1410,6 +1556,29 @@ export const api = {
     }),
 
   removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
+  restoreTeamMember: (id: string) => request<void>(`/api/team/members/${id}/restore`, { method: "POST" }),
+
+  // A member's page: figures for a range (the owner's days), per day and account.
+  getMemberOverview: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
+    const q = new URLSearchParams({ range });
+    if (range === "custom" && custom) {
+      q.set("from", custom.from);
+      q.set("to", custom.to);
+    }
+    return request<MemberOverview>(`/api/team/members/${id}/overview?${q.toString()}`);
+  },
+
+  // Their activity log, newest first; `before` pages on, `kind` is an activity kind or a figure's key.
+  getMemberActivity: (
+    id: string,
+    params: { range: TeamRange; from?: string; to?: string; kind?: string; connectionId?: string; before?: string; limit?: number }
+  ) => {
+    const q = new URLSearchParams({ range: params.range });
+    for (const [k, v] of Object.entries(params)) if (k !== "range" && v !== undefined && v !== "") q.set(k, String(v));
+    return request<{ items: MemberActivityItem[]; next: string | null; range: { key: TeamRange; from: string; to: string; timeZone: string } }>(
+      `/api/team/members/${id}/activity?${q.toString()}`
+    );
+  },
   setTeamMemberPassword: (id: string, password: string) =>
     request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 

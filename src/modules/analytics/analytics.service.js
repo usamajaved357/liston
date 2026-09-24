@@ -32,6 +32,8 @@ const accountEvents = require('../ebay/account-events');
 const logger = require('../../utils/logger');
 const repo = require('./analytics.repository');
 const d = require('./analytics-days');
+const health = require('./listing-health');
+const listingRepository = require('../listings/listing.repository');
 
 // Stores up to this size have every listing read each day (5 calls); a
 // bigger one gets eBay's busiest 200 (1 call).
@@ -452,6 +454,267 @@ function describeReport(report) {
   return { state: 'ok', scope: report.scope, cutoff: report.cutoff, measured: (report.rows || []).length, fetchedAt: report.fetched_at };
 }
 
+// ---- listing health: deeper check and edits ---------------------------------------
+
+// What a deeper check costs: the full listing (1 Trading call), plus 1
+// search of similar listings when their prices are wanted. The category's
+// item specifics come from Liston's cache of eBay's taxonomy.
+const CHECK_CALLS = { listing: 1, competitor: 1 };
+const COMPETITOR_SAMPLE = 20;
+
+// A title's first words, without filler and sizes, for finding similar
+// listings (eBay's search matches every word, so fewer finds more).
+function searchWords(title) {
+  const skip = new Set(['for', 'with', 'and', 'the', 'of', 'to', 'in', 'a', 'an', 'uk', 'new', '&', '-', '+', '|']);
+  return String(title || '')
+    .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !skip.has(w.toLowerCase()) && w.length > 1)
+    .slice(0, 6)
+    .join(' ');
+}
+
+/**
+ * The cheapest delivered prices of similar fixed-price listings on the same
+ * site and category (1 Browse call), leaving out this seller's own.
+ */
+async function similarPrices(item, { marketplaceId, sellerUsername }) {
+  const q = searchWords(item.title);
+  if (!q) return null;
+  const filters = ['buyingOptions:{FIXED_PRICE}', ...(item.currency ? [`priceCurrency:${item.currency}`] : [])];
+  const res = await ebayService.searchSimilarListings({ q, categoryId: item.categoryId, filter: filters.join(','), limit: COMPETITOR_SAMPLE }, marketplaceId);
+  const prices = (res.itemSummaries || [])
+    .filter((s) => String(s.legacyItemId || '') !== String(item.itemId) && (!sellerUsername || s.seller?.username !== sellerUsername))
+    .map((s) => {
+      const price = Number(s.price?.value);
+      const ship = s.shippingOptions?.[0]?.shippingCost ? Number(s.shippingOptions[0].shippingCost.value) : 0;
+      return Number.isFinite(price) ? Math.round((price + (Number.isFinite(ship) ? ship : 0)) * 100) / 100 : null;
+    })
+    .filter((v) => v != null)
+    .sort((a, b) => a - b);
+  if (!prices.length) return { query: q, compared: 0, cheapest: null, median: null };
+  return { query: q, compared: prices.length, cheapest: prices[0], median: health.median(prices) };
+}
+
+/**
+ * "Deeper check" on one listing, on request: reads the live listing from
+ * eBay (photos, specifics, postage, dispatch, returns), compares its item
+ * specifics with what its category requires or recommends and, with
+ * `competitor`, similar listings' delivered prices. Saved, so reopening
+ * the listing costs nothing; its reasons feed the listing's health.
+ */
+async function checkListing(connectionId, ownerId, itemId, { competitor = false } = {}) {
+  return connectionService.withDecryptedCredentials(connectionId, ownerId, async (credentials, connection) => {
+    const item = await ebayService.getLiveItem(credentials, String(itemId));
+    const marketplaceId = connection.settings?.ebay?.marketplaceId || credentials.marketplaceId || 'EBAY_GB';
+    const schema = item.categoryId ? await ebayService.categoryAspectSchema(marketplaceId, item.categoryId) : null;
+    let prices = null;
+    if (competitor) {
+      prices = await similarPrices(item, { marketplaceId, sellerUsername: connection.settings?.ebay?.username }).catch((err) => {
+        logger.warn('Similar listings not read for the health check', { connectionId, itemId, error: err.message });
+        return { error: "eBay's search didn't answer; try again later." };
+      });
+    }
+    const quality = health.qualityFromItem({ ...item, currency: item.currency || item.price?.currency }, schema, prices);
+    const saved = await repo.saveHealthCheck(connectionId, itemId, { quality, calls: CHECK_CALLS.listing + (competitor ? CHECK_CALLS.competitor : 0) });
+    accountEvents.emitUpdated(connectionId, 'analytics');
+    return { data: { checkedAt: saved.checked_at, quality, calls: saved.result.calls } };
+  });
+}
+
+/**
+ * After a live edit is published from Liston: the listing's saved deeper
+ * check, if it has one, updated to what the edit sent (no eBay call), so
+ * its reasons — and "Apply recommended changes" — don't ask again for a
+ * fix that is already live.
+ */
+async function checkAfterEdit(connectionId, itemId, draft) {
+  const saved = await repo.getHealthCheck(connectionId, itemId);
+  if (!saved?.result?.quality) return null;
+  const quality = health.qualityAfterEdit(saved.result.quality, draft);
+  const updated = await repo.updateHealthCheckResult(connectionId, itemId, { ...saved.result, quality });
+  accountEvents.emitUpdated(connectionId, 'analytics');
+  return updated;
+}
+
+// Days either side of an edit that its effect is measured over.
+const EDIT_WINDOW = 14;
+const EDIT_MIN_DAYS = 3;
+
+// Where an edit stands: its day in the seller's time zone, the complete
+// days after it so far, and the day its effect is first judged.
+function editTiming(changedAt, { timeZone, lastFinal }) {
+  const day = d.dayOf(changedAt, timeZone);
+  const afterTo = [d.addDays(day, EDIT_WINDOW), lastFinal].sort()[0];
+  const afterDays = afterTo > day ? d.dayCount(d.addDays(day, 1), afterTo) : 0;
+  return { day, afterTo, afterDays, waitDays: Math.max(0, EDIT_MIN_DAYS - afterDays), resultsFrom: d.addDays(day, EDIT_MIN_DAYS + 1) };
+}
+
+/**
+ * Each listing's latest edit from Liston in the last EDIT_WINDOW days, for
+ * the Analytics table: "Updated 23 Sept", and while its results aren't in
+ * (`waiting`) it is kept out of Needs attention — its verdict is from
+ * before the fix.
+ */
+async function recentEdits(connectionId, { timeZone, lastFinal }) {
+  const since = new Date(Date.now() - (EDIT_WINDOW + 1) * 864e5);
+  const latest = await listingRepository.latestChanges(connectionId, since);
+  const out = new Map();
+  for (const [itemId, c] of latest) {
+    const t = editTiming(c.changed_at, { timeZone, lastFinal });
+    out.set(itemId, { changedAt: c.changed_at, day: t.day, fields: c.fields, waiting: t.waitDays > 0, resultsFrom: t.resultsFrom });
+  }
+  return out;
+}
+
+/**
+ * A listing's recent live edits with its figures in the days before and
+ * after each ("title changed on 12 Sept: click-through 0.8% → 1.9%").
+ * From stored days; `after` waits until at least 3 complete days exist.
+ */
+async function editEffects(connectionId, itemId, { timeZone, lastFinal, listingSales, ordersFrom }) {
+  const changes = await listingRepository.listingChanges(connectionId, itemId, 5);
+  const figures = async (from, to) => {
+    if (to < from) return null;
+    const [rows, reads] = await Promise.all([repo.listingDays(connectionId, itemId, from, to), repo.dayReads(connectionId, from, to)]);
+    const known = new Set(rows.map((r) => r.day));
+    for (const r of reads) if (r.listing_ids ? r.listing_ids.map(String).includes(String(itemId)) : r.cutoff == null) known.add(r.day);
+    // Per day over the days its figures are known (a day before it was
+    // listed, or one not read, doesn't count as a zero).
+    const days = known.size;
+    if (days < Math.max(EDIT_MIN_DAYS, Math.ceil(d.dayCount(from, to) * 0.5))) return null;
+    const salesKnown = from >= ordersFrom;
+    const m = d.metricsFrom(d.sumTraffic(rows), d.salesWithin(listingSales, from, to));
+    return {
+      days,
+      impressionsPerDay: Math.round((m.impressions / days) * 10) / 10,
+      viewsPerDay: Math.round((m.views / days) * 10) / 10,
+      ctr: m.ctr,
+      soldPerDay: salesKnown ? Math.round((m.sold / days) * 100) / 100 : null,
+      conversion: salesKnown ? m.conversion : null,
+    };
+  };
+  return Promise.all(
+    changes.map(async (c) => {
+      const { day, afterTo, afterDays, waitDays } = editTiming(c.changed_at, { timeZone, lastFinal });
+      return {
+        id: String(c.id),
+        changedAt: c.changed_at,
+        day,
+        fields: c.fields,
+        before: c.before,
+        after: c.after,
+        figuresBefore: await figures(d.addDays(day, -EDIT_WINDOW), d.addDays(day, -1)),
+        figuresAfter: afterDays >= EDIT_MIN_DAYS ? await figures(d.addDays(day, 1), afterTo) : null,
+        waitDays,
+      };
+    })
+  );
+}
+
+/**
+ * Every live listing's figures for a range and the period before, added up
+ * from the stored days — never read from eBay here, whatever the range. A
+ * "Load all" report someone asked for (or one kept from earlier) fills in
+ * listings the history doesn't. Each entry: { item, m, t, prev }.
+ */
+async function listingFigures({ connectionId, inputs, status, state, timeZone, win, lastFinal, sales, ordersFrom }) {
+  let current = [];
+  let prior = [];
+  let history = null;
+  if (status === 'ok') {
+    const listedOn = listedOnMap(inputs.items, timeZone);
+    const args = { connectionId, inputs, timeZone, lastFinal };
+    const [hist, prevHist] = await Promise.all([
+      historyFor(connectionId, win.from, win.to, listedOn, state.history_from),
+      historyFor(connectionId, win.previous.from, win.previous.to, listedOn, state.history_from),
+    ]);
+    history = hist;
+    const [all, top, prevAll, prevTop] = await Promise.all([
+      reportFor({ ...args, from: win.from, to: win.to, scope: 'all' }),
+      reportFor({ ...args, from: win.from, to: win.to, scope: 'top' }),
+      reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'all' }),
+      reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'top' }),
+    ]);
+    current = [hist, all, top];
+    prior = [prevHist, prevAll, prevTop];
+  }
+  const entries = inputs.items.map((item) => {
+    const id = String(item.itemId);
+    const t = listingTraffic(current, id, history);
+    const m = listingMetrics(t, d.salesWithin(sales.byListingDay.get(id), win.from, win.to));
+    // The previous period: traffic when its stored days cover this listing,
+    // sales whenever the orders reach back that far — each compared on
+    // its own, so sales changes show while traffic history still fills.
+    const pt = trafficFrom(prior, id);
+    let prev = null;
+    if (liveThroughPrevious(item, win.previous.from, timeZone)) {
+      const pSales = win.previous.from >= ordersFrom ? d.salesWithin(sales.byListingDay.get(id), win.previous.from, win.previous.to) : null;
+      if (pt.state === 'measured' || pSales) {
+        prev = listingMetrics(pt, pSales || { units: 0, amount: 0, orders: 0 });
+        if (!pSales) Object.assign(prev, { sold: null, sales: null, conversion: null, orders: null });
+      }
+    }
+    return { item, m, t, prev };
+  });
+  return { entries, current, history };
+}
+
+/**
+ * Every listing's health over a range (see listing-health.js), judged
+ * against the account's typical listing over the same days. Quality comes
+ * from a saved deeper check, else Liston's own draft of the listing; no
+ * eBay calls. A range still running (this month on the 1st) isn't judged.
+ */
+async function healthFor(connectionId, entries, { win, today, timeZone }) {
+  const empty = { byId: new Map(), bench: null };
+  if (win.partial || !entries.length) return empty;
+  const ids = entries.map((e) => String(e.item.itemId));
+  const [drafts, checks] = await Promise.all([listingRepository.findPublishedDataByItemIds(connectionId, ids), repo.healthChecksFor(connectionId, ids)]);
+  const previousDays = d.dayCount(win.previous.from, win.previous.to);
+  const facts = entries.map((e) => {
+    const id = String(e.item.itemId);
+    const listed = e.item.startTime ? d.dayOf(e.item.startTime, timeZone) : null;
+    const liveDays = !listed || listed <= win.from ? win.days : listed > win.to ? 0 : d.dayCount(listed, win.to);
+    const ageDays = listed ? d.dayCount(listed, today) - 1 : null;
+    const quality = checks.get(id)?.result?.quality || health.qualityFromDraft(drafts.get(id));
+    const n = (v) => (v == null ? 0 : Number(v));
+    const m = { impressions: n(e.m.impressions), views: n(e.m.views), ctr: e.m.ctr, sold: n(e.m.sold), sales: n(e.m.sales), conversion: e.m.conversion };
+    return { id, e, m, liveDays, ageDays, quality, measured: e.t.state === 'measured', price: e.item.price?.amount ?? null };
+  });
+  const bench = health.benchmarks(facts.map((f) => ({ ...f.m, measured: f.measured, liveDays: f.liveDays })));
+  // The same category's other listings: a price far above theirs is a reason.
+  const byCategory = new Map();
+  for (const f of facts) {
+    const category = f.quality?.categoryId;
+    if (category && f.price) byCategory.set(category, [...(byCategory.get(category) || []), f]);
+  }
+  const byId = new Map();
+  for (const f of facts) {
+    const peers = (byCategory.get(f.quality?.categoryId) || []).filter((p) => p.id !== f.id).map((p) => p.price);
+    const perDay = f.m.sold / Math.max(1, f.liveDays);
+    const stock = f.e.item.quantityAvailable ?? null;
+    byId.set(
+      f.id,
+      health.diagnose({
+        m: f.m,
+        measured: f.measured,
+        liveDays: f.liveDays,
+        ageDays: f.ageDays,
+        bench,
+        previous: f.e.prev && f.e.prev.sold != null ? { sold: f.e.prev.sold, days: previousDays } : null,
+        quality: f.quality,
+        stock,
+        watchers: f.e.item.watchCount ?? null,
+        price: f.price,
+        peerPrice: peers.length >= 3 ? health.median(peers) : null,
+        daysOfStock: stock != null && perDay > 0 ? stock / perDay : null,
+      })
+    );
+  }
+  return { byId, bench };
+}
+
 /**
  * The Analytics tab for one range: account figures with the change from the
  * previous period, the daily series, where views came from, and every live
@@ -508,45 +771,10 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
       };
     };
 
-    // Listing figures: added up from the stored days — never read from
-    // eBay here, whatever the range. A "Load all" report someone asked for
-    // (or one kept from earlier) fills in listings the history doesn't.
-    let current = [];
-    let prior = [];
-    let history = null;
-    if (status === 'ok') {
-      const listedOn = listedOnMap(inputs.items, timeZone);
-      const args = { connectionId, inputs, timeZone, lastFinal };
-      const [hist, prevHist] = await Promise.all([
-        historyFor(connectionId, win.from, win.to, listedOn, state.history_from),
-        historyFor(connectionId, win.previous.from, win.previous.to, listedOn, state.history_from),
-      ]);
-      history = hist;
-      const [all, top, prevAll, prevTop] = await Promise.all([
-        reportFor({ ...args, from: win.from, to: win.to, scope: 'all' }),
-        reportFor({ ...args, from: win.from, to: win.to, scope: 'top' }),
-        reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'all' }),
-        reportFor({ ...args, from: win.previous.from, to: win.previous.to, scope: 'top' }),
-      ]);
-      current = [hist, all, top];
-      prior = [prevHist, prevAll, prevTop];
-    }
-    const listings = inputs.items.map((item) => {
+    const { entries, current, history } = await listingFigures({ connectionId, inputs, status, state, timeZone, win, lastFinal, sales, ordersFrom });
+    const [{ byId: healthById, bench }, edited] = await Promise.all([healthFor(connectionId, entries, { win, today, timeZone }), recentEdits(connectionId, { timeZone, lastFinal })]);
+    const listings = entries.map(({ item, m, t, prev }) => {
       const id = String(item.itemId);
-      const t = listingTraffic(current, id, history);
-      const m = listingMetrics(t, d.salesWithin(sales.byListingDay.get(id), win.from, win.to));
-      // The previous period: traffic when its stored days cover this listing,
-      // sales whenever the orders reach back that far — each compared on
-      // its own, so sales changes show while traffic history still fills.
-      const pt = trafficFrom(prior, id);
-      let prev = null;
-      if (liveThroughPrevious(item, win.previous.from, timeZone)) {
-        const pSales = win.previous.from >= ordersFrom ? d.salesWithin(sales.byListingDay.get(id), win.previous.from, win.previous.to) : null;
-        if (pt.state === 'measured' || pSales) {
-          prev = listingMetrics(pt, pSales || { units: 0, amount: 0, orders: 0 });
-          if (!pSales) Object.assign(prev, { sold: null, sales: null, conversion: null, orders: null });
-        }
-      }
       return {
         itemId: id,
         title: item.title,
@@ -561,7 +789,8 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
         // Traffic changes need both periods measured: an unmeasured side is
         // null in listingMetrics, and a change with a null side is null.
         changes: withChanges(m, prev),
-        hint: t.state === 'measured' && !win.partial ? d.hintFor(m, win) : null,
+        health: healthById.get(id) || null,
+        lastEdit: edited.get(id) || null,
       };
     });
 
@@ -584,6 +813,9 @@ async function getAnalytics(connectionId, ownerId, { range = '30d' } = {}) {
         leadInSeries: lead ? d.daysBetween(lead.from, lead.to).map(dayPoint) : null,
         sources: sourcesFrom(d.sumTraffic(inRange(win.from, win.to))),
         listings,
+        // The account's typical listing over this range: what each
+        // listing's health is judged against.
+        benchmarks: bench,
         listingReport: {
           ...report,
           live: inputs.items.length,
@@ -700,6 +932,16 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
     };
     const series = d.daysBetween(win.from, win.to).map(dayPoint);
 
+    // Its health, judged against the account's typical listing over the
+    // same days (every listing's figures, from stored days), the deeper
+    // check if one was run, and what its live edits changed.
+    const { entries } = await listingFigures({ connectionId, inputs, status, state, timeZone, win, lastFinal, sales, ordersFrom });
+    const [{ byId: healthById, bench }, check, edits] = await Promise.all([
+      healthFor(connectionId, entries, { win, today, timeZone }),
+      repo.getHealthCheck(connectionId, id),
+      editEffects(connectionId, id, { timeZone, lastFinal, listingSales, ordersFrom }),
+    ]);
+
     return {
       ...base,
       data: {
@@ -733,7 +975,11 @@ async function getListingAnalytics(connectionId, ownerId, itemId, { range = '30d
         readCalls: comparable ? 2 : 1,
         canRead: status === 'ok' && t.state !== 'measured' && !win.partial && budget.allows('view', comparable ? 2 : 1),
         sources: t.state === 'measured' ? sourcesFrom(t.traffic) : [],
-        hint: t.state === 'measured' && !win.partial ? d.hintFor(totals, win) : null,
+        health: healthById.get(id) || null,
+        benchmarks: bench,
+        check: check ? { checkedAt: check.checked_at, quality: check.result.quality, calls: check.result.calls } : null,
+        checkCalls: CHECK_CALLS,
+        edits,
         sync: { finalThrough: state.account_through },
       },
     };
@@ -769,44 +1015,6 @@ async function readListing(connectionId, ownerId, itemId, { range = '30d' } = {}
 }
 
 /**
- * The last 30 complete days per live listing (views, impressions), units
- * sold and watchers, for the Listings tab's rows. From the stored days;
- * never reads eBay.
- */
-async function getListingSummaries(connectionId, ownerId) {
-  return connectionService.withDecryptedCredentials(connectionId, ownerId, async (credentials, connection) => {
-    const inputs = await ebayService.analyticsInputs(credentials, connectionId, { push: ebayService.pushEnabled(connection) });
-    const base = { credentialsChanged: inputs.credentialsChanged, credentials: inputs.credentials };
-    const status = statusOf(inputs);
-    const timeZone = d.timeZoneFor(inputs.marketplaceId) || 'Europe/London';
-    const { today, lastFinal } = contextFor(timeZone);
-    const win = d.rangeWindow('30d', { today, lastFinal });
-    let reports = [];
-    let history = null;
-    if (status === 'ok') {
-      const state = await repo.getSyncState(connectionId);
-      history = await historyFor(connectionId, win.from, win.to, listedOnMap(inputs.items, timeZone), state.history_from);
-      const args = { connectionId, inputs, timeZone, lastFinal, from: win.from, to: win.to };
-      reports = history.complete ? [history] : [history, await reportFor({ ...args, scope: 'all' }), await reportFor({ ...args, scope: 'top' })];
-    }
-    const sales = d.salesIndex(inputs.orders, timeZone);
-    const items = {};
-    for (const item of inputs.items) {
-      const id = String(item.itemId);
-      const t = listingTraffic(reports, id, history);
-      items[id] = {
-        traffic: t.state,
-        views: t.state === 'measured' ? t.traffic.views : null,
-        impressions: t.state === 'measured' ? t.traffic.total_impressions : null,
-        sold: d.salesWithin(sales.byListingDay.get(id), win.from, win.to).units,
-        watchers: item.watchCount ?? null,
-      };
-    }
-    return { ...base, data: { status: status === 'ok' ? 'ok' : 'reconnect', from: win.from, to: win.to, items } };
-  });
-}
-
-/**
  * For the admin's usage page: the traffic allowance today, by kind and by
  * account, and where each account's stored figures stand.
  */
@@ -832,13 +1040,15 @@ async function adminUsage(labels) {
 }
 
 module.exports = {
+  checkAfterEdit,
+  checkListing,
+  CHECK_CALLS,
   AnalyticsError,
   syncAccount,
   getAnalytics,
   loadAllListings,
   getListingAnalytics,
   readListing,
-  getListingSummaries,
   adminUsage,
   isDue,
   nightlyReserve,

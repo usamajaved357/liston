@@ -152,6 +152,10 @@ async function reviseText({ draft, instruction, current: given, options = {} }) 
           `layout exactly.\n` +
           descriptionFormat.PROMPT_GUIDANCE +
           `\n` +
+          `Item specific values must be facts the listing itself states (title, description, existing specifics). ` +
+          `Never invent or infer one it doesn't: a warranty, country of origin, part number, EAN or brand has to be ` +
+          `stated, and a returns or postage policy is not a warranty. Leave out any specific the listing can't support ` +
+          `and name it in the summary so the seller can fill it in themselves.\n` +
           `Refer to variations by their index and to options by their exact current names. Photos and the eBay ` +
           `category cannot be changed here: if asked, fill in cannotDo and change nothing.\n\n` +
           `Current listing:\n${describeCurrent(current, options)}\n\n` +

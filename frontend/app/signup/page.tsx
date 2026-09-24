@@ -8,6 +8,7 @@ import { Field } from "@/components/Field";
 import { PasswordField } from "@/components/PasswordField";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Alert } from "@/components/Alert";
+import { offerToSaveLogin } from "@/lib/savedLogin";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -31,6 +32,7 @@ export default function SignupPage() {
     try {
       const { token, user } = await api.signup(email, password, { name: name || undefined, accessNote: accessNote || undefined });
       localStorage.setItem("token", token);
+      await offerToSaveLogin(email, password, name || undefined);
       router.push(user.access_status === "pending" ? "/pending" : "/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't create your account. Try again.");

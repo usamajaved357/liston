@@ -12,6 +12,7 @@ const budget = require('../../src/modules/ebay/analytics-budget');
 const repo = require('../../src/modules/analytics/analytics.repository');
 const service = require('../../src/modules/analytics/analytics.service');
 const days = require('../../src/modules/analytics/analytics-days');
+const listingRepository = require('../../src/modules/listings/listing.repository');
 
 // Against the real local DB (fixture users are @example.com, removed by
 // tests/cleanup.js). eBay is mocked twice over: the account's cached
@@ -183,9 +184,7 @@ test('the Analytics tab: every range, and its comparison, is added up from store
   const panel = await service.getListingAnalytics(connectionId, userId, '222', { range: '30d' });
   assert.strictEqual(panel.data.traffic, 'measured');
   assert.strictEqual(panel.data.dailyTrafficDays, 30, 'a figure every day: zero before it was listed');
-  const summary = await service.getListingSummaries(connectionId, userId);
-  assert.strictEqual(summary.data.items['111'].views, listedDays * 6, 'the Listings tab: the same 30 days');
-  assert.strictEqual(calls.length - before, 0, 'every range, the panel and the Listings tab: no eBay calls');
+  assert.strictEqual(calls.length - before, 0, 'every range and the panel: no eBay calls');
 });
 
 test('a store of 300: each day reads every listing (2 calls), so ranges are exact for all of them', async () => {
@@ -313,4 +312,163 @@ test('a later day reads only the new day; a filter the history doesn’t reach s
   assert.strictEqual(data.listings.find((l) => l.itemId === '111').traffic, 'pending');
   // eBay failing on a read someone asked for: an error, nothing stored.
   await assert.rejects(service.readListing(connectionId, userId, '111', { range: '7d' }), (err) => err.statusCode === 502);
+});
+
+// ---- listing health ----------------------------------------------------------------
+
+
+// Six seasoned listings and one new one. Per day: 111 600 impressions (0.6%
+// of search clicked), 222 400 (0.33%), the 9000s ~298 (1%): the account's
+// typical listing clicks at 1%, so 222 is "seen, rarely clicked".
+const HEALTH_STORE = [item('111', 'Garden light'), item('222', 'Fishing line'), ...['9001', '9002', '9003', '9004'].map((id) => item(id, `Item ${id}`)), item('333', 'Brand new lamp', daysAgo(3))];
+
+async function healthFixture() {
+  const { userId, connectionId } = await fixture();
+  const now = new Date();
+  mockInputs({ items: HEALTH_STORE });
+  const calls = mockTrafficReports();
+  await service.syncAccount(connectionId, userId, { mode: 'essential', now });
+  spareHours();
+  await syncUntilDone(connectionId, userId, now);
+  return { userId, connectionId, calls };
+}
+
+test('every listing gets a health verdict against the account’s typical listing, with the money at stake, from stored data only', async () => {
+  const { userId, connectionId, calls } = await healthFixture();
+  // Liston published 222: its draft says what the listing is like.
+  await pool.query(`INSERT INTO listings (connection_id, status, external_product_id, generated_data) VALUES ($1, 'published', '222', $2)`, [
+    connectionId,
+    { title: 'Fishing line', imageUrls: ['a', 'b'], aspects: { Brand: ['X'] }, description: 'Strong line.', categoryId: '1' },
+  ]);
+  const before = calls.length;
+  const { data } = await service.getAnalytics(connectionId, userId, { range: '7d' });
+  assert.strictEqual(calls.length - before, 0, 'no eBay call');
+  assert.deepStrictEqual([data.benchmarks.listings, data.benchmarks.ctr], [6, 0.01]);
+  const health = Object.fromEntries(data.listings.map((l) => [l.itemId, l.health]));
+  assert.strictEqual(health['333'].stage, 'new');
+  assert.strictEqual(health['222'].stage, 'not_clicked');
+  assert.ok(health['222'].opportunity.units > 0 && health['222'].opportunity.amount > 0);
+  assert.deepStrictEqual(
+    health['222'].reasons.map((r) => [r.key, r.status]),
+    [
+      ['title', 'fail'],
+      ['photo', 'warn'],
+      ['watchers', 'info'],
+    ],
+    "the title's length from Liston's draft; 3 watchers and no sale"
+  );
+  assert.strictEqual(data.listings.find((l) => l.itemId === '222').hint, undefined, 'health replaces the old hint');
+
+  const panel = await service.getListingAnalytics(connectionId, userId, '222', { range: '7d' });
+  assert.deepStrictEqual(panel.data.health, health['222'], 'the panel judges it the same way');
+  assert.deepStrictEqual([panel.data.check, panel.data.edits, panel.data.checkCalls], [null, [], { listing: 1, competitor: 1 }]);
+});
+
+test('a deeper check reads the listing, its category’s item specifics and similar listings’ prices once, and is kept', async () => {
+  const { userId, connectionId } = await healthFixture();
+  const getItem = mock.method(ebayService, 'getLiveItem', async () => ({
+    itemId: '222',
+    title: 'Fishing line braid 100m',
+    imageUrls: ['a', 'b', 'c'],
+    specifics: { Brand: ['X'] },
+    variationSpecificsSet: {},
+    description: '<p>Strong.</p>',
+    categoryId: '1',
+    currency: 'GBP',
+    price: { amount: 4.5, currency: 'GBP' },
+    shipping: { cost: 1.99, dispatchDays: 2 },
+    returnsAccepted: true,
+  }));
+  mock.method(ebayService, 'categoryAspectSchema', async () => [{ name: 'Brand', required: true }, { name: 'Material', recommended: true }, { name: 'Length', recommended: true }]);
+  const search = mock.method(ebayService, 'searchSimilarListings', async () => ({
+    itemSummaries: [
+      { legacyItemId: '222', price: { value: '1.00' } }, // this listing
+      { legacyItemId: '5', price: { value: '3.20' }, shippingOptions: [{ shippingCost: { value: '0.99' } }] },
+      { legacyItemId: '6', price: { value: '5.00' } },
+      { legacyItemId: '7', price: { value: '6.50' }, shippingOptions: [{ shippingCost: { value: '0.00' } }] },
+    ],
+  }));
+
+  const { data } = await service.checkListing(connectionId, userId, '222', { competitor: true });
+  assert.deepStrictEqual(data.quality.specificsMissing, ['Material', 'Length']);
+  assert.deepStrictEqual(data.quality.competitor, { query: 'Fishing line braid 100m', compared: 3, cheapest: 4.19, median: 5 });
+  assert.deepStrictEqual([data.quality.shippingCost, data.calls], [1.99, 2]);
+  assert.strictEqual(search.mock.calls[0].arguments[0].categoryId, '1');
+
+  const panel = await service.getListingAnalytics(connectionId, userId, '222', { range: '7d' });
+  assert.strictEqual(panel.data.check.quality.competitor.cheapest, 4.19, 'kept: reopening costs nothing');
+  assert.ok(panel.data.health.reasons.some((r) => r.key === 'postage' && /1\.99/.test(r.text)), "its reasons use what the check found");
+  assert.strictEqual(getItem.mock.calls.length, 1);
+
+  await service.checkListing(connectionId, userId, '222');
+  assert.strictEqual(search.mock.calls.length, 1, 'similar listings only when asked for');
+});
+
+test('a live edit’s effect: the listing’s figures in the days before and after it', async () => {
+  const { userId, connectionId } = await healthFixture();
+  const change = { fields: ['title'], before: { title: 'Old' }, after: { title: 'New' } };
+  await listingRepository.recordListingChange(connectionId, '222', change);
+  await pool.query(`UPDATE listing_changes SET changed_at = now() - interval '7 days' WHERE connection_id = $1`, [connectionId]);
+  await listingRepository.recordListingChange(connectionId, '222', { ...change, after: { title: 'Newer' } });
+
+  const { data } = await service.getListingAnalytics(connectionId, userId, '222', { range: '30d' });
+  const [latest, earlier] = data.edits;
+  assert.deepStrictEqual([latest.after.title, latest.figuresAfter, latest.waitDays], ['Newer', null, 3], 'too soon to judge: waits for 3 complete days');
+  assert.deepStrictEqual(earlier.fields, ['title']);
+  assert.strictEqual(earlier.figuresBefore.impressionsPerDay, 400);
+  assert.strictEqual(earlier.figuresAfter.impressionsPerDay, 400);
+  assert.strictEqual(earlier.figuresAfter.ctr, earlier.figuresBefore.ctr);
+});
+
+test('an edit published from Liston brings the saved deeper check up to date, without reading eBay', async () => {
+  const { userId, connectionId } = await healthFixture();
+  mock.method(ebayService, 'getLiveItem', async () => ({
+    itemId: '222',
+    title: 'Fishing line',
+    imageUrls: ['a'],
+    specifics: { Brand: ['X'] },
+    variationSpecificsSet: {},
+    description: '<p>Strong.</p>',
+    categoryId: '1',
+    currency: 'GBP',
+    shipping: { cost: 0, dispatchDays: 4 },
+    returnsAccepted: true,
+  }));
+  mock.method(ebayService, 'categoryAspectSchema', async () => [{ name: 'Brand', required: true }, { name: 'Material', recommended: true }, { name: 'Length', recommended: true }]);
+  await service.checkListing(connectionId, userId, '222');
+  const before = await repo.getHealthCheck(connectionId, '222');
+  assert.deepStrictEqual(before.result.quality.specificsMissing, ['Material', 'Length']);
+
+  const edited = { title: 'Fishing line braid 100m strong nylon', imageUrls: ['a', 'b'], aspects: { Brand: ['X'], material: ['Nylon'] }, description: '<p>Strong and long.</p>' };
+  await service.checkAfterEdit(connectionId, '222', edited);
+
+  const after = await repo.getHealthCheck(connectionId, '222');
+  const q = after.result.quality;
+  assert.deepStrictEqual(q.specificsMissing, ['Length'], 'a specific the edit filled is no longer empty');
+  assert.deepStrictEqual([q.titleLength, q.photos, q.specificsCount], [edited.title.length, 2, 2]);
+  assert.deepStrictEqual([q.dispatchDays, q.shippingCost], [4, 0], 'what a live edit cannot change stays as checked');
+  assert.ok(q.editedAt);
+  assert.strictEqual(after.checked_at.getTime(), before.checked_at.getTime(), 'still says when eBay was read');
+  assert.strictEqual(ebayService.getLiveItem.mock.calls.length, 1, 'no eBay call');
+
+  const { data } = await service.getListingAnalytics(connectionId, userId, '222', { range: '7d' });
+  assert.ok(!data.health.reasons.some((r) => r.key === 'specifics' && /Material/.test(r.text)), 'its reasons stop asking for it');
+
+  assert.strictEqual(await service.checkAfterEdit(connectionId, '999', edited), null, 'a listing never checked has nothing to update');
+});
+
+test('the Analytics table knows which listings were updated in Liston and which are still waiting for results', async () => {
+  const { userId, connectionId } = await healthFixture();
+  await listingRepository.recordListingChange(connectionId, '111', { fields: ['title'], before: { title: 'A' }, after: { title: 'B' } });
+  await pool.query(`UPDATE listing_changes SET changed_at = now() - interval '8 days' WHERE connection_id = $1`, [connectionId]);
+  await listingRepository.recordListingChange(connectionId, '222', { fields: ['specifics'], before: { specifics: 1 }, after: { specifics: 3 } });
+  await listingRepository.recordListingChange(connectionId, '9001', { fields: ['price'], before: { price: 5 }, after: { price: 4 } });
+  await pool.query(`UPDATE listing_changes SET changed_at = now() - interval '30 days' WHERE connection_id = $1 AND item_id = '9001'`, [connectionId]);
+
+  const { data } = await service.getAnalytics(connectionId, userId, { range: '7d' });
+  const edit = Object.fromEntries(data.listings.map((l) => [l.itemId, l.lastEdit]));
+  assert.deepStrictEqual([edit['222'].fields, edit['222'].waiting], [['specifics'], true], 'just edited: its results are not in yet');
+  assert.strictEqual(edit['222'].resultsFrom, days.addDays(edit['222'].day, 4));
+  assert.strictEqual(edit['111'].waiting, false, 'a week on, its results are in');
+  assert.strictEqual(edit['9001'], null, 'an edit older than two weeks is no longer shown');
 });

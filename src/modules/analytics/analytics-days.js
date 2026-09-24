@@ -217,7 +217,7 @@ function isCancelled(order) {
  */
 function salesIndex(orders, timeZone) {
   const byDay = new Map(); // day -> { units, amount, orders }
-  const byListingDay = new Map(); // itemId -> Map(day -> { units, amount })
+  const byListingDay = new Map(); // itemId -> Map(day -> { units, amount, orders })
   let currency = null;
   for (const order of orders || []) {
     if (isCancelled(order)) continue;
@@ -225,6 +225,7 @@ function salesIndex(orders, timeZone) {
     if (!day) continue;
     const dayTotal = byDay.get(day) || { units: 0, amount: 0, orders: 0 };
     dayTotal.orders += 1;
+    const counted = new Set(); // an order counts once per listing, however many lines it has of it
     for (const line of order.lineItems || []) {
       const units = Number(line.quantityPurchased) || 1;
       const amount = (Number(line.price?.amount) || 0) * units;
@@ -233,9 +234,13 @@ function salesIndex(orders, timeZone) {
       dayTotal.amount += amount;
       if (!line.itemId) continue;
       const perDay = byListingDay.get(String(line.itemId)) || new Map();
-      const cell = perDay.get(day) || { units: 0, amount: 0 };
+      const cell = perDay.get(day) || { units: 0, amount: 0, orders: 0 };
       cell.units += units;
       cell.amount += amount;
+      if (!counted.has(String(line.itemId))) {
+        counted.add(String(line.itemId));
+        cell.orders += 1;
+      }
       perDay.set(day, cell);
       byListingDay.set(String(line.itemId), perDay);
     }
@@ -314,28 +319,6 @@ function historyReport({ from, to, reads, totals, listedOn, historyFrom = null }
   return { scope: 'history', rows, cutoff: null, covers: (id) => covered.has(String(id)), coveredCount: covered.size, complete: covered.size === listedOn.size, filled };
 }
 
-// ---- what to look at ----------------------------------------------------------
-
-/**
- * One plain suggestion for a listing over a range, or null. Thresholds need
- * enough traffic to mean something, so a quiet week says nothing.
- */
-function hintFor(m, { days }) {
-  if (m.impressions === 0 && days >= 7) {
-    return { kind: 'no_impressions', label: 'No impressions', detail: 'Not showing in search. Check the title, category and item specifics match what buyers search for.' };
-  }
-  if (m.impressions >= 500 && m.ctr != null && m.ctr < 0.005) {
-    return { kind: 'low_ctr', label: 'Seen, rarely clicked', detail: 'Plenty of impressions but few clicks. A stronger main photo or a sharper title usually helps.' };
-  }
-  if (m.views >= 40 && m.sold === 0) {
-    return { kind: 'no_sales', label: 'Viewed, not selling', detail: 'Buyers look but don’t buy. Compare the price and postage with similar listings.' };
-  }
-  if (m.sold >= 3 && m.conversion != null && m.conversion >= 0.05) {
-    return { kind: 'converting', label: 'Converting well', detail: 'A strong seller. Worth promoting or keeping well stocked.' };
-  }
-  return null;
-}
-
 module.exports = {
   SITE_TIME_ZONES,
   SYNC_HOUR,
@@ -363,5 +346,4 @@ module.exports = {
   change,
   salesIndex,
   salesWithin,
-  hintFor,
 };

@@ -10,9 +10,10 @@ router.get('/', requireAuth, requireFeature('analytics'), analyticsController.ge
 // Every live listing's figures for a range (1 traffic call per 200 listings).
 router.post('/listings/all', requireAuth, requireFeature('analytics'), analyticsController.loadAllListings);
 // The Listings tab's rows: the 30-day report, shared with the Analytics tab.
-router.get('/listings/summary', requireAuth, requireFeature('analytics'), analyticsController.getListingSummaries);
 router.get('/listings/:itemId', requireAuth, requireFeature('analytics'), analyticsController.getListingAnalytics);
 // One listing's figures for a range, read on request (1–2 traffic calls).
 router.post('/listings/:itemId/read', requireAuth, requireFeature('analytics'), analyticsController.readListing);
+// A listing's deeper health check, on request (1 Trading call, +1 search of similar listings).
+router.post('/listings/:itemId/check', requireAuth, requireFeature('analytics'), analyticsController.checkListing);
 
 module.exports = router;

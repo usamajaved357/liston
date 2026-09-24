@@ -75,21 +75,31 @@ async function tradingRequestNow(accessToken, callName, bodyXml, siteId = 0) {
     const message = /exceeded usage limit/i.test(raw)
       ? "eBay's daily API allowance for Liston is used up for today. Live figures return when eBay resets it (midnight Pacific time)."
       : raw;
-    throw new EbayTradingError(message, /exceeded usage limit/i.test(raw) ? 429 : 502, errors);
+    const err = new EbayTradingError(message, /exceeded usage limit/i.test(raw) ? 429 : 502, errors);
+    // eBay's own answer (why it refused), safe and useful to show — never
+    // hidden behind "Internal server error" (errorHandler.middleware).
+    err.expose = true;
+    throw err;
   }
   // Ack=Warning is a success that did LESS than asked — eBay keeps parts of
   // a revision it refuses (a description on a listing with sales, say) and
   // only says so here. Logged, and handed to callers that can tell the
   // seller.
   if (body.Ack === 'Warning') {
-    const warnings = toArray(body.Errors).map((e) => e.LongMessage || e.ShortMessage).filter(Boolean);
-    if (warnings.length) {
-      logger.warn(`eBay ${callName} completed with warnings`, { warnings });
-      body._warnings = warnings;
-    }
+    const all = toArray(body.Errors).map((e) => e.LongMessage || e.ShortMessage).filter(Boolean);
+    const warnings = all.filter((w) => !NOTICE_ONLY.some((re) => re.test(w)));
+    if (all.length) logger.warn(`eBay ${callName} completed with warnings`, { warnings: all });
+    if (warnings.length) body._warnings = warnings;
   }
   return body;
 }
+
+// Warnings eBay attaches to a call that did everything asked: kept in the
+// log, never shown to the seller as if part of an edit was dropped. eBay
+// sends the business-policies one on every revise of a listing that still
+// carries old-style postage/payment/returns fields from when it was listed
+// (Liston's revise sends none of those; the policies stay as they were).
+const NOTICE_ONLY = [/opted into business policies/i];
 
 function toArray(value) {
   if (value === undefined || value === null) return [];
@@ -537,17 +547,45 @@ async function getItem(accessToken, itemId, { siteId } = {}) {
     currency: item.StartPrice?.['@_currencyID'] || item.Currency || null,
     viewItemUrl: item.ListingDetails?.ViewItemURL || null,
     listingType: item.ListingType || null,
+    // 'Active', or 'Completed'/'Ended' once it has come off eBay.
+    listingStatus: item.SellingStatus?.ListingStatus || null,
     variationSpecificsSet: specificsFrom(variationsNode?.VariationSpecificsSet),
     variations,
     variationPictures,
+    // What a buyer pays and waits for, for the listing health check.
+    shipping: shippingFrom(item),
+    returnsAccepted: item.ReturnPolicy?.ReturnsAcceptedOption ? item.ReturnPolicy.ReturnsAcceptedOption === 'ReturnsAccepted' : null,
   };
+}
+
+// The first (cheapest, as eBay lists them) domestic postage option and the
+// dispatch time.
+function shippingFrom(item) {
+  const first = toArray(item.ShippingDetails?.ShippingServiceOptions)[0];
+  const cost = first ? (first.FreeShipping === true || first.FreeShipping === 'true' ? 0 : Number(first.ShippingServiceCost?.['#text'] ?? first.ShippingServiceCost ?? NaN)) : NaN;
+  const dispatch = Number(item.DispatchTimeMax);
+  return { cost: Number.isFinite(cost) ? cost : null, dispatchDays: Number.isFinite(dispatch) ? dispatch : null };
 }
 
 // Revises a live fixed-price listing in place. Only the fields given are
 // sent; eBay leaves the rest as they were. For a variation listing the
 // whole matrix goes up together, because eBay treats <Variations> as a
 // replacement set.
-async function reviseListing(accessToken, itemId, { title, descriptionHtml, price, quantity, conditionId, imageUrls, specifics, variations, variationSpecificsSet, variationPictures }, { siteId } = {}) {
+async function reviseListing(accessToken, itemId, fields, { siteId } = {}) {
+  const res = await tradingRequest(accessToken, 'ReviseFixedPriceItem', itemChangesXml(itemId, fields), siteId);
+  return { itemId: String(res.ItemID || itemId), warnings: res._warnings || [] };
+}
+
+// Puts an ended fixed-price listing back on eBay with the same fields as a
+// revision (RelistFixedPriceItem takes the same <Item> changes). eBay gives
+// it a new item number; the ended one stays ended.
+async function relistListing(accessToken, itemId, fields, { siteId } = {}) {
+  const res = await tradingRequest(accessToken, 'RelistFixedPriceItem', itemChangesXml(itemId, fields), siteId);
+  return { itemId: String(res.ItemID), relistedFrom: String(itemId), warnings: res._warnings || [] };
+}
+
+// The <Item> with only the fields given: shared by revise and relist.
+function itemChangesXml(itemId, { title, descriptionHtml, price, quantity, conditionId, imageUrls, specifics, variations, variationSpecificsSet, variationPictures }) {
   let body = `<Item><ItemID>${itemId}</ItemID>`;
   if (title !== undefined) body += `<Title>${xmlEscape(title)}</Title>`;
   if (descriptionHtml !== undefined) body += `<Description><![CDATA[${descriptionHtml}]]></Description>`;
@@ -582,8 +620,7 @@ async function reviseListing(accessToken, itemId, { title, descriptionHtml, pric
     if (quantity !== undefined) body += `<Quantity>${Math.max(0, Number(quantity) || 0)}</Quantity>`;
   }
   body += '</Item>';
-  const res = await tradingRequest(accessToken, 'ReviseFixedPriceItem', body, siteId);
-  return { itemId: String(res.ItemID || itemId), warnings: res._warnings || [] };
+  return body;
 }
 
 // Which eBay site the seller registered on, and the address eBay holds for
@@ -626,6 +663,7 @@ async function getMemberFeedback(accessToken, userId, siteId = 0) {
 
 module.exports = {
   EbayTradingError,
+  relistListing,
   getUserProfile,
   getMemberFeedback,
   getStoreCategories,

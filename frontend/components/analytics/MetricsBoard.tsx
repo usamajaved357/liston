@@ -6,6 +6,8 @@ import { KpiTile } from "@/components/charts/KpiTile";
 import { ChartLegend, TrendChart, TrendTable } from "@/components/charts/TrendChart";
 import { dayRangeLabel } from "@/components/charts/chart-format";
 import { METRICS, MetricKey, comparedFor, metricDef, metricValue, trendPoints } from "./metrics";
+import { downloadCsv, pct, toCsv } from "@/lib/csv";
+import { DownloadIcon } from "./ListingsTable";
 
 // The headline figures as tiles, and the chart of whichever one is
 // selected. Used by the Analytics tab (whole account) and the listing panel
@@ -25,6 +27,7 @@ export function MetricsBoard({
   compact = false,
   trafficUnavailable,
   emptyDailyMessage,
+  csvName,
 }: {
   totals: AnalyticsMetrics | null;
   changes: AnalyticsChanges | null;
@@ -44,6 +47,7 @@ export function MetricsBoard({
   // figures in the range (a listing's traffic is kept day by day only while
   // it's among the account's busiest).
   emptyDailyMessage?: string;
+  csvName?: string; // set to offer the day-by-day figures as a CSV file
 }) {
   const [selected, setSelected] = useState<MetricKey>("views");
   const def = metricDef(selected);
@@ -56,6 +60,22 @@ export function MetricsBoard({
   const hasPrevious = points.some((p) => p.previous != null);
   const salesMetric = selected === "sold" || selected === "sales";
   const drawn = !(loading && !shown.length) && points.some((p) => p.value != null);
+
+  // Every measure, each day of what's charted, beside the same day of the
+  // previous period: built from what's on screen, no request.
+  function exportCsv() {
+    const previous = leadIn ? null : previousSeries;
+    const values = (d: AnalyticsDay | undefined) => (d ? METRICS.map((m) => (m.key === "ctr" || m.key === "conversion" ? pct(m.daily(d)) : m.daily(d))) : METRICS.map(() => null));
+    const names = METRICS.map((m) => (m.key === "ctr" || m.key === "conversion" ? `${m.label} (%)` : m.key === "sales" && currency ? `${m.label} (${currency})` : m.label));
+    const header = ["Date", ...names, ...(previous ? ["Previous period date", ...names.map((n) => `Previous ${n.charAt(0).toLowerCase()}${n.slice(1)}`)] : []), "Note"];
+    const rows = shown.map((d, i) => [
+      d.day,
+      ...values(d),
+      ...(previous ? [previous[i]?.day ?? null, ...values(previous[i])] : []),
+      d.partial ? "Day still running: traffic arrives once eBay closes it" : "",
+    ]);
+    downloadCsv(`${csvName}-daily.csv`, toCsv(header, rows));
+  }
   const note = leadIn
     ? salesMetric
       ? "Today so far (live), after the 13 days before it"
@@ -97,13 +117,21 @@ export function MetricsBoard({
             {note && <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">{note}</p>}
           </div>
           {drawn && (
-            <ChartLegend
-              current={shownLabel}
-              currentCaption={leadIn ? `Last ${leadIn.length} days` : "This period"}
-              previous={hasPrevious && previousRange ? dayRangeLabel(previousRange.from, previousRange.to) : null}
-              today={points.some((p) => p.partial && p.value != null)}
-              bars={single}
-            />
+            <div className="flex flex-wrap items-start gap-x-5 gap-y-2">
+              <ChartLegend
+                current={shownLabel}
+                currentCaption={leadIn ? `Last ${leadIn.length} days` : "This period"}
+                previous={hasPrevious && previousRange ? dayRangeLabel(previousRange.from, previousRange.to) : null}
+                today={points.some((p) => p.partial && p.value != null)}
+                bars={single}
+              />
+              {csvName && (
+                <button type="button" onClick={exportCsv} className="btn btn-secondary btn-sm" title="Download every measure, day by day, for these dates as a CSV file">
+                  <DownloadIcon />
+                  CSV
+                </button>
+              )}
+            </div>
           )}
         </div>
         {loading && !shown.length ? (

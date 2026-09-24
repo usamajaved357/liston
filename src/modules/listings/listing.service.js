@@ -16,6 +16,8 @@ const descriptionTemplate = require('./description-template');
 const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const textGenerator = require('../ai-generation/text-generator.service');
 const governor = require('../ebay/request-governor');
+const analyticsService = require('../analytics/analytics.service');
+const listingSort = require('./listing-sort');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -984,9 +986,11 @@ async function splitVariant(id, userId, index) {
   });
 }
 
+// Returns the removed row (for the team activity record).
 async function removeDraft(id, userId) {
-  await loadEditableDraft(id, userId);
-  return listingRepository.deleteDraft(id, userId);
+  const draft = await loadEditableDraft(id, userId);
+  await listingRepository.deleteDraft(id, userId);
+  return draft;
 }
 
 // The account's own live listings, for the "You may also like" cards. Read
@@ -1146,9 +1150,24 @@ function draftFromLiveItem(item, marketplaceId) {
   };
 }
 
-async function startLiveEdit(connectionId, userId, itemId) {
+// `fromInactive`: opened from the Inactive tab, i.e. to relist it.
+async function startLiveEdit(connectionId, userId, itemId, { fromInactive = false } = {}) {
   const existing = await listingRepository.findLiveEdit(connectionId, userId, itemId);
-  if (existing) return existing;
+  if (existing) {
+    // An unfinished edit is resumed, but whether the listing is still live
+    // is read again when it's unknown (a copy from before Liston recorded
+    // it) or when it's opened to relist and not yet marked ended — so a
+    // stale copy never opens an ended listing as live (1 GetItem).
+    const known = existing.source_data && 'liveStatus' in existing.source_data;
+    if (known && !(fromInactive && !existing.source_data.ended)) return existing;
+    return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials) => {
+      const item = await ebayService.getLiveItem(credentials, itemId);
+      const ended = Boolean(item.listingStatus && item.listingStatus !== 'Active');
+      const { ended: _was, ...rest } = existing.source_data || {};
+      const sourceData = { ...rest, liveStatus: item.listingStatus || null, ...(ended ? { ended: true } : {}) };
+      return listingRepository.updateSourceData(existing.id, sourceData);
+    });
+  }
 
   return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
     const item = await ebayService.getLiveItem(credentials, itemId);
@@ -1171,15 +1190,109 @@ async function startLiveEdit(connectionId, userId, itemId) {
       }
     }
 
-    return listingRepository.createLiveEdit({ connectionId, itemId, sku: item.sku, generatedData: draft });
+    // The listing as it was, so publishing the edit can record what changed
+    // (for its before/after figures in Analytics). An ended listing is
+    // marked: publishing it relists it rather than revising.
+    const ended = Boolean(item.listingStatus && item.listingStatus !== 'Active');
+    return listingRepository.createLiveEdit({
+      connectionId,
+      itemId,
+      sku: item.sku,
+      generatedData: draft,
+      sourceData: { liveOriginal: editSnapshot(draft), liveStatus: item.listingStatus || null, ...(ended ? { ended: true } : {}) },
+    });
   });
+}
+
+// What a live edit is judged by: the things buyers see in search and on
+// the listing. Text is kept as a fingerprint, not copied.
+function editSnapshot(draft) {
+  const variation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const fingerprint = (value) => crypto.createHash('sha1').update(JSON.stringify(value ?? '')).digest('hex').slice(0, 12);
+  const aspects = (variation ? draft.variesBy?.aspects : draft.aspects) || {};
+  const sortedAspects = Object.keys(aspects)
+    .sort()
+    .map((k) => [k, aspects[k]]);
+  const prices = variation ? draft.variants.map((v) => Number(v.price?.value)).filter(Number.isFinite) : [Number(draft.price?.value)].filter(Number.isFinite);
+  return {
+    title: String((variation ? draft.commonTitle : draft.title) || ''),
+    mainPhoto: draft.imageUrls?.[0] || null,
+    photos: (draft.imageUrls || []).length,
+    photoSet: fingerprint(draft.imageUrls || []),
+    price: prices.length ? Math.min(...prices) : null,
+    quantity: variation ? draft.variants.reduce((sum, v) => sum + (Number(v.quantity) || 0), 0) : Number(draft.quantity) || 0,
+    specifics: Object.values(aspects).filter((v) => (v || []).some((x) => String(x).trim())).length,
+    specificsSet: fingerprint(sortedAspects),
+    description: fingerprint(variation ? draft.commonDescription : draft.description),
+  };
+}
+
+// The fields that differ between two snapshots, with readable before/after
+// values (fingerprints stay out of them).
+function editDifferences(before, after) {
+  if (!before || !after) return null;
+  const fields = [];
+  if (before.title !== after.title) fields.push('title');
+  if (before.mainPhoto !== after.mainPhoto) fields.push('main_photo');
+  else if (before.photoSet !== after.photoSet) fields.push('photos');
+  if (before.price !== after.price) fields.push('price');
+  if (before.quantity !== after.quantity) fields.push('quantity');
+  if (before.specificsSet !== after.specificsSet) fields.push('specifics');
+  if (before.description !== after.description) fields.push('description');
+  if (!fields.length) return null;
+  const readable = ({ title, mainPhoto, photos, price, quantity, specifics }) => ({ title, mainPhoto, photos, price, quantity, specifics });
+  return { fields, before: readable(before), after: readable(after) };
+}
+
+/**
+ * One page of the account's live (or ended) listings for the Listings tab,
+ * in the chosen order (listing-sort.js), each with its latest sale and its
+ * latest edit from Liston. The whole list is sorted before paging, so page
+ * 1 is the top of everything; no eBay call beyond the cached list.
+ */
+async function pageOfListings(credentials, { connectionId, status, search, sort, page = 1, perPage = 25, hiddenItemIds = [], push = false }) {
+  const all = await ebayService.listListingsDetailed(credentials, { connectionId, status, search, page: 1, perPage: 0, hiddenItemIds, push });
+  const current = all.credentialsChanged ? all.credentials : credentials;
+  const [lastSold, edits] = await Promise.all([
+    ebayService.lastSalesByItem(current, { connectionId, push }).catch(() => new Map()),
+    listingRepository.latestChanges(connectionId, new Date(0)).catch(() => new Map()),
+  ]);
+  const items = all.items.map((item) => ({
+    ...item,
+    lastSoldAt: lastSold.get(String(item.itemId)) || null,
+    lastEditedAt: edits.get(String(item.itemId))?.changed_at || null,
+  }));
+  const sortKey = listingSort.sortFor(sort, status);
+  const sorted = listingSort.sortListings(items, sortKey, status);
+  const size = perPage > 0 ? perPage : Math.max(1, sorted.length);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / size));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  return {
+    items: sorted.slice((safePage - 1) * size, safePage * size),
+    totalEntries: sorted.length,
+    totalPages,
+    page: safePage,
+    perPage: size,
+    sort: sortKey,
+    allCount: all.allCount,
+    syncedAt: all.syncedAt,
+    credentialsChanged: all.credentialsChanged,
+    credentials: all.credentials,
+  };
 }
 
 async function publishLiveEdit(listing, userId) {
   const draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  // An ended listing can't be revised (eBay refuses any change to it); it
+  // is relisted instead, with the edit's fields, as a new item.
+  let relist = Boolean(listing.source_data?.ended);
   const imageCheck = imageGates.checkDraftImages(draft);
   if (!imageCheck.ok) throw new ListingError(imageCheck.errors.join(' '), 400);
+  if (relist) {
+    const stock = isVariation ? draft.variants.reduce((sum, v) => sum + (Number(v.quantity) || 0), 0) : Number(draft.quantity) || 0;
+    if (stock <= 0) throw new ListingError('Set the quantity above 0 before relisting: eBay won’t relist a listing with no stock.', 400);
+  }
 
   const html = await renderDraftDescription(listing, userId);
   // Same readiness rules as a new publish (no axis in the shared set,
@@ -1238,14 +1351,42 @@ async function publishLiveEdit(listing, userId) {
     });
   const revised = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
     if (inventoryRef) return reviseViaInventory(credentials, inventoryRef);
+    return reviseOrRelist(credentials);
+  }).catch((err) => {
+    // eBay won't have two identical listings from one seller live at once:
+    // say which one is live and what to do, not eBay's paragraph.
+    const liveId = relist ? ebayService.duplicateListingOf(err) : null;
+    if (liveId === null) throw err;
+    throw new ListingError(
+      `eBay won't relist this: the same item is already live on this account${liveId ? ` as #${liveId}` : ''}. Add stock or variations to that listing instead, or end it first and relist this one.`,
+      409
+    );
+  });
+  async function reviseOrRelist(credentials) {
     try {
-      return await ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload);
+      if (relist) return await ebayService.relistLiveListing(credentials, listing.connection_id, listing.edit_of_item_id, payload);
+      try {
+        return await ebayService.reviseLiveListing(credentials, listing.edit_of_item_id, payload);
+      } catch (err) {
+        // It ended after the edit was opened: put it back instead.
+        if (!ebayService.isEndedListingError(err)) throw err;
+        relist = true;
+        return await ebayService.relistLiveListing(credentials, listing.connection_id, listing.edit_of_item_id, payload);
+      }
     } catch (err) {
-      const guessed = ebayService.isInventoryManagedError(err) ? guessInventoryRef(readied.draft, listing) : null;
+      // Liston's SKU scheme gives the inventory objects away; failing that
+      // (another tool's SKUs), eBay's inventory item says which group.
+      let guessed = ebayService.isInventoryManagedError(err) ? guessInventoryRef(readied.draft, listing) : null;
+      if (!guessed && ebayService.isInventoryManagedError(err)) {
+        const skus = isVariation ? readied.draft.variants.map((v) => v.sku) : [readied.draft.sku || listing.sku];
+        guessed = await ebayService.inventoryRefForSkus(credentials, { skus, isVariation }).catch(() => null);
+      }
       if (!guessed) {
         if (ebayService.isInventoryManagedError(err)) {
           throw new ListingError(
-            "This listing was created through eBay's Inventory API by another tool, and eBay only lets that tool revise it. Edit it there, or end it and relist it from Liston.",
+            relist
+              ? "This listing was created through eBay's Inventory API by another tool, and eBay only lets that tool relist it. Relist it there, or draft it again in Liston."
+              : "This listing was created through eBay's Inventory API by another tool, and eBay only lets that tool revise it. Edit it there, or end it and relist it from Liston.",
             400
           );
         }
@@ -1253,8 +1394,22 @@ async function publishLiveEdit(listing, userId) {
       }
       return reviseViaInventory(credentials, guessed);
     }
-  });
+  }
   resyncListings(listing.connection_id, userId);
+  if (relist) return finishRelist(listing, draft, own, revised);
+  // What changed, for the listing's before/after figures in Analytics. A
+  // failure to record never fails the edit itself.
+  const changed = editDifferences(listing.source_data?.liveOriginal, editSnapshot(draft));
+  if (changed) {
+    await listingRepository
+      .recordListingChange(listing.connection_id, listing.edit_of_item_id, changed)
+      .catch((err) => logger.warn('Listing change not recorded', { itemId: listing.edit_of_item_id, error: err.message }));
+  }
+  // The listing's deeper check follows the edit, so its health stops
+  // asking for fixes that just went live.
+  await analyticsService
+    .checkAfterEdit(listing.connection_id, listing.edit_of_item_id, draft)
+    .catch((err) => logger.warn('Health check not updated after edit', { itemId: listing.edit_of_item_id, error: err.message }));
   // Liston's record of the published listing follows the edit, so the next
   // edit starts from what is live and the draft never contradicts eBay.
   if (own) {
@@ -1266,7 +1421,24 @@ async function publishLiveEdit(listing, userId) {
   // eBay applies what it can and warns about the rest (a description it
   // refused to replace, for one). The seller must hear that, or they trust
   // a preview that never went live.
-  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, warnings: revised.warnings || [] };
+  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, changedFields: changed?.fields || [], warnings: revised.warnings || [] };
+}
+
+// After a relist: eBay's new item number (from the Trading relist, or the
+// Inventory publish for a listing Liston made) becomes the one Liston's
+// record points at, the ended one leaves the Inactive tab, and the working
+// copy goes. A relist is a new listing, so no before/after is recorded.
+async function finishRelist(listing, draft, own, revised) {
+  const newItemId = String(revised.relistedFrom ? revised.itemId : revised.listingId || listing.edit_of_item_id);
+  ebayService.removeListingFromMirror(listing.connection_id, listing.edit_of_item_id);
+  if (own) {
+    const { liveItemId, ...edited } = draft;
+    await listingRepository.updateGeneratedData(own.id, { ...(own.generated_data || {}), ...edited }).catch(() => {});
+    if (newItemId !== String(listing.edit_of_item_id)) await listingRepository.setExternalProductId(own.id, newItemId).catch(() => {});
+  }
+  await listingRepository.deleteById(listing.id);
+  logger.info('Ended listing relisted', { connectionId: listing.connection_id, from: listing.edit_of_item_id, to: newItemId });
+  return { ...listing, status: 'published', external_product_id: newItemId, relisted: true, relistedFrom: String(listing.edit_of_item_id), deleted: true, warnings: revised.warnings || [] };
 }
 
 // Where on eBay's Inventory system a Liston-published listing lives, from
@@ -1798,6 +1970,9 @@ function withSkus(draft, connectionId) {
 }
 
 module.exports = {
+  pageOfListings,
+  editSnapshot,
+  editDifferences,
   renderDraftDescription,
   renderTemplatePreview,
   uploadDraftImage,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api, ApiError, AnalyticsRange, ListingAnalytics } from "@/lib/api";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { useAccountEvents } from "@/lib/useAccountEvents";
@@ -9,37 +9,35 @@ import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { BarList } from "@/components/charts/BarList";
 import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
 import { MetricsBoard } from "./MetricsBoard";
-import { Funnel } from "./Funnel";
-import { HintTag } from "./InsightCards";
+import { HealthPanel, HealthPlan } from "./HealthPanel";
 import { RANGE_OPTIONS } from "./metrics";
 
 // One listing's analytics in a panel that slides over the page: its
 // figures for a range, the change from the period before, the day-by-day
 // chart, where its views came from and a suggestion when there is one.
 // Opened from the Analytics tab and from each live listing on the Listings
-// tab, so neither has to leave its page. "Open in Listings" takes the seller
-// to the listing on Liston's Active tab (searched by its item number), where
-// it can be edited or ended — the fix happens here, not on eBay.
+// tab, so neither has to leave its page. The health check's "Open in
+// editor" / "Apply recommended changes" opens the listing in Liston's live
+// editor — the fix happens here, not on eBay.
 
 export function ListingAnalyticsPanel({
   connectionId,
   itemId,
   initialRange = "30d",
   onClose,
-  onOpenInListings,
 }: {
   connectionId: string;
   itemId: string;
   initialRange?: AnalyticsRange;
   onClose: () => void;
-  // Already on the Listings tab: show the listing there instead of navigating.
-  onOpenInListings?: () => void;
 }) {
   const [range, setRange] = useState<AnalyticsRange>(initialRange);
   const [byKey, setByKey] = useState<Record<string, ListingAnalytics | { error: string }>>({});
   const [reload, setReload] = useState(0);
   const [reading, setReading] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
+  const [fixError, setFixError] = useState<string | null>(null);
+  const router = useRouter();
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const key = `${itemId}:${range}`;
   const loaded = byKey[key];
@@ -102,7 +100,37 @@ export function ListingAnalyticsPanel({
     }
   }
 
+  // "Apply recommended changes": the listing opens in Liston's live editor
+  // with what the AI can change already applied (reviewed there, published
+  // only when the seller presses Publish) and the rest listed as a to-do.
+  async function applyPlan(plan: HealthPlan) {
+    setFixError(null);
+    try {
+      const { listing: draft } = await api.startLiveEdit(connectionId, itemId);
+      // Nothing to apply or do: just the editor.
+      if (!plan.instruction && !plan.todo.length) return router.push(`/accounts/${connectionId}/listings/draft/${draft.id}`);
+      const query = new URLSearchParams({ apply: "1" });
+      if (plan.instruction) query.set("ask", plan.instruction);
+      if (plan.todo.length) query.set("todo", plan.todo.join("|"));
+      router.push(`/accounts/${connectionId}/listings/draft/${draft.id}?${query.toString()}`);
+    } catch (err) {
+      setFixError(err instanceof ApiError ? err.message : "Couldn't open this listing for editing. Try again.");
+    }
+  }
+
+  // The deeper check, then this range again (its reasons now use it).
+  async function runCheck(competitor: boolean) {
+    try {
+      await api.checkListingHealth(connectionId, itemId, competitor);
+    } catch (err) {
+      throw new Error(err instanceof ApiError ? err.message : "The check didn't finish. Try again.");
+    }
+    setByKey({});
+    setReload((n) => n + 1);
+  }
+
   const listing = view?.listing;
+  const sellerHubUrl = listing?.url ? `${new URL(listing.url).origin}/sh/lst/active` : null;
   const rangeLabel = view ? dayRangeLabel(view.range.from, view.range.to) : "";
 
   return (
@@ -136,17 +164,6 @@ export function ListingAnalyticsPanel({
               )}
             </div>
             <div className="flex flex-shrink-0 items-center gap-1.5">
-              {onOpenInListings ? (
-                <button type="button" onClick={onOpenInListings} className="btn btn-secondary btn-sm">
-                  Open in Listings
-                  <ArrowIcon />
-                </button>
-              ) : (
-                <Link href={`/accounts/${connectionId}/listings?q=${encodeURIComponent(itemId)}`} className="btn btn-secondary btn-sm">
-                  Open in Listings
-                  <ArrowIcon />
-                </Link>
-              )}
               <button ref={closeRef} type="button" onClick={onClose} className="btn btn-ghost btn-icon" aria-label="Close">
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
                   <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -182,11 +199,21 @@ export function ListingAnalyticsPanel({
             </div>
           )}
 
-          {view?.hint && (
-            <div className="flex items-start gap-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
-              <HintTag hint={view.hint} />
-              <p className="text-[13px] leading-relaxed text-[var(--color-ink)]">{view.hint.detail}</p>
-            </div>
+          {fixError && <div className="notice notice-danger">{fixError}</div>}
+          {view?.health && (
+            <HealthPanel
+              key={`${itemId}:${view.range.key}`}
+              health={view.health}
+              benchmarks={view.benchmarks}
+              check={view.check}
+              checkCalls={view.checkCalls}
+              edits={view.edits}
+              currency={view.currency}
+              sellerHubUrl={sellerHubUrl}
+              price={view.listing.price?.amount ?? null}
+              onApply={applyPlan}
+              onCheck={runCheck}
+            />
           )}
 
           <MetricsBoard
@@ -196,6 +223,7 @@ export function ListingAnalyticsPanel({
             series={view?.series ?? []}
             previousSeries={view?.previousSeries ?? null}
             leadInSeries={view?.leadInSeries ?? null}
+            csvName={view ? `listing-${itemId}-${view.range.from}-to-${view.range.to}` : undefined}
             currency={view?.currency ?? null}
             range={range}
             rangeLabel={rangeLabel}
@@ -205,21 +233,13 @@ export function ListingAnalyticsPanel({
             emptyDailyMessage="Day-by-day traffic for this listing appears as its days are stored. Sales show every day."
           />
 
-          {view && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <section className="card p-5">
-                <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">From shown to sold</h3>
-                <div className="mt-3">
-                  <Funnel impressions={view.totals.impressions} views={view.totals.views} sold={view.totals.sold} ctr={view.totals.ctr} />
-                </div>
-              </section>
-              <section className="card p-5">
-                <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">Where views came from</h3>
-                <div className="mt-3">
-                  <BarList items={view.sources.map((s) => ({ key: s.key, label: s.label, value: s.views }))} format={fullNumber} empty="No views recorded in this range." />
-                </div>
-              </section>
-            </div>
+          {view && view.sources.length > 0 && (
+            <section className="card p-5">
+              <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">Where views came from</h3>
+              <div className="mt-3">
+                <BarList items={view.sources.map((s) => ({ key: s.key, label: s.label, value: s.views }))} format={fullNumber} empty="No views recorded in this range." />
+              </div>
+            </section>
           )}
 
           {view && (
@@ -242,13 +262,5 @@ export function ListingAnalyticsPanel({
         </div>
       </div>
     </div>
-  );
-}
-
-function ArrowIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
-      <path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
   );
 }

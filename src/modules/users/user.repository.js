@@ -18,7 +18,7 @@ async function findByIdWithPlan(userId) {
 // Cheap indexed PK lookup used on every authenticated request (requireAuth)
 // to resolve role/ownerId — kept minimal on purpose.
 async function findRoleInfo(userId) {
-  const result = await query('SELECT id, email, role, parent_user_id, access_status FROM users WHERE id = $1', [userId]);
+  const result = await query('SELECT id, email, role, parent_user_id, access_status, deactivated_at FROM users WHERE id = $1', [userId]);
   return result.rows[0] || null;
 }
 

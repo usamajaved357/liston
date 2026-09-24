@@ -58,13 +58,19 @@ async function readListing(req, res, next) {
   }
 }
 
-async function getListingSummaries(req, res, next) {
+const checkSchema = z.object({ competitor: z.boolean().default(false) });
+
+// A listing's deeper health check, on request (1 Trading call, +1 search
+// for similar listings' prices).
+async function checkListing(req, res, next) {
   try {
-    const result = await analyticsService.getListingSummaries(req.params.id, req.ownerId);
+    const { itemId } = parse(itemSchema, req.params);
+    const { competitor } = parse(checkSchema, req.body || {});
+    const result = await analyticsService.checkListing(req.params.id, req.ownerId, itemId, { competitor });
     res.status(200).json(result.data);
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { getAnalytics, loadAllListings, getListingAnalytics, readListing, getListingSummaries };
+module.exports = { getAnalytics, loadAllListings, getListingAnalytics, readListing, checkListing };

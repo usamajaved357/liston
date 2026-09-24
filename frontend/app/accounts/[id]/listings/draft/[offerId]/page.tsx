@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { EditorSkeleton } from "@/components/Skeleton";
 import {
   api,
@@ -1217,6 +1217,7 @@ function AiPanel({
   busy,
   currentImageUrl,
   hasVariations,
+  initialInstruction,
 }: {
   scope: "text" | "image";
   onScopeChange: (s: "text" | "image") => void;
@@ -1232,8 +1233,9 @@ function AiPanel({
   busy: boolean;
   currentImageUrl: string | null;
   hasVariations: boolean;
+  initialInstruction?: string | null; // typed in for the seller (a health check's fix), not sent
 }) {
-  const [instruction, setInstruction] = useState("");
+  const [instruction, setInstruction] = useState(initialInstruction || "");
   const proposal = scope === "text" ? textProposal : imageProposal;
 
   function submit(e?: React.FormEvent) {
@@ -1255,7 +1257,7 @@ function AiPanel({
       : ['Add the heading "FREE UK DELIVERY"', "Add a UK flag badge"];
 
   return (
-    <div className={`${cardClass} border-[var(--color-primary)]/25 bg-gradient-to-b from-[var(--color-primary-soft)]/50 to-[var(--color-panel)]`}>
+    <div id="ask-ai" className={`${cardClass} scroll-mt-4 border-[var(--color-primary)]/25 bg-gradient-to-b from-[var(--color-primary-soft)]/50 to-[var(--color-panel)]`}>
       <div className="flex items-center justify-between gap-2">
         <h3 className={`${cardTitleClass} flex items-center gap-1.5`}>
           <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-[var(--color-primary)]">
@@ -1355,6 +1357,9 @@ function AiPanel({
             </div>
           )}
 
+          {scope === "text" && textProposal && !textProposal.cannotDo && textRows.length === 0 && (
+            <p className="px-3 py-2 text-[12px] leading-relaxed text-[var(--color-muted)]">Nothing to change: the listing&apos;s own facts don&apos;t say more than what&apos;s already there.</p>
+          )}
           {scope === "text" && textProposal && textRows.length > 0 && (
             <ul className="max-h-72 divide-y divide-[var(--color-line)] overflow-y-auto">
               {textRows.map((row, i) => (
@@ -1378,13 +1383,13 @@ function AiPanel({
           )}
 
           <div className="flex gap-1.5 border-t border-[var(--color-line)] bg-[var(--color-paper)]/60 px-3 py-2">
-            {!(scope === "text" && textProposal?.cannotDo) && (
+            {!(scope === "text" && (textProposal?.cannotDo || textRows.length === 0)) && (
               <button type="button" onClick={scope === "text" ? onAcceptText : onAcceptImage} disabled={busy} className="btn btn-primary btn-sm">
                 Accept
               </button>
             )}
             <button type="button" onClick={onDiscard} disabled={busy} className="btn btn-ghost btn-sm">
-              {scope === "text" && textProposal?.cannotDo ? "OK" : "Discard"}
+              {scope === "text" && (textProposal?.cannotDo || textRows.length === 0) ? "OK" : "Discard"}
             </button>
           </div>
         </div>
@@ -1482,6 +1487,22 @@ function withSchemaRows(rows: { name: string; value: string }[], info: DraftCate
 export default function DraftEditorPage() {
   const params = useParams<{ id: string; offerId: string }>();
   const router = useRouter();
+  // ?ask= is a fix from Analytics' health check ("Fill specifics with AI"):
+  // once the listing is loaded, Ask AI proposes it straight away and the
+  // proposal waits for the seller to Accept — nothing changes on eBay until
+  // they accept and update the listing.
+  // Read through Next's router, not window.location: arriving by a click
+  // inside the app, the address bar may not show the new URL yet when this
+  // page first renders.
+  const searchParams = useSearchParams();
+  const [askPrefill] = useState(() => searchParams.get("ask"));
+  // With ?apply=1 (the health check's "Apply recommended changes") the
+  // proposal is applied to the editor at once; ?todo= lists what only the
+  // seller can do (stock, photos…), shown with what was applied.
+  const [applyAsked] = useState(() => searchParams.get("apply") === "1");
+  const [todoAsked] = useState(() => (searchParams.get("todo") || "").split("|").filter(Boolean));
+  const [appliedNote, setAppliedNote] = useState<{ summary: string; rows: ChangeRow[]; todo: string[]; working: boolean } | null>(null);
+  const askedRef = useRef(false);
 
   const [listing, setListing] = useState<DraftListing | null>(null);
   const [policies, setPolicies] = useState<ConnectionPolicies | null>(null);
@@ -1572,6 +1593,9 @@ export default function DraftEditorPage() {
   // A live listing opened for editing: only two ways out, discard or push
   // the changes to eBay. No draft is kept either way.
   const isLiveEdit = Boolean(listing?.edit_of_item_id);
+  // An ended listing opened from Inactive: publishing puts it back on eBay
+  // (a relist, new item number), and it can go back up unchanged.
+  const isRelist = isLiveEdit && Boolean(listing?.source_data?.ended);
 
   // The category schema in force, for resetFrom to merge unfilled rows in.
   // A ref, kept in step wherever categoryInfo is set, so a save (which also
@@ -1718,8 +1742,12 @@ export default function DraftEditorPage() {
   const stableAspects = (a: Record<string, string[]>) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]]));
   const aspectsChanged = stableAspects(editedAspects) !== stableAspects(originalAspects);
 
+  // All three or none: a blank one (a draft made before the account had
+  // defaults) is shown as "Choose…" and only counts as a change, and is
+  // saved, once all three are picked.
   const policiesChanged =
     !!content?.listingPolicies &&
+    !!(policyIds.fulfillmentPolicyId && policyIds.paymentPolicyId && policyIds.returnPolicyId) &&
     (policyIds.fulfillmentPolicyId !== content.listingPolicies.fulfillmentPolicyId ||
       policyIds.paymentPolicyId !== content.listingPolicies.paymentPolicyId ||
       policyIds.returnPolicyId !== content.listingPolicies.returnPolicyId);
@@ -1785,9 +1813,7 @@ export default function DraftEditorPage() {
     if (content && JSON.stringify(images) !== JSON.stringify(content.imageUrls)) patch.imageUrls = images;
     if (aspectsChanged) patch.aspects = editedAspects;
     if (condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW")) patch.condition = condition;
-    // All three or none: a blank one (a draft made before the account had
-    // defaults) is shown as "Choose…" and saved once it's picked.
-    if (policiesChanged && policyIds.fulfillmentPolicyId && policyIds.paymentPolicyId && policyIds.returnPolicyId) patch.listingPolicies = policyIds;
+    if (policiesChanged) patch.listingPolicies = policyIds;
     if (single) {
       if (singlePrice !== single.price.value) patch.price = { value: singlePrice, currency: single.price.currency };
       if (singleQuantity !== String(single.quantity ?? 1)) patch.quantity = Math.max(0, parseInt(singleQuantity, 10) || 0);
@@ -2058,6 +2084,11 @@ export default function DraftEditorPage() {
         resetFrom(saved.listing);
       }
       const data = await api.publishDraftListing(listing.id);
+      if (data.listing.relisted) {
+        const warning = data.warnings?.length ? `&warning=${encodeURIComponent(data.warnings.join(" "))}` : "";
+        router.push(`/accounts/${params.id}/listings?relisted=${data.listing.external_product_id}&from=${data.listing.relistedFrom}${warning}`);
+        return;
+      }
       if (isLiveEdit) {
         // eBay may have applied only part of the revision; say so on the way out.
         const warning = data.warnings?.length ? `&warning=${encodeURIComponent(data.warnings.join(" "))}` : "";
@@ -2102,7 +2133,7 @@ export default function DraftEditorPage() {
     setDeleting(true);
     try {
       await api.deleteDraftListing(listing.id);
-      router.push(`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`);
+      router.push(`/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't delete this draft.");
       setDeleting(false);
@@ -2213,13 +2244,54 @@ export default function DraftEditorPage() {
     setAiBusy(true);
     setError(null);
     try {
-      setTextProposal(await api.reviseDraftText(listing.id, instruction, currentStateForAi()));
+      const proposal = await api.reviseDraftText(listing.id, instruction, currentStateForAi());
+      setTextProposal(proposal);
+      return proposal;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The AI couldn't make that change.");
+      return null;
     } finally {
       setAiBusy(false);
     }
   }
+  // The health check's fix, asked once the editor holds this listing (its
+  // title state matches the loaded draft); ?ask= is then dropped so a reload
+  // doesn't ask again.
+  const editorReady = Boolean(content) && title === (content ? (isVariationDraft(content) ? content.commonTitle : content.title) : null);
+  // Only a to-do (nothing the AI can change): shown as it opens.
+  useEffect(() => {
+    if (askPrefill || !applyAsked || !todoAsked.length || askedRef.current || !editorReady) return;
+    askedRef.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    setAppliedNote({ summary: "Nothing here can be changed automatically; the list below is for you.", rows: [], todo: todoAsked, working: false });
+  }, [askPrefill, applyAsked, todoAsked, editorReady]);
+
+  useEffect(() => {
+    if (!askPrefill || askedRef.current || !editable || !editorReady || !listing) return;
+    askedRef.current = true;
+    setAiScope("text");
+    window.history.replaceState(null, "", window.location.pathname);
+    if (applyAsked) {
+      // Applied straight into the editor; the note at the top says what.
+      setAppliedNote({ summary: "", rows: [], todo: todoAsked, working: true });
+      proposeText(askPrefill).then((proposal) => {
+        if (!proposal || proposal.cannotDo) {
+          setAppliedNote({ summary: proposal?.summary || "", rows: [], todo: todoAsked, working: false });
+          return;
+        }
+        const rows = changeRowsFor(proposal);
+        if (rows.length) applyTextChanges(proposal.changes);
+        setTextProposal(null);
+        setAppliedNote({ summary: proposal.summary, rows, todo: todoAsked, working: false });
+      });
+      return;
+    }
+    const show = () => document.getElementById("ask-ai")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setTimeout(show, 150);
+    proposeText(askPrefill).then(() => setTimeout(show, 50));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the editor is ready
+  }, [askPrefill, editable, editorReady, listing]);
+
   async function proposeImage(instruction: string) {
     if (!listing || !images[selectedImage]) return;
     setAiBusy(true);
@@ -2249,9 +2321,9 @@ export default function DraftEditorPage() {
   };
 
   // The proposal, as rows the panel can show: field, before, after.
-  const textRows = useMemo<ChangeRow[]>(() => {
-    if (!textProposal) return [];
-    const c = textProposal.changes;
+  // What a text proposal would change, against the editor as it is now.
+  function changeRowsFor(proposal: TextProposal): ChangeRow[] {
+    const c = proposal.changes;
     const rows: ChangeRow[] = [];
     const newTitle = c.title ?? c.commonTitle;
     const newDesc = c.description ?? c.commonDescription;
@@ -2259,7 +2331,10 @@ export default function DraftEditorPage() {
     if (newDesc !== undefined && newDesc !== description) rows.push({ label: "Description", from: description, to: newDesc, long: true });
     for (const [name, values] of Object.entries(c.aspects || {})) {
       const from = editedAspects[name]?.join(", ");
-      rows.push({ label: `Specific · ${name}`, from, to: values.join(", ") });
+      const to = values.join(", ");
+      // The same value again isn't a change (the model sometimes repeats what's there).
+      if ((from ?? "").trim().toLowerCase() === to.trim().toLowerCase()) continue;
+      rows.push({ label: `Specific · ${name}`, from, to });
     }
     for (const name of c.removeAspects || []) if (editedAspects[name]) rows.push({ label: `Specific · ${name}`, from: editedAspects[name].join(", "), to: "removed" });
     if (c.condition && c.condition !== condition) rows.push({ label: "Condition", from: CONDITIONS.find((x) => x.value === condition)?.label, to: CONDITIONS.find((x) => x.value === c.condition)?.label || c.condition });
@@ -2292,11 +2367,19 @@ export default function DraftEditorPage() {
     }
     if (c.storeCategoryNames) rows.push({ label: "Shop categories", from: storeCategoryNames.join(", ") || "—", to: c.storeCategoryNames.join(", ") || "none" });
     return rows;
-  }, [textProposal, title, description, editedAspects, condition, single, singlePrice, singleQuantity, sku, variation, priceOverrides, quantityOverrides, policies, policyIds, storeCategoryNames]);
+  }
+  const textRows = textProposal ? changeRowsFor(textProposal) : [];
 
   function acceptText() {
     if (!textProposal || !content) return;
-    const c = textProposal.changes;
+    applyTextChanges(textProposal.changes);
+    setTextProposal(null);
+  }
+
+  // Puts a proposal's changes into the editor (saved as a draft; nothing
+  // reaches eBay until Publish).
+  function applyTextChanges(c: TextProposal["changes"]) {
+    if (!content) return;
     const newTitle = c.title ?? c.commonTitle;
     const newDesc = c.description ?? c.commonDescription;
     if (newTitle !== undefined) setTitle(newTitle);
@@ -2359,7 +2442,6 @@ export default function DraftEditorPage() {
     if (c.removeVariants?.length) setRemovedRows((s) => new Set([...s, ...c.removeVariants!]));
     if (c.listingPolicies) setPolicyIds((p) => ({ ...p, ...c.listingPolicies }));
     if (c.storeCategoryNames) setStoreCategoryNames(c.storeCategoryNames);
-    setTextProposal(null);
   }
   async function acceptImage() {
     if (!listing || !imageProposal || !imageProposalTarget) return;
@@ -2410,9 +2492,9 @@ export default function DraftEditorPage() {
   return (
     <main className="flex h-screen flex-col bg-[var(--color-paper)]">
       <EditorHeader
-        backHref={`/accounts/${params.id}/listings${isLiveEdit ? "" : "?filter=draft"}`}
+        backHref={`/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`}
         backLabel={isLiveEdit ? "Back to listings" : "Back to drafts"}
-        title={isLiveEdit ? "Edit live listing" : editable ? "Edit listing" : "Listing"}
+        title={isRelist ? "Relist listing" : isLiveEdit ? "Edit live listing" : editable ? "Edit listing" : "Listing"}
         chips={
           notes.length > 0 ? (
             <button
@@ -2434,8 +2516,8 @@ export default function DraftEditorPage() {
         }
         actions={
           isLiveEdit ? (
-            <span className="chip font-medium" title="eBay item number">
-              Live · #{listing.edit_of_item_id}
+            <span className="chip font-medium" title={isRelist ? "The ended eBay item; relisting gives it a new number" : "eBay item number"}>
+              {isRelist ? "Ended" : "Live"} · #{listing.edit_of_item_id}
             </span>
           ) : editable ? (
             <span className="chip text-xs font-medium text-[var(--color-muted)]" aria-live="polite">
@@ -2447,6 +2529,78 @@ export default function DraftEditorPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1360px] px-5 py-4">
+          {appliedNote && (
+            <div className="mb-3 overflow-hidden rounded-2xl border border-[var(--color-primary)]/30 bg-[var(--color-panel)] shadow-[var(--shadow-card)]">
+              <div className="flex items-start gap-3 bg-[var(--color-primary-soft)]/60 px-4 py-3">
+                <span className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary)] text-white">
+                  {appliedNote.working ? (
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                  ) : (
+                    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden>
+                      <path d="M4 8.5l2.5 2.5L12 5.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  )}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13.5px] font-semibold text-[var(--color-ink)]">
+                    {appliedNote.working
+                      ? "Applying the recommended changes…"
+                      : appliedNote.rows.length
+                        ? `${appliedNote.rows.length} recommended change${appliedNote.rows.length === 1 ? "" : "s"} applied`
+                        : "Nothing to change automatically"}
+                  </p>
+                  <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--color-muted)]">
+                    {appliedNote.working
+                      ? "The AI is working through the health check's recommendations."
+                      : appliedNote.rows.length
+                        ? "Not on eBay yet: review them below, then Publish changes. Discard changes drops them all."
+                        : appliedNote.summary}
+                  </p>
+                </div>
+                {!appliedNote.working && (
+                  <button type="button" onClick={() => setAppliedNote(null)} aria-label="Dismiss" className="text-[var(--color-muted)] hover:text-[var(--color-ink)]">
+                    {Icon.close}
+                  </button>
+                )}
+              </div>
+              {!appliedNote.working && (appliedNote.rows.length > 0 || appliedNote.todo.length > 0) && (
+                <div className="grid gap-4 px-4 py-3 md:grid-cols-2">
+                  {appliedNote.rows.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {appliedNote.rows.map((row, i) => (
+                        <li key={i} className="text-[12px] leading-snug">
+                          <span className="font-semibold text-[var(--color-ink)]">{row.label}</span>
+                          <span className="text-[var(--color-muted)]"> · </span>
+                          {row.long ? (
+                            <span className="text-[var(--color-ink)]">rewritten</span>
+                          ) : (
+                            <>
+                              {row.from && <span className="text-[var(--color-muted)] line-through decoration-[var(--color-muted)]/60">{row.from}</span>}
+                              {row.from && <span className="mx-1 text-[var(--color-muted)]">→</span>}
+                              <span className="font-medium text-[var(--color-ink)]">{row.to}</span>
+                            </>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {appliedNote.todo.length > 0 && (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">For you to do</p>
+                      <ul className="mt-1 space-y-1">
+                        {appliedNote.todo.map((t) => (
+                          <li key={t} className="flex gap-1.5 text-[12px] leading-snug text-[var(--color-ink)]">
+                            <span className="text-[var(--color-muted)]">•</span>
+                            {t}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           {(error || policyFixNote || (listing.error_message && listing.status === "pending_review") || (imageCheck && !imageCheck.ok) || listing.status === "published" || (editable && policyTriggers.length > 0)) && (
             <div className="mb-3 space-y-2">
               {editable && policyTriggers.length > 0 && (
@@ -2546,6 +2700,7 @@ export default function DraftEditorPage() {
                   busy={aiBusy}
                   currentImageUrl={imageProposalTarget}
                   hasVariations={Boolean(variation)}
+                  initialInstruction={askPrefill}
                 />
               )}
             </div>
@@ -2937,9 +3092,9 @@ export default function DraftEditorPage() {
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
                 {Icon.trash}
-                <span>{isLiveEdit ? "Discard changes" : "Delete draft"}</span>
+                <span>{isRelist ? "Cancel" : isLiveEdit ? "Discard changes" : "Delete draft"}</span>
               </button>
-              {isLiveEdit && (
+              {isLiveEdit && !isRelist && (
                 <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now">
                   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                     <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
@@ -2950,7 +3105,20 @@ export default function DraftEditorPage() {
               )}
             </div>
             <div className="flex items-center gap-3">
-              {isLiveEdit ? (
+              {isRelist ? (
+                <>
+                  <span className="text-xs text-[var(--color-muted)]">{dirty ? "Relisted with your changes" : "Change anything first, or relist it as it was"}</span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmPublish(true)}
+                    disabled={!editable || busy || title.length > TITLE_MAX}
+                    title={title.length > TITLE_MAX ? "Shorten the title first" : undefined}
+                    className="btn btn-primary"
+                  >
+                    {publishing ? "Relisting…" : "Relist on eBay"}
+                  </button>
+                </>
+              ) : isLiveEdit ? (
                 <>
                   {dirty && <span className="text-xs text-[var(--color-muted)]">Changes go live on eBay when you publish</span>}
                   <button
@@ -3019,13 +3187,15 @@ export default function DraftEditorPage() {
       )}
       <ConfirmDialog
         open={confirmPublish}
-        title={isLiveEdit ? "Publish these changes?" : "Publish this listing?"}
+        title={isRelist ? "Relist this on eBay?" : isLiveEdit ? "Publish these changes?" : "Publish this listing?"}
         description={
-          isLiveEdit
+          isRelist
+            ? "It goes back on sale on eBay now as a new listing with a new item number. eBay charges its usual listing fees, if any. The ended listing stays ended."
+            : isLiveEdit
             ? "The live eBay listing is updated in place. Buyers see the new title, photos, price, stock and description straight away."
             : `It goes live on eBay immediately${variation ? `, with ${variation.variants.length} variations` : ""}. Publishing creates the listing on eBay now, so this can take a minute or two for large variation sets.`
         }
-        confirmLabel={isLiveEdit ? "Publish changes" : "Publish"}
+        confirmLabel={isRelist ? "Relist" : isLiveEdit ? "Publish changes" : "Publish"}
         loading={publishing}
         onCancel={() => setConfirmPublish(false)}
         onConfirm={handlePublish}
@@ -3033,7 +3203,7 @@ export default function DraftEditorPage() {
       <ConfirmDialog
         open={confirmEnd}
         title="End this listing on eBay?"
-        description="It comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it, and the changes you were making here are dropped. You can relist it from eBay later."
+        description="It comes off eBay straight away and moves to Inactive. Buyers can no longer purchase it, and the changes you were making here are dropped. You can relist it from the Inactive tab later."
         confirmLabel="End listing"
         danger
         loading={ending}

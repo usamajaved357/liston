@@ -5,6 +5,8 @@ const ebayFulfillment = require('./api/ebay.fulfillment');
 const ebayFinances = require('./api/ebay.finances');
 const ebaySignature = require('./api/ebay.signature');
 const ebayPostOrder = require('./api/ebay.postorder');
+const ebayBrowse = require('./api/ebay.browse');
+const ebayTaxonomy = require('./api/ebay.taxonomy');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
@@ -12,6 +14,8 @@ const ebayNotifications = require('./ebay.notifications');
 const accountEvents = require('./account-events');
 const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
+const analyticsDays = require('../analytics/analytics-days');
+const orderSort = require('../orders/order-sort');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -732,12 +736,52 @@ async function reviseLiveListing(credentials, itemId, payload) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// Where a listing another tool made through the Inventory API lives, from
+// its SKUs: a variation's group (the inventory item names it in groupIds),
+// or a single listing's SKU. Null when eBay has no inventory item for them.
+async function inventoryRefForSkus(credentials, { skus, isVariation }) {
+  const { accessToken } = await ensureValidAccessToken(credentials);
+  const first = (skus || []).find(Boolean);
+  if (!first) return null;
+  const item = await ebayClient.getInventoryItem(accessToken, first).catch(() => null);
+  if (!item) return null;
+  if (!isVariation) return { sku: first };
+  const groupKey = (item.groupIds || [])[0];
+  return groupKey ? { groupKey } : null;
+}
+
+// Puts an ended listing back on eBay (a new item number) with the edit's
+// fields; the ended one leaves the Inactive mirror.
+async function relistLiveListing(credentials, connectionId, itemId, payload) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const result = await ebayTrading.relistListing(accessToken, itemId, payload, { siteId });
+  removeListingFromMirror(connectionId, itemId);
+  return { ...result, credentialsChanged, credentials: refreshedCredentials };
+}
+
 // A listing Liston published through the Inventory API can't be revised
 // through the Trading API — eBay answers "Inventory-based listing
 // management is not currently supported by this tool". Such a listing is
 // revised the way it was made: the inventory item(s), the offer(s) and (for
 // variations) the group are replaced, then the offer/group is published
 // again, which pushes the changes to the live item.
+// eBay's refusal to put up a listing identical to one this seller already
+// has live ("…an item you already have on eBay: <title> (<item id>)…").
+// Returns the live item's number, or null when it isn't that refusal.
+function duplicateListingOf(err) {
+  const texts = [err?.message, ...((err?.details || []).map((e) => e.LongMessage || e.ShortMessage))].filter(Boolean).join(' ');
+  if (!/identical items from the same seller|already have on eBay/i.test(texts)) return null;
+  const m = texts.match(/\((\d{9,15})\)/);
+  return m ? m[1] : '';
+}
+
+// eBay's refusal to revise a listing that has already ended ("You are not
+// allowed to revise ended listings", error 291).
+function isEndedListingError(err) {
+  const codes = (err?.details || []).map((e) => String(e.ErrorCode ?? ''));
+  return codes.includes('291') || /revise ended|listing (has )?ended|auction (has )?ended/i.test(err?.message || '');
+}
+
 function isInventoryManagedError(err) {
   return /Inventory-based listing management/i.test(err?.message || '');
 }
@@ -872,11 +916,26 @@ function endOfUtcMonth(date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) - 1);
 }
 
+// The start of a day in the seller's time zone, as an instant.
+function localMidnight(day, timeZone) {
+  return new Date(`${day}T00:00:00${analyticsDays.offsetAt(day, timeZone)}`);
+}
+
 // Resolves a named range (or explicit custom from/to) to a concrete window.
 // Returns null for 'all_time', which has no single window — see
-// getEarningsSummary, which walks backwards in chunks instead.
-function resolveRangeWindow(range, from, to) {
+// getEarningsSummary, which walks backwards in chunks instead. With the
+// seller's `timeZone`, Today and the months start at their midnight (an
+// order at 00:30 in London is today's, not yesterday's in UTC).
+function resolveRangeWindow(range, from, to, timeZone = null) {
   const now = new Date();
+  if (timeZone && ['today', 'this_month', 'last_month'].includes(range)) {
+    const today = analyticsDays.today(timeZone, now);
+    if (range === 'today') return [localMidnight(today, timeZone), now];
+    const thisMonth = `${today.slice(0, 7)}-01`;
+    if (range === 'this_month') return [localMidnight(thisMonth, timeZone), now];
+    const lastMonth = `${analyticsDays.addDays(thisMonth, -1).slice(0, 7)}-01`;
+    return [localMidnight(lastMonth, timeZone), new Date(localMidnight(thisMonth, timeZone).getTime() - 1)];
+  }
   switch (range) {
     case 'today':
       return [startOfUtcDay(now), now];
@@ -1107,6 +1166,23 @@ async function listListingsDetailed(credentials, { connectionId, status = 'activ
     credentialsChanged,
     credentials: refreshedCredentials,
   };
+}
+
+// Each listing's latest sale in the mirrored orders (eBay keeps 90 days):
+// itemId -> ISO time. Cancelled orders aren't sales. Reads the mirror only.
+async function lastSalesByItem(credentials, { connectionId, push = false }) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const orders = await getOrdersLast90Cached(String(connectionId), accessToken, siteId, push).catch(() => []);
+  const last = new Map();
+  for (const order of orders || []) {
+    if (order.cancelStatus && !['NotApplicable', 'None', 'CancelFailed'].includes(order.cancelStatus)) continue;
+    if (!order.createdAt) continue;
+    for (const line of order.lineItems || []) {
+      const id = line.itemId ? String(line.itemId) : null;
+      if (id && !(last.get(id) >= order.createdAt)) last.set(id, order.createdAt);
+    }
+  }
+  return last;
 }
 
 // The account's best sellers, for the "More from our store" row in every
@@ -1992,15 +2068,16 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
 
 /**
  * The Orders page's data source: fetches every order in the range, tags each
- * with a derived status, filters by status/search text, sorts newest first,
- * and paginates in-memory (eBay's own pagination doesn't support these
+ * with a derived status, filters by status/search text, sorts it
+ * (orders/order-sort.js: newest first, or the nearest dispatch deadline on
+ * Awaiting dispatch) and paginates in-memory (eBay's own pagination doesn't support these
  * filters) — then enriches only the returned page's line items with a
  * picture + live quantity from GetItem, so we're not fetching images for
  * orders the page never shows.
  */
 // `archivedOrderIds` are the orders the team put away: left out unless
 // `archived` asks for exactly those.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false }) {
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2026,7 +2103,8 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
     );
   }
 
-  filtered.sort((a, b) => new Date(b.paidTime || b.createdAt) - new Date(a.paidTime || a.createdAt));
+  const sortKey = orderSort.sortFor(sort, status);
+  filtered = orderSort.sortOrders(filtered, sortKey, status);
 
   const totalEntries = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalEntries / perPage));
@@ -2055,6 +2133,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
     totalPages,
     page,
     perPage,
+    sort: sortKey,
     syncedAt: ordersCache.syncedAt(String(connectionId)),
     credentialsChanged,
     credentials: refreshedCredentials,
@@ -2071,7 +2150,7 @@ async function getEarningsSummary(credentials, { connectionId, range, from, to, 
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
 
   const effectiveRange = range === 'all_time' ? '90d' : range;
-  const [start, end] = resolveRangeWindow(effectiveRange, from, to);
+  const [start, end] = resolveRangeWindow(effectiveRange, from, to, analyticsDays.timeZoneFor(credentials.marketplaceId || 'EBAY_GB'));
   const orders = connectionId
     ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end)
     : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString(), 1, siteId)).orders;
@@ -2086,7 +2165,8 @@ async function getEarningsSummary(credentials, { connectionId, range, from, to, 
   }
 
   return {
-    earnings: { amount: Math.round(amount * 100) / 100, currency },
+    // A day with no orders is still £0.00, not a bare 0.00.
+    earnings: { amount: Math.round(amount * 100) / 100, currency: currency || marketplaces.currencyFor(credentials.marketplaceId || 'EBAY_GB') },
     orderCount: orders.length,
     truncated: range === 'all_time',
     credentialsChanged,
@@ -2110,7 +2190,21 @@ function pushEnabled(connection, now = Date.now()) {
   return { listings, orders };
 }
 
+// Similar listings on a site (public data, 1 Browse call), for a listing's
+// health check: the cheapest by price in the same category.
+function searchSimilarListings({ q, categoryId, filter, limit = 20 }, marketplaceId) {
+  return ebayBrowse.searchItemSummaries({ q, limit, filter, categoryIds: categoryId || undefined, sort: 'price' }, marketplaceId);
+}
+
+// A category's item specifics with required/recommended flags (cached by
+// the taxonomy client for a day); null when eBay couldn't be asked.
+function categoryAspectSchema(marketplaceId, categoryId) {
+  return ebayTaxonomy.getEditorAspectSchema(marketplaceId, categoryId);
+}
+
 module.exports = {
+  searchSimilarListings,
+  categoryAspectSchema,
   pushEnabled,
   getOrderCases,
   declineCancellation,
@@ -2159,6 +2253,11 @@ module.exports = {
   isInventoryManagedError,
   conditionIdFor,
   listListingsDetailed,
+  relistLiveListing,
+  inventoryRefForSkus,
+  duplicateListingOf,
+  isEndedListingError,
+  lastSalesByItem,
   invalidateListings,
   removeListingFromMirror,
   endLiveListing,

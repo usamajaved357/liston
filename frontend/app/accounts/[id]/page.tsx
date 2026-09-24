@@ -24,6 +24,18 @@ const RANGES: { key: EarningsRange; label: string }[] = [
   { key: "all_time", label: "All time" },
 ];
 
+// "today", "in the last 7 days", "this month": how each range reads in a sentence.
+const RANGE_PHRASE: Record<EarningsRange, string> = {
+  today: "today",
+  "7d": "in the last 7 days",
+  "30d": "in the last 30 days",
+  "90d": "in the last 90 days",
+  this_month: "this month",
+  last_month: "last month",
+  all_time: "in the last 90 days",
+  custom: "in this period",
+};
+
 const SUMMARY_RANGE = "90d";
 
 const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
@@ -163,7 +175,7 @@ const Icons = {
 };
 
 function OwnerDashboard({ connectionId }: { connectionId: string }) {
-  const [range, setRange] = useState<EarningsRange>("7d");
+  const [range, setRange] = useState<EarningsRange>("today");
   // Keyed by range so switching ranges shows the skeleton without a
   // synchronous reset inside the effect.
   const [earningsByRange, setEarningsByRange] = useState<Record<string, { amount: Money; orders: number; truncated: boolean } | { error: string }>>({});
@@ -214,7 +226,7 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
       <section>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <p className="text-[13px] text-[var(--color-muted)]">
-            Sales for <span className="font-medium text-[var(--color-ink)]">{rangeLabel}</span>
+            Sales for <span className="font-medium text-[var(--color-ink)]">{(RANGE_PHRASE[range] ?? rangeLabel).replace(/^in /, "")}</span>
             {earnings?.truncated && <span className="ml-2">· eBay only keeps 90 days of orders</span>}
           </p>
           <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
@@ -240,11 +252,11 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
         )}
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="Earnings" value={earnings ? formatMoney(earnings.amount) : "—"} hint={`Revenue in the last ${rangeLabel}`} tone="accent" icon={Icons.money} loading={!earnings && !earningsError} />
+          <Stat label="Earnings" value={earnings ? formatMoney(earnings.amount) : "—"} hint={`Revenue ${RANGE_PHRASE[range] ?? rangeLabel}`} tone="accent" icon={Icons.money} loading={!earnings && !earningsError} />
           <Stat
             label="Orders"
             value={earnings ? String(earnings.orders) : "—"}
-            hint={`Placed in the last ${rangeLabel}`}
+            hint={`Placed ${RANGE_PHRASE[range] ?? rangeLabel}`}
             tone="primary"
             icon={Icons.orders}
             href={`${base}/orders`}

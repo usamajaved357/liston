@@ -15,6 +15,7 @@
 require('dotenv').config();
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const { rebuildOrderActivity } = require('../src/modules/team/activity-backfill');
 
 const email = process.argv[2];
 const direction = process.argv[3];
@@ -77,6 +78,10 @@ async function upsert(db, table, row, conflictKey = 'id') {
   const { rows: targetPlan } = await target.query('SELECT id FROM plans WHERE name = $1', [planRows[0]?.name || 'starter']);
   if (!targetPlan.length) throw new Error('Target has no plans — has the seed run?');
 
+  const hasTable = async (db, name) => (await db.query('SELECT to_regclass($1) AS t', [name])).rows[0].t !== null;
+  const sourceHasActivity = await hasTable(local, 'public.member_activity');
+  const targetHasActivity = await hasTable(target, 'public.member_activity');
+
   const members = (await local.query('SELECT * FROM users WHERE parent_user_id = $1', [owner.id])).rows;
   for (const u of [owner, ...members]) {
     await upsert(target, 'users', { ...u, plan_id: targetPlan[0].id, stripe_customer_id: null, stripe_subscription_id: null });
@@ -99,6 +104,28 @@ async function upsert(db, table, row, conflictKey = 'id') {
     const listings = (await local.query('SELECT * FROM listings WHERE connection_id = $1', [c.id])).rows;
     for (const l of listings) await upsert(target, 'listings', l);
     console.log(`  listings: ${listings.length}`);
+
+    // Order history (down only — production's is its own): the timeline
+    // (who placed, dispatched, refunded…) the team's activity is built
+    // from, and the mirrored orders it reads titles and totals from.
+    if (direction !== '--from-prod') continue;
+    const orders = (await local.query('SELECT * FROM ebay_orders WHERE connection_id = $1', [c.id])).rows;
+    for (const o of orders) await upsert(target, 'ebay_orders', o, 'connection_id, order_id');
+    const events = (await local.query('SELECT * FROM order_events WHERE connection_id = $1', [c.id])).rows;
+    for (const e of events) await upsert(target, 'order_events', e);
+    console.log(`  orders: ${orders.length}, order events: ${events.length}`);
+    if (sourceHasActivity) {
+      const activity = (await local.query('SELECT * FROM member_activity WHERE connection_id = $1', [c.id])).rows;
+      for (const a of activity) await upsert(target, 'member_activity', a);
+      console.log(`  team activity: ${activity.length}`);
+    }
+  }
+
+  // A source from before migration 021 has no team activity: build it here
+  // from the order events just copied.
+  if (direction === '--from-prod' && !sourceHasActivity && targetHasActivity) {
+    const added = await rebuildOrderActivity(target, connections.map((c) => c.id));
+    console.log(`team activity rebuilt from order events: ${added}`);
   }
 
   const perms = (await local.query('SELECT * FROM member_permissions WHERE member_user_id = ANY($1)', [members.map((m) => m.id)])).rows;

@@ -7,10 +7,10 @@ const ebayService = require('../ebay/ebay.service');
 const { query } = require('../../db/client');
 const logger = require('../../utils/logger');
 
-const RANGES = new Set(['7d', '30d', '90d', 'this_month', 'last_month']);
+const RANGES = new Set(['today', '7d', '30d', '90d', 'this_month', 'last_month']);
 
-async function getOverview(ownerId, viewer, { range = '7d' } = {}) {
-  const effectiveRange = RANGES.has(range) ? range : '7d';
+async function getOverview(ownerId, viewer, { range = 'today' } = {}) {
+  const effectiveRange = RANGES.has(range) ? range : 'today';
   const { connections } = await connectionService.listConnections(ownerId, viewer);
   const ebayConnections = connections.filter((c) => c.platform_key === 'ebay');
 
