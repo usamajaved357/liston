@@ -117,6 +117,31 @@ function listHtml(kind, items) {
 const NOTE_LINE = /^(?:\*\*)?(?:important|please note|note|warning|caution|attention)(?:\s*:\s*\*\*|\s*\*\*\s*:|\s*:)/i;
 const isNoteLine = (line) => NOTE_LINE.test(line);
 
+// A line written to the SELLER, not the buyer: the model sometimes turns
+// what it couldn't tell from the product data into a reminder ("Important:
+// Please confirm exact contents before publishing: add any additional units
+// or accessories included in the pack."), and it went live on eBay. Buyers
+// must never see those. Any line about publishing or a placeholder goes; a
+// note line (Important:, Note: …) also goes when it tells someone to edit,
+// update or add to the listing. A buyer's caution ("Please check your model
+// before ordering") stays, and so does a book's "Published by …".
+const SELLER_LINE =
+  /\b(?:before|when|after) (?:you )?(?:publishing|listing)\b|\bpublish(?:ing)? (?:this|the) listing\b|\bplaceholder\b|\bTODO\b|\[(?:insert|add|enter|your|product|brand|model|x{2,})\b[^\]]*\]/i;
+const SELLER_NOTE =
+  /\bseller\b|\badd any (?:additional|extra|other)\b|\b(?:update|edit|amend|replace|adjust) (?:this|the) (?:description|listing|text|section)\b|\bconfirm (?:the )?exact (?:contents|quantity|quantities|items)\b|\bincluded in the pack\b/i;
+
+/** The description without lines meant for the seller (see SELLER_LINE). */
+function dropSellerNotes(text) {
+  if (typeof text !== 'string' || !text) return text;
+  const kept = text.split('\n').filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return true;
+    if (SELLER_LINE.test(trimmed)) return false;
+    return !(isNoteLine(trimmed) && SELLER_NOTE.test(trimmed));
+  });
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // The model writes plain text — paragraphs separated by blank lines, bullet
 // lines starting with "•" or "-", and short ALL-CAPS lines as headings.
 // Turned into the HTML the template's styles expect, with everything escaped.
@@ -278,7 +303,9 @@ function renderDescription({ template, marketplaceId, productName, description, 
   const postageWord = escapeHtml(copy.postageWord);
   const postage = t.freePostage ? `Free ${postageWord}` : `Tracked ${postageWord}`;
   const returns = Number(t.returnsDays) > 0 ? `${Number(t.returnsDays)}-Day Returns` : null;
-  const descHtml = descriptionHtml !== undefined ? descriptionHtml : textToHtml(description);
+  // A seller's reminder left in the text never reaches buyers, even on a
+  // draft written before the model was told not to.
+  const descHtml = descriptionHtml !== undefined ? descriptionHtml : textToHtml(dropSellerNotes(description));
   const conditionLabel = escapeHtml(String(condition).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 
   const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 10);
@@ -439,4 +466,4 @@ function renderTemplateSource({ template, marketplaceId }) {
     .replace(/\{\{Condition\}\}/g, '{{condition}}');
 }
 
-module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, listItem, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };
+module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, dropSellerNotes, listItem, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };

@@ -287,7 +287,9 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   // The list sections take the editor's default bullets even when the model
   // leaves them off, and any dash it used as punctuation is rewritten.
   const descKey = hasVariants ? 'commonDescription' : 'description';
-  content[descKey] = descriptionFormat.cleanDashes(descriptionFormat.applyDefaultBullets(content[descKey]));
+  // Lines the model wrote to the seller ("confirm the contents before
+  // publishing") are taken out of the buyer's text.
+  content[descKey] = descriptionFormat.dropSellerNotes(descriptionFormat.cleanDashes(descriptionFormat.applyDefaultBullets(content[descKey])));
 
   // The schema says maxLength 80 but the model doesn't always honour it (an
   // 89-character camera title came back and blocked Save). Trim at a word
@@ -397,7 +399,7 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
     warnings.push(`eBay requires ${missing.join(', ')} in this category and the draft has no value yet — fill ${missing.length === 1 ? 'it' : 'them'} in item specifics before publishing.`);
   }
   const finalTitle = await ensureTitleLength(anthropic, trimTitle(content.title), source ? summarizeListing(source) : null);
-  return { title: finalTitle, description: descriptionFormat.cleanDashes(content.description), aspects: validated, warnings };
+  return { title: finalTitle, description: descriptionFormat.dropSellerNotes(descriptionFormat.cleanDashes(content.description)), aspects: validated, warnings };
 }
 
 module.exports = { generateListingContent, refitContentForCategory };

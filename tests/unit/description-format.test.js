@@ -70,3 +70,40 @@ test('the layout forbids dashes and uses colons in its own examples', () => {
   const example = PROMPT_GUIDANCE.slice(PROMPT_GUIDANCE.indexOf('Example of the layout'));
   assert.doesNotMatch(example.split('\n').slice(1).join('\n'), /[–—]| - /, 'the example itself has no dashes');
 });
+
+// --- lines written to the seller never reach buyers ------------------------
+
+const { dropSellerNotes, renderDescription } = require('../../src/modules/listings/description-template');
+
+test('a note telling the seller to confirm contents before publishing is taken out', () => {
+  const text =
+    '**Package Includes**\n• 1 × Ultrasonic Pest Repeller with UK Plug\n\n' +
+    '**Important:** Please confirm exact contents before publishing — add any additional units or accessories included in the pack.\n\n' +
+    'Give your home effective pest control with a silent, energy-efficient solution.';
+  assert.strictEqual(
+    dropSellerNotes(text),
+    '**Package Includes**\n• 1 × Ultrasonic Pest Repeller with UK Plug\n\nGive your home effective pest control with a silent, energy-efficient solution.'
+  );
+  assert.strictEqual(dropSellerNotes('Note: Update this description with the real size.\nA lovely mat.'), 'A lovely mat.');
+  assert.strictEqual(dropSellerNotes('Made by [Insert brand] in the UK.\nSoft cotton.'), 'Soft cotton.');
+});
+
+test('buyer cautions, a book’s publisher and ordinary brackets stay', () => {
+  const text =
+    '**Important:** Please check your model number before ordering to make sure it fits.\n' +
+    'Published by Penguin in 2021.\n' +
+    'Ships from the UK [fast dispatch].\n' +
+    'Note: Colours may vary slightly from the photos.';
+  assert.strictEqual(dropSellerNotes(text), text);
+});
+
+test('the rendered eBay description never shows a seller reminder, even from an older draft', () => {
+  const html = renderDescription({
+    template: null,
+    marketplaceId: 'EBAY_GB',
+    productName: 'Pest Repeller',
+    description: 'Keeps pests away.\n\n**Important:** Please confirm exact contents before publishing.',
+  });
+  assert.doesNotMatch(html, /before publishing/);
+  assert.match(html, /Keeps pests away/);
+});

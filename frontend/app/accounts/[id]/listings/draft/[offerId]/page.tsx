@@ -1798,32 +1798,6 @@ export default function DraftEditorPage() {
     return [...found].map(([word, places]) => `“${word}” in ${[...places].join(", ")}`);
   }, [policyWords, title, description, specifics, variation, valueRenames, axisRenames, addedValues]);
 
-  const dirty = useMemo(() => {
-    if (!content) return false;
-    const origTitle = variation ? variation.commonTitle : single!.title;
-    const origDesc = variation ? variation.commonDescription : single!.description;
-    return (
-      title !== origTitle ||
-      description !== origDesc ||
-      aspectsChanged ||
-      condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW") ||
-      (single ? singlePrice !== single.price.value || singleQuantity !== String(single.quantity ?? 1) : false) ||
-      policiesChanged ||
-      JSON.stringify(images) !== JSON.stringify(content.imageUrls) ||
-      removedRows.size > 0 ||
-      removedAxisValues.length > 0 ||
-      Object.keys(priceOverrides).length > 0 ||
-      Object.keys(quantityOverrides).length > 0 ||
-      Object.keys(imageOverrides).length > 0 ||
-      Object.keys(valueRenames).length > 0 ||
-      Object.keys(axisRenames).length > 0 ||
-      addedValues.length > 0 ||
-      sku !== (content.sku || "") ||
-      (secondaryCategoryId || null) !== (content.secondaryCategoryId || null) ||
-      JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])
-    );
-  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, valueRenames, axisRenames, addedValues, sku, secondaryCategoryId, storeCategoryNames]);
-
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
     if (variation) {
@@ -1884,6 +1858,12 @@ export default function DraftEditorPage() {
     if (content && JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])) patch.storeCategoryNames = storeCategoryNames;
     return patch;
   }
+  // Unsaved means the save would carry something. Judged on the patch
+  // itself: a price typed and put back is an override but no change, and
+  // counting it sent an empty save the server refused ("Nothing to update"),
+  // which also stopped the publish behind it.
+  const dirty = Boolean(content) && Object.keys(buildPatch()).length > 0;
+
 
   // The primary category is applied immediately: the server refits title,
   // specifics and description to it, which is a change the seller should see
