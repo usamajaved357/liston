@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingSort, ListingStatusFilter } from "@/lib/api";
 import { readView, writeView } from "@/lib/viewState";
+import { ViewMenu } from "@/components/ViewMenu";
 import { useConnection } from "@/lib/useConnection";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -482,7 +483,7 @@ export default function AccountListingsPage() {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {filter !== "draft" && <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />}
           {filter === "draft" && (
             <Link href={`/accounts/${connection.id}/listings/new`} className="btn btn-primary btn-sm">
@@ -493,19 +494,7 @@ export default function AccountListingsPage() {
             </Link>
           )}
           {filter !== "draft" && (
-            <label className="relative flex items-center">
-              <span className="sr-only">Sort listings</span>
-              <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 h-3.5 w-3.5 text-[var(--color-muted)]" aria-hidden>
-                <path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              <select value={sort} onChange={(e) => changeSort(e.target.value as ListingSort)} className="input input-sm w-auto cursor-pointer !pl-8 !pr-8" title="Sort listings">
-                {(filter === "inactive" ? INACTIVE_SORT_OPTIONS : SORT_OPTIONS).map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <ViewMenu title="Sort listings" sections={[{ label: "Sort", value: sort, options: filter === "inactive" ? INACTIVE_SORT_OPTIONS : SORT_OPTIONS, onChange: (k) => changeSort(k as ListingSort) }]} />
           )}
         <div className="relative w-72 max-w-full">
           <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">

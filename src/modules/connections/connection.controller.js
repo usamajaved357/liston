@@ -151,13 +151,14 @@ async function getOrders(req, res, next) {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
     const archived = req.query.archived === '1' || req.query.archived === 'true';
+    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
     const archivedOrderIds = await require('../orders/order.service').archivedOrderIds(req.params.id).catch(() => []);
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived });
     });
 
     // Each row's supplier-order state, so the list can show it and take a
@@ -169,6 +170,7 @@ async function getOrders(req, res, next) {
     res.status(200).json({
       orders: result.orders.map((o) => ({ ...o, sourcing: sourcingByOrder[o.orderId] || [] })),
       counts: result.counts,
+      sort: result.sort,
       totalEntries: result.totalEntries,
       totalPages: result.totalPages,
       page: result.page,

@@ -237,6 +237,10 @@ export interface Listing {
   lastEditedAt?: string | null; // its latest edit from Liston
 }
 
+// The Orders page's orders (backend orders/order-sort.js). Left unset, the
+// backend picks: the nearest dispatch deadline on Awaiting dispatch, else newest.
+export type OrderSort = "newest" | "oldest" | "dispatch_soonest" | "total_high";
+
 // The Listings tab's orders (backend listing-sort.js).
 export type ListingSort = "newest" | "edited" | "best_selling" | "last_sold" | "not_selling" | "low_stock" | "price_high" | "price_low";
 
@@ -1242,7 +1246,7 @@ export const api = {
 
   getConnectionOrders: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; page?: number; perPage?: number; archived?: boolean }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean }
   ) => {
     const query = new URLSearchParams({
       range: params.range,
@@ -1251,6 +1255,7 @@ export const api = {
       perPage: String(params.perPage ?? 25),
     });
     if (params.search) query.set("search", params.search);
+    if (params.sort) query.set("sort", params.sort);
     if (params.archived) query.set("archived", "1");
     return request<{
       orders: Order[];

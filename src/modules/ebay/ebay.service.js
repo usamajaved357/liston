@@ -15,6 +15,7 @@ const accountEvents = require('./account-events');
 const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
 const analyticsDays = require('../analytics/analytics-days');
+const orderSort = require('../orders/order-sort');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -2027,15 +2028,16 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
 
 /**
  * The Orders page's data source: fetches every order in the range, tags each
- * with a derived status, filters by status/search text, sorts newest first,
- * and paginates in-memory (eBay's own pagination doesn't support these
+ * with a derived status, filters by status/search text, sorts it
+ * (orders/order-sort.js: newest first, or the nearest dispatch deadline on
+ * Awaiting dispatch) and paginates in-memory (eBay's own pagination doesn't support these
  * filters) — then enriches only the returned page's line items with a
  * picture + live quantity from GetItem, so we're not fetching images for
  * orders the page never shows.
  */
 // `archivedOrderIds` are the orders the team put away: left out unless
 // `archived` asks for exactly those.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false }) {
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2061,7 +2063,8 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
     );
   }
 
-  filtered.sort((a, b) => new Date(b.paidTime || b.createdAt) - new Date(a.paidTime || a.createdAt));
+  const sortKey = orderSort.sortFor(sort, status);
+  filtered = orderSort.sortOrders(filtered, sortKey, status);
 
   const totalEntries = filtered.length;
   const totalPages = Math.max(1, Math.ceil(totalEntries / perPage));
@@ -2090,6 +2093,7 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
     totalPages,
     page,
     perPage,
+    sort: sortKey,
     syncedAt: ordersCache.syncedAt(String(connectionId)),
     credentialsChanged,
     credentials: refreshedCredentials,
