@@ -1,143 +1,207 @@
-# Liston — Phase 1
+# Liston
 
-Multi-tenant SaaS: scrape competitor listings, generate AI content, publish to destination marketplaces (TikTok Shop in v1; eBay/Amazon publishing and AliExpress/Amazon scraping land in Phase 2).
+A Node.js/Express API and a Next.js web app, backed by PostgreSQL. The two run
+as separate processes from one repository and talk only over the REST API.
 
-This is the **foundation** slice, backend and frontend both: auth, users, plans, the platform registry, and the connections/listings schema, with a working signup → login → dashboard flow you can click through in a browser. Scraping, AI generation, TikTok publishing, Sheets sync, and billing are stubbed in the folder structure (per `ARCHITECTURE.md`) but not yet implemented — build order is in `ARCHITECTURE.md` Section 10.
+- **Backend** — `src/` · Express (CommonJS), raw SQL through `pg`, Zod validation, JWT auth
+- **Frontend** — `frontend/` · Next.js (App Router), TypeScript, Tailwind
+- **Database** — PostgreSQL, versioned SQL migrations in `src/db/migrations/`
 
-## Project structure
+---
+
+## How it fits together
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI["Next.js app<br/>frontend/"]
+  end
+
+  subgraph API["Express API · src/"]
+    MW["Middleware<br/>auth · access · permissions"]
+    R["Routes → Controllers<br/>(request/response, validation)"]
+    S["Services<br/>(business rules)"]
+    Repo["Repositories<br/>(SQL only)"]
+    A["Platform adapters<br/>ebay/ · sourcing/"]
+    EV["Account events<br/>(server-sent)"]
+  end
+
+  DB[("PostgreSQL")]
+  EXT["External APIs<br/>eBay REST & Trading · supplier API · AI"]
+
+  UI -- "REST /api/*" --> MW --> R --> S
+  S --> Repo --> DB
+  S --> A --> EXT
+  EXT -- "push notifications<br/>(webhooks)" --> A
+  S --> EV -- "live updates" --> UI
+```
+
+Every change follows the same one-way path: **route → controller → service →
+repository**. Controllers only deal with the request and its validation,
+services hold the rules, repositories only run SQL. Nothing outside
+`src/modules/ebay/` and `src/modules/sourcing/` calls an external API.
+
+### A request, step by step
+
+1. The browser calls `/api/...` through `frontend/lib/api.ts`, the app's only HTTP client.
+2. `requireAuth` checks the JWT and works out **who is acting** (`req.userId`) and **whose data it is** (`req.ownerId`). A team member acts on their owner's data.
+3. `requireFeature` checks what that person may use on that account (per-feature, per-account permissions).
+4. The controller validates the input (Zod) and calls a service.
+5. The service reads and writes through repositories, and calls a platform adapter when it needs an outside system.
+6. Errors are thrown with a `statusCode` and turned into a JSON response in one place (`errorHandler.middleware.js`).
+
+---
+
+## Where the data comes from and where it lives
+
+| Data | Comes from | Stored in | Notes |
+|---|---|---|---|
+| Users, teams, permissions | sign-up, the Team page | `users`, `member_permissions` | removed members are deactivated, never deleted |
+| Marketplace connections | OAuth | `connections` | tokens encrypted with AES-256-GCM (`credentials.encryption.js`), decrypted only for the call that needs them |
+| Drafts and published records | the app's editor | `listings`, `listing_changes` | a live listing is edited as a working copy until it's published |
+| Orders | marketplace push + periodic reads | `ebay_orders` (mirror), `order_sourcing`, `order_events` | the mirror is read by every page; nothing refetches per view |
+| Traffic figures | nightly sync within the daily API allowance | `ebay_traffic_days`, `ebay_traffic_listing_reports` | every filter and range is added up from stored days |
+| Who did what | every action taken in the app | `member_activity` | append-only; feeds each team member's page |
+| Short-lived reads | external APIs | in memory (`swr-cache`) | refreshed in the background |
+
+### How data moves
+
+```mermaid
+flowchart TB
+  subgraph In["Coming in"]
+    P["Push notifications<br/>(orders, listing changes)"]
+    N["Nightly sync<br/>(traffic, within allowance)"]
+    U["People in the app<br/>(edits, orders, team)"]
+  end
+
+  subgraph Store["Stored"]
+    M[("Order & listing mirror")]
+    D[("Daily figures")]
+    L[("Listings & drafts")]
+    T[("Team activity")]
+  end
+
+  subgraph Out["Going out"]
+    X["Marketplace writes<br/>(publish, revise, dispatch, refund)"]
+    V["Pages & CSV exports"]
+  end
+
+  P --> M
+  N --> D
+  U --> L
+  U --> X
+  X --> M
+  U --> T
+  M --> V
+  D --> V
+  L --> V
+  T --> V
+```
+
+- **Reads are local.** Pages read from PostgreSQL and in-memory caches. External APIs are called on a schedule, on a push, or when someone explicitly asks, never once per page view.
+- **Writes go out, then come back.** An action (publish, dispatch, refund…) is sent to the marketplace, recorded locally, and the change shows up in the mirror.
+- **Every action has an author.** The person who did it is written to `member_activity`, which is what team figures are counted from.
+- **Days follow the seller.** Dates are grouped in the marketplace's time zone, so every page agrees on what "today" means.
+
+---
+
+## Project layout
 
 ```
-tiktok-automation-tool/
-  src/            ← backend (Node/Express API)
-  frontend/       ← frontend (Next.js)
-  tests/          ← backend tests
+.
+├── src/
+│   ├── app.js, server.js         # Express app and entry point
+│   ├── config/                   # environment → config
+│   ├── db/
+│   │   ├── migrations/           # NNN_name.up.sql / .down.sql
+│   │   └── seeds/                # plans and platforms
+│   ├── middleware/               # auth, access, permissions, errors
+│   ├── modules/<feature>/        # *.routes → *.controller → *.service → *.repository
+│   │   ├── ebay/api/             # one thin client per marketplace API
+│   │   └── sourcing/             # supplier adapter
+│   └── utils/                    # logger, encryption, email, validation messages
+├── frontend/
+│   ├── app/                      # pages (App Router), kept thin
+│   ├── components/               # UI, grouped by area (orders/, analytics/, team/, charts/)
+│   └── lib/                      # api.ts (the only API client), formatting, view state
+├── scripts/                      # one-off operational scripts
+└── tests/
+    ├── unit/                     # pure logic
+    └── integration/              # against a real local PostgreSQL
 ```
 
-Backend and frontend are two separate Node projects (two `package.json`s, two `npm install`s, run as two separate processes) — not a monorepo tool, just two folders side by side.
+---
 
-## Prerequisites
+## Getting started
 
-- Node.js 20+
-- PostgreSQL 16 (or compatible) — **or Supabase** (hosted Postgres; works with zero code changes, see below)
-- Redis 7 (or compatible) — not yet used by any running code, but required by `ioredis`/`bullmq` once the job queues (Phase 3+) are built
+**Prerequisites:** Node.js 20+ and PostgreSQL 16.
 
-## Using Supabase instead of local Postgres (recommended if you don't want to install Postgres yourself)
+### 1. Backend
 
-Supabase is hosted Postgres, and the backend uses the standard `pg` driver with a plain `DATABASE_URL` connection string — so nothing in the code changes, you just point `DATABASE_URL` at Supabase instead of `localhost`:
+```bash
+npm install
+cp .env.example .env        # fill in DATABASE_URL, JWT_SECRET, CREDENTIALS_ENCRYPTION_KEY, …
+npm run migrate
+npm run seed
+npm run dev                 # http://localhost:3000
+```
 
-1. Create a free project at [supabase.com](https://supabase.com)
-2. In your project's Settings → Database, copy the **Connection string** (URI format, "Session pooler" or "Direct connection" both work for this stage)
-3. Use that as `DATABASE_URL` in `.env` (step 4 below) instead of the local one
-4. Everything else in the setup steps stays the same — `npm run migrate` and `npm run seed` work identically against Supabase
+Generate an encryption key with:
 
-If you'd rather run Postgres locally (Docker or a native install), skip this section and use the local setup below instead.
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
 
-## Backend setup
+### 2. Frontend (a second terminal)
 
-1. **Install dependencies**
-   ```bash
-   cd tiktok-automation-tool
-   npm install
-   ```
+```bash
+cd frontend
+npm install
+cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL=http://localhost:3000
+npm run dev -- -p 3001             # http://localhost:3001
+```
 
-2. **Start Postgres and Redis** (skip Postgres if using Supabase). If you don't already have them running:
-   - macOS: `brew install postgresql redis && brew services start postgresql && brew services start redis`
-   - Ubuntu/Debian: `apt-get install postgresql redis-server`, then start both services
-   - Docker: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=app_password postgres:16` and `docker run -d -p 6379:6379 redis:7`
+---
 
-3. **Create the database and app role** (skip if using Supabase — the database already exists):
-   ```sql
-   CREATE USER app_user WITH PASSWORD 'app_password';
-   CREATE DATABASE listing_automation_dev OWNER app_user;
-   ```
+## Commands
 
-4. **Copy the env file and fill it in**
-   ```bash
-   cp .env.example .env
-   ```
-   At minimum for Phase 1 you need: `DATABASE_URL` (local connection string, or your Supabase connection string), `REDIS_URL`, `JWT_SECRET`, `CREDENTIALS_ENCRYPTION_KEY`.
-   Generate the encryption key with:
-   ```bash
-   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-   ```
-   Everything else in `.env.example` (Anthropic, Bria/Photoroom, Stripe, Google) is for later phases — leave blank for now.
+| Where | Command | What it does |
+|---|---|---|
+| root | `npm run dev` | API with auto-restart on changes |
+| root | `npm start` | API in production mode |
+| root | `npm run migrate` / `npm run migrate:down` | apply / roll back migrations |
+| root | `npm run seed` | plans and platforms |
+| root | `npm test` | unit + integration tests, then removes test data |
+| frontend | `npm run dev` | web app in development |
+| frontend | `npm run build` | type-check, lint and production build |
 
-5. **Run migrations**
-   ```bash
-   npm run migrate
-   ```
+---
 
-6. **Seed plans and platforms**
-   ```bash
-   npm run seed
-   ```
+## Database changes
 
-7. **Start the backend dev server**
-   ```bash
-   npm run dev
-   ```
-   Runs on `http://localhost:3000`.
+- Every schema change is a new pair: `src/db/migrations/NNN_name.up.sql` and `.down.sql`.
+- An applied migration is never edited. Change it with a new one.
+- Migrations run automatically on deploy, before the API starts.
 
-## Frontend setup
+## Tests
 
-In a **second terminal**, from the project root:
-
-1. **Install dependencies**
-   ```bash
-   cd frontend
-   npm install
-   ```
-
-2. **Set up the env file**
-   ```bash
-   cp .env.local.example .env.local
-   ```
-   Default (`NEXT_PUBLIC_API_URL=http://localhost:3000`) matches the backend's default port — no changes needed unless you changed the backend's `PORT`.
-
-3. **Start the frontend dev server**
-   ```bash
-   npm run dev
-   ```
-   Runs on `http://localhost:3000` by default too — **since the backend is already using port 3000, Next.js will prompt to use 3001 instead** (or start it explicitly with `npm run dev -- -p 3001`).
-
-## Using it in a browser
-
-With both servers running:
-
-1. Open `http://localhost:3001` (or whichever port the frontend started on)
-2. You'll be redirected to `/login` — click through to `/signup`
-3. Create an account — you'll land on `/dashboard`, showing your plan (starter, by default), connection usage, and listing usage, all pulled live from the backend
-4. Refresh the page — you'll stay logged in (token persists in `localStorage`)
-5. Click "Log out" — you'll be sent back to `/login`
-
-This whole flow — signup, login, protected dashboard, logout — is real and tested end to end, not a mockup.
-
-## What's actually implemented right now
-
-**Backend:**
-- `POST /api/auth/signup`, `POST /api/auth/login` — email/password auth, bcrypt-hashed, JWT-issued
-- `GET /api/users/me` — protected route, returns user + plan + usage
-- Full DB schema (Section 5 of `ARCHITECTURE.md`): `users`, `plans`, `platforms`, `plan_platform_access`, `connections`, `tracked_stores`, `listings`, `jobs_log`
-- Seeded plans (5 tiers) and platforms (eBay/TikTok active, AliExpress/Amazon `coming_soon`)
-- AES-256-GCM credential encryption helper — ready for the Connections module to use
-- Structured JSON logging, centralized error handling, migration runner (`up`/`down`)
-
-**Frontend:**
-- `/signup`, `/login` — forms wired to the real API, with error handling and loading states
-- `/dashboard` — protected route (redirects to `/login` if no valid token), shows live plan/usage data
-- Token-based auth persisted in `localStorage`, auto-redirect on expired/invalid token
-
-## What's not built yet
-
-Connections CRUD (backend + frontend), eBay scraping, AI generation (text + image), TikTok publishing, Google Sheets sync, Stripe billing, notifications, admin tooling. Backend module folders for all of these already exist under `src/modules/`; frontend pages for them don't exist yet — they'll be added alongside each backend feature per the build order in `ARCHITECTURE.md` Section 10.
-
-## Running tests
-
-Backend:
 ```bash
 npm test
 ```
-(6 tests covering auth flow and credential encryption — needs Postgres running.)
 
-Frontend has no automated tests yet.
+Unit tests cover pure logic. Integration tests run against a real local
+PostgreSQL, with external APIs mocked at the client or service boundary.
+Test users use `@example.com` addresses and are removed after each run.
 
+The frontend is checked with `npm run build` (types and lint).
+
+## Deployment
+
+See [`DEPLOY.md`](DEPLOY.md): two services (API and web) plus PostgreSQL.
+Migrations and seeds run as part of each deploy.
+
+## Security
+
+- `.env` files are never committed. `.env.example` lists every variable with placeholders.
+- Marketplace credentials are encrypted at rest and never logged.
+- Request bodies are never logged.

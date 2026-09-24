@@ -28,14 +28,31 @@ frontend/build/
 # Coverage / test artifacts
 coverage/
 
-# Internal planning docs and AI-assistant config — kept local only, not pushed
+# Internal planning docs — kept local only, never pushed
 ARCHITECTURE.md
 PHASE-2.md
 PROGRESS.md
-CLAUDE.md
-frontend/AGENTS.md
+
+# AI-assistant config, instructions and memory — local only, at any depth
 .claude/
+**/.claude/
+CLAUDE.md
+CLAUDE.local.md
+**/CLAUDE.md
+**/CLAUDE.local.md
+AGENTS.md
+**/AGENTS.md
+.mcp.json
+.cursor/
+.cursorrules
+.windsurf/
+.aider*
 .cache/
+
+# Keys and certificates
+*.pem
+*.key
+*.p12
 
 # TypeScript incremental cache (breaks Nixpacks cache mounts when committed)
 frontend/tsconfig.tsbuildinfo
