@@ -1,3 +1,4 @@
+const analyticsDays = require('../analytics/analytics-days');
 const { z } = require('zod');
 const teamService = require('./team.service');
 
@@ -23,7 +24,7 @@ const updatePermissionsSchema = z.object({
 
 async function listMembers(req, res, next) {
   try {
-    const members = await teamService.listMembers(req.ownerId);
+    const members = await teamService.listMembers(req.ownerId, { timeZone: analyticsDays.validTimeZone(req.query.tz) });
     res.status(200).json({ members, knownFeatures: teamService.KNOWN_FEATURES });
   } catch (err) {
     next(err);
@@ -75,7 +76,8 @@ async function restoreMember(req, res, next) {
   }
 }
 
-const rangeQuery = (q) => ({ range: typeof q.range === 'string' ? q.range : undefined, from: q.from, to: q.to });
+// `tz`: the viewer's own time zone (the browser's); team figures are counted in it.
+const rangeQuery = (q) => ({ range: typeof q.range === 'string' ? q.range : undefined, from: q.from, to: q.to, timeZone: analyticsDays.validTimeZone(q.tz) });
 
 async function getMemberOverview(req, res, next) {
   try {

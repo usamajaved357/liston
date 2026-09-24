@@ -4,6 +4,7 @@ const connectionService = require('../connections/connection.service');
 const ebayService = require('../ebay/ebay.service');
 const listingRepository = require('../listings/listing.repository');
 const orderRepository = require('./order.repository');
+const orderSupplier = require('./order-supplier');
 const { CARRIERS, detectCarrier } = require('./carriers');
 const { SELLER_CANCEL_REASONS } = require('../ebay/api/ebay.postorder');
 const logger = require('../../utils/logger');
@@ -454,4 +455,16 @@ async function sourcingForOrders(connectionId, orderIds) {
   return byOrder;
 }
 
-module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };
+/**
+ * For the Orders page's Supplier filter: a function giving any order on the
+ * account its supplier state (order-supplier.js). One query for the account.
+ */
+async function supplierStateLookup(connectionId) {
+  const byOrder = await orderRepository.sourcingStatusesByOrder(connectionId);
+  return (order) =>
+    orderSupplier.supplierState(byOrder.get(order.orderId) || [], (order.lineItems || []).length, {
+      settled: Boolean(order.shippedTime) || order.status === 'Cancelled' || Boolean(order.cancelStatus && order.cancelStatus !== 'NotApplicable'),
+    });
+}
+
+module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, supplierStateLookup, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };

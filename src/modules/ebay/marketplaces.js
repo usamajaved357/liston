@@ -1,3 +1,5 @@
+const analyticsDays = require('../analytics/analytics-days');
+
 // The eBay sites Liston knows how to sell on. One row ties together every
 // per-market value the rest of the code needs: the Inventory/Account API
 // marketplace id, the Trading API site id and its GetUser `Site` name, the
@@ -37,6 +39,13 @@ function currencyFor(marketplaceId) {
   return byId(marketplaceId)?.currency || 'GBP';
 }
 
+// Each site's own clock: the analytics days' zones, plus the sites eBay's
+// traffic report doesn't cover.
+const OTHER_TIME_ZONES = { EBAY_CA: 'America/Toronto', EBAY_IE: 'Europe/Dublin', EBAY_NL: 'Europe/Amsterdam' };
+function timeZoneOf(marketplaceId) {
+  return analyticsDays.timeZoneFor(marketplaceId) || OTHER_TIME_ZONES[marketplaceId] || 'Europe/London';
+}
+
 // What the frontend shows: enough to tag a connection and label prices.
 function summary(marketplaceId) {
   const m = byId(marketplaceId) || byId(DEFAULT_ID);
@@ -50,6 +59,8 @@ function summary(marketplaceId) {
     country: m.country,
     countryName: m.countryName,
     itemHost: m.itemHost,
+    // The site's own clock: every date on the account's pages is shown in it.
+    timeZone: timeZoneOf(m.id),
     // The market's wording for the description template, so the Settings
     // page can show the right defaults before anything is saved.
     template: { tagline: copy.tagline, warehouse: copy.warehouse, carrier: copy.carrier, region: copy.region, postageWord: copy.postageWord },
@@ -91,4 +102,4 @@ function templateCopy(marketplaceId) {
   };
 }
 
-module.exports = { MARKETPLACES, DEFAULT_ID, byId, fromSite, fromCountry, siteIdFor, currencyFor, summary, templateCopy };
+module.exports = { MARKETPLACES, DEFAULT_ID, byId, fromSite, fromCountry, siteIdFor, currencyFor, timeZoneOf, summary, templateCopy };

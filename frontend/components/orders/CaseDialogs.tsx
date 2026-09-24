@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { api, ApiError, type OrderCases, type OrderDetail, type OrderDispute, type OrderInquiry, type OrderReturn } from "@/lib/api";
 import { formatDateTime, formatPrice } from "@/lib/format";
+import { useAccountTimeZone } from "@/lib/timezone";
 import { Modal, cleanTitle, inputClass, labelClass, money } from "@/components/orders/order-ui";
 
 // --- post-sale cases: returns, item-not-received, payment disputes ---------
@@ -18,6 +19,7 @@ function humanise(code: string | null | undefined) {
 }
 
 export function CasesPanel({ cases, order, currency, onAct }: { cases: OrderCases; order: OrderDetail; currency: string; onAct: (c: CaseAction) => void }) {
+  const timeZone = useAccountTimeZone();
   const itemTitle = (itemId: string | null) => cleanTitle(order.lineItems.find((li) => li.itemId === itemId)?.title || order.lineItems[0]?.title || null);
   const rows: { key: string; tone: string; title: string; detail: string; due: string | null; actions: { label: string; primary?: boolean; run: () => void }[] }[] = [];
 
@@ -79,7 +81,7 @@ export function CasesPanel({ cases, order, currency, onAct }: { cases: OrderCase
           <div className="min-w-0">
             <p className="font-semibold text-[var(--color-ink)]">{row.title}</p>
             {row.detail && <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">{row.detail}</p>}
-            {row.due && !row.actions.length ? null : row.due && <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">Respond by {formatDateTime(row.due)}</p>}
+            {row.due && !row.actions.length ? null : row.due && <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">Respond by {formatDateTime(row.due, timeZone)}</p>}
           </div>
           {row.actions.length > 0 && (
             <div className="flex flex-wrap gap-2 print:hidden">

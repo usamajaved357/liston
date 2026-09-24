@@ -11,8 +11,12 @@ import { useEffect, useRef, useState } from "react";
 export interface ViewMenuSection {
   label: string;
   value: string;
-  options: { key: string; label: string }[];
+  // `short`: the option's name on the button ("7 days" for "Last 7 days");
+  // `count`: how many rows it would show, listed beside it in the menu.
+  options: { key: string; label: string; short?: string; count?: number }[];
   onChange: (key: string) => void;
+  // Leave this section off the button (a filter set to "Any", say).
+  hideInSummary?: boolean;
 }
 
 export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSection[]; title?: string }) {
@@ -35,7 +39,13 @@ export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSecti
     };
   }, [open]);
 
-  const summary = sections.map((s) => s.options.find((o) => o.key === s.value)?.label ?? s.value).join(" · ");
+  const summary = sections
+    .filter((s) => !s.hideInSummary)
+    .map((s) => {
+      const option = s.options.find((o) => o.key === s.value);
+      return option?.short ?? option?.label ?? s.value;
+    })
+    .join(" · ");
 
   return (
     <div ref={wrap} className="relative flex-shrink-0">
@@ -45,7 +55,7 @@ export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSecti
         aria-haspopup="menu"
         aria-expanded={open}
         title={title}
-        className={`flex h-8 items-center gap-2 whitespace-nowrap rounded-full border px-3 text-[12.5px] font-medium transition-colors ${
+        className={`flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[12px] font-medium transition-colors ${
           open ? "border-[var(--color-primary)] text-[var(--color-ink)]" : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)] hover:border-slate-300"
         }`}
       >
@@ -60,7 +70,7 @@ export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSecti
         </svg>
       </button>
       {open && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1.5 w-56 overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 shadow-lg">
+        <div role="menu" className="absolute right-0 top-full z-30 mt-1.5 w-60 overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 shadow-lg">
           {sections.map((s, i) => (
             <div key={s.label} className={i > 0 ? "mt-1 border-t border-[var(--color-line)] pt-1" : undefined}>
               <p className="px-3 pb-0.5 pt-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">{s.label}</p>
@@ -78,11 +88,16 @@ export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSecti
                     }`}
                   >
                     {o.label}
-                    {active && (
-                      <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden>
-                        <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    )}
+                    <span className="flex items-center gap-2">
+                      {o.count !== undefined && <span className="text-[11.5px] font-normal tabular-nums text-[var(--color-muted)]">{o.count}</span>}
+                      {active ? (
+                        <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden>
+                          <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      ) : (
+                        <span className="w-3.5" aria-hidden />
+                      )}
+                    </span>
                   </button>
                 );
               })}

@@ -13,7 +13,7 @@ import { ListFooter } from "@/components/ListFooter";
 import { Alert } from "@/components/Alert";
 import { ListSkeleton } from "@/components/Skeleton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { SyncStatus } from "@/components/SyncStatus";
+import { useAccountTimeZone } from "@/lib/timezone";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
 
@@ -91,6 +91,7 @@ function ListingRow({
   onEnd?: () => void;
   onAnalytics?: () => void;
 }) {
+  const timeZone = useAccountTimeZone();
   const open = () => {
     if (item.viewItemUrl) window.open(item.viewItemUrl, "_blank", "noopener");
   };
@@ -106,20 +107,20 @@ function ListingRow({
           <StockBadge available={item.quantityAvailable} />
           <span className="font-mono text-[11.5px] tracking-tight">#{item.itemId}</span>
           {item.sku && <span className="truncate">SKU {item.sku}</span>}
-          {item.startTime && <span className="font-medium text-[var(--color-ink)]">Listed {formatShortDate(item.startTime)}</span>}
-          {item.lastEditedAt && <span className="font-medium text-[var(--color-ink)]" title="Last edited from Liston">Edited {formatShortDate(item.lastEditedAt)}</span>}
+          {item.startTime && <span className="font-medium text-[var(--color-ink)]">Listed {formatShortDate(item.startTime, timeZone)}</span>}
+          {item.lastEditedAt && <span className="font-medium text-[var(--color-ink)]" title="Last edited from Liston">Edited {formatShortDate(item.lastEditedAt, timeZone)}</span>}
           {/* Sales last: eBay's lifetime count and, from the orders Liston holds, the latest sale. */}
           {/* eBay's ended-listings list can report 0 sold for one that did sell: an order Liston holds says otherwise. */}
           <span className={item.quantitySold > 0 || item.lastSoldAt ? "text-[var(--color-ink)]" : "font-medium text-[var(--color-danger)]"}>
             {item.quantitySold > 0 ? (
               <>
                 <span className="font-semibold tabular-nums">{item.quantitySold} sold</span>
-                {item.lastSoldAt && <span className="text-[var(--color-muted)]"> · last {formatShortDate(item.lastSoldAt)}</span>}
+                {item.lastSoldAt && <span className="text-[var(--color-muted)]"> · last {formatShortDate(item.lastSoldAt, timeZone)}</span>}
               </>
             ) : item.lastSoldAt ? (
               <>
                 <span className="font-semibold">Sold</span>
-                <span className="text-[var(--color-muted)]"> · last {formatShortDate(item.lastSoldAt)}</span>
+                <span className="text-[var(--color-muted)]"> · last {formatShortDate(item.lastSoldAt, timeZone)}</span>
               </>
             ) : (
               "No sales yet"
@@ -186,6 +187,7 @@ function ListingRow({
 
 function DraftRow({ draft, connectionId, onDelete }: { draft: DraftListing; connectionId: string; onDelete: () => void }) {
   const router = useRouter();
+  const timeZone = useAccountTimeZone();
   const content = draft.generated_data;
   const isVariation = isVariationDraft(content);
   const title = isVariation ? content.commonTitle : content.title;
@@ -205,7 +207,7 @@ function DraftRow({ draft, connectionId, onDelete }: { draft: DraftListing; conn
           </span>
           <span>{variantCount !== null ? `${variantCount} variations` : "Single listing"}</span>
           {draft.sku && <span className="truncate">SKU {draft.sku}</span>}
-          {draft.created_at && <span>Drafted {formatShortDate(draft.created_at)}</span>}
+          {draft.created_at && <span>Drafted {formatShortDate(draft.created_at, timeZone)}</span>}
         </div>
       </div>
       <p className="w-20 flex-shrink-0 text-right text-[14px] font-medium tracking-tight text-[var(--color-ink)]">
@@ -460,6 +462,7 @@ export default function AccountListingsPage() {
       marketplace={connection.marketplace}
       permissions={connection.permissions}
       user={user}
+      sync={filter !== "draft" ? { syncedAt, onRefresh: handleRefresh, refreshing, note: refreshNote } : undefined}
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Listings</h1>
@@ -488,7 +491,6 @@ export default function AccountListingsPage() {
           ))}
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {filter !== "draft" && <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />}
           {filter === "draft" && (
             <Link href={`/accounts/${connection.id}/listings/new`} className="btn btn-primary btn-sm">
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">

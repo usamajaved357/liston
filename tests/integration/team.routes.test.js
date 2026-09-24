@@ -261,6 +261,12 @@ test("a member's work is on their page: figures for the range, per account, and 
   assert.strictEqual(data.series.length, 1);
   assert.deepStrictEqual(data.accounts.map((a) => [a.label, a.supplier_orders]), [['Team Test Store', 2]]);
   assert.strictEqual(data.member.id, memberId);
+  // Team figures count in the viewer's own time zone; the eBay site's without one.
+  assert.strictEqual(data.range.timeZone, 'Europe/London');
+  const local = await request('GET', `/api/team/members/${memberId}/overview?range=today&tz=Asia/Karachi`, undefined, ownerToken);
+  assert.strictEqual(local.data.range.timeZone, 'Asia/Karachi');
+  const bogus = await request('GET', `/api/team/members/${memberId}/overview?range=today&tz=Nowhere/Land`, undefined, ownerToken);
+  assert.strictEqual(bogus.data.range.timeZone, 'Europe/London');
 
   const feed = await request('GET', `/api/team/members/${memberId}/activity?range=7d&limit=2`, undefined, ownerToken);
   assert.deepStrictEqual(feed.data.items.map((i) => i.kind), ['order.note', 'order.dispatched']);

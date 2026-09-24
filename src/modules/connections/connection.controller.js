@@ -100,7 +100,8 @@ async function remove(req, res, next) {
 }
 
 const LIST_ORDER_RANGES = ['7d', '30d', '90d'];
-const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'cancelled'];
+const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'delivered', 'cancelled'];
+const { FILTERS: SUPPLIER_FILTERS } = require('../orders/order-supplier');
 const ORDER_PAGE_SIZES = [25, 50, 100, 200];
 const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month', 'custom', 'all_time'];
 
@@ -153,13 +154,18 @@ async function getOrders(req, res, next) {
     const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
     const archived = req.query.archived === '1' || req.query.archived === 'true';
     const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
-    const archivedOrderIds = await require('../orders/order.service').archivedOrderIds(req.params.id).catch(() => []);
+    const supplier = SUPPLIER_FILTERS.includes(req.query.supplier) ? req.query.supplier : 'any';
+    const orderService = require('../orders/order.service');
+    const [archivedOrderIds, supplierStateOf] = await Promise.all([
+      orderService.archivedOrderIds(req.params.id).catch(() => []),
+      orderService.supplierStateLookup(req.params.id).catch(() => null),
+    ]);
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived, supplier, supplierStateOf });
     });
 
     // Each row's supplier-order state, so the list can show it and take a
@@ -171,6 +177,8 @@ async function getOrders(req, res, next) {
     res.status(200).json({
       orders: result.orders.map((o) => ({ ...o, sourcing: sourcingByOrder[o.orderId] || [] })),
       counts: result.counts,
+      supplier: result.supplier,
+      supplierCounts: result.supplierCounts,
       sort: result.sort,
       totalEntries: result.totalEntries,
       totalPages: result.totalPages,

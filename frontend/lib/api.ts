@@ -1,5 +1,17 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
+
+// The viewer's own time zone (their browser's), for figures about the
+// team and the owner's own dashboard. An account's pages use the account's
+// eBay site's zone instead (lib/timezone.tsx).
+export function viewerTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -317,6 +329,8 @@ export interface Order {
   shippedTime: string | null;
   cancelStatus: string | null;
   dispatchByTime: string | null;
+  // When the carrier confirmed the last item delivered.
+  deliveredAt?: string | null;
   lineItems: OrderLineItem[];
   derivedStatus?: OrderStatusFilter;
   // Liston's supplier-order rows for this order (one per line item).
@@ -399,6 +413,8 @@ export interface OrderDetail {
   shipTo: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string; email: string } | null;
   shippingService: string | null;
   shippingCarrier: string | null;
+  // When the carrier confirmed delivery (from the account's order copy).
+  deliveredAt?: string | null;
   estimatedDelivery: { min: string | null; max: string | null };
   pricing: { subtotal: Amount | null; discount: Amount | null; delivery: Amount | null; deliveryDiscount: Amount | null; tax: Amount | null; adjustment: Amount | null; total: Amount | null };
   payments: { method: string | null; status: string; amount: Amount | null; date: string; referenceId: string | null }[];
@@ -522,8 +538,12 @@ export interface OrderCounts {
   awaiting_payment: number;
   awaiting_dispatch: number;
   dispatched: number;
+  delivered: number;
   cancelled: number;
 }
+
+// Where an order's supplier order stands (the Orders page's Supplier filter).
+export type SupplierFilter = "any" | "pending" | "ordered" | "shipped" | "delivered" | "problem";
 
 export interface Policy {
   fulfillmentPolicyId?: string;
@@ -562,6 +582,8 @@ export interface Marketplace {
   country: string;
   countryName: string;
   itemHost: string;
+  // The site's own time zone ("Europe/London"): the account's dates are shown in it.
+  timeZone?: string;
   // The market's wording for the description template.
   template?: { tagline: string; warehouse: string; carrier: string; region: string; postageWord: string };
 }
@@ -933,7 +955,7 @@ export interface DraftListing {
 
 export type ListingStatusFilter = "active" | "inactive";
 export type OrderRange = "7d" | "30d" | "90d";
-export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "cancelled";
+export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "delivered" | "cancelled";
 // ---- listing analytics ---------------------------------------------------------
 // Days are eBay's reporting days (US Pacific), "YYYY-MM-DD".
 
@@ -1210,7 +1232,8 @@ export const api = {
     }),
 
   me: () => request<{ user: User }>("/api/users/me"),
-  overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}`),
+  // The owner's dashboard: "today" is the viewer's own day.
+  overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}&tz=${encodeURIComponent(viewerTimeZone())}`),
 
   verifyEmail: (token: string) =>
     request<{ user: User }>("/api/auth/verify-email", {
@@ -1290,7 +1313,7 @@ export const api = {
 
   getConnectionOrders: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean; supplier?: SupplierFilter }
   ) => {
     const query = new URLSearchParams({
       range: params.range,
@@ -1301,9 +1324,13 @@ export const api = {
     if (params.search) query.set("search", params.search);
     if (params.sort) query.set("sort", params.sort);
     if (params.archived) query.set("archived", "1");
+    if (params.supplier && params.supplier !== "any") query.set("supplier", params.supplier);
     return request<{
       orders: Order[];
       counts: OrderCounts;
+      supplier?: SupplierFilter;
+      // Orders in the chosen tab at each supplier state.
+      supplierCounts?: Partial<Record<SupplierFilter, number>> | null;
       totalEntries: number;
       totalPages: number;
       syncedAt: string | null;
@@ -1547,7 +1574,7 @@ export const api = {
   },
 
   listTeamMembers: () =>
-    request<{ members: TeamMember[]; knownFeatures: string[] }>("/api/team/members"),
+    request<{ members: TeamMember[]; knownFeatures: string[] }>(`/api/team/members?tz=${encodeURIComponent(viewerTimeZone())}`),
 
   addTeamMember: (input: { email: string; name?: string; password: string }) =>
     request<{ member: TeamMember }>("/api/team/members", {
@@ -1558,9 +1585,9 @@ export const api = {
   removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
   restoreTeamMember: (id: string) => request<void>(`/api/team/members/${id}/restore`, { method: "POST" }),
 
-  // A member's page: figures for a range (the owner's days), per day and account.
+  // A member's page: figures for a range (the viewer's own days), per day and account.
   getMemberOverview: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
-    const q = new URLSearchParams({ range });
+    const q = new URLSearchParams({ range, tz: viewerTimeZone() });
     if (range === "custom" && custom) {
       q.set("from", custom.from);
       q.set("to", custom.to);
@@ -1573,7 +1600,7 @@ export const api = {
     id: string,
     params: { range: TeamRange; from?: string; to?: string; kind?: string; connectionId?: string; before?: string; limit?: number }
   ) => {
-    const q = new URLSearchParams({ range: params.range });
+    const q = new URLSearchParams({ range: params.range, tz: viewerTimeZone() });
     for (const [k, v] of Object.entries(params)) if (k !== "range" && v !== undefined && v !== "") q.set(k, String(v));
     return request<{ items: MemberActivityItem[]; next: string | null; range: { key: TeamRange; from: string; to: string; timeZone: string } }>(
       `/api/team/members/${id}/activity?${q.toString()}`

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api, ApiError, type OrderDetailLine, type OrderSourcing, type SourcingPatch } from "@/lib/api";
 import { formatPrice } from "@/lib/format";
 import { Chevron, Chip, SOURCING_STATUS, cleanTitle, formatDayMonth, inputClass, labelClass } from "@/components/orders/order-ui";
+import { useAccountTimeZone } from "@/lib/timezone";
 
 // --- source card (one per line item) --------------------------------------
 // The team's spreadsheet row, on the order: the supplier login used, the
@@ -50,6 +51,7 @@ export function SourcingCard({
   onNote: (note: { tone: "ok" | "bad"; text: string } | null) => void;
   defaultOpen: boolean;
 }) {
+  const timeZone = useAccountTimeZone();
   const s = line.sourcing;
   const [open, setOpen] = useState(defaultOpen);
   const [status, setStatus] = useState<OrderSourcing["status"]>(s?.status || "to_order");
@@ -115,7 +117,7 @@ export function SourcingCard({
   const summary = [
     s?.sourceOrderNo ? `#${s.sourceOrderNo}` : null,
     s?.sourceEmail || null,
-    s?.placedAt ? formatDayMonth(String(s.placedAt)) : null,
+    s?.placedAt ? formatDayMonth(String(s.placedAt), timeZone) : null,
     s?.placedBy?.name ? `by ${s.placedBy.name}` : null,
     s?.cardLabel || null,
     s?.cost ? formatPrice(s.cost.value, s.cost.currency) : null,
@@ -213,7 +215,7 @@ export function SourcingCard({
           </div>
           <p className="mt-2 text-[11.5px] text-[var(--color-muted)]">
             {actionsEnabled ? "Saving a new tracking number marks this item dispatched on eBay with it." : "eBay dispatch is off for this account until it is reconnected; the details are still saved."}
-            {s?.dispatchedAt ? ` Dispatched on eBay ${formatDayMonth(s.dispatchedAt)}${s.dispatchedBy?.name ? ` by ${s.dispatchedBy.name}` : ""}.` : ""}
+            {s?.dispatchedAt ? ` Dispatched on eBay ${formatDayMonth(s.dispatchedAt, timeZone)}${s.dispatchedBy?.name ? ` by ${s.dispatchedBy.name}` : ""}.` : ""}
           </p>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <p className={`text-[12px] ${note?.tone === "bad" ? "font-medium text-[var(--color-danger)]" : "text-emerald-700"}`}>{note?.text || ""}</p>

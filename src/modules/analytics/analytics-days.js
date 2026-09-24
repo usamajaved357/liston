@@ -31,6 +31,17 @@ const RANGES = ['7d', '30d', 'this_month', 'last_month', '90d'];
 
 const timeZoneFor = (marketplaceId) => SITE_TIME_ZONES[marketplaceId] || null;
 
+/** `tz` when it's a time zone this runtime knows ("Asia/Karachi"), else null. */
+function validTimeZone(tz) {
+  if (typeof tz !== 'string' || !tz || tz.length > 64) return null;
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: tz });
+    return tz;
+  } catch {
+    return null;
+  }
+}
+
 const formatters = new Map();
 function partsOf(date, timeZone) {
   let f = formatters.get(timeZone);
@@ -320,6 +331,7 @@ function historyReport({ from, to, reads, totals, listedOn, historyFrom = null }
 }
 
 module.exports = {
+  validTimeZone,
   SITE_TIME_ZONES,
   SYNC_HOUR,
   ACCOUNT_HISTORY_DAYS,

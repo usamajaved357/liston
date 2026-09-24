@@ -8,6 +8,7 @@ import { useConnection } from "@/lib/useConnection";
 import { formatMoney } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { useAccountEvents } from "@/lib/useAccountEvents";
+import { useAccountRefresh } from "@/lib/useAccountRefresh";
 import { Alert } from "@/components/Alert";
 
 // The account dashboard: money in and orders for a chosen window, the live
@@ -40,7 +41,8 @@ const SUMMARY_RANGE = "90d";
 
 const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
   { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid, needs shipping", tone: "text-[var(--color-primary)]" },
-  { key: "dispatched", label: "Dispatched", hint: "Already shipped", tone: "text-emerald-700" },
+  { key: "dispatched", label: "Dispatched", hint: "On the way to the buyer", tone: "text-emerald-700" },
+  { key: "delivered", label: "Delivered", hint: "Carrier confirmed delivery", tone: "text-emerald-800" },
   { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-muted)]" },
 ];
 
@@ -114,7 +116,7 @@ function OrderQueue({ connectionId, counts, loading, error }: { connectionId: st
       {error ? (
         <Alert>{error}</Alert>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {ORDER_TILES.map((tile) => (
             <Link
               key={tile.key}
@@ -174,7 +176,11 @@ const Icons = {
   ),
 };
 
-function OwnerDashboard({ connectionId }: { connectionId: string }) {
+// `reloadKey` bumps after the header's refresh; `onSynced` reports how fresh
+// the account's orders are, for that header.
+type DashboardProps = { connectionId: string; reloadKey: number; onSynced: (syncedAt: string | null) => void };
+
+function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
   const [range, setRange] = useState<EarningsRange>("today");
   // Keyed by range so switching ranges shows the skeleton without a
   // synchronous reset inside the effect.
@@ -203,7 +209,7 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [connectionId, range, liveKey]);
+  }, [connectionId, range, liveKey, reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -211,12 +217,17 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
     api.listDraftListings(connectionId).then((d) => !cancelled && setDrafts(d.drafts.length)).catch(() => !cancelled && setDrafts(0));
     api
       .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
-      .then((d) => !cancelled && setCounts(d.counts))
+      .then((d) => {
+        if (cancelled) return;
+        setCounts(d.counts);
+        onSynced(d.syncedAt);
+      })
       .catch((err) => !cancelled && setCountsError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."));
     return () => {
       cancelled = true;
     };
-  }, [connectionId, liveKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, liveKey, reloadKey]);
 
   const rangeLabel = RANGES.find((r) => r.key === range)?.label.toLowerCase() || range;
   const base = `/accounts/${connectionId}`;
@@ -289,15 +300,19 @@ function OwnerDashboard({ connectionId }: { connectionId: string }) {
 
 // A team member granted Orders is doing fulfilment work — revenue isn't
 // theirs to see, so they get the queue and nothing else.
-function MemberDashboard({ connectionId }: { connectionId: string }) {
+function MemberDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
   const [counts, setCounts] = useState<OrderCounts | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     api
       .getConnectionOrders(connectionId, { range: SUMMARY_RANGE, status: "all", page: 1, perPage: 25 })
-      .then((d) => setCounts(d.counts))
+      .then((d) => {
+        setCounts(d.counts);
+        onSynced(d.syncedAt);
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load orders from eBay."));
-  }, [connectionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, reloadKey]);
   return <OrderQueue connectionId={connectionId} counts={counts} loading={!counts && !error} error={error} />;
 }
 
@@ -319,6 +334,7 @@ function ShellSkeleton() {
 export default function AccountOverviewPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
+  const { sync, setSyncedAt, reloadKey } = useAccountRefresh(connection?.id);
 
   if (loading) return <ShellSkeleton />;
 
@@ -341,6 +357,7 @@ export default function AccountOverviewPage() {
       marketplace={connection.marketplace}
       permissions={connection.permissions}
       user={user}
+      sync={isOwner || connection.permissions?.orders ? sync : undefined}
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Overview</h1>
@@ -351,9 +368,9 @@ export default function AccountOverviewPage() {
       }
     >
       {isOwner ? (
-        <OwnerDashboard connectionId={connection.id} />
+        <OwnerDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
       ) : connection.permissions?.orders ? (
-        <MemberDashboard connectionId={connection.id} />
+        <MemberDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
       ) : (
         <div className="card px-6 py-12 text-center">
           <p className="text-sm font-medium text-[var(--color-ink)]">Nothing to show here yet</p>

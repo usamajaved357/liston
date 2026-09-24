@@ -210,6 +210,8 @@ function mapLineItem(transaction) {
     // The delivery window eBay showed the buyer at checkout.
     estimatedDeliveryMin: transaction.ShippingServiceSelected?.ShippingPackageInfo?.EstimatedDeliveryTimeMin || null,
     estimatedDeliveryMax: transaction.ShippingServiceSelected?.ShippingPackageInfo?.EstimatedDeliveryTimeMax || null,
+    // When the carrier confirmed delivery; eBay leaves it out until then.
+    deliveredAt: transaction.ShippingServiceSelected?.ShippingPackageInfo?.ActualDeliveryTime || null,
     shippingService: transaction.ShippingServiceSelected?.ShippingService || null,
   };
 }
@@ -243,6 +245,8 @@ function mapOrder(order) {
   const buyer = transactions[0]?.Buyer;
   const lineItems = transactions.map(mapLineItem);
   const dispatchByTime = lineItems.map((li) => li.handleByTime).filter(Boolean).sort()[0] || null;
+  // Delivered once every item has arrived: the last arrival.
+  const deliveredAt = lineItems.length && lineItems.every((li) => li.deliveredAt) ? lineItems.map((li) => li.deliveredAt).sort().slice(-1)[0] : null;
 
   return {
     orderId: order.OrderID,
@@ -264,6 +268,7 @@ function mapOrder(order) {
     shippedTime: order.ShippedTime || null,
     cancelStatus: order.CancelStatus || null,
     dispatchByTime,
+    deliveredAt,
     lineItems,
   };
 }
@@ -338,17 +343,21 @@ const GET_ORDERS_FIELDS = [
   'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.HandleByTime',
   'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.EstimatedDeliveryTimeMin',
   'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.EstimatedDeliveryTimeMax',
+  'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingPackageInfo.ActualDeliveryTime',
   'OrderArray.Order.TransactionArray.Transaction.ShippingServiceSelected.ShippingService',
 ];
 
 // createTimeFrom/createTimeTo are ISO 8601 strings; eBay caps this range at
 // 90 days per request. Alternatively modTimeFrom/modTimeTo (≤30 days apart)
 // select orders CHANGED in the window, which is how a refresh picks up only
-// what moved since the last sync instead of re-reading 90 days.
-async function getOrders(accessToken, { createTimeFrom, createTimeTo, modTimeFrom, modTimeTo, pageNumber = 1, entriesPerPage = 50, siteId } = {}) {
-  const window = modTimeFrom
-    ? `<ModTimeFrom>${modTimeFrom}</ModTimeFrom><ModTimeTo>${modTimeTo}</ModTimeTo>`
-    : `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom><CreateTimeTo>${createTimeTo}</CreateTimeTo>`;
+// what moved since the last sync instead of re-reading 90 days. `orderIds`
+// reads those orders alone (eBay then ignores any time window).
+async function getOrders(accessToken, { createTimeFrom, createTimeTo, modTimeFrom, modTimeTo, orderIds, pageNumber = 1, entriesPerPage = 50, siteId } = {}) {
+  const window = orderIds?.length
+    ? `<OrderIDArray>${orderIds.map((id) => `<OrderID>${xmlEscape(String(id))}</OrderID>`).join('')}</OrderIDArray>`
+    : modTimeFrom
+      ? `<ModTimeFrom>${modTimeFrom}</ModTimeFrom><ModTimeTo>${modTimeTo}</ModTimeTo>`
+      : `<CreateTimeFrom>${createTimeFrom}</CreateTimeFrom><CreateTimeTo>${createTimeTo}</CreateTimeTo>`;
   const body =
     window +
     `<OrderStatus>All</OrderStatus>` +

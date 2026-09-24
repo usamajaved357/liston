@@ -215,7 +215,7 @@ export default function OrderDetailPage() {
   const relistUrl = firstItem?.itemId ? `https://${host}/sl/sell?mode=Relist&itemId=${firstItem.itemId}` : null;
   const sellSimilarUrl = firstItem?.itemId ? `https://${host}/sl/sell?mode=SellSimilar&itemId=${firstItem.itemId}` : null;
 
-  const siteTz = SITE_TIMEZONES[connection.marketplace?.id || ""];
+  const siteTz = connection.marketplace?.timeZone || SITE_TIMEZONES[connection.marketplace?.id || ""];
   const deadlineTone = cancelled ? "" : dispatched ? "" : daysLeft !== null && daysLeft < 0 ? "text-[var(--color-danger)]" : daysLeft !== null && daysLeft <= 1 ? "text-amber-800" : "";
 
   return (
@@ -225,7 +225,7 @@ export default function OrderDetailPage() {
       platformKey={connection.platform_key}
       platformName={connection.platform_name}
       status={connection.status}
-      marketplace={connection.marketplace ? { flag: connection.marketplace.flag, label: connection.marketplace.label, currency: connection.marketplace.currency, name: connection.marketplace.name } : null}
+      marketplace={connection.marketplace}
       permissions={connection.permissions}
       user={user}
       header={
@@ -339,7 +339,7 @@ export default function OrderDetailPage() {
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="min-w-0 flex-1 basis-[320px]">
                     <h2 className={`text-[20px] font-bold text-[var(--color-ink)] ${deadlineTone}`}>
-                      {cancelled ? "Order cancelled" : dispatched ? `Dispatched${shippedAt ? ` on ${formatDayMonthYear(shippedAt)}` : ""}` : dispatchBy ? `Dispatch by ${formatDeadline(dispatchBy, siteTz)}` : "Awaiting dispatch"}
+                      {cancelled ? "Order cancelled" : dispatched ? `Dispatched${shippedAt ? ` on ${formatDayMonthYear(shippedAt, siteTz)}` : ""}` : dispatchBy ? `Dispatch by ${formatDeadline(dispatchBy, siteTz)}` : "Awaiting dispatch"}
                     </h2>
                     {!cancelled && !dispatched && <p className="mt-1 text-[13px] text-[var(--color-ink)]">Make sure you send your order within the dispatch time you specified in the listing.</p>}
                     {(order.estimatedDelivery.min || order.estimatedDelivery.max) && (
@@ -426,7 +426,9 @@ export default function OrderDetailPage() {
                   steps={[
                     { label: "Buyer paid", date: formatDayMonth(paidAt || order.createdAt, siteTz), done: order.paymentStatus === "PAID" || order.paymentStatus === "FULLY_REFUNDED" || order.paymentStatus === "PARTIALLY_REFUNDED" },
                     { label: dispatched ? "Dispatched" : "Dispatch by", date: formatDayMonth(dispatched ? shippedAt : dispatchBy, siteTz), done: dispatched },
-                    { label: "Delivery", date: order.estimatedDelivery.max ? `est. ${formatDayMonth(order.estimatedDelivery.max, siteTz)}` : "", done: false },
+                    order.deliveredAt
+                      ? { label: "Delivered", date: formatDayMonth(order.deliveredAt, siteTz), done: true }
+                      : { label: "Delivery", date: order.estimatedDelivery.max ? `est. ${formatDayMonth(order.estimatedDelivery.max, siteTz)}` : "", done: false },
                   ]}
                 />
               </div>
@@ -477,7 +479,7 @@ export default function OrderDetailPage() {
                         <p key={f.fulfillmentId || i}>
                           {f.trackingNumber ? <span className="font-mono">{f.trackingNumber}</span> : "No tracking"}
                           {f.carrier ? ` · ${f.carrier}` : ""}
-                          {f.shippedDate ? ` · ${formatDayMonth(f.shippedDate)}` : ""}
+                          {f.shippedDate ? ` · ${formatDayMonth(f.shippedDate, siteTz)}` : ""}
                         </p>
                       ))
                     ) : (
@@ -638,8 +640,8 @@ export default function OrderDetailPage() {
                     }
                   />
                   {order.salesRecordReference && <Row label="Sales record no." value={order.salesRecordReference} />}
-                  <Row label="Sold" value={formatDayMonthYear(order.createdAt)} />
-                  <Row label="Buyer paid" value={paidAt ? formatDayMonthYear(paidAt) : pay?.text || "—"} />
+                  <Row label="Sold" value={formatDayMonthYear(order.createdAt, siteTz)} />
+                  <Row label="Buyer paid" value={paidAt ? formatDayMonthYear(paidAt, siteTz) : pay?.text || "—"} />
                   <Row
                     label="Buyer"
                     value={
@@ -788,7 +790,7 @@ export default function OrderDetailPage() {
                       {order.refunds.length > 0 && (
                         <div className="mt-1 border-t border-[var(--color-line)] pt-1">
                           {order.refunds.map((r, i) => (
-                            <MoneyRow key={r.referenceId || i} label={`Refund${r.date ? ` ${formatDayMonth(r.date)}` : ""}`} value={money(r.amount, currency)} indent negative />
+                            <MoneyRow key={r.referenceId || i} label={`Refund${r.date ? ` ${formatDayMonth(r.date, siteTz)}` : ""}`} value={money(r.amount, currency)} indent negative />
                           ))}
                         </div>
                       )}
@@ -807,7 +809,7 @@ export default function OrderDetailPage() {
                     </div>
                   )}
                 </div>
-                {paidAt && <p className="mt-3 text-[11.5px] text-[var(--color-muted)]">Paid {formatDateTime(paidAt)}{order.payments[0]?.method ? ` · ${order.payments[0].method.replace(/_/g, " ").toLowerCase()}` : ""}</p>}
+                {paidAt && <p className="mt-3 text-[11.5px] text-[var(--color-muted)]">Paid {formatDateTime(paidAt, siteTz)}{order.payments[0]?.method ? ` · ${order.payments[0].method.replace(/_/g, " ").toLowerCase()}` : ""}</p>}
               </div>
             </div>
           </div>

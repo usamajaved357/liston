@@ -29,14 +29,22 @@ export function prettyPriceText(text: string | null | undefined): string {
     .replace(/\s*-\s*/g, " – ");
 }
 
-export function formatDate(iso: string | null): string {
+// Every formatter takes an optional IANA time zone: an account's pages pass
+// the account's (useAccountTimeZone), so dates read as eBay shows them; left
+// out, the viewer's own.
+export function formatDate(iso: string | null, timeZone?: string): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone });
 }
 
-export function formatShortDate(iso: string | null): string {
+export function formatShortDate(iso: string | null, timeZone?: string): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone });
+}
+
+export function formatTime(iso: string | null, timeZone?: string): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone });
 }
 
 /** A calendar day ("2026-09-23") plus some days, as "27 Sept", whatever the viewer's time zone. */
@@ -45,13 +53,9 @@ export function formatDay(day: string, plus = 0): string {
   return new Date(Date.UTC(y, m - 1, d + plus)).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-export function formatDateTime(iso: string | null): string {
+export function formatDateTime(iso: string | null, timeZone?: string): string {
   if (!iso) return "—";
-  const d = new Date(iso);
-  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${d.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  })}`;
+  return `${formatShortDate(iso, timeZone)}, ${formatTime(iso, timeZone)}`;
 }
 
 const DIAL_CODES: Record<string, string> = { GB: "+44", UK: "+44", US: "+1", CA: "+1", AU: "+61", DE: "+49", FR: "+33", IT: "+39", ES: "+34", IE: "+353", NL: "+31", BE: "+32", AT: "+43", CH: "+41", PL: "+48" };

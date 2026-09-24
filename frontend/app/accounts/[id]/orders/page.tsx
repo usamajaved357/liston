@@ -3,15 +3,15 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter } from "@/lib/api";
+import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter, SupplierFilter } from "@/lib/api";
 import { readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
-import { formatMoney, formatShortDate, internationalPhone } from "@/lib/format";
+import { formatMoney, formatShortDate, formatTime, internationalPhone } from "@/lib/format";
+import { useAccountTimeZone } from "@/lib/timezone";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton, ListSkeleton } from "@/components/Skeleton";
 import { ListFooter } from "@/components/ListFooter";
-import { SyncStatus } from "@/components/SyncStatus";
 import { ViewMenu } from "@/components/ViewMenu";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 
@@ -31,11 +31,36 @@ const RANGE_LABELS: Record<OrderRange, string> = {
   "30d": "Last 30 days",
   "90d": "Last 90 days",
 };
+const RANGE_SHORT: Record<OrderRange, string> = { "7d": "7 days", "30d": "30 days", "90d": "90 days" };
+
+// Where the supplier order stands (orders/order-supplier.js on the server).
+// Each status tab keeps its own choice; untouched, the tabs where new orders
+// land (All, Awaiting dispatch) show only those not yet ordered from the
+// supplier, and the rest show everything.
+const SUPPLIER_LABELS: Record<SupplierFilter, string> = {
+  any: "Any",
+  pending: "Not ordered yet",
+  ordered: "Ordered",
+  shipped: "Supplier shipped",
+  delivered: "Supplier delivered",
+  problem: "Problem",
+};
+const SUPPLIER_SHORT: Partial<Record<SupplierFilter, string>> = { pending: "To order", shipped: "Shipped", delivered: "Delivered" };
+const SUPPLIER_PHRASE: Record<SupplierFilter, string> = {
+  any: "",
+  pending: "not yet ordered from the supplier",
+  ordered: "ordered from the supplier",
+  shipped: "shipped by the supplier",
+  delivered: "delivered by the supplier",
+  problem: "with a supplier problem",
+};
+const defaultSupplier = (status: OrderStatusFilter): SupplierFilter => (status === "all" || status === "awaiting_dispatch" ? "pending" : "any");
 
 const STATUS_TABS: { key: OrderStatusFilter; label: string }[] = [
   { key: "all", label: "All orders" },
   { key: "awaiting_dispatch", label: "Awaiting dispatch" },
   { key: "dispatched", label: "Dispatched" },
+  { key: "delivered", label: "Delivered" },
   { key: "cancelled", label: "Cancelled" },
 ];
 
@@ -46,17 +71,21 @@ const STATUS_TEXT_STYLES: Record<OrderStatusFilter, string> = {
   awaiting_payment: "text-amber-700",
   awaiting_dispatch: "text-[var(--color-ink)]",
   dispatched: "text-emerald-700",
+  delivered: "text-emerald-800",
   cancelled: "text-[var(--color-danger)]",
 };
 
-function statusLabel(order: Order): string {
+// Dates in the account's time zone (its eBay site's), as Seller Hub shows them.
+function statusLabel(order: Order, timeZone?: string): string {
   switch (order.derivedStatus) {
     case "awaiting_payment":
       return "Awaiting payment";
     case "awaiting_dispatch":
-      return order.dispatchByTime ? `Dispatch by ${formatShortDate(order.dispatchByTime)}` : "Awaiting dispatch";
+      return order.dispatchByTime ? `Dispatch by ${formatShortDate(order.dispatchByTime, timeZone)}` : "Awaiting dispatch";
     case "dispatched":
-      return order.shippedTime ? `Dispatched ${formatShortDate(order.shippedTime)}` : "Dispatched";
+      return order.shippedTime ? `Dispatched ${formatShortDate(order.shippedTime, timeZone)}` : "Dispatched";
+    case "delivered":
+      return order.deliveredAt ? `Delivered ${formatShortDate(order.deliveredAt, timeZone)}` : "Delivered";
     case "cancelled":
       return "Cancelled";
     default:
@@ -162,6 +191,7 @@ function sourcingSummary(order: Order) {
 
 function OrderCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
   const router = useRouter();
+  const timeZone = useAccountTimeZone();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
   const sourcing = sourcingSummary(order);
   const shippingCost =
@@ -181,7 +211,7 @@ function OrderCard({ order, country, countryName, href }: { order: Order; countr
       }}
     >
       <div className="pt-0.5">
-        <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order)}</p>
+        <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
         {sourcing && (
           <span className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourcing.className}`} title="Supplier order">
             {sourcing.text}
@@ -244,8 +274,8 @@ function OrderCard({ order, country, countryName, href }: { order: Order; countr
         )}
       </div>
       <div className="pt-0.5 text-right text-[12.5px] leading-snug text-[var(--color-ink)]">
-        <p>{formatShortDate(order.createdAt)}</p>
-        <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">{new Date(order.createdAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</p>
+        <p>{formatShortDate(order.createdAt, timeZone)}</p>
+        <p className="mt-0.5 text-[11px] text-[var(--color-muted)]">{formatTime(order.createdAt, timeZone)}</p>
       </div>
     </div>
   );
@@ -271,7 +301,7 @@ function AccountOrdersContent() {
   const initialRange = searchParams.get("range");
   const initialStatus = searchParams.get("status");
   const VALID_RANGES: OrderRange[] = ["7d", "30d", "90d"];
-  const VALID_STATUSES: OrderStatusFilter[] = ["all", "awaiting_payment", "awaiting_dispatch", "dispatched", "cancelled"];
+  const VALID_STATUSES: OrderStatusFilter[] = ["all", "awaiting_payment", "awaiting_dispatch", "dispatched", "delivered", "cancelled"];
 
   const [range, setRange] = useState<OrderRange>(
     initialRange && VALID_RANGES.includes(initialRange as OrderRange) ? (initialRange as OrderRange) : "7d"
@@ -290,8 +320,10 @@ function AccountOrdersContent() {
     awaiting_payment: 0,
     awaiting_dispatch: 0,
     dispatched: 0,
+    delivered: 0,
     cancelled: 0,
   });
+  const [supplierCounts, setSupplierCounts] = useState<Partial<Record<SupplierFilter, number>> | null>(null);
   const [totalPages, setTotalPages] = useState(1);
   const [totalEntries, setTotalEntries] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -308,6 +340,14 @@ function AccountOrdersContent() {
     writeView(sortKey, { [status]: next });
     setPage(1);
   }
+  const supplierKey = `orders-supplier:${params.id}`;
+  const [suppliers, setSuppliers] = useState<Partial<Record<OrderStatusFilter, SupplierFilter>>>(() => readView<Record<OrderStatusFilter, SupplierFilter>>(supplierKey));
+  const supplier: SupplierFilter = suppliers[status] || defaultSupplier(status);
+  function changeSupplier(next: SupplierFilter) {
+    setSuppliers((s) => ({ ...s, [status]: next }));
+    writeView(supplierKey, { [status]: next });
+    setPage(1);
+  }
   // Orders the team put away (Seller Hub's "Archive"): shown on their own.
   const [archived, setArchived] = useState(false);
   const [archivedCount, setArchivedCount] = useState(0);
@@ -317,10 +357,11 @@ function AccountOrdersContent() {
     setLoading(true);
     setError(null);
     api
-      .getConnectionOrders(connection.id, { range, status, search, sort, page, perPage, archived })
+      .getConnectionOrders(connection.id, { range, status, search, sort, page, perPage, archived, supplier })
       .then((data) => {
         setOrders(data.orders);
         setCounts(data.counts);
+        setSupplierCounts(data.supplierCounts || null);
         setTotalPages(data.totalPages);
         setTotalEntries(data.totalEntries);
         setSyncedAt(data.syncedAt);
@@ -328,7 +369,7 @@ function AccountOrdersContent() {
       })
       .catch(() => setError("Couldn't load orders from eBay. Try again."))
       .finally(() => setLoading(false));
-  }, [connection, range, status, search, sort, page, perPage, archived, reloadKey]);
+  }, [connection, range, status, search, sort, page, perPage, archived, supplier, reloadKey]);
 
   useAccountEvents(connection?.id, (event) => {
     if (event.kind === "orders") setReloadKey((k) => k + 1);
@@ -398,6 +439,7 @@ function AccountOrdersContent() {
       status={connection.status}
       permissions={connection.permissions}
       user={user}
+      sync={{ syncedAt, onRefresh: handleRefresh, refreshing, note: refreshNote }}
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Orders</h1>
@@ -423,7 +465,6 @@ function AccountOrdersContent() {
             ))}
           </div>
           <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
-            <SyncStatus syncedAt={syncedAt} onRefresh={handleRefresh} refreshing={refreshing} note={refreshNote} />
             {(archivedCount > 0 || archived) && (
               <button
                 type="button"
@@ -438,9 +479,17 @@ function AccountOrdersContent() {
               </button>
             )}
             <ViewMenu
-              title="Period and sort"
+              title="Period, supplier and sort"
               sections={[
-                { label: "Period", value: range, options: (Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => ({ key, label: RANGE_LABELS[key] })), onChange: (k) => changeRange(k as OrderRange) },
+                { label: "Period", value: range, options: (Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => ({ key, label: RANGE_LABELS[key], short: RANGE_SHORT[key] })), onChange: (k) => changeRange(k as OrderRange) },
+                {
+                  label: "Supplier order",
+                  value: supplier,
+                  // "Any" says nothing on the button; a filter does.
+                  hideInSummary: supplier === "any",
+                  options: (Object.keys(SUPPLIER_LABELS) as SupplierFilter[]).map((key) => ({ key, label: SUPPLIER_LABELS[key], short: SUPPLIER_SHORT[key], count: supplierCounts ? supplierCounts[key] ?? 0 : undefined })),
+                  onChange: (k) => changeSupplier(k as SupplierFilter),
+                },
                 { label: "Sort", value: sort, options: (Object.keys(SORT_LABELS) as OrderSort[]).map((key) => ({ key, label: SORT_LABELS[key] })), onChange: (k) => changeSort(k as OrderSort) },
               ]}
             />
@@ -481,6 +530,14 @@ function AccountOrdersContent() {
         ) : null
       }
     >
+      {supplier !== "any" && !loading && (
+        <p className="mb-2 text-xs text-[var(--color-muted)]">
+          Showing {totalEntries} of {counts[status]} {status === "all" ? "" : `${STATUS_TABS.find((t) => t.key === status)?.label.toLowerCase()} `}order{counts[status] === 1 ? "" : "s"}, {SUPPLIER_PHRASE[supplier]} ·{" "}
+          <button type="button" onClick={() => changeSupplier("any")} className="font-semibold text-[var(--color-primary)] hover:underline">
+            Show all
+          </button>
+        </p>
+      )}
       {search && (
         <p className="mb-2 text-xs text-[var(--color-muted)]">
           Showing results for &ldquo;{search}&rdquo; ·{" "}

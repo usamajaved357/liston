@@ -67,6 +67,15 @@ async function listSourcingForOrder(connectionId, orderId) {
   return result.rows;
 }
 
+/** Every order's line statuses on an account: orderId → ['ordered', …]. */
+async function sourcingStatusesByOrder(connectionId) {
+  const result = await query(
+    `SELECT order_id, array_agg(status) AS statuses FROM order_sourcing WHERE connection_id = $1 GROUP BY order_id`,
+    [connectionId]
+  );
+  return new Map(result.rows.map((r) => [r.order_id, r.statuses]));
+}
+
 async function listSourcingForOrders(connectionId, orderIds) {
   if (!orderIds.length) return [];
   const result = await query(
@@ -177,7 +186,7 @@ module.exports = {
   createSourceAccount,
   updateSourceAccount,
   listSourcingForOrder,
-  listSourcingForOrders,
+  listSourcingForOrders, sourcingStatusesByOrder,
   upsertSourcing,
   findSourcing,
   addEvent,

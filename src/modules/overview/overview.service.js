@@ -9,7 +9,7 @@ const logger = require('../../utils/logger');
 
 const RANGES = new Set(['today', '7d', '30d', '90d', 'this_month', 'last_month']);
 
-async function getOverview(ownerId, viewer, { range = 'today' } = {}) {
+async function getOverview(ownerId, viewer, { range = 'today', timeZone = null } = {}) {
   const effectiveRange = RANGES.has(range) ? range : 'today';
   const { connections } = await connectionService.listConnections(ownerId, viewer);
   const ebayConnections = connections.filter((c) => c.platform_key === 'ebay');
@@ -20,7 +20,7 @@ async function getOverview(ownerId, viewer, { range = 'today' } = {}) {
         const result = await connectionService.withDecryptedCredentials(connection.id, ownerId, async (credentials) => {
           const [listings, earnings] = await Promise.all([
             ebayService.countActiveListings(credentials, connection.id, { push: ebayService.pushEnabled(connection) }),
-            ebayService.getEarningsSummary(credentials, { connectionId: connection.id, range: effectiveRange, push: ebayService.pushEnabled(connection) }),
+            ebayService.getEarningsSummary(credentials, { connectionId: connection.id, range: effectiveRange, timeZone, push: ebayService.pushEnabled(connection) }),
           ]);
           return {
             activeListings: listings.totalEntries || 0,
