@@ -35,9 +35,14 @@ const RANGE_OPTIONS: { key: TeamRange; label: string }[] = [
 
 // The log's filter: every figure, then the smaller things people do.
 const EXTRA_KINDS: { key: string; label: string }[] = [
+  { key: "order.supplier_updated", label: "Supplier order updates" },
   { key: "order.note", label: "Notes" },
   { key: "order.archived", label: "Archived orders" },
+  { key: "listing.checked", label: "Deeper checks" },
   { key: "listing.draft_deleted", label: "Deleted drafts" },
+  { key: "account.store_category_added", label: "Shop categories added" },
+  { key: "account.source_account_saved", label: "Supplier accounts saved" },
+  { key: "session.login", label: "Logins" },
 ];
 
 const change = (now: number, before: number) => (before > 0 ? (now - before) / before : null);
@@ -129,7 +134,7 @@ function NothingRecorded({ recordingSince, compact = false }: { recordingSince: 
 }
 
 function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (kind: TeamMetricKey) => void }) {
-  const [metric, setMetric] = useState<TeamMetricKey>(() => data.metrics.find((m) => data.totals[m.key] > 0)?.key || "supplier_orders");
+  const [metric, setMetric] = useState<TeamMetricKey>(() => data.metrics.find((m) => m.key !== "active_days" && data.totals[m.key] > 0)?.key || "supplier_orders");
   const compared = `vs ${dayRangeLabel(data.range.previous.from, data.range.previous.to)}`;
   const label = data.metrics.find((m) => m.key === metric)?.label || "";
   const points = data.series.map((p, i) => ({ day: p.day, value: p[metric], previous: data.previousSeries[i]?.[metric] ?? null, previousDay: data.previousSeries[i]?.day ?? null }));
@@ -142,7 +147,7 @@ function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (ki
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         {data.metrics.map((m) => (
           <KpiTile
             key={m.key}
@@ -365,7 +370,8 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
         <ul className="divide-y divide-[var(--color-line)] border-t border-[var(--color-line)]">
           {items.map((i) => {
             const href = subjectLink(i);
-            const subject = i.subjectType === "order" ? `Order ${i.subjectId}` : i.subjectType === "listing" ? `#${i.subjectId}` : "Draft";
+            const subject =
+              i.subjectType === "order" ? `Order ${i.subjectId}` : i.subjectType === "listing" ? `#${i.subjectId}` : i.subjectType === "draft" ? "Draft" : null;
             return (
               <li key={i.id} className="flex items-start gap-3 px-4 py-2.5">
                 <span className="w-24 flex-shrink-0 pt-px text-[11.5px] tabular-nums text-[var(--color-muted)]" title={timeZone ? `${timeZone} time` : undefined}>
@@ -374,8 +380,8 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
                 <div className="min-w-0 flex-1">
                   <p className="text-[12.5px] text-[var(--color-ink)]">
                     <span className="font-medium">{i.label}</span>
-                    <span className="text-[var(--color-muted)]"> · </span>
-                    {href ? (
+                    {subject && <span className="text-[var(--color-muted)]"> · </span>}
+                    {!subject ? null : href ? (
                       <Link href={href} className="font-mono text-[11.5px] text-[var(--color-primary)] hover:underline">
                         {subject}
                       </Link>

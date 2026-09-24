@@ -24,6 +24,7 @@ const TODAY_WORDS: [TeamMetricKey, string, string][] = [
   ["relisted", "relisted", "relisted"],
   ["ended", "ended", "ended"],
   ["drafted", "draft", "drafts"],
+  ["draft_work", "draft worked on", "drafts worked on"],
 ];
 function todayLine(member: TeamMember): string | null {
   const t = member.today;

@@ -6,25 +6,46 @@ const logger = require('../../utils/logger');
 // moment of the action, so a row stays readable after the account goes.
 
 /**
- * Records an action. `amount`/`title` default, for an order, to what the
- * order mirror holds (order total, first item's title). Never throws: a
- * failure to record must not undo the work itself.
+ * Records an action. The owner comes from the eBay account (`connectionId`),
+ * or is given (`ownerUserId`) for work on no one account — a login, a
+ * supplier account. `amount`/`title` default, for an order, to what the
+ * order mirror holds (order total, first item's title). `onceWithinHours`:
+ * skip it if the same person already has this kind on this subject that
+ * recently (draft work is many small saves, counted as one sitting). Never
+ * throws: a failure to record must not undo the work itself.
  */
-async function record({ actorUserId, connectionId, kind, subjectType, subjectId, subjectPart = null, title = null, amount = null, currency = null, detail = {} }) {
-  if (!actorUserId || !connectionId || !kind || !subjectId) return null;
+async function record({
+  actorUserId,
+  connectionId = null,
+  ownerUserId = null,
+  kind,
+  subjectType,
+  subjectId,
+  subjectPart = null,
+  title = null,
+  amount = null,
+  currency = null,
+  detail = {},
+  onceWithinHours = null,
+}) {
+  if (!actorUserId || (!connectionId && !ownerUserId) || !kind || !subjectId) return null;
   try {
     const result = await query(
       `INSERT INTO member_activity (owner_user_id, actor_user_id, connection_id, connection_label, kind, subject_type, subject_id, subject_part, title, amount, currency, detail)
-       SELECT c.user_id, $2, c.id, c.label, $3, $4, $5, $6,
+       SELECT COALESCE(c.user_id, $11::uuid), $2, c.id, c.label, $3, $4, $5, $6,
          COALESCE($7, o.data->'lineItems'->0->>'title'),
          COALESCE($8::numeric, NULLIF(o.data->'total'->>'amount', '')::numeric),
          COALESCE($9, o.data->'total'->>'currency'),
          $10
-       FROM connections c
+       FROM (SELECT 1) one
+       LEFT JOIN connections c ON c.id = $1::uuid
        LEFT JOIN ebay_orders o ON $4 = 'order' AND o.connection_id = c.id AND o.order_id = $5
-       WHERE c.id = $1
+       WHERE (c.id IS NOT NULL OR ($1::uuid IS NULL AND $11::uuid IS NOT NULL))
+         AND ($12::int IS NULL OR NOT EXISTS (
+           SELECT 1 FROM member_activity p
+           WHERE p.actor_user_id = $2 AND p.kind = $3 AND p.subject_id = $5 AND p.created_at > now() - make_interval(hours => $12::int)))
        RETURNING *`,
-      [connectionId, actorUserId, kind, subjectType, String(subjectId), subjectPart, title, amount, currency, JSON.stringify(detail || {})]
+      [connectionId, actorUserId, kind, subjectType, String(subjectId), subjectPart, title, amount, currency, JSON.stringify(detail || {}), ownerUserId, onceWithinHours]
     );
     return result.rows[0] || null;
   } catch (err) {
@@ -77,17 +98,17 @@ async function feed(ownerId, actorId, { startsAt, endsAt, kinds = null, connecti
 /** A row's place in the feed, for the next page. */
 const cursorOf = (row) => `${new Date(row.created_at).toISOString()}|${row.id}`;
 
-/** When a member last did anything. */
+/** When a member last did any work (a login alone isn't work). */
 async function lastActiveAt(ownerId, actorId) {
-  const result = await query('SELECT max(created_at) AS at FROM member_activity WHERE owner_user_id = $1 AND actor_user_id = $2', [ownerId, actorId]);
+  const result = await query(`SELECT max(created_at) AS at FROM member_activity WHERE owner_user_id = $1 AND actor_user_id = $2 AND subject_type <> 'session'`, [ownerId, actorId]);
   return result.rows[0]?.at || null;
 }
 
 /** Per member of an owner: their last action, and what they did since `since` (for the Team cards). */
 async function teamSince(ownerId, since) {
   const [last, recent] = await Promise.all([
-    query(`SELECT actor_user_id, max(created_at) AS last_active_at FROM member_activity WHERE owner_user_id = $1 GROUP BY actor_user_id`, [ownerId]),
-    query(`SELECT actor_user_id, kind, subject_id, subject_part FROM member_activity WHERE owner_user_id = $1 AND created_at >= $2`, [ownerId, since]),
+    query(`SELECT actor_user_id, max(created_at) AS last_active_at FROM member_activity WHERE owner_user_id = $1 AND subject_type <> 'session' GROUP BY actor_user_id`, [ownerId]),
+    query(`SELECT actor_user_id, kind, subject_id, subject_part, created_at FROM member_activity WHERE owner_user_id = $1 AND created_at >= $2`, [ownerId, since]),
   ]);
   return { last: last.rows, recent: recent.rows };
 }

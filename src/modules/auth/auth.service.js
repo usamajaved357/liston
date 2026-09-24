@@ -6,6 +6,7 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 const emailService = require('../../utils/email');
 const accessService = require('./access.service');
+const activityRepository = require('../team/activity.repository');
 
 const SALT_ROUNDS = 12;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -166,7 +167,7 @@ async function resetPassword(rawToken, newPassword) {
 
 async function login({ email, password }) {
   const result = await query(
-    'SELECT id, email, password_hash, plan_id, role, deactivated_at FROM users WHERE email = $1',
+    'SELECT id, email, password_hash, plan_id, role, parent_user_id, deactivated_at FROM users WHERE email = $1',
     [email]
   );
   if (result.rows.length === 0) {
@@ -183,6 +184,8 @@ async function login({ email, password }) {
     throw new AuthError('This login has been removed by the account owner.', 403);
   }
   await query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
+  // When each person started, for their team record (attendance).
+  await activityRepository.record({ actorUserId: user.id, ownerUserId: user.role === 'member' ? user.parent_user_id : user.id, kind: 'session.login', subjectType: 'session', subjectId: user.id });
 
   const token = issueToken(user);
   return {

@@ -38,7 +38,7 @@ async function listMembers(ownerId) {
     members.map(async (member) => ({
       ...member,
       lastActiveAt: lastBy.get(member.id) || null,
-      today: activity.metricsFrom(recent.filter((r) => r.actor_user_id === member.id)),
+      today: activity.metricsFrom(recent.filter((r) => r.actor_user_id === member.id), today.timeZone),
       permissions: await teamRepository.getPermissions(member.id),
     }))
   );
@@ -64,21 +64,22 @@ async function getMemberOverview(ownerId, memberId, { range, from, to } = {}) {
   // Day by day, in the owner's time zone.
   const byDay = new Map(analyticsDays.daysBetween(win.from, win.to).map((d) => [d, []]));
   for (const r of rows) byDay.get(analyticsDays.dayOf(r.created_at, win.timeZone))?.push(r);
-  const series = [...byDay].map(([day, dayRows]) => ({ day, ...activity.metricsFrom(dayRows) }));
+  const series = [...byDay].map(([day, dayRows]) => ({ day, ...activity.metricsFrom(dayRows, win.timeZone) }));
   // The period before, day by day, lined up with this one for the chart.
   const prevByDay = new Map(analyticsDays.daysBetween(win.previous.from, win.previous.to).map((d) => [d, []]));
   for (const r of prevRows) prevByDay.get(analyticsDays.dayOf(r.created_at, win.timeZone))?.push(r);
-  const previousSeries = [...prevByDay].map(([day, dayRows]) => ({ day, ...activity.metricsFrom(dayRows) }));
+  const previousSeries = [...prevByDay].map(([day, dayRows]) => ({ day, ...activity.metricsFrom(dayRows, win.timeZone) }));
 
   // Per eBay account (a removed account keeps its name from the rows).
   const byAccount = new Map();
-  for (const r of rows) {
+  // (Logins and supplier accounts are on no one eBay account.)
+  for (const r of rows.filter((x) => x.connection_id || x.connection_label)) {
     const key = r.connection_id || `gone:${r.connection_label}`;
     if (!byAccount.has(key)) byAccount.set(key, { connectionId: r.connection_id, label: r.connection_label, rows: [] });
     byAccount.get(key).rows.push(r);
   }
   const accounts = [...byAccount.values()]
-    .map((a) => ({ connectionId: a.connectionId, label: a.label, actions: a.rows.length, ...activity.metricsFrom(a.rows) }))
+    .map((a) => ({ connectionId: a.connectionId, label: a.label, actions: a.rows.filter((r) => activity.isWork(r.kind)).length, ...activity.metricsFrom(a.rows, win.timeZone) }))
     .sort((a, b) => b.actions - a.actions);
 
   return {
@@ -86,9 +87,9 @@ async function getMemberOverview(ownerId, memberId, { range, from, to } = {}) {
     recordingSince,
     range: { key: win.key, from: win.from, to: win.to, days: win.days, timeZone: win.timeZone, previous: { from: win.previous.from, to: win.previous.to } },
     metrics: activity.METRICS.map(({ key, label }) => ({ key, label })),
-    totals: activity.metricsFrom(rows),
-    previous: activity.metricsFrom(prevRows),
-    actions: rows.length,
+    totals: activity.metricsFrom(rows, win.timeZone),
+    previous: activity.metricsFrom(prevRows, win.timeZone),
+    actions: rows.filter((r) => activity.isWork(r.kind)).length,
     series,
     previousSeries,
     accounts,

@@ -202,7 +202,7 @@ export interface TeamMember {
 
 // A member's figures (backend team/activity.js METRICS). An order line or
 // listing counts once per range, however often it was touched.
-export type TeamMetricKey = "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted";
+export type TeamMetricKey = "active_days" | "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted" | "draft_work";
 export type TeamMetrics = Record<TeamMetricKey, number>;
 export type TeamRange = "today" | "yesterday" | "7d" | "30d" | "this_month" | "last_month" | "custom";
 
@@ -226,7 +226,7 @@ export interface MemberActivityItem {
   id: string;
   kind: string;
   label: string;
-  subjectType: "order" | "listing" | "draft";
+  subjectType: "order" | "listing" | "draft" | "account" | "session";
   subjectId: string;
   subjectPart: string | null;
   title: string | null;

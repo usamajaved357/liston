@@ -7,6 +7,7 @@ const marketplaces = require('../ebay/marketplaces');
 const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const descriptionTemplate = require('../listings/description-template');
 const listingService = require('../listings/listing.service');
+const activityRepository = require('../team/activity.repository');
 const accountEvents = require('../ebay/account-events');
 
 const startEbayAuthSchema = z.object({
@@ -621,6 +622,7 @@ async function addStoreCategory(req, res, next) {
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials) =>
       ebayService.addStoreCategory(credentials, req.params.id, parsed.data)
     );
+    await activityRepository.record({ actorUserId: req.userId, connectionId: req.params.id, kind: 'account.store_category_added', subjectType: 'account', subjectId: req.params.id, title: parsed.data.name || null, detail: parsed.data });
     res.status(201).json(storeCategoriesResponse(result));
   } catch (err) {
     next(err);

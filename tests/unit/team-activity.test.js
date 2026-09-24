@@ -86,3 +86,14 @@ test('publishing is recorded as the person\'s work: a new listing, an edit or a 
   assert.deepStrictEqual([calls[0].title, calls[0].amount, calls[1].detail.fields], ['Lamp', 9.99, ['price']]);
   mock.restoreAll();
 });
+
+test('days worked are the owner\'s days with any work; a login alone is not a day worked', () => {
+  const rows = [
+    { kind: 'session.login', subject_id: 'u', created_at: '2026-09-20T08:00:00Z' },
+    { kind: 'listing.draft_edited', subject_id: 'd1', created_at: '2026-09-21T08:00:00Z' },
+    { kind: 'listing.draft_edited', subject_id: 'd1', created_at: '2026-09-21T15:00:00Z' },
+    { kind: 'listing.published', subject_id: '4071', created_at: '2026-09-21T23:30:00Z' }, // 00:30 on the 22nd in London
+  ];
+  const m = activity.metricsFrom(rows, 'Europe/London');
+  assert.deepStrictEqual([m.active_days, m.draft_work, m.published], [2, 1, 1]);
+});

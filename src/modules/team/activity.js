@@ -7,6 +7,7 @@ const days = require('../analytics/analytics-days');
 // Every recorded kind, with the words the activity log shows.
 const KINDS = {
   'order.supplier_ordered': 'Placed the supplier order',
+  'order.supplier_updated': 'Updated the supplier order',
   'order.dispatched': 'Dispatched on eBay',
   'order.refunded': 'Refunded',
   'order.cancelled': 'Cancelled',
@@ -18,18 +19,27 @@ const KINDS = {
   'order.unarchived': 'Unarchived',
   'order.note': 'Added a note',
   'listing.drafted': 'Drafted a listing',
+  'listing.draft_edited': 'Worked on a draft',
   'listing.draft_deleted': 'Deleted a draft',
   'listing.published': 'Published a listing',
   'listing.edited': 'Edited a live listing',
   'listing.relisted': 'Relisted',
   'listing.ended': 'Ended a listing',
+  'listing.checked': 'Ran a deeper check',
+  'account.store_category_added': 'Added a Shop category',
+  'account.source_account_saved': 'Saved a supplier account',
+  'session.login': 'Logged in',
 };
+
+// Logins are recorded (when someone started) but aren't work in themselves.
+const isWork = (kind) => !String(kind).startsWith('session.');
 
 // An order-timeline event (order_events.kind) as an activity kind; null for
 // events that aren't someone's work (eBay's own, or pushed from eBay).
 function kindForOrderEvent(eventKind) {
   const k = String(eventKind || '');
   if (k === 'sourcing.ordered') return 'order.supplier_ordered';
+  if (k === 'sourcing.updated') return 'order.supplier_updated';
   if (k === 'ebay.dispatched_by_liston') return 'order.dispatched';
   if (k === 'ebay.refunded_by_liston') return 'order.refunded';
   if (k === 'ebay.cancelled_by_liston' || k === 'ebay.cancel_approved_by_liston') return 'order.cancelled';
@@ -46,7 +56,9 @@ function kindForOrderEvent(eventKind) {
 // The figures a member is judged (and paid) on. `distinct`: the same order
 // line or listing counts once however many times it was touched in the
 // range — re-saving a supplier order number is not a second order.
+// `active_days` is worked out apart: the owner's days with any work.
 const METRICS = [
+  { key: 'active_days', label: 'Days worked', kinds: [], distinct: true },
   { key: 'supplier_orders', label: 'Supplier orders placed', kinds: ['order.supplier_ordered'], distinct: true },
   { key: 'dispatched', label: 'Orders dispatched', kinds: ['order.dispatched'], distinct: true },
   { key: 'cases', label: 'Refunds, cancellations & cases', kinds: ['order.refunded', 'order.cancelled', 'order.cancel_declined', 'order.return_handled', 'order.inquiry_handled', 'order.dispute_handled'], distinct: false },
@@ -55,15 +67,21 @@ const METRICS = [
   { key: 'relisted', label: 'Listings relisted', kinds: ['listing.relisted'], distinct: true },
   { key: 'ended', label: 'Listings ended', kinds: ['listing.ended'], distinct: true },
   { key: 'drafted', label: 'Drafts created', kinds: ['listing.drafted'], distinct: false },
+  { key: 'draft_work', label: 'Drafts worked on', kinds: ['listing.draft_edited'], distinct: true },
 ];
 
 /**
- * The figures for a set of activity rows ({ kind, subject_id, subject_part }):
- * { supplier_orders: 12, dispatched: 30, … } by METRICS' rules.
+ * The figures for a set of activity rows ({ kind, subject_id, subject_part,
+ * created_at }): { active_days: 5, supplier_orders: 12, … } by METRICS'
+ * rules; days in `timeZone` (the owner's).
  */
-function metricsFrom(rows) {
+function metricsFrom(rows, timeZone = 'Europe/London') {
   const out = {};
   for (const m of METRICS) {
+    if (m.key === 'active_days') {
+      out[m.key] = new Set(rows.filter((r) => isWork(r.kind) && r.created_at).map((r) => days.dayOf(r.created_at, timeZone))).size;
+      continue;
+    }
     const own = rows.filter((r) => m.kinds.includes(r.kind));
     out[m.key] = m.distinct ? new Set(own.map((r) => `${r.subject_id}:${r.subject_part || ''}`)).size : own.length;
   }
@@ -151,4 +169,4 @@ function rangeWindow(range, { from, to, timeZone, now = new Date() } = {}) {
   };
 }
 
-module.exports = { KINDS, METRICS, RANGES, kindForOrderEvent, metricsFrom, rangeWindow };
+module.exports = { KINDS, METRICS, RANGES, isWork, kindForOrderEvent, metricsFrom, rangeWindow };

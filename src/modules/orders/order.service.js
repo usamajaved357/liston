@@ -359,7 +359,8 @@ async function saveSourcing(connectionId, userId, actorId, orderId, lineKey, inp
 
   let row = await orderRepository.upsertSourcing({ connectionId, orderId, lineItemId: lineKey, ...patch });
 
-  if (patch.source_order_no && patch.source_order_no !== existing?.source_order_no) {
+  const placedNow = Boolean(patch.source_order_no && patch.source_order_no !== existing?.source_order_no);
+  if (placedNow) {
     await orderRepository.addEvent({ connectionId, orderId, lineItemId: lineKey, kind: 'sourcing.ordered', detail: { sourceOrderNo: patch.source_order_no, sourceAccountId: row.source_account_id }, actorUserId: actorId });
   }
 
@@ -391,6 +392,17 @@ async function saveSourcing(connectionId, userId, actorId, orderId, lineKey, inp
         dispatch = { ok: false, reason: err.message, code: err.code || null };
       }
     }
+  }
+
+  // Other work on the supplier order (its status, cost, a tracking number
+  // not sent to eBay) goes on the timeline too, and so on the person's
+  // record — once per save, and not when placing or dispatching said it.
+  const changed = {};
+  if (patch.status && patch.status !== (existing?.status || 'to_order')) changed.status = { from: existing?.status || 'to_order', to: patch.status };
+  if (patch.cost_value !== undefined && Number(patch.cost_value) !== Number(existing?.cost_value ?? NaN)) changed.cost = { value: patch.cost_value, currency: patch.cost_currency };
+  if (tracking !== undefined && tracking !== (existing?.tracking_number || '')) changed.tracking = tracking || null;
+  if (Object.keys(changed).length && !placedNow && !dispatch?.ok) {
+    await orderRepository.addEvent({ connectionId, orderId, lineItemId: lineKey, kind: 'sourcing.updated', detail: changed, actorUserId: actorId });
   }
 
   const rows = await orderRepository.listSourcingForOrder(connectionId, orderId);

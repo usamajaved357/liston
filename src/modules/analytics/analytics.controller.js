@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const analyticsService = require('./analytics.service');
+const activityRepository = require('../team/activity.repository');
 const { RANGES } = require('./analytics-days');
 
 const rangeSchema = z.object({ range: z.enum(RANGES).default('30d') });
@@ -67,6 +68,7 @@ async function checkListing(req, res, next) {
     const { itemId } = parse(itemSchema, req.params);
     const { competitor } = parse(checkSchema, req.body || {});
     const result = await analyticsService.checkListing(req.params.id, req.ownerId, itemId, { competitor });
+    await activityRepository.record({ actorUserId: req.userId, connectionId: req.params.id, kind: 'listing.checked', subjectType: 'listing', subjectId: String(itemId), detail: { competitor: Boolean(competitor) } });
     res.status(200).json(result.data);
   } catch (err) {
     next(err);

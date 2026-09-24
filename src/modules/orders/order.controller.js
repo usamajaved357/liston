@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const activityRepository = require('../team/activity.repository');
 const orderService = require('./order.service');
 
 const moneySchema = z.object({ value: z.union([z.number(), z.string()]), currency: z.string().min(3).max(3) }).nullable();
@@ -179,7 +180,9 @@ async function createSourceAccount(req, res, next) {
   try {
     const parsed = accountSchema.safeParse(req.body || {});
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid account' });
-    res.status(201).json({ account: await orderService.createSourceAccount(req.ownerId, parsed.data) });
+    const account = await orderService.createSourceAccount(req.ownerId, parsed.data);
+    await activityRepository.record({ actorUserId: req.userId, ownerUserId: req.ownerId, kind: 'account.source_account_saved', subjectType: 'account', subjectId: account.id, title: account.label || account.email || null, detail: { created: true } });
+    res.status(201).json({ account });
   } catch (err) {
     next(err);
   }
@@ -189,7 +192,9 @@ async function updateSourceAccount(req, res, next) {
   try {
     const parsed = accountSchema.partial().extend({ archived: z.boolean().optional() }).safeParse(req.body || {});
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid account' });
-    res.status(200).json({ account: await orderService.updateSourceAccount(req.ownerId, req.params.accountId, parsed.data) });
+    const account = await orderService.updateSourceAccount(req.ownerId, req.params.accountId, parsed.data);
+    await activityRepository.record({ actorUserId: req.userId, ownerUserId: req.ownerId, kind: 'account.source_account_saved', subjectType: 'account', subjectId: req.params.accountId, title: account?.label || account?.email || null, detail: { changed: Object.keys(parsed.data) } });
+    res.status(200).json({ account });
   } catch (err) {
     next(err);
   }

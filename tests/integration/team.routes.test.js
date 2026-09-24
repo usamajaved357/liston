@@ -266,7 +266,7 @@ test("a member's work is on their page: figures for the range, per account, and 
   assert.deepStrictEqual(feed.data.items.map((i) => i.kind), ['order.note', 'order.dispatched']);
   assert.ok(feed.data.next, 'more to load');
   const rest = await request('GET', `/api/team/members/${memberId}/activity?range=7d&before=${feed.data.next}`, undefined, ownerToken);
-  assert.strictEqual(rest.data.items.length, 3);
+  assert.deepStrictEqual(rest.data.items.map((i) => i.kind).sort(), ['order.supplier_ordered', 'order.supplier_ordered', 'order.supplier_ordered', 'session.login'], 'the rest, and the login that started the sitting');
   const only = await request('GET', `/api/team/members/${memberId}/activity?range=7d&kind=supplier_orders`, undefined, ownerToken);
   assert.deepStrictEqual([only.data.items.length, only.data.items[0].label], [3, 'Placed the supplier order'], 'the log lists every save');
 
@@ -321,4 +321,37 @@ test('team activity can be rebuilt from an account\'s order timeline (a copy fro
   assert.strictEqual(await rebuildOrderActivity(pool, [connectionId]), 3, 'run again: replaced, not doubled');
   const { data } = await request('GET', `/api/team/members/${memberId}/overview?range=today`, undefined, ownerToken);
   assert.deepStrictEqual([data.totals.supplier_orders, data.totals.dispatched, data.totals.cases], [1, 1, 1]);
+});
+
+test('everything a member does lands on their record: logins, draft work (once a sitting), supplier-order updates', async () => {
+  const { ownerToken, memberId, memberEmail, connectionId } = await createOwnerWithMemberAndConnection();
+  await request('PUT', `/api/team/members/${memberId}/permissions`, { permissions: [{ connectionId: null, feature: 'listings', allowed: true }, { connectionId: null, feature: 'orders', allowed: true }] }, ownerToken);
+
+  // A login, recorded as the start of a sitting (not as work).
+  const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
+  const memberToken = login.data.token;
+
+  // Three saves on one draft in a sitting: one "worked on a draft".
+  const { rows } = await pool.query(
+    `INSERT INTO listings (connection_id, status, generated_data) VALUES ($1, 'pending_review', $2) RETURNING id`,
+    [connectionId, { title: 'Garden lamp', description: 'Bright.', price: { value: '9.99', currency: 'GBP' }, quantity: 3, imageUrls: [] }]
+  );
+  for (const title of ['Garden lamp solar', 'Garden lamp solar LED', 'Garden lamp solar LED UK']) {
+    const saved = await request('PATCH', `/api/listings/${rows[0].id}`, { title }, memberToken);
+    assert.strictEqual(saved.status, 200, JSON.stringify(saved.data));
+  }
+
+  // A supplier order marked delivered: an update, not a second order.
+  const orderService = require('../../src/modules/orders/order.service');
+  await orderService.saveSourcing(connectionId, null, memberId, '66-1', 'L1', { sourceOrderNo: 'AE-1' });
+  await orderService.saveSourcing(connectionId, null, memberId, '66-1', 'L1', { status: 'delivered' });
+
+  await new Promise((r) => setTimeout(r, 100)); // draft work is recorded as each response finishes
+  const { data } = await request('GET', `/api/team/members/${memberId}/overview?range=today`, undefined, ownerToken);
+  assert.deepStrictEqual([data.totals.draft_work, data.totals.supplier_orders, data.totals.active_days], [1, 1, 1]);
+  const feed = await request('GET', `/api/team/members/${memberId}/activity?range=today`, undefined, ownerToken);
+  const kinds = feed.data.items.map((i) => i.kind).sort();
+  assert.deepStrictEqual(kinds, ['listing.draft_edited', 'order.supplier_ordered', 'order.supplier_updated', 'session.login', 'session.login'], 'the setup\'s login and this one');
+  assert.deepStrictEqual(feed.data.items.find((i) => i.kind === 'order.supplier_updated').detail.status, { from: 'ordered', to: 'delivered' });
+  assert.strictEqual(data.actions, 3, 'a login is recorded, but it is not work');
 });
