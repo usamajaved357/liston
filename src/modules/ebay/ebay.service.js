@@ -441,9 +441,31 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
   };
 }
 
+// Right after its items are built, eBay sometimes answers a publish with
+// "Seller Inventory Service can not publish the data. Product not found."
+// — its inventory hasn't caught up with the items yet — and the same
+// publish goes through a few seconds later. One more try, after a pause.
+let productNotFoundDelayMs = 4000;
+const isProductNotFound = (err) => /product not found/i.test(err?.message || '');
+
+async function publishWhenReady(publishCall) {
+  try {
+    return await publishCall();
+  } catch (err) {
+    if (!isProductNotFound(err)) throw err;
+    logger.warn('eBay had not caught up with the new items. Publishing again', { error: err.message });
+    if (productNotFoundDelayMs) await new Promise((resolve) => setTimeout(resolve, productNotFoundDelayMs));
+    return publishCall();
+  }
+}
+
+function setProductNotFoundDelay(ms) {
+  productNotFoundDelayMs = ms;
+}
+
 async function publishDraft(credentials, offerId, marketplaceId) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayClient.publishOffer(accessToken, offerId, marketplaceId);
+  const result = await publishWhenReady(() => ebayClient.publishOffer(accessToken, offerId, marketplaceId));
   return {
     externalProductId: result.listingId,
     status: 'published',
@@ -454,7 +476,7 @@ async function publishDraft(credentials, offerId, marketplaceId) {
 
 async function publishGroup(credentials, groupKey, marketplaceId) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayClient.publishOfferByInventoryItemGroup(accessToken, groupKey, marketplaceId || 'EBAY_GB');
+  const result = await publishWhenReady(() => ebayClient.publishOfferByInventoryItemGroup(accessToken, groupKey, marketplaceId || 'EBAY_GB'));
   return {
     externalProductId: result.listingId,
     status: 'published',
@@ -2232,6 +2254,7 @@ module.exports = {
   getMerchantLocations,
   publishDraft,
   publishGroup,
+  setProductNotFoundDelay,
   withdrawDraft,
   listActiveListings,
   countActiveListings,

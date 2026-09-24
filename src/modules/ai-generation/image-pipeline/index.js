@@ -162,4 +162,51 @@ async function buildVariantImage({ sourceImageUrl, accessToken, marketplaceId })
   }
 }
 
-module.exports = { buildGalleryImages, buildVariantImage };
+/** The draft's photos (gallery and variations) that aren't on eBay yet. */
+function unhostedImages(draft) {
+  const all = [...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])];
+  return [...new Set(all.filter((url) => url && !eps.isEbayHosted(url)))];
+}
+
+/**
+ * Puts every photo of a draft on eBay's picture service before it's sent.
+ *
+ * eBay refuses a listing whose photos mix its own hosting with anyone
+ * else's ("A mixture of Self Hosted and EPS pictures are not allowed"), and
+ * a draft gets supplier-hosted photos whenever an upload failed while it was
+ * built. Each one is uploaded again here; one that still won't go is left
+ * out (a variation that loses its only photo takes the main photo) and said
+ * so. `ok` is false when no main photo could be hosted at all.
+ *
+ * @returns { draft, changed, dropped: string[], ok }
+ */
+async function hostDraftImages(draft, { accessToken, marketplaceId }) {
+  const pending = unhostedImages(draft);
+  if (!pending.length) return { draft, changed: false, dropped: [], ok: true };
+
+  const hosted = new Map();
+  const dropped = [];
+  await Promise.all(
+    pending.map(async (url) => {
+      try {
+        hosted.set(url, await eps.hostUrl(accessToken, url, { marketplaceId }));
+      } catch (err) {
+        logger.warn('Photo could not be put on eBay. Left out of the listing', { sourceUrl: url, error: err.message });
+        dropped.push(url);
+      }
+    })
+  );
+
+  const swap = (urls) => [...new Set((urls || []).map((url) => hosted.get(url) || url).filter((url) => !dropped.includes(url)))];
+  const imageUrls = swap(draft.imageUrls);
+  const next = { ...draft, imageUrls };
+  if (Array.isArray(draft.variants)) {
+    next.variants = draft.variants.map((variant) => {
+      const own = swap(variant.imageUrls);
+      return { ...variant, imageUrls: own.length ? own : imageUrls.slice(0, 1) };
+    });
+  }
+  return { draft: next, changed: true, dropped, ok: imageUrls.length > 0 };
+}
+
+module.exports = { buildGalleryImages, buildVariantImage, unhostedImages, hostDraftImages };

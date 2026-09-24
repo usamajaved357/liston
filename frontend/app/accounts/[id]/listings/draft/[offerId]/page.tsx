@@ -640,6 +640,7 @@ function VariationsTable({
   priceOverrides,
   quantityOverrides,
   imageOverrides,
+  imageAxis,
   onRemoveRow,
   onRestoreRow,
   onRemoveAxisValue,
@@ -699,13 +700,14 @@ function VariationsTable({
   priceOverrides: Record<number, string>;
   quantityOverrides: Record<number, string>;
   imageOverrides: Record<number, string>;
+  imageAxis?: string;
   onRemoveRow: (index: number) => void;
   onRestoreRow: (index: number) => void;
   onRemoveAxisValue: (r: AxisRemoval) => void;
   onRestoreAxisValue: (r: AxisRemoval) => void;
   onPriceChange: (index: number, value: string) => void;
   onQuantityChange: (index: number, value: string) => void;
-  onImageChange: (index: number, url: string) => void;
+  onImageChange: (indexes: number[], url: string) => void;
   onUploadImage: (index: number, file: File) => void;
   onApplyAll: (field: "price" | "quantity", value: string) => void;
   disabled: boolean;
@@ -736,6 +738,27 @@ function VariationsTable({
     removedIndexes.has(index) || Object.entries(variant.aspects).some(([axis, values]) => axisRemoved(axis, values[0]));
   const axes = specifications.map((s) => s.name);
   const remaining = variants.filter((v, i) => !isRowGone(v, i)).length;
+  // eBay shows one photo per option of one attribute (Colour, usually): on
+  // a Colour × Size listing, every size of Red shows Red's photo. So a photo
+  // picked on one row goes to every row with that option. Same rule as the
+  // server's (variant-photos.js).
+  const photoAxis =
+    imageAxis && axes.includes(imageAxis)
+      ? imageAxis
+      : axes.length <= 1
+        ? axes[0]
+        : axes.find((a) => /colou?r|pattern|style|design|print|flavou?r|scent|finish/i.test(a)) || axes[0];
+  const otherAxes = axes.filter((a) => a !== photoAxis);
+  const photoValue = (index: number) => (photoAxis ? variants[index]?.aspects[photoAxis]?.[0] : undefined);
+  const photoRows = (index: number) => {
+    const value = photoValue(index);
+    if (value === undefined || !otherAxes.length) return [index];
+    return variants.map((v, i) => (v.aspects[photoAxis!]?.[0] === value ? i : -1)).filter((i) => i >= 0);
+  };
+  const photoTitle = (index: number) =>
+    otherAxes.length && photoValue(index) !== undefined
+      ? `Photo for ${showValue(photoAxis!, photoValue(index)!)} · every ${otherAxes.map(showAxis).join(" and ")}`
+      : `Photo for ${axes.map((axis) => showValue(axis, variants[index].aspects[axis]?.[0] || "")).filter(Boolean).join(" · ") || `variation ${index + 1}`}`;
   const currency = variants[0]?.price.currency || "GBP";
   const cell = "px-2.5 py-1 align-middle";
   const numInput = "input input-sm !h-7 text-center text-[12.5px]";
@@ -1042,7 +1065,7 @@ function VariationsTable({
                       type="button"
                       disabled={disabled || gone}
                       onClick={() => setPickerFor(i)}
-                      title={disabled || gone ? undefined : "Change this variation's photo"}
+                      title={disabled || gone ? undefined : otherAxes.length && photoValue(i) !== undefined ? `Change the photo for every ${showValue(photoAxis!, photoValue(i)!)} variation` : "Change this variation's photo"}
                       className="group relative block h-9 w-9 rounded-lg disabled:cursor-default"
                     >
                       {image ? (
@@ -1179,11 +1202,11 @@ function VariationsTable({
       </div>
       {pickerFor !== null && variants[pickerFor] && (
         <ImagePickerDialog
-          title={`Photo for ${axes.map((axis) => showValue(axis, variants[pickerFor].aspects[axis]?.[0] || "")).filter(Boolean).join(" · ") || `variation ${pickerFor + 1}`}`}
+          title={photoTitle(pickerFor)}
           images={allImages}
           current={imageOverrides[pickerFor] ?? variants[pickerFor].imageUrls[0] ?? null}
           onPick={(url) => {
-            onImageChange(pickerFor, url);
+            onImageChange(photoRows(pickerFor), url);
             setPickerFor(null);
           }}
           onUpload={(file) => {
@@ -3044,6 +3067,7 @@ export default function DraftEditorPage() {
                   priceOverrides={priceOverrides}
                   quantityOverrides={quantityOverrides}
                   imageOverrides={imageOverrides}
+                  imageAxis={variation.variesBy.aspectsImageVariesBy?.[0]}
                   onRemoveRow={(i) => setRemovedRows((s) => new Set([...s, i]))}
                   onRestoreRow={(i) =>
                     setRemovedRows((s) => {
@@ -3056,7 +3080,7 @@ export default function DraftEditorPage() {
                   onRestoreAxisValue={(r) => setRemovedAxisValues((list) => list.filter((x) => !(x.axis === r.axis && x.value === r.value)))}
                   onPriceChange={(i, value) => setPriceOverrides((p) => ({ ...p, [i]: value }))}
                   onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
-                  onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
+                  onImageChange={(rows, url) => setImageOverrides((p) => ({ ...p, ...Object.fromEntries(rows.map((i) => [i, url])) }))}
                   onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
                   valueRenames={valueRenames}
                   axisRenames={axisRenames}

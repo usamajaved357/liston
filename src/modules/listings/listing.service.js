@@ -18,6 +18,8 @@ const textGenerator = require('../ai-generation/text-generator.service');
 const governor = require('../ebay/request-governor');
 const analyticsService = require('../analytics/analytics.service');
 const listingSort = require('./listing-sort');
+const { alignVariantPhotos } = require('./variant-photos');
+const imagePipeline = require('../ai-generation/image-pipeline');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -488,6 +490,9 @@ async function updateDraft(id, userId, patch) {
         ...(change.imageUrls !== undefined ? { imageUrls: change.imageUrls } : {}),
       };
     });
+    // A photo set on one row is its option's photo (every size of that colour).
+    const photoRows = Object.keys(patch.variants).filter((index) => patch.variants[index]?.imageUrls !== undefined);
+    if (photoRows.length) draft = alignVariantPhotos(draft, photoRows);
   }
 
   // Renames come first: removals and everything after refer to the new
@@ -842,6 +847,7 @@ async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex
   } else if (variantIndex !== undefined && Array.isArray(draft.variants)) {
     if (!draft.variants[variantIndex]) throw new ListingError('That variation no longer exists.', 400);
     draft.variants = draft.variants.map((variant, i) => (i === variantIndex ? { ...variant, imageUrls: [hostedUrl] } : variant));
+    Object.assign(draft, alignVariantPhotos(draft, [variantIndex]));
   } else {
     if ((draft.imageUrls || []).length >= 24) throw new ListingError('eBay allows at most 24 images per listing.', 400);
     draft.imageUrls = [...(draft.imageUrls || []), hostedUrl];
@@ -1282,13 +1288,15 @@ async function pageOfListings(credentials, { connectionId, status, search, sort,
 }
 
 async function publishLiveEdit(listing, userId) {
-  const draft = listing.generated_data || {};
+  let draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
   // An ended listing can't be revised (eBay refuses any change to it); it
   // is relisted instead, with the edit's fields, as a new item.
   let relist = Boolean(listing.source_data?.ended);
   const imageCheck = imageGates.checkDraftImages(draft);
   if (!imageCheck.ok) throw new ListingError(imageCheck.errors.join(' '), 400);
+  const photos = await readyPhotosForPublish(listing, draft, userId);
+  draft = photos.draft;
   if (relist) {
     const stock = isVariation ? draft.variants.reduce((sum, v) => sum + (Number(v.quantity) || 0), 0) : Number(draft.quantity) || 0;
     if (stock <= 0) throw new ListingError('Set the quantity above 0 before relisting: eBay won’t relist a listing with no stock.', 400);
@@ -1395,6 +1403,7 @@ async function publishLiveEdit(listing, userId) {
       return reviseViaInventory(credentials, guessed);
     }
   }
+  if (photos.warnings.length && revised) revised.warnings = [...photos.warnings, ...(revised.warnings || [])];
   resyncListings(listing.connection_id, userId);
   if (relist) return finishRelist(listing, draft, own, revised);
   // What changed, for the listing's before/after figures in Analytics. A
@@ -1585,7 +1594,7 @@ async function publishNow(listing, id, userId) {
     throw new ListingError(imageCheck.errors.join(' '), 400);
   }
 
-  const draft = listing.generated_data || {};
+  let draft = listing.generated_data || {};
   const marketplaceId = draft.marketplaceId;
 
   const gaps = draftGaps(draft);
@@ -1611,6 +1620,12 @@ async function publishNow(listing, id, userId) {
       );
     }
   }
+  // Every photo on eBay, and every row of an option with that option's
+  // photo. Drafts made before drafts went local already have their eBay
+  // objects, photos included.
+  const alreadyBuilt = Boolean(listing.platform_offer_id || listing.platform_group_key);
+  const photos = alreadyBuilt ? { draft, warnings: [] } : await readyPhotosForPublish(listing, draft, userId);
+  draft = photos.draft;
   // The item specifics eBay will actually accept: no variation attribute
   // repeated in the shared set, identifiers the product lacks marked "Does
   // Not Apply", and anything still required but empty named here rather
@@ -1735,7 +1750,7 @@ async function publishNow(listing, id, userId) {
 
     resyncListings(listing.connection_id, userId);
     const row = await listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
-    const warnings = [...skuWarnings, ...readied.warnings, ...tidied.warnings];
+    const warnings = [...photos.warnings, ...skuWarnings, ...readied.warnings, ...tidied.warnings];
     return warnings.length ? { ...row, warnings } : row;
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way
@@ -1786,9 +1801,45 @@ async function publishNow(listing, id, userId) {
       err.message = explainRejectedAxisValue(rejected, readied.unmatched);
       err.statusCode = 400;
     }
+    // Anything else eBay refused about the draft itself (a value it won't
+    // take, a field it wants) is the seller's to fix: a 400 with eBay's
+    // words, not a server error.
+    if (err.ebayStatus >= 400 && err.ebayStatus < 500 && err.statusCode >= 500) {
+      err.statusCode = 400;
+      err.message = String(err.message || '').replace(/^A user error has occurred\.\s*/i, '');
+    }
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
     throw err;
   }
+}
+
+// Before anything goes to eBay: every photo on eBay's own picture service
+// (eBay refuses a listing whose photos mix its hosting with a supplier's)
+// and every row of an option showing that option's photo. Saved on the
+// draft, so it happens once.
+async function readyPhotosForPublish(listing, draft, userId) {
+  let ready = alignVariantPhotos(draft);
+  const warnings = [];
+  if (imagePipeline.unhostedImages(ready).length) {
+    const hosting = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
+      const { accessToken } = await ebayService.ensureValidAccessToken(credentials);
+      return imagePipeline.hostDraftImages(ready, { accessToken, marketplaceId: ready.marketplaceId });
+    });
+    if (!hosting.ok) {
+      throw new ListingError("eBay couldn't take this listing's photos. Replace them with your own copies (Upload) and publish again.", 400);
+    }
+    ready = hosting.draft;
+    const n = hosting.dropped.length;
+    if (n) {
+      warnings.push(
+        n === 1
+          ? "1 photo couldn't be put on eBay and was left out. Add it again with Upload if you need it."
+          : `${n} photos couldn't be put on eBay and were left out. Add them again with Upload if you need them.`
+      );
+    }
+  }
+  if (ready !== draft) await listingRepository.updateGeneratedData(listing.id, ready);
+  return { draft: ready, warnings };
 }
 
 // eBay treats "Camo Brown", "camo brown" and "Camo  Brown" as the same

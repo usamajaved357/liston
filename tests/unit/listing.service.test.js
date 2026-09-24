@@ -758,9 +758,13 @@ test('publish uses the seller’s own SKU as-is, and numbers variations from it'
   mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => null);
   mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  // Each colour has its own photo, so eBay is told the photos follow Colour
+  // (the draft named no attribute), and that is kept on the draft.
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
   const draftMock = mock.method(ebayService, 'draftVariationListing', async (credentials, input) => {
     assert.strictEqual(input.groupKey, 'Liston-777');
     assert.deepStrictEqual(input.variants.map((v) => v.sku), ['Liston-777-1', 'Liston-777-2']);
+    assert.deepStrictEqual(input.variesBy.aspectsImageVariesBy, ['Colour']);
     return { groupKey: input.groupKey };
   });
   mock.method(ebayService, 'publishGroup', async () => ({ externalProductId: 'ebay-1' }));
@@ -769,6 +773,7 @@ test('publish uses the seller’s own SKU as-is, and numbers variations from it'
 
   await listingService.publish('listing-1', USER_ID);
   assert.strictEqual(draftMock.mock.calls.length, 1);
+  assert.deepStrictEqual(saved.mock.calls[0].arguments[1].variesBy.aspectsImageVariesBy, ['Colour']);
 });
 
 test('publish sends eBay-ready specifics: no axis in the shared set, identifiers marked Does Not Apply', async () => {
@@ -796,6 +801,7 @@ test('publish sends eBay-ready specifics: no axis in the shared set, identifiers
   ]);
   mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
   let sent;
   mock.method(ebayService, 'draftVariationListing', async (credentials, input) => {
     sent = input;
@@ -1622,6 +1628,7 @@ test('an ended variation listing another tool made through the Inventory API is 
   });
   mock.method(ebayService, 'removeListingFromMirror', () => {});
   mock.method(listingRepository, 'deleteById', async () => {});
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
 
   const result = await listingService.publish('edit-1', USER_ID);
   assert.strictEqual(lookup.mock.calls.length, 1);
@@ -1646,4 +1653,102 @@ test('eBay refusing a relist because the same item is already live says which li
     () => listingService.publish('edit-1', USER_ID),
     (err) => err.statusCode === 409 && /already live on this account as #800680929541/.test(err.message)
   );
+});
+
+// --- photos at publish ---------------------------------------------------
+
+const { EbayApiError } = require('../../src/modules/ebay/api/ebay.client');
+
+test('publish puts a supplier-hosted photo on eBay first, so eBay never sees a mixture, and keeps it on the draft', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      marketplaceId: 'EBAY_GB',
+      imageUrls: ['https://i.ebayimg.com/main.jpg', 'https://ae01.alicdn.com/kf/side.jpg', 'https://ae01.alicdn.com/kf/gone.jpg'],
+      categoryId: '11',
+      aspects: {},
+    })
+  );
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => null);
+  mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(ebayService, 'listListingsDetailed', async () => ({ items: [] }));
+  mock.method(ebayService, 'findLiveListingForSku', async () => ({ listingId: null }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async (credentials) => ({ accessToken: credentials.accessToken }));
+  mock.method(eps, 'hostUrl', async (token, url) => {
+    if (url.endsWith('gone.jpg')) throw new Error('Internal error to the application.');
+    return 'https://i.ebayimg.com/hosted-side.jpg';
+  });
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  let sentImages;
+  mock.method(ebayService, 'draftListing', async (credentials, input) => {
+    sentImages = input.imageUrls;
+    return { offerId: 'offer-1' };
+  });
+  mock.method(ebayService, 'publishDraft', async () => ({ externalProductId: 'ebay-1' }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  const result = await listingService.publish('listing-1', USER_ID);
+
+  assert.deepStrictEqual(sentImages, ['https://i.ebayimg.com/main.jpg', 'https://i.ebayimg.com/hosted-side.jpg']);
+  assert.deepStrictEqual(saved.mock.calls[0].arguments[1].imageUrls, sentImages);
+  assert.match(result.warnings[0], /1 photo couldn't be put on eBay and was left out/);
+});
+
+test('publish stops with a clear message when none of the photos can be put on eBay', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({ marketplaceId: 'EBAY_GB', imageUrls: ['https://ae01.alicdn.com/kf/a.jpg'], categoryId: '11', aspects: {} })
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async (credentials) => ({ accessToken: credentials.accessToken }));
+  mock.method(eps, 'hostUrl', async () => {
+    throw new Error('Internal error to the application.');
+  });
+  const built = mock.method(ebayService, 'draftListing', async () => ({ offerId: 'x' }));
+
+  await assert.rejects(listingService.publish('listing-1', USER_ID), (err) => err.statusCode === 400 && /couldn't take this listing's photos/.test(err.message));
+  assert.strictEqual(built.mock.calls.length, 0);
+});
+
+test('eBay refusing a value in the draft is a 400 in eBay’s words, not a server error', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({ marketplaceId: 'EBAY_GB', imageUrls: ['https://i.ebayimg.com/a.jpg'], categoryId: '11', aspects: { 'Fabric Weight': ['Light'] } })
+  );
+  mock.method(ebayTaxonomy, 'getEditorAspectSchema', async () => null);
+  mock.method(listingService, 'renderDraftDescription', async () => '<p>x</p>');
+  mock.method(listingRepository, 'findOtherWithSku', async () => null);
+  mock.method(ebayService, 'listListingsDetailed', async () => ({ items: [] }));
+  mock.method(ebayService, 'findLiveListingForSku', async () => ({ listingId: null }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(ebayService, 'draftListing', async () => {
+    const err = new EbayApiError('A user error has occurred. Fabric weight must be greater than 0. Enter up to 1 number after the decimal.', 502, [{ errorId: 25002 }]);
+    err.ebayStatus = 400;
+    throw err;
+  });
+  const status = mock.method(listingRepository, 'updateStatus', async (id, s, extra) => ({ id, status: s, ...extra }));
+
+  await assert.rejects(listingService.publish('listing-1', USER_ID), (err) => err.statusCode === 400 && /^Fabric weight must be greater than 0/.test(err.message));
+  assert.match(status.mock.calls.at(-1).arguments[2].errorMessage, /^Fabric weight/);
+});
+
+test('a photo picked on one row of a Colour × Size draft is saved on every size of that colour', async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({
+      imageUrls: ['https://i.ebayimg.com/main.jpg'],
+      variesBy: { aspects: {}, aspectsImageVariesBy: [], specifications: [{ name: 'Colour', values: ['Red', 'Blue'] }, { name: 'Size', values: ['S', 'M'] }] },
+      variants: [
+        { aspects: { Colour: ['Red'], Size: ['S'] }, imageUrls: ['https://i.ebayimg.com/main.jpg'] },
+        { aspects: { Colour: ['Red'], Size: ['M'] }, imageUrls: ['https://i.ebayimg.com/main.jpg'] },
+        { aspects: { Colour: ['Blue'], Size: ['S'] }, imageUrls: ['https://i.ebayimg.com/main.jpg'] },
+      ],
+    })
+  );
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  await listingService.updateDraft('listing-1', USER_ID, { variants: { 1: { imageUrls: ['https://i.ebayimg.com/red.jpg'] } } });
+
+  const draft = saved.mock.calls[0].arguments[1];
+  assert.deepStrictEqual(draft.variants.map((v) => v.imageUrls[0]), ['https://i.ebayimg.com/red.jpg', 'https://i.ebayimg.com/red.jpg', 'https://i.ebayimg.com/main.jpg']);
+  assert.deepStrictEqual(draft.variesBy.aspectsImageVariesBy, ['Colour']);
 });

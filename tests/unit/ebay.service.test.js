@@ -830,3 +830,28 @@ test('variationImageFor picks the photo of the option the buyer chose, loosely m
   assert.strictEqual(variationImageFor(summary, [{ name: 'Size', value: 'M' }]), 'https://i/main.jpg');
   assert.strictEqual(variationImageFor({ imageUrl: 'https://i/main.jpg', variationPictures: [] }, [{ name: 'Colour', value: 'Red' }]), 'https://i/main.jpg');
 });
+
+// --- publishing right after the items are built ---------------------------
+
+test('a publish eBay answers with "Product not found" is tried once more, and then goes live', async () => {
+  ebayService.setProductNotFoundDelay(0);
+  let calls = 0;
+  mock.method(ebayClient, 'publishOfferByInventoryItemGroup', async () => {
+    calls += 1;
+    if (calls === 1) throw new ebayClient.EbayApiError('Input error. Seller Inventory Service can not publish the data. Product not found. Please try again or contact customer support..', 502, []);
+    return { listingId: '800700000001' };
+  });
+
+  const result = await ebayService.publishGroup(freshCredentials(), 'Liston-group', 'EBAY_GB');
+  assert.strictEqual(calls, 2);
+  assert.strictEqual(result.externalProductId, '800700000001');
+});
+
+test('any other publish refusal is not retried', async () => {
+  ebayService.setProductNotFoundDelay(0);
+  const publish = mock.method(ebayClient, 'publishOffer', async () => {
+    throw new ebayClient.EbayApiError('A mixture of Self Hosted and EPS pictures are not allowed.', 502, []);
+  });
+  await assert.rejects(ebayService.publishDraft(freshCredentials(), 'offer-1', 'EBAY_GB'), /mixture/);
+  assert.strictEqual(publish.mock.calls.length, 1);
+});

@@ -104,6 +104,8 @@ async function request(accessToken, method, path, body, marketplaceId, { baseUrl
     const scopeMissing = res.status === 403 && (data.errors || []).some((e) => e.errorId === 1100 || /insufficient permissions|scope/i.test(`${e.message} ${e.longMessage}`));
     const err = new EbayApiError(describeErrors(data.errors, res.status), scopeMissing ? 403 : 502, data.errors);
     if (scopeMissing) err.code = 'EBAY_SCOPE_MISSING';
+    // eBay's own status: a 4xx is a refusal of what was sent, not an outage.
+    err.ebayStatus = res.status;
     throw err;
   }
   return data;

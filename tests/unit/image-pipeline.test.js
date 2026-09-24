@@ -7,6 +7,9 @@ const imageOps = require('../../src/modules/ai-generation/image-pipeline/image.o
 const gates = require('../../src/modules/ai-generation/image-pipeline/gates');
 const eps = require('../../src/modules/ai-generation/image-pipeline/eps');
 const slotPlan = require('../../src/modules/ai-generation/image-pipeline/slot-plan');
+const imagePipeline = require('../../src/modules/ai-generation/image-pipeline');
+
+eps.setRetryDelay(0);
 
 function makeImage(width, height, format = 'jpeg') {
   return sharp({ create: { width, height, channels: 3, background: '#3355ff' } })[format]().toBuffer();
@@ -145,6 +148,106 @@ test('uploadAll falls back to the source URL for an image eBay rejects', async (
 
   // A reachable original beats a hole in the gallery.
   assert.deepStrictEqual(urls, ['https://example.com/a.jpg']);
+});
+
+// eBay's picture service answers some uploads with "Internal error to the
+// application" and takes the same picture on the next try.
+function epsFailure(message = 'Internal error to the application.') {
+  return `<UploadSiteHostedPicturesResponse><Ack>Failure</Ack><Errors><LongMessage>${message}</LongMessage></Errors></UploadSiteHostedPicturesResponse>`;
+}
+
+test('upload tries again when eBay has an internal error, then a clean JPEG', async () => {
+  const answers = [epsFailure(), epsFailure(), epsResponse('https://i.ebayimg.com/00/s/third.jpg')];
+  const sent = [];
+  mock.method(global, 'fetch', async (url, options) => {
+    sent.push(options.body.toString('latin1'));
+    return { ok: true, status: 200, text: async () => answers.shift() };
+  });
+
+  const url = await eps.upload('token', await makeImage(600, 600, 'png'));
+  assert.strictEqual(url, 'https://i.ebayimg.com/00/s/third.jpg');
+  assert.strictEqual(sent.length, 3);
+  // The PNG goes as a PNG twice, then re-encoded as a JPEG.
+  assert.match(sent[0], /filename="image\.png"[\s\S]*Content-Type: image\/png/);
+  assert.match(sent[2], /filename="image\.jpg"[\s\S]*Content-Type: image\/jpeg/);
+});
+
+test('upload sends a WEBP as a JPEG, never mislabelled', async () => {
+  const sent = [];
+  mock.method(global, 'fetch', async (url, options) => {
+    sent.push(options.body.toString('latin1'));
+    return { ok: true, status: 200, text: async () => epsResponse('https://i.ebayimg.com/00/s/w.jpg') };
+  });
+
+  await eps.upload('token', await makeImage(600, 600, 'webp'));
+  assert.strictEqual(sent.length, 1);
+  assert.match(sent[0], /filename="image\.jpg"/);
+  assert.doesNotMatch(sent[0], /WEBP/);
+});
+
+test('upload gives up with eBay’s reason when every try fails', async () => {
+  const calls = mock.method(global, 'fetch', async () => ({ ok: true, status: 200, text: async () => epsFailure('Picture too large') }));
+  await assert.rejects(eps.upload('token', await makeImage(600, 600)), /Picture too large/);
+  assert.strictEqual(calls.mock.calls.length, 3);
+});
+
+test('isEbayHosted knows eBay picture URLs from supplier ones', () => {
+  assert.strictEqual(eps.isEbayHosted('https://i.ebayimg.com/00/s/MTYwMA==/z/abc/$_57.JPG'), true);
+  assert.strictEqual(eps.isEbayHosted('https://ae01.alicdn.com/kf/S8afe.jpg'), false);
+  assert.strictEqual(eps.isEbayHosted('https://ebayimg.com.evil.example/a.jpg'), false);
+  assert.strictEqual(eps.isEbayHosted('not a url'), false);
+});
+
+// --- publishing: every photo on eBay -----------------------------------------
+
+test('hostDraftImages puts supplier photos on eBay, in the gallery and on variations', async () => {
+  const image = await makeImage(600, 600);
+  let uploads = 0;
+  mock.method(global, 'fetch', async (url) => {
+    if (String(url).includes('alicdn')) return { ok: true, status: 200, arrayBuffer: async () => image };
+    uploads += 1;
+    return { ok: true, status: 200, text: async () => epsResponse('https://i.ebayimg.com/00/s/hosted.jpg') };
+  });
+  const draft = {
+    imageUrls: ['https://i.ebayimg.com/main.jpg', 'https://ae01.alicdn.com/kf/a.jpg'],
+    variants: [{ imageUrls: ['https://ae01.alicdn.com/kf/a.jpg'] }, { imageUrls: ['https://i.ebayimg.com/b.jpg'] }],
+  };
+
+  assert.deepStrictEqual(imagePipeline.unhostedImages(draft), ['https://ae01.alicdn.com/kf/a.jpg']);
+  const result = await imagePipeline.hostDraftImages(draft, { accessToken: 't', marketplaceId: 'EBAY_GB' });
+
+  assert.strictEqual(uploads, 1, 'the same photo is uploaded once');
+  assert.deepStrictEqual(result.draft.imageUrls, ['https://i.ebayimg.com/main.jpg', 'https://i.ebayimg.com/00/s/hosted.jpg']);
+  assert.deepStrictEqual(result.draft.variants[0].imageUrls, ['https://i.ebayimg.com/00/s/hosted.jpg']);
+  assert.deepStrictEqual([result.ok, result.changed, result.dropped], [true, true, []]);
+});
+
+test('a photo eBay still won’t take is left out, and a variation that loses it shows the main photo', async () => {
+  mock.method(global, 'fetch', async () => ({ ok: false, status: 403 }));
+  const draft = {
+    imageUrls: ['https://i.ebayimg.com/main.jpg', 'https://ae01.alicdn.com/kf/gone.jpg'],
+    variants: [{ imageUrls: ['https://ae01.alicdn.com/kf/gone.jpg'] }],
+  };
+
+  const result = await imagePipeline.hostDraftImages(draft, { accessToken: 't' });
+  assert.deepStrictEqual(result.draft.imageUrls, ['https://i.ebayimg.com/main.jpg']);
+  assert.deepStrictEqual(result.draft.variants[0].imageUrls, ['https://i.ebayimg.com/main.jpg']);
+  assert.deepStrictEqual(result.dropped, ['https://ae01.alicdn.com/kf/gone.jpg']);
+  assert.strictEqual(result.ok, true);
+
+  const nothingLeft = await imagePipeline.hostDraftImages({ imageUrls: ['https://ae01.alicdn.com/kf/gone.jpg'] }, { accessToken: 't' });
+  assert.strictEqual(nothingLeft.ok, false);
+});
+
+test('a draft already all on eBay is returned untouched', async () => {
+  const fetchMock = mock.method(global, 'fetch', async () => {
+    throw new Error('nothing to upload');
+  });
+  const draft = { imageUrls: ['https://i.ebayimg.com/a.jpg'] };
+  const result = await imagePipeline.hostDraftImages(draft, { accessToken: 't' });
+  assert.strictEqual(result.draft, draft);
+  assert.strictEqual(result.changed, false);
+  assert.strictEqual(fetchMock.mock.calls.length, 0);
 });
 
 test('siteIdFor maps marketplaces to Trading API site ids', () => {
