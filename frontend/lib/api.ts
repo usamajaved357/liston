@@ -54,27 +54,69 @@ async function request<T>(
   return data as T;
 }
 
+// One account's (or one market's) money for a range, in its own currency:
+// sales (what buyers paid), eBay and ad fees, refunds, earnings (what reached
+// the seller, eBay's figure), supplier cost and profit (earnings − cost).
+export interface MoneySummary {
+  currency: string;
+  sales: number;
+  fees: number;
+  adFees: number;
+  refunds: number;
+  earnings: number;
+  sourceCost: number;
+  profit: number;
+  settledSales: number;
+  // Orders placed (cancelled ones apart).
+  orders: number;
+  cancelled: number;
+  // Orders eBay has fee/earnings figures for; the newest are still settling.
+  withEarnings: number;
+  awaitingEbay: number;
+  // Orders with a supplier cost entered.
+  withCost: number;
+  // Profit as a share of the sales it covers.
+  margin: number | null;
+}
+
+export interface OverviewAccount {
+  id: string;
+  label: string;
+  status: string;
+  marketplace: Marketplace | null;
+  ok: boolean;
+  error?: string;
+  activeListings: number;
+  money: MoneySummary | null;
+  financesPending: boolean;
+  // False: linked before Liston asked eBay for its finances permission, so
+  // fees and earnings need the account reconnected.
+  financesAccess: boolean;
+}
+
+export interface OverviewMarket {
+  id: string;
+  label: string;
+  name: string;
+  flag: string;
+  currency: string;
+  accounts: number;
+  activeListings: number;
+  money: MoneySummary;
+}
+
 export interface Overview {
   range: string;
   accounts: { total: number; active: number; needsAttention: number };
   activeListings: number;
-  earnings: { amount: number; currency: string };
-  // Sales in other currencies (accounts on other eBay sites), never added in.
-  otherEarnings?: { amount: number; currency: string }[];
   orders: number;
   drafts: number;
   publishedViaListon: number;
-  perAccount: {
-    id: string;
-    label: string;
-    status: string;
-    ok: boolean;
-    error?: string;
-    activeListings: number;
-    earnings: { amount: number; currency: string } | null;
-    otherEarnings?: { amount: number; currency: string }[];
-    orders: number;
-  }[];
+  // Busiest first; each in its own currency.
+  markets: OverviewMarket[];
+  // Some accounts' fees and earnings were still being read from eBay.
+  financesPending: boolean;
+  perAccount: OverviewAccount[];
 }
 
 export interface EbayUsage {

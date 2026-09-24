@@ -287,6 +287,51 @@ async function sellerOf(connection, ownerId, ebayService) {
 }
 
 /**
+ * A reconnect: eBay's fresh sign-in replaces the old one, keeping everything
+ * else the connection holds (marketplace, signing key…). One eBay account
+ * connected on several sites is one sign-in, so every site of it gets the
+ * new one — one reconnect covers UK and Australia. Signing in as a
+ * different eBay seller than the connection's is refused (403) rather than
+ * pointing the account at someone else's store.
+ *
+ * @returns { connection, siblings: [ids of the other sites updated] }
+ */
+async function reconnectEbayAccount(ownerId, connectionId, tokens, ebayService) {
+  const connection = await getConnectionWithDecryptedCredentials(connectionId, ownerId);
+  const known = { userId: connection.settings?.ebay?.userId || null, username: connection.settings?.ebay?.username || null };
+  const seller = await ebayService.identifySeller(tokens).catch(() => null);
+  const fresh = seller?.credentialsChanged ? seller.credentials : tokens;
+  const same = (a, b) => (a.userId && b.userId ? a.userId === b.userId : Boolean(a.username && b.username && a.username === b.username));
+  if (seller && (known.userId || known.username) && (seller.userId || seller.username) && !same(known, seller)) {
+    throw new ConnectionError(
+      `That's a different eBay account (${seller.username || seller.userId}) from the one ${connection.label} is linked to. Sign in to eBay as ${known.username || 'that account'} and reconnect again.`,
+      403
+    );
+  }
+
+  const { marketplaceId: ownSite, ...stored } = connection.credentials || {};
+  void ownSite;
+  await updateConnectionCredentials(connection.id, { ...stored, ...fresh });
+  const identity = seller && (seller.userId || seller.username) ? seller : known;
+  if (seller && !known.userId && !known.username) {
+    await connectionRepository.mergeEbaySettings(connection.id, {
+      ...(seller.userId ? { userId: seller.userId } : {}),
+      ...(seller.username ? { username: seller.username } : {}),
+    });
+    ebayService.forgetMarketScopes();
+  }
+
+  const siblings = identity.userId || identity.username ? await connectionRepository.findOwnerEbayAccount(ownerId, identity, connection.id) : [];
+  for (const sibling of siblings) {
+    const current = await getConnectionWithDecryptedCredentials(sibling.id, ownerId);
+    const { marketplaceId: site, ...kept } = current.credentials || {};
+    void site;
+    await updateConnectionCredentials(sibling.id, { ...kept, ...fresh });
+  }
+  return { connection, siblings: siblings.map((c) => c.id) };
+}
+
+/**
  * The eBay sites a connection's account sells on, as eBay's copies show
  * them, each with the connection that holds it (this one, a sibling, or
  * none yet): [{ marketplace, listings, orders, connectionId }].
@@ -350,6 +395,7 @@ async function addEbaySite(ownerId, connectionId, marketplaceId, ebayService) {
 }
 
 module.exports = {
+  reconnectEbayAccount,
   ebaySites,
   addEbaySite,
   listPlatforms,

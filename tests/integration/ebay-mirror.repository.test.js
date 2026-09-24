@@ -67,3 +67,24 @@ test('item summaries are shared by item id', async () => {
   assert.strictEqual(loaded.get(itemId).summary.imageUrl, 'https://i.ebayimg.com/x.jpg');
   await pool.query('DELETE FROM ebay_item_summaries WHERE item_id = $1', [itemId]);
 });
+
+test('order money rows are stored per order, updated in place, and read back with supplier costs', async () => {
+  const connectionId = await fixtureConnection();
+  const orderRepository = require('../../src/modules/orders/order.repository');
+  const row = { orderId: 'O-1', currency: 'GBP', gross: 5.69, fees: 2.33, adFees: 1.28, refunds: 0, earnings: 3.36, fundsStatus: 'Pending', saleDate: '2026-09-24T18:49:21.717Z' };
+  await mirror.upsertOrderFinances(connectionId, [row, { ...row, orderId: 'O-2', earnings: 1 }]);
+  await mirror.upsertOrderFinances(connectionId, [{ ...row, refunds: 3.36, earnings: 0, fundsStatus: 'Available' }]);
+  const money = await mirror.loadOrderFinances(connectionId, ['O-1', 'O-2', 'O-3']);
+  assert.deepStrictEqual(money.get('O-1'), { currency: 'GBP', gross: 5.69, fees: 2.33, adFees: 1.28, refunds: 3.36, earnings: 0, fundsStatus: 'Available' });
+  assert.strictEqual(money.get('O-2').earnings, 1);
+  assert.strictEqual(money.has('O-3'), false);
+
+  // Two supplier orders for one eBay order add up; a line with no cost doesn't count.
+  await pool.query(
+    `INSERT INTO order_sourcing (connection_id, order_id, line_item_id, cost_value, cost_currency) VALUES ($1, 'O-1', 'L1', 1.5, 'GBP'), ($1, 'O-1', 'L2', 2.25, 'GBP'), ($1, 'O-2', 'L3', NULL, NULL)`,
+    [connectionId]
+  );
+  const costs = await orderRepository.sourceCostsByOrder(connectionId, ['O-1', 'O-2']);
+  assert.deepStrictEqual(costs.get('O-1'), { value: 3.75, currency: 'GBP' });
+  assert.strictEqual(costs.has('O-2'), false);
+});

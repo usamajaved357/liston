@@ -68,6 +68,47 @@ async function deleteOrders(connectionId) {
   await query(`DELETE FROM ebay_orders WHERE connection_id = $1`, [connectionId]);
 }
 
+// ---- order money (Finances API), one row per order -------------------------
+
+async function upsertOrderFinances(connectionId, rows) {
+  const BATCH = 200;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const values = [];
+    const params = [connectionId];
+    for (const r of batch) {
+      params.push(r.orderId, r.currency, r.gross, r.fees, r.adFees, r.refunds, r.earnings, r.fundsStatus, r.saleDate);
+      const n = params.length;
+      values.push(`($1, ${Array.from({ length: 9 }, (_, k) => `$${n - 8 + k}`).join(', ')}, now())`);
+    }
+    await query(
+      `INSERT INTO ebay_order_finances (connection_id, order_id, currency, gross, fees, ad_fees, refunds, earnings, funds_status, sale_date, synced_at)
+       VALUES ${values.join(', ')}
+       ON CONFLICT (connection_id, order_id) DO UPDATE SET
+         currency = EXCLUDED.currency, gross = EXCLUDED.gross, fees = EXCLUDED.fees, ad_fees = EXCLUDED.ad_fees,
+         refunds = EXCLUDED.refunds, earnings = EXCLUDED.earnings, funds_status = EXCLUDED.funds_status,
+         sale_date = EXCLUDED.sale_date, synced_at = now()`,
+      params
+    );
+  }
+}
+
+/** orderId -> { currency, gross, fees, adFees, refunds, earnings, fundsStatus } */
+async function loadOrderFinances(connectionId, orderIds) {
+  if (!orderIds.length) return new Map();
+  const result = await query(
+    `SELECT order_id, currency, gross, fees, ad_fees, refunds, earnings, funds_status FROM ebay_order_finances
+     WHERE connection_id = $1 AND order_id = ANY($2)`,
+    [connectionId, orderIds]
+  );
+  return new Map(
+    result.rows.map((r) => [
+      r.order_id,
+      { currency: r.currency, gross: Number(r.gross), fees: Number(r.fees), adFees: Number(r.ad_fees), refunds: Number(r.refunds), earnings: Number(r.earnings), fundsStatus: r.funds_status },
+    ])
+  );
+}
+
 // ---- item summaries --------------------------------------------------------
 
 async function loadItemSummaries(itemIds) {
@@ -93,4 +134,6 @@ module.exports = {
   deleteOrders,
   loadItemSummaries,
   saveItemSummary,
+  upsertOrderFinances,
+  loadOrderFinances,
 };

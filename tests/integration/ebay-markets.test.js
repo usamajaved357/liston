@@ -153,3 +153,43 @@ test('another site of a linked account is split off as its own connection, with 
   await assert.rejects(connectionService.addEbaySite(ownerId, uk.id, 'EBAY_AU', ebay), (err) => err.statusCode === 409);
   await assert.rejects(connectionService.addEbaySite(ownerId, uk.id, 'EBAY_GB', ebay), (err) => err.statusCode === 400);
 });
+
+test('one reconnect gives every market of that eBay account the new sign-in, and refuses a different seller', async () => {
+  const ownerId = await owner();
+  const ebay = fakeEbay();
+  const seller = `re-${crypto.randomUUID()}`;
+  const uk = await connectionService.connectEbayAccount(ownerId, { label: 'Minsu', marketplaceId: 'EBAY_GB', tokens: tokens(seller) }, ebay);
+  const au = await connectionService.connectEbayAccount(ownerId, { label: 'Minsu', marketplaceId: 'EBAY_AU', tokens: tokens(seller) }, ebay);
+  const other = await connectionService.connectEbayAccount(ownerId, { label: 'Other', marketplaceId: 'EBAY_GB', tokens: tokens(`x-${crypto.randomUUID()}`) }, ebay);
+  // The UK market also carries its own signing key, which a reconnect keeps.
+  const ukCreds = (await connectionService.getConnectionWithDecryptedCredentials(uk.connection.id, ownerId)).credentials;
+  await connectionService.updateConnectionCredentials(uk.connection.id, { ...ukCreds, signingKey: { jwe: 'kept' } });
+
+  const done = await connectionService.reconnectEbayAccount(ownerId, uk.connection.id, { ...tokens(seller, 'new-token'), scopes: ['sell.finances'] }, ebay);
+  assert.deepStrictEqual(done.siblings, [au.connection.id]);
+  const read = async (id) => (await connectionService.getConnectionWithDecryptedCredentials(id, ownerId)).credentials;
+  assert.strictEqual((await read(uk.connection.id)).accessToken, 'new-token');
+  assert.strictEqual((await read(uk.connection.id)).signingKey.jwe, 'kept');
+  assert.strictEqual((await read(au.connection.id)).accessToken, 'new-token');
+  assert.deepStrictEqual((await read(au.connection.id)).scopes, ['sell.finances']);
+  assert.strictEqual((await read(other.connection.id)).accessToken, 'a', 'another seller is untouched');
+
+  // Signed in to eBay as someone else: nothing changes.
+  await assert.rejects(
+    connectionService.reconnectEbayAccount(ownerId, uk.connection.id, tokens(`stranger-${crypto.randomUUID()}`, 'wrong'), ebay),
+    (err) => err.statusCode === 403 && /different eBay account/.test(err.message)
+  );
+  assert.strictEqual((await read(uk.connection.id)).accessToken, 'new-token');
+  assert.strictEqual((await read(au.connection.id)).accessToken, 'new-token');
+});
+
+test('a reconnect of an account linked before sellers were recorded records the seller and finds its other markets', async () => {
+  const ownerId = await owner();
+  const seller = `legacy-${crypto.randomUUID()}`;
+  const old = await connectionService.createConnection(ownerId, { platformKey: 'ebay', label: 'Legacy', credentials: tokens(seller) });
+  await connectionRepository.mergeEbaySettings(old.id, { marketplaceId: 'EBAY_GB' });
+  const done = await connectionService.reconnectEbayAccount(ownerId, old.id, tokens(seller, 'fresh'), fakeEbay());
+  assert.deepStrictEqual(done.siblings, []);
+  const stored = await connectionRepository.findByIdForUser(old.id, ownerId);
+  assert.strictEqual(stored.settings.ebay.userId, seller);
+});

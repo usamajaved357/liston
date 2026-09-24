@@ -37,15 +37,13 @@ async function oauthCallback(req, res) {
   try {
     const tokens = await ebayOauth.exchangeCodeForToken(String(code));
     if (statePayload.connectionId) {
-      // A reconnect: the fresh token replaces the old one on the same
-      // connection; everything else it holds (marketplace, signing key…)
-      // is kept.
-      const existing = await connectionService.getConnectionWithDecryptedCredentials(statePayload.connectionId, statePayload.userId);
-      await connectionService.updateConnectionCredentials(existing.id, { ...(existing.credentials || {}), ...tokens });
-      ebayPush.subscribeInBackground(existing.id, statePayload.userId);
-      const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') ? statePayload.returnTo : `/accounts/${existing.id}`;
+      // A reconnect: the fresh sign-in replaces the old one, on every site
+      // of that eBay account at once; everything else is kept.
+      const { connection, siblings } = await connectionService.reconnectEbayAccount(statePayload.userId, statePayload.connectionId, tokens, ebayService);
+      for (const id of [connection.id, ...siblings]) ebayPush.subscribeInBackground(id, statePayload.userId);
+      const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') ? statePayload.returnTo : `/accounts/${connection.id}`;
       const joiner = returnTo.includes('?') ? '&' : '?';
-      return res.redirect(`${config.frontendUrl}${returnTo}${joiner}reconnected=1`);
+      return res.redirect(`${config.frontendUrl}${returnTo}${joiner}reconnected=1${siblings.length ? `&sites=${siblings.length + 1}` : ''}`);
     }
     // Linked for the site the seller picked. The same eBay account on
     // another site is a connection of its own; on a site it already has,
@@ -60,7 +58,7 @@ async function oauthCallback(req, res) {
     return res.redirect(`${config.frontendUrl}/dashboard?connected=ebay`);
   } catch (err) {
     logger.error('eBay OAuth callback failed', { message: err.message });
-    const reason = err.statusCode === 403 ? 'plan_limit' : 'connection_failed';
+    const reason = err.statusCode === 403 ? (statePayload.connectionId ? 'different_account' : 'plan_limit') : 'connection_failed';
     return res.redirect(`${failureUrl}${encodeURIComponent(reason)}`);
   }
 }

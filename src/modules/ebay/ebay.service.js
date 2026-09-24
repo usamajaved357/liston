@@ -2301,6 +2301,76 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
 // lifetime total.
 // `timeZone`: whose day "today" and the months are (the owner's dashboard
 // passes the viewer's); the account's site's otherwise.
+/** The account's own orders placed in a range (its site only), from the mirror. */
+async function ordersInRange(credentials, { connectionId, range, from, to, timeZone = null, push = false }) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const [start, end] = resolveRangeWindow(range === 'all_time' ? '90d' : range, from, to, timeZone || analyticsDays.timeZoneFor(credentials.marketplaceId || 'EBAY_GB'));
+  return ordersWithin(await getOrdersLast90Cached(String(connectionId), accessToken, siteId, push), start, end);
+}
+
+// Each order's money as eBay's Finances API has it (fees, ad fees, what
+// reached the seller, refunds), kept in ebay_order_finances for the
+// Overview. Read in bulk: every transaction in a date window, 1,000 to a
+// call. The first read covers eBay's 90 days; after that the window since
+// the last read (with a few days' overlap for fees and refunds eBay books
+// late), at most every FINANCES_FRESH_MS. An order whose sale fell before
+// the window but got a refund or an ad fee inside it is read on its own.
+const FINANCES_FRESH_MS = 30 * 60 * 1000;
+const FINANCES_OVERLAP_MS = 3 * DAY_MS;
+const FINANCES_MAX_PAGES = 20;
+const FINANCES_LATE_ORDERS = 50;
+const financesRunning = new Map();
+
+function syncOrderFinances(credentials, connectionId, { force = false } = {}) {
+  const id = String(connectionId);
+  if (financesRunning.has(id)) return financesRunning.get(id);
+  const run = syncOrderFinancesNow(credentials, id, { force }).finally(() => financesRunning.delete(id));
+  financesRunning.set(id, run);
+  return run;
+}
+
+async function syncOrderFinancesNow(credentials, id, { force }) {
+  if (!ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES)) return { skipped: 'scope', credentialsChanged: false, credentials };
+  const state = await mirror.loadSnapshot(id, 'finances').catch(() => null);
+  const now = new Date();
+  if (!force && state && now - state.syncedAt < FINANCES_FRESH_MS) return { skipped: 'fresh', credentialsChanged: false, credentials };
+
+  const { accessToken, credentials: refreshed, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || marketplaces.DEFAULT_ID;
+  const signed = await ensureSigningKey({ ...refreshed, marketplaceId }, accessToken);
+  const lastSyncAt = state?.meta?.lastSyncAt ? new Date(state.meta.lastSyncAt) : null;
+  const from = lastSyncAt ? new Date(lastSyncAt.getTime() - FINANCES_OVERLAP_MS) : ordersHorizon(now);
+
+  // The first page says how many there are; the rest are read together
+  // (each takes eBay a few seconds).
+  const window = { from: from.toISOString(), to: now.toISOString() };
+  const first = await ebayFinances.getTransactions(accessToken, { ...window, offset: 0 }, marketplaceId, signed.key);
+  const pageSize = (first?.transactions || []).length;
+  const pages = pageSize ? Math.min(FINANCES_MAX_PAGES, Math.ceil(Number(first?.total || 0) / pageSize)) : 1;
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) =>
+      ebayFinances.getTransactions(accessToken, { ...window, offset: (i + 1) * pageSize }, marketplaceId, signed.key)
+    )
+  );
+  const transactions = [first, ...rest].flatMap((res) => res?.transactions || []);
+  const rows = ebayFinances.orderFinancesFrom(transactions);
+  // After the first read: a refund or a late ad fee on an order sold before
+  // the window brings that order's whole history, so its row stays complete.
+  // (On the first read those orders are older than the 90 days shown.)
+  if (lastSyncAt) {
+    const found = new Set(rows.map((r) => r.orderId));
+    const late = [...new Set(transactions.map(ebayFinances.orderIdOf).filter((orderId) => orderId && !found.has(orderId)))].slice(0, FINANCES_LATE_ORDERS);
+    const histories = await mapWithConcurrency(late, 4, (orderId) =>
+      ebayFinances.getOrderTransactions(accessToken, orderId, marketplaceId, signed.key).catch(() => null)
+    );
+    for (const res of histories) rows.push(...ebayFinances.orderFinancesFrom(res?.transactions || []));
+  }
+  await mirror.upsertOrderFinances(id, rows);
+  await mirror.saveSnapshot(id, 'finances', { count: rows.length }, { lastSyncAt: now.toISOString() });
+  const changed = credentialsChanged || signed.credentialsChanged;
+  return { orders: rows.length, credentialsChanged: changed, credentials: signed.credentialsChanged ? signed.credentials : refreshed };
+}
+
 async function getEarningsSummary(credentials, { connectionId, range, from, to, timeZone = null, push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
 
@@ -2428,6 +2498,9 @@ module.exports = {
   awaitingDelivery,
   forgetMarketScopes,
   accountSites,
+  ordersInRange,
+  syncOrderFinances,
+  classifyOrderStatus,
   setDeliveryCheckInterval,
   getEarningsSummary,
   resolveRangeWindow,

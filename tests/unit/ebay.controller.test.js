@@ -122,3 +122,31 @@ test('oauthCallback links the chosen site, and sends a site already linked back 
     mock.restoreAll();
   }
 });
+
+test('oauthCallback reconnects every market of the account and says how many; a different seller is sent back with a reason', async () => {
+  const { mock } = require('node:test');
+  const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
+  const connectionService = require('../../src/modules/connections/connection.service');
+  const ebayPush = require('../../src/modules/ebay/ebay-push');
+  mock.method(ebayOauth, 'verifyState', () => ({ userId: 'owner-1', label: 'Minsu', connectionId: 'conn-uk', returnTo: '/connections' }));
+  mock.method(ebayOauth, 'exchangeCodeForToken', async () => ({ accessToken: 'a' }));
+  const subscribed = mock.method(ebayPush, 'subscribeInBackground', () => {});
+  const reconnect = mock.method(connectionService, 'reconnectEbayAccount', async () => ({ connection: { id: 'conn-uk' }, siblings: ['conn-au'] }));
+  const redirectRes = () => ({ location: null, redirect(url) { this.location = url; } });
+  try {
+    const res = redirectRes();
+    await ebayController.oauthCallback({ query: { code: 'c', state: 's' } }, res);
+    assert.strictEqual(reconnect.mock.calls[0].arguments[1], 'conn-uk');
+    assert.match(res.location, /\/connections\?reconnected=1&sites=2$/);
+    assert.deepStrictEqual(subscribed.mock.calls.map((c) => c.arguments[0]), ['conn-uk', 'conn-au']);
+
+    reconnect.mock.mockImplementation(async () => {
+      throw Object.assign(new Error('different'), { statusCode: 403 });
+    });
+    const wrong = redirectRes();
+    await ebayController.oauthCallback({ query: { code: 'c', state: 's' } }, wrong);
+    assert.match(wrong.location, /ebayError=different_account$/);
+  } finally {
+    mock.restoreAll();
+  }
+});

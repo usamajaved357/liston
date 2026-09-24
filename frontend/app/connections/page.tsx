@@ -67,11 +67,25 @@ function ConnectionBanner() {
   const searchParams = useSearchParams();
   const connected = searchParams.get("connected");
   const ebayError = searchParams.get("ebayError");
+  const reconnected = searchParams.get("reconnected") === "1";
+  // How many sites of that eBay account the new sign-in went to.
+  const sites = Number(searchParams.get("sites") || 1);
 
   if (connected === "ebay") {
     return (
       <div className="mb-4">
         <Alert variant="success">Your eBay account is connected.</Alert>
+      </div>
+    );
+  }
+  if (reconnected) {
+    return (
+      <div className="mb-4">
+        <Alert variant="success">
+          {sites > 1
+            ? `Reconnected. This eBay account is linked on ${sites} markets, and ${sites === 2 ? "both" : `all ${sites}`} have the new sign-in.`
+            : "Reconnected. The account has eBay's latest permissions."}
+        </Alert>
       </div>
     );
   }
