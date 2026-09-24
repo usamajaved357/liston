@@ -7,9 +7,26 @@ const logger = require('./logger');
 const resend =
   config.resend.apiKey && config.env !== 'test' ? new Resend(config.resend.apiKey) : null;
 
-async function sendEmail({ to, subject, html }) {
+// Addresses no real person has: example.com/.org/.net (the test fixtures'
+// domain) and the reserved .test, .example, .invalid and .localhost names.
+// A test run that reached a real mail key once emailed the admin inbox an
+// access request for every fixture owner — hundreds, and the day's quota.
+const RESERVED_DOMAIN = /@(?:[^@\s]+\.)?(?:example\.(?:com|org|net)|[^@\s]+\.(?:test|example|invalid|localhost))$/i;
+function isReservedAddress(email) {
+  return RESERVED_DOMAIN.test(String(email || '').trim());
+}
+
+/**
+ * Sends one email. `about`: the address the email concerns when it isn't
+ * the recipient (an access request is sent to an admin about an applicant);
+ * nothing is sent to or about a reserved address.
+ */
+async function sendEmail({ to, subject, html, about = null }) {
   if (!resend) {
     return { sent: false };
+  }
+  if (isReservedAddress(to) || (about && isReservedAddress(about))) {
+    return { sent: false, reason: 'reserved address' };
   }
   try {
     // The SDK reports failures in the response rather than throwing —
@@ -122,6 +139,7 @@ function sendAccessRequestEmail(to, { applicantEmail, applicantName, note, appro
     </tr></table>`;
   return sendEmail({
     to,
+    about: applicantEmail,
     subject: `Access request from ${applicantName || applicantEmail}`,
     html: layout({
       preheader: `${applicantName || applicantEmail} has asked for access to Liston.`,
@@ -153,4 +171,4 @@ function sendAccessDecisionEmail(to, { approved, loginLink }) {
   });
 }
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendAccessRequestEmail, sendAccessDecisionEmail };
+module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendAccessRequestEmail, sendAccessDecisionEmail, isReservedAddress };

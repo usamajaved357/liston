@@ -41,7 +41,10 @@ function credentialsEncryptionKey() {
 }
 
 const config = {
-  env: process.env.NODE_ENV || 'development',
+  // Node's test runner marks every file it runs (NODE_TEST_CONTEXT), so a
+  // test file started on its own (`node --test tests/…`, no NODE_ENV=test)
+  // is still a test: no real emails, no shared caches.
+  env: process.env.NODE_TEST_CONTEXT ? 'test' : process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3000', 10),
 
   databaseUrl: required('DATABASE_URL'),
