@@ -986,9 +986,11 @@ async function splitVariant(id, userId, index) {
   });
 }
 
+// Returns the removed row (for the team activity record).
 async function removeDraft(id, userId) {
-  await loadEditableDraft(id, userId);
-  return listingRepository.deleteDraft(id, userId);
+  const draft = await loadEditableDraft(id, userId);
+  await listingRepository.deleteDraft(id, userId);
+  return draft;
 }
 
 // The account's own live listings, for the "You may also like" cards. Read
@@ -1419,7 +1421,7 @@ async function publishLiveEdit(listing, userId) {
   // eBay applies what it can and warns about the rest (a description it
   // refused to replace, for one). The seller must hear that, or they trust
   // a preview that never went live.
-  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, warnings: revised.warnings || [] };
+  return { ...listing, status: 'published', external_product_id: listing.edit_of_item_id, deleted: true, changedFields: changed?.fields || [], warnings: revised.warnings || [] };
 }
 
 // After a relist: eBay's new item number (from the Trading relist, or the

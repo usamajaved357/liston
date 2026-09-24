@@ -1,4 +1,6 @@
 const { query } = require('../../db/client');
+const activity = require('../team/activity');
+const activityRepository = require('../team/activity.repository');
 
 // --- supplier buying accounts ---------------------------------------------
 
@@ -115,6 +117,19 @@ async function addEvent({ connectionId, orderId, lineItemId = null, kind, detail
     `INSERT INTO order_events (connection_id, order_id, line_item_id, kind, detail, actor_user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
     [connectionId, orderId, lineItemId, kind, JSON.stringify(detail), actorUserId]
   );
+  // Someone's work on an order also goes on their team activity record.
+  const activityKind = actorUserId ? activity.kindForOrderEvent(kind) : null;
+  if (activityKind) {
+    await activityRepository.record({
+      actorUserId,
+      connectionId,
+      kind: activityKind,
+      subjectType: 'order',
+      subjectId: orderId,
+      subjectPart: lineItemId,
+      detail: { ...detail, event: kind },
+    });
+  }
   return result.rows[0];
 }
 

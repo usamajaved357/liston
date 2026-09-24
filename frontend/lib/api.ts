@@ -193,7 +193,49 @@ export interface TeamMember {
   email: string;
   name: string | null;
   created_at: string;
+  last_login_at?: string | null;
+  deactivated_at?: string | null; // removed: no login, history kept
+  lastActiveAt?: string | null; // their last recorded action
+  today?: TeamMetrics; // what they've done today (Team page cards)
   permissions: TeamMemberPermission[];
+}
+
+// A member's figures (backend team/activity.js METRICS). An order line or
+// listing counts once per range, however often it was touched.
+export type TeamMetricKey = "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted";
+export type TeamMetrics = Record<TeamMetricKey, number>;
+export type TeamRange = "today" | "yesterday" | "7d" | "30d" | "this_month" | "last_month" | "custom";
+
+export interface MemberOverview {
+  member: TeamMember & { lastActiveAt: string | null };
+  recordingSince: string | null; // when Liston started noting who did what (listing work before it isn't attributed)
+  range: { key: TeamRange; from: string; to: string; days: number; timeZone: string; previous: { from: string; to: string } };
+  metrics: { key: TeamMetricKey; label: string }[];
+  totals: TeamMetrics;
+  previous: TeamMetrics;
+  actions: number; // every recorded action in the range
+  series: ({ day: string } & TeamMetrics)[];
+  previousSeries: ({ day: string } & TeamMetrics)[]; // the period before, lined up day by day
+  accounts: ({ connectionId: string | null; label: string; actions: number } & TeamMetrics)[];
+  permissions: TeamMemberPermission[];
+  connections: { id: string; label: string }[];
+  knownFeatures: string[];
+}
+
+export interface MemberActivityItem {
+  id: string;
+  kind: string;
+  label: string;
+  subjectType: "order" | "listing" | "draft";
+  subjectId: string;
+  subjectPart: string | null;
+  title: string | null;
+  amount: number | null;
+  currency: string | null;
+  detail: Record<string, unknown>;
+  connectionId: string | null;
+  connectionLabel: string | null;
+  at: string;
 }
 
 export interface PermissionUpdate {
@@ -1514,6 +1556,29 @@ export const api = {
     }),
 
   removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
+  restoreTeamMember: (id: string) => request<void>(`/api/team/members/${id}/restore`, { method: "POST" }),
+
+  // A member's page: figures for a range (the owner's days), per day and account.
+  getMemberOverview: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
+    const q = new URLSearchParams({ range });
+    if (range === "custom" && custom) {
+      q.set("from", custom.from);
+      q.set("to", custom.to);
+    }
+    return request<MemberOverview>(`/api/team/members/${id}/overview?${q.toString()}`);
+  },
+
+  // Their activity log, newest first; `before` pages on, `kind` is an activity kind or a figure's key.
+  getMemberActivity: (
+    id: string,
+    params: { range: TeamRange; from?: string; to?: string; kind?: string; connectionId?: string; before?: string; limit?: number }
+  ) => {
+    const q = new URLSearchParams({ range: params.range });
+    for (const [k, v] of Object.entries(params)) if (k !== "range" && v !== undefined && v !== "") q.set(k, String(v));
+    return request<{ items: MemberActivityItem[]; next: string | null; range: { key: TeamRange; from: string; to: string; timeZone: string } }>(
+      `/api/team/members/${id}/activity?${q.toString()}`
+    );
+  },
   setTeamMemberPassword: (id: string, password: string) =>
     request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 

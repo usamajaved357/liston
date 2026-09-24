@@ -24,6 +24,10 @@ async function requireAuth(req, res, next) {
     if (!user) {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
+    // A member the owner removed is signed out at their next request.
+    if (user.deactivated_at) {
+      return res.status(401).json({ error: 'This login has been removed by the account owner.' });
+    }
     req.userId = user.id;
     req.userEmail = user.email;
     req.role = user.role;

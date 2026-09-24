@@ -66,6 +66,38 @@ async function removeMember(req, res, next) {
   }
 }
 
+async function restoreMember(req, res, next) {
+  try {
+    await teamService.restoreMember(req.params.id, req.ownerId);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+}
+
+const rangeQuery = (q) => ({ range: typeof q.range === 'string' ? q.range : undefined, from: q.from, to: q.to });
+
+async function getMemberOverview(req, res, next) {
+  try {
+    res.status(200).json(await teamService.getMemberOverview(req.ownerId, req.params.id, rangeQuery(req.query)));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getMemberActivity(req, res, next) {
+  try {
+    const q = req.query;
+    const connectionId = typeof q.connectionId === 'string' && /^[0-9a-f-]{36}$/i.test(q.connectionId) ? q.connectionId : undefined;
+    const before = typeof q.before === 'string' && q.before.length < 80 ? q.before : undefined;
+    res.status(200).json(
+      await teamService.getMemberActivity(req.ownerId, req.params.id, { ...rangeQuery(q), kind: typeof q.kind === 'string' ? q.kind : undefined, connectionId, before, limit: q.limit })
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getMemberPermissions(req, res, next) {
   try {
     const permissions = await teamService.getMemberPermissions(req.params.id, req.ownerId);
@@ -88,4 +120,4 @@ async function updateMemberPermissions(req, res, next) {
   }
 }
 
-module.exports = { listMembers, addMember, removeMember, setMemberPassword, getMemberPermissions, updateMemberPermissions };
+module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, getMemberPermissions, updateMemberPermissions, getMemberOverview, getMemberActivity };

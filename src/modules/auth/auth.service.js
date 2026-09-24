@@ -166,7 +166,7 @@ async function resetPassword(rawToken, newPassword) {
 
 async function login({ email, password }) {
   const result = await query(
-    'SELECT id, email, password_hash, plan_id, role FROM users WHERE email = $1',
+    'SELECT id, email, password_hash, plan_id, role, deactivated_at FROM users WHERE email = $1',
     [email]
   );
   if (result.rows.length === 0) {
@@ -178,6 +178,11 @@ async function login({ email, password }) {
   if (!passwordMatches) {
     throw new AuthError('Invalid email or password', 401);
   }
+  // A removed team member keeps their history, not their login.
+  if (user.deactivated_at) {
+    throw new AuthError('This login has been removed by the account owner.', 403);
+  }
+  await query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
 
   const token = issueToken(user);
   return {
