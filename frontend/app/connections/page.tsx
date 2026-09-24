@@ -14,6 +14,7 @@ import { Alert } from "@/components/Alert";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { AddConnectionPanel } from "@/components/AddConnectionPanel";
 import { formatShortDate } from "@/lib/format";
+import { ebayConnectError } from "@/lib/connect-errors";
 
 const STATUS: Record<Connection["status"], { label: string; dot: string; chip: string }> = {
   active: { label: "Connected", dot: "bg-emerald-500", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
@@ -100,7 +101,7 @@ function ConnectionBanner() {
   if (ebayError) {
     return (
       <div className="mb-4">
-        <Alert>Couldn&apos;t connect your eBay account ({ebayError}). Try again below.</Alert>
+        <Alert>{ebayConnectError(ebayError, "Try again below.")}</Alert>
       </div>
     );
   }

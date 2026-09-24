@@ -32,6 +32,8 @@ async function listPlatforms() {
   return platforms.map((p) => ({
     ...p,
     connectable: p.status === 'active' && PLATFORMS_WITH_CONNECT_FLOW.includes(p.key),
+    // The sites an eBay account can be linked for, one connection each.
+    ...(p.key === 'ebay' ? { marketplaces: marketplaces.MARKETPLACES.map((m) => marketplaces.summary(m.id)) } : {}),
   }));
 }
 
@@ -88,8 +90,8 @@ async function assertUnderPlanLimit(userId) {
   }
 }
 
-async function createConnection(userId, { platformKey, label, credentials }) {
-  await assertUnderPlanLimit(userId);
+async function createConnection(userId, { platformKey, label, credentials, settings = null }, { planChecked = false } = {}) {
+  if (!planChecked) await assertUnderPlanLimit(userId);
 
   const platform = await connectionRepository.findPlatformByKey(platformKey);
   if (!platform) {
@@ -99,12 +101,84 @@ async function createConnection(userId, { platformKey, label, credentials }) {
     throw new ConnectionError(`${platform.name} isn't available yet`, 400);
   }
 
-  return connectionRepository.create({
+  const created = await connectionRepository.create({
     userId,
     destinationPlatformId: platform.id,
     label,
     credentials: encryptCredentials(credentials),
   });
+  if (!settings) return created;
+  await connectionRepository.updateSettings(created.id, settings);
+  return { ...created, settings };
+}
+
+// The owner's eBay connections that don't know which seller they are yet
+// (linked before sellers were recorded), told now, so a second site of the
+// same account is recognised. Best effort: one that can't be asked is left.
+async function recordSellers(ownerId, ebayService) {
+  const unknown = (await connectionRepository.findAllByUser(ownerId)).filter(
+    (c) => c.platform_key === 'ebay' && !c.settings?.ebay?.userId && !c.settings?.ebay?.username
+  );
+  await Promise.all(
+    unknown.map((c) =>
+      withDecryptedCredentials(c.id, ownerId, async (credentials) => {
+        const seller = await ebayService.identifySeller(credentials);
+        await connectionRepository.mergeEbaySettings(c.id, {
+          ...(seller.userId ? { userId: seller.userId } : {}),
+          ...(seller.username ? { username: seller.username } : {}),
+        });
+        return seller;
+      }).catch(() => null)
+    )
+  );
+}
+
+/**
+ * A signed-in eBay account, linked for one eBay site. The same account can
+ * be linked once per site (UK and Australia are two connections of one
+ * seller); linking it again for a site it already has refreshes that
+ * connection's sign-in instead of adding a copy. Extra sites of an account
+ * already linked don't take a plan slot. `marketplaceId` is the site the
+ * seller picked; without one, the account's home site is detected.
+ *
+ * @returns { connection, existing } — existing is true when that site of
+ *          that account was already connected.
+ */
+async function connectEbayAccount(ownerId, { label, marketplaceId, tokens }, ebayService) {
+  const seller = await ebayService.identifySeller(tokens).catch(() => null);
+  const credentials = seller?.credentialsChanged ? seller.credentials : tokens;
+  const market = marketplaces.byId(marketplaceId)?.id || (await ebayService.detectMarketplace(credentials).catch(() => null))?.marketplaceId || marketplaces.DEFAULT_ID;
+
+  const known = seller && (seller.userId || seller.username);
+  if (known) await recordSellers(ownerId, ebayService);
+  const siblings = known ? await connectionRepository.findOwnerEbayAccount(ownerId, seller) : [];
+  const sameSite = siblings.find((c) => c.settings?.ebay?.marketplaceId === market);
+  if (sameSite) {
+    const current = await getConnectionWithDecryptedCredentials(sameSite.id, ownerId);
+    await updateConnectionCredentials(sameSite.id, { ...(current.credentials || {}), ...credentials });
+    return { connection: sameSite, existing: true };
+  }
+  if (!siblings.length) await assertUnderPlanLimit(ownerId);
+
+  const connection = await createConnection(
+    ownerId,
+    {
+      platformKey: 'ebay',
+      label,
+      credentials,
+      settings: {
+        ebay: {
+          marketplaceId: market,
+          ...(seller?.userId ? { userId: seller.userId } : {}),
+          ...(seller?.username ? { username: seller.username } : {}),
+        },
+        pricing: { currency: marketplaces.currencyFor(market) },
+      },
+    },
+    { planChecked: true }
+  );
+  ebayService.forgetMarketScopes();
+  return { connection, existing: false };
 }
 
 // Safe to return to the frontend — no credentials, decrypted or otherwise.
@@ -172,6 +246,7 @@ async function ensureMarketplace(id, userId, ebayService) {
     },
     pricing: { ...(connection.settings?.pricing || {}), currency: connection.settings?.pricing?.currency || marketplaces.currencyFor(detected.marketplaceId) },
   });
+  ebayService.forgetMarketScopes?.();
   return { ...connection, settings, credentials: { ...connection.credentials, marketplaceId: detected.marketplaceId } };
 }
 
@@ -204,6 +279,7 @@ module.exports = {
   updateConnectionCredentials,
   updateConnectionSettings,
   ensureMarketplace,
+  connectEbayAccount,
   withDecryptedCredentials,
   deleteConnection,
   ConnectionError,

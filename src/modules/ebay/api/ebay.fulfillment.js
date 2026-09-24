@@ -208,6 +208,7 @@ function toListOrder(o) {
     return {
       itemId: li.legacyItemId ? String(li.legacyItemId) : null,
       title: li.title || null,
+      marketplaceId: li.listingMarketplaceId || li.purchaseMarketplaceId || null,
       quantityPurchased: quantity,
       price: cost ? { amount: Math.round((cost.amount / quantity) * 100) / 100, currency: cost.currency } : null,
       variation: (li.variationAspects || []).map((v) => ({ name: v.name, value: v.value })),

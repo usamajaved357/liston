@@ -12,6 +12,9 @@ const accountEvents = require('../ebay/account-events');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
+  // The eBay site to link the account for; one account can be linked once
+  // per site. Left out, the account's home site is detected.
+  marketplaceId: z.enum(marketplaces.MARKETPLACES.map((m) => m.id)).optional(),
 });
 
 // Re-runs eBay's consent for an EXISTING connection, so the new token (with
@@ -39,9 +42,15 @@ async function startEbayAuth(req, res, next) {
 
     // Fail fast on plan limit before sending the user through eBay's consent
     // screen — nothing worse than a "connection added" surprise 403 after.
-    await connectionService.assertUnderPlanLimit(req.ownerId);
+    // Another site of an account already linked takes no slot, and which
+    // account it is only shows after sign-in, so an owner with eBay accounts
+    // goes through and the callback decides.
+    await connectionService.assertUnderPlanLimit(req.ownerId).catch(async (err) => {
+      const { connections } = await connectionService.listConnections(req.ownerId);
+      if (!connections.some((c) => c.platform_key === 'ebay')) throw err;
+    });
 
-    const state = ebayOauth.signState({ userId: req.ownerId, label: parsed.data.label });
+    const state = ebayOauth.signState({ userId: req.ownerId, label: parsed.data.label, marketplaceId: parsed.data.marketplaceId });
     const authorizeUrl = ebayOauth.buildAuthorizeUrl(state);
     res.status(200).json({ authorizeUrl });
   } catch (err) {
@@ -93,6 +102,8 @@ async function getOne(req, res, next) {
 async function remove(req, res, next) {
   try {
     await connectionService.deleteConnection(req.params.id, req.ownerId);
+    // Another site of the same account takes back what this one held.
+    ebayService.forgetMarketScopes();
     res.status(204).send();
   } catch (err) {
     next(err);

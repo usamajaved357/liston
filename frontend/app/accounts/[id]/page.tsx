@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, EarningsRange, Money, OrderCounts, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
@@ -335,6 +335,9 @@ export default function AccountOverviewPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
   const { sync, setSyncedAt, reloadKey } = useAccountRefresh(connection?.id);
+  // Back from linking a site this account already had: its sign-in was
+  // refreshed instead of a copy being added.
+  const alreadyConnected = useSearchParams().get("alreadyConnected") === "1";
 
   if (loading) return <ShellSkeleton />;
 
@@ -362,11 +365,19 @@ export default function AccountOverviewPage() {
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Overview</h1>
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            {connection.label} · {connection.platform_name}
+            {connection.label} · {connection.marketplace?.name ?? connection.platform_name}
           </p>
         </div>
       }
     >
+      {alreadyConnected && (
+        <div className="mb-4">
+          <Alert variant="success">
+            This eBay account was already connected for {connection.marketplace?.name ?? "this site"}, so no copy was added; its sign-in has been
+            refreshed. To add another site, connect it again and pick that site.
+          </Alert>
+        </div>
+      )}
       {isOwner ? (
         <OwnerDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
       ) : connection.permissions?.orders ? (

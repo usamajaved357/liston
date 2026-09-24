@@ -89,3 +89,36 @@ test('accountDeletionNotification always acknowledges with 200', () => {
   assert.strictEqual(res.statusCode, 200);
   assert.deepStrictEqual(res.body, {});
 });
+
+test('oauthCallback links the chosen site, and sends a site already linked back to that account', async () => {
+  const { mock } = require('node:test');
+  const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
+  const connectionService = require('../../src/modules/connections/connection.service');
+  const ebayPush = require('../../src/modules/ebay/ebay-push');
+  mock.method(ebayOauth, 'verifyState', () => ({ userId: 'owner-1', label: 'Walexo', marketplaceId: 'EBAY_AU' }));
+  mock.method(ebayOauth, 'exchangeCodeForToken', async () => ({ accessToken: 'a', refreshToken: 'r' }));
+  mock.method(ebayPush, 'subscribeInBackground', () => {});
+  let existing = false;
+  const linked = mock.method(connectionService, 'connectEbayAccount', async () => ({ connection: { id: 'conn-au' }, existing }));
+  const redirectRes = () => ({ location: null, redirect(url) { this.location = url; } });
+  try {
+    const first = redirectRes();
+    await ebayController.oauthCallback({ query: { code: 'c', state: 's' } }, first);
+    assert.deepStrictEqual(linked.mock.calls[0].arguments.slice(0, 2), ['owner-1', { label: 'Walexo', marketplaceId: 'EBAY_AU', tokens: { accessToken: 'a', refreshToken: 'r' } }]);
+    assert.match(first.location, /\/dashboard\?connected=ebay$/);
+
+    existing = true;
+    const again = redirectRes();
+    await ebayController.oauthCallback({ query: { code: 'c', state: 's' } }, again);
+    assert.match(again.location, /\/accounts\/conn-au\?alreadyConnected=1$/);
+
+    linked.mock.mockImplementation(async () => {
+      throw Object.assign(new Error('plan'), { statusCode: 403 });
+    });
+    const full = redirectRes();
+    await ebayController.oauthCallback({ query: { code: 'c', state: 's' } }, full);
+    assert.match(full.location, /ebayError=plan_limit$/);
+  } finally {
+    mock.restoreAll();
+  }
+});

@@ -7,6 +7,7 @@ const ebaySignature = require('./api/ebay.signature');
 const ebayPostOrder = require('./api/ebay.postorder');
 const ebayBrowse = require('./api/ebay.browse');
 const ebayTaxonomy = require('./api/ebay.taxonomy');
+const ebayIdentity = require('./api/ebay.identity');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
@@ -16,6 +17,8 @@ const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
 const analyticsDays = require('../analytics/analytics-days');
 const orderSort = require('../orders/order-sort');
+const marketScope = require('./market-scope');
+const connectionRepository = require('../connections/connection.repository');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -548,7 +551,12 @@ const activeCountCache = createSwrCache({
 
 async function countActiveListings(credentials, connectionId, { push = false } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  const totalEntries = await activeCountCache.get(`${connectionId}`, { accessToken, siteId, push, connectionId });
+  // Shared with another site: eBay's count covers both, so it's counted
+  // from this site's listings instead.
+  const scope = await scopeOf(connectionId);
+  const totalEntries = scope?.claimed?.length
+    ? (await cachedListings(connectionId, 'active', { accessToken, siteId, push })).length
+    : await activeCountCache.get(`${connectionId}`, { accessToken, siteId, push, connectionId });
   return { totalEntries, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -720,6 +728,21 @@ async function detectMarketplace(credentials) {
   }
   market = market || marketplaces.byId(marketplaces.DEFAULT_ID);
   return { marketplaceId: market.id, profile, credentialsChanged, credentials: refreshedCredentials };
+}
+
+/**
+ * Which eBay seller a token belongs to: { userId, username }, the same
+ * account whatever site it's connected for. Identity API first (not
+ * rationed), GetUser when that fails.
+ */
+async function identifySeller(credentials) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  let seller = await ebayIdentity.getUser(accessToken).catch(() => null);
+  if (!seller?.userId && !seller?.username) {
+    const profile = await ebayTrading.getUserProfile(accessToken).catch(() => null);
+    seller = { userId: null, username: profile?.username || null };
+  }
+  return { ...seller, credentialsChanged, credentials: refreshedCredentials };
 }
 
 // Creates an Inventory API location (what an offer's merchantLocationKey
@@ -1038,7 +1061,7 @@ async function persist(write) {
 }
 
 // Bump when mapOrder gains a field, so every mirrored order is re-read once.
-const ORDER_SHAPE = 5; // 5: delivered time; 4: buyer email and sales record number; 3: delivery window and service
+const ORDER_SHAPE = 6; // 6: each line's eBay site; 5: delivered time; 4: buyer email and sales record number; 3: delivery window and service
 
 // A delivery is a carrier scan, which doesn't always move an order's
 // modified time, so the incremental read can miss it. Every few hours the
@@ -1139,8 +1162,29 @@ async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, m
   }
 }
 
-function getOrdersLast90Cached(connectionId, accessToken, siteId, push = false) {
-  return ordersCache.get(connectionId, { accessToken, siteId, connectionId, push });
+// One eBay account connected on several sites: eBay hands every connection
+// the account's listings and orders from all of them, so each keeps its own
+// site's (market-scope.js). The copies hold everything; the split is made
+// as they're read, so connecting or removing a site needs no re-read.
+const SCOPE_TTL_MS = 5 * 60 * 1000;
+const scopes = new Map(); // connectionId -> { at, scope: Promise }
+function scopeOf(connectionId) {
+  const id = String(connectionId);
+  const known = scopes.get(id);
+  if (known && Date.now() - known.at < SCOPE_TTL_MS) return known.scope;
+  const scope = connectionRepository.findMarketScope(id).catch(() => null);
+  scopes.set(id, { at: Date.now(), scope });
+  return scope;
+}
+
+/** After a connection is added, removed or tagged with its site or seller. */
+function forgetMarketScopes() {
+  scopes.clear();
+}
+
+async function getOrdersLast90Cached(connectionId, accessToken, siteId, push = false) {
+  const [orders, scope] = await Promise.all([ordersCache.get(connectionId, { accessToken, siteId, connectionId, push }), scopeOf(connectionId)]);
+  return marketScope.ordersIn(scope, orders);
 }
 
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
@@ -1180,6 +1224,13 @@ const listingsCache = createSwrCache({
 // Cache keys double as snapshot ids: "<connectionId>:listings:active" is
 // snapshot kind "listings:active" of that connection.
 const listingsKey = (connectionId, status) => `${connectionId}:listings:${status}`;
+
+// The cached listings of one tab, this connection's site only.
+async function cachedListings(connectionId, status, ctx) {
+  const id = String(connectionId);
+  const [items, scope] = await Promise.all([listingsCache.get(listingsKey(id, status), { ...ctx, status, connectionId: id }), scopeOf(id)]);
+  return marketScope.listingsIn(scope, items);
+}
 function splitListingsKey(key) {
   const at = key.indexOf(':');
   return [key.slice(0, at), key.slice(at + 1)];
@@ -1191,7 +1242,7 @@ function splitListingsKey(key) {
  */
 async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25, hiddenItemIds = [], push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  let all = await listingsCache.get(listingsKey(connectionId, status), { accessToken, status, siteId, push, connectionId });
+  let all = await cachedListings(connectionId, status, { accessToken, siteId, push });
   if (hiddenItemIds.length) {
     const hidden = new Set(hiddenItemIds.map(String));
     all = all.filter((item) => !hidden.has(item.itemId));
@@ -1270,7 +1321,7 @@ async function analyticsInputs(credentials, connectionId, { push = false } = {})
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const id = String(connectionId);
   const [items, orders] = await Promise.all([
-    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }).catch(() => []),
+    cachedListings(id, 'active', { accessToken, siteId, push }).catch(() => []),
     getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
   ]);
   return {
@@ -1289,7 +1340,7 @@ async function bestSellingListings(credentials, connectionId, { exclude, count =
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const id = String(connectionId);
   const [items, orders] = await Promise.all([
-    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }),
+    cachedListings(id, 'active', { accessToken, siteId, push }),
     getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
   ]);
 
@@ -2321,6 +2372,7 @@ module.exports = {
   listOrders,
   getLiveItem,
   detectMarketplace,
+  identifySeller,
   getStoreCategories,
   getStoreCategoriesCached,
   addStoreCategory,
@@ -2349,6 +2401,7 @@ module.exports = {
   enableNotifications,
   listOrdersDetailed,
   awaitingDelivery,
+  forgetMarketScopes,
   setDeliveryCheckInterval,
   getEarningsSummary,
   resolveRangeWindow,

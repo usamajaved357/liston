@@ -198,6 +198,9 @@ function mapLineItem(transaction) {
   return {
     itemId: item.ItemID ? String(item.ItemID) : null,
     title: item.Title || null,
+    // The eBay site the listing is on ("UK", "Australia"...): one account
+    // selling on several sites gets them all back from one GetOrders.
+    site: item.Site || null,
     quantityPurchased: Number(transaction.QuantityPurchased ?? 1),
     price: money(transaction.TransactionPrice),
     variation: toArray(transaction.Variation?.VariationSpecifics?.NameValueList).map((nv) => ({
@@ -332,6 +335,7 @@ const GET_ORDERS_FIELDS = [
   'OrderArray.Order.ShippingAddress',
   'OrderArray.Order.TransactionArray.Transaction.Item.ItemID',
   'OrderArray.Order.TransactionArray.Transaction.Item.Title',
+  'OrderArray.Order.TransactionArray.Transaction.Item.Site',
   'OrderArray.Order.TransactionArray.Transaction.QuantityPurchased',
   'OrderArray.Order.TransactionArray.Transaction.TransactionPrice',
   'OrderArray.Order.TransactionArray.Transaction.Variation.VariationSpecifics',

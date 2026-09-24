@@ -8,6 +8,8 @@ import { PlatformIcon } from "@/components/PlatformIcon";
 // own sign-in. Liston never sees the password — only the OAuth grant.
 function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCancel: () => void }) {
   const [label, setLabel] = useState("");
+  const sites = platform.marketplaces ?? [];
+  const [site, setSite] = useState(sites[0]?.id ?? "");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -17,7 +19,7 @@ function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCan
     setConnecting(true);
     try {
       if (platform.key === "ebay") {
-        const { authorizeUrl } = await api.startEbayAuth(label);
+        const { authorizeUrl } = await api.startEbayAuth(label, site || undefined);
         window.location.href = authorizeUrl;
         return;
       }
@@ -43,6 +45,39 @@ function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCan
             className="input mt-1"
           />
           <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">How this account appears in Liston. You can change it later.</p>
+
+          {sites.length > 0 && (
+            <div className="mt-4">
+              <p className="label">{platform.name} site</p>
+              <div role="radiogroup" aria-label={`${platform.name} site`} className="mt-1 flex flex-wrap gap-1.5">
+                {sites.map((m) => {
+                  const on = site === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      title={`${m.name} · ${m.currency}`}
+                      onClick={() => setSite(m.id)}
+                      className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[13px] font-medium transition-colors ${
+                        on
+                          ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)] text-[var(--color-ink)]"
+                          : "border-[var(--color-line)] text-[var(--color-muted)] hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"
+                      }`}
+                    >
+                      <span aria-hidden>{m.flag}</span>
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">
+                Selling on more than one {platform.name} site? Connect the same account once for each site; each gets its own listings, orders and
+                policies.
+              </p>
+            </div>
+          )}
         </div>
         <div className="rounded-xl bg-[var(--color-paper)] px-4 py-3.5 text-[13px] leading-relaxed text-[var(--color-muted)]">
           <p className="font-medium text-[var(--color-ink)]">What happens next</p>
@@ -50,6 +85,12 @@ function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCan
             You&apos;ll be sent to {platform.name} to sign in and approve access, then brought straight back here. Your {platform.name}{" "}
             password never touches Liston.
           </p>
+          {sites.length > 0 && (
+            <p className="mt-2">
+              {platform.name} uses one sign-in for every site. Linking an account for another site adds a second account in Liston and leaves the
+              first one as it is.
+            </p>
+          )}
         </div>
       </div>
 
@@ -61,7 +102,7 @@ function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCan
 
       <div className="mt-5 flex items-center gap-2">
         <button type="submit" disabled={connecting || !label.trim()} className="btn btn-primary btn-sm">
-          {connecting ? "Redirecting…" : `Continue to ${platform.name}`}
+          {connecting ? "Redirecting…" : `Continue to ${sites.find((m) => m.id === site)?.name ?? platform.name}`}
         </button>
         <button type="button" onClick={onCancel} className="btn btn-ghost btn-sm">
           Cancel

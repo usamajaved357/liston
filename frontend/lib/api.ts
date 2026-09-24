@@ -267,6 +267,8 @@ export interface Platform {
   role: "source" | "destination" | "both";
   status: "active" | "coming_soon";
   connectable: boolean;
+  // eBay: the sites an account can be linked for, one connection each.
+  marketplaces?: Marketplace[];
 }
 
 export interface Money {
@@ -1279,10 +1281,12 @@ export const api = {
 
   getConnection: (id: string) => request<{ connection: Connection }>(`/api/connections/${id}`),
 
-  startEbayAuth: (label: string) =>
+  // `marketplaceId`: the eBay site to link the account for. The same eBay
+  // account can be linked once per site.
+  startEbayAuth: (label: string, marketplaceId?: string) =>
     request<{ authorizeUrl: string }>("/api/connections/ebay/authorize", {
       method: "POST",
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ label, marketplaceId }),
     }),
 
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: "DELETE" }),

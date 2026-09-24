@@ -131,6 +131,7 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
       {
         itemId: '456',
         title: 'Widget',
+        site: null,
         quantityPurchased: 2,
         price: { amount: 6.25, currency: 'GBP' },
         variation: [{ name: 'Color', value: 'Blue' }],

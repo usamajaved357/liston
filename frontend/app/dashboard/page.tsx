@@ -9,6 +9,7 @@ import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatPrice } from "@/lib/format";
 import { cacheUser, useCachedUser } from "@/lib/session";
+import { ebayConnectError } from "@/lib/connect-errors";
 
 // The overview: what's happening across every connected account, summed.
 // Plan/usage rings are gone until billing exists — the numbers that matter
@@ -72,7 +73,7 @@ function ConnectionBanner() {
   if (ebayError) {
     return (
       <div className="notice notice-danger mb-4">
-        <span className="flex-1">Couldn&apos;t connect your eBay account ({ebayError}). Try again from Connections.</span>
+        <span className="flex-1">{ebayConnectError(ebayError, "Try again from Connections.")}</span>
       </div>
     );
   }
