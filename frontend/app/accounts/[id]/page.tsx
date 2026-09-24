@@ -37,12 +37,32 @@ const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint
 
 type Attention = { overdue: number; notOrdered: number | null };
 
+const TodoIcons = {
+  // A clock: past the dispatch-by date.
+  late: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  // A cart: still to buy from the supplier.
+  supplier: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
+      <path d="M3.5 4.5h2l2.2 10.2a1.5 1.5 0 001.5 1.2h7.9a1.5 1.5 0 001.5-1.1l1.4-5.8H6.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="9.5" cy="19.5" r="1.3" fill="currentColor" />
+      <circle cx="17" cy="19.5" r="1.3" fill="currentColor" />
+    </svg>
+  ),
+};
+
 // The order queue by state, and above it what needs doing now.
 function OrderQueue({ connectionId, counts, attention, loading, error }: { connectionId: string; counts: OrderCounts | null; attention: Attention | null; loading: boolean; error: string | null }) {
   const todo = [
-    attention?.overdue ? { n: attention.overdue, text: `past ${attention.overdue === 1 ? "its" : "their"} dispatch-by date`, tone: "danger" } : null,
-    attention?.notOrdered ? { n: attention.notOrdered, text: "paid but not yet ordered from the supplier", tone: "warning" } : null,
-  ].filter(Boolean) as { n: number; text: string; tone: string }[];
+    attention?.overdue
+      ? { n: attention.overdue, text: `past ${attention.overdue === 1 ? "its" : "their"} dispatch-by date`, tone: "danger" as const, icon: TodoIcons.late }
+      : null,
+    attention?.notOrdered ? { n: attention.notOrdered, text: "paid but not yet ordered from the supplier", tone: "warning" as const, icon: TodoIcons.supplier } : null,
+  ].filter((t) => t !== null);
   return (
     <section>
       <div className="mb-3 flex items-baseline justify-between">
@@ -50,19 +70,34 @@ function OrderQueue({ connectionId, counts, attention, loading, error }: { conne
         <span className="text-[12px] text-[var(--color-muted)]">Last 90 days</span>
       </div>
       {todo.length > 0 && (
-        <div className="mb-3 flex flex-wrap gap-2">
-          {todo.map((t) => (
-            <Link
-              key={t.text}
-              href={`/accounts/${connectionId}/orders?status=awaiting_dispatch&range=${SUMMARY_RANGE}`}
-              className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 ring-inset transition-colors ${
-                t.tone === "danger" ? "bg-rose-50 text-rose-700 ring-rose-200 hover:ring-rose-300" : "bg-amber-50 text-amber-800 ring-amber-200 hover:ring-amber-300"
-              }`}
-            >
-              <span className="tabular-nums font-semibold">{t.n}</span> order{t.n === 1 ? "" : "s"} {t.text}
-              <span aria-hidden>→</span>
-            </Link>
-          ))}
+        <div className={`mb-4 grid gap-3 ${todo.length > 1 ? "lg:grid-cols-2" : ""}`}>
+          {todo.map((t) => {
+            const tone =
+              t.tone === "danger"
+                ? { box: "border-rose-200 bg-rose-50/70 hover:border-rose-300", icon: "bg-rose-100 text-rose-600", action: "text-rose-700" }
+                : { box: "border-amber-200 bg-amber-50/70 hover:border-amber-300", icon: "bg-amber-100 text-amber-700", action: "text-amber-800" };
+            return (
+              <Link
+                key={t.text}
+                href={`/accounts/${connectionId}/orders?status=awaiting_dispatch&range=${SUMMARY_RANGE}`}
+                className={`group flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${tone.box}`}
+              >
+                <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone.icon}`}>{t.icon}</span>
+                <span className="min-w-0 flex-1 text-[13.5px] text-[var(--color-ink)]">
+                  <span className="font-semibold tabular-nums">
+                    {t.n.toLocaleString("en-GB")} order{t.n === 1 ? "" : "s"}
+                  </span>{" "}
+                  <span className="text-[var(--color-muted)]">{t.text}</span>
+                </span>
+                <span className={`flex shrink-0 items-center gap-1 text-[13px] font-medium ${tone.action}`}>
+                  Review
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-4 w-4 transition-transform group-hover:translate-x-0.5">
+                    <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+              </Link>
+            );
+          })}
         </div>
       )}
       {error ? (
