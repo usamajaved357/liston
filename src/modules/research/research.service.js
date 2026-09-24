@@ -1,4 +1,5 @@
 const browseResearch = require('../ebay/browse-research');
+const browseUsage = require('../ebay/browse-usage');
 const connectionService = require('../connections/connection.service');
 const marketplaces = require('../ebay/marketplaces');
 const researchStats = require('./research-stats');
@@ -31,8 +32,11 @@ class ResearchError extends Error {
 
 // ---- the daily allowance --------------------------------------------------------
 
+// Research's day is the Browse allowance's own (it resets when eBay's does,
+// 07:00 UTC), so its share and the admin's Browse figures move together.
 const usage = { day: null, used: 0, loaded: false };
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => browseUsage.snapshot().resetAt;
+const resetText = () => `${today().slice(11, 16)} UTC`;
 
 async function loadUsage() {
   if (!usage.loaded) {
@@ -52,7 +56,7 @@ async function spend(calls) {
 async function budget() {
   await loadUsage();
   const limit = config.research.dailyCalls;
-  return { used: usage.used, limit, remaining: Math.max(0, limit - usage.used) };
+  return { used: usage.used, limit, remaining: Math.max(0, limit - usage.used), resetAt: today() };
 }
 
 // ---- research ---------------------------------------------------------------------
@@ -81,7 +85,7 @@ async function withSoldCounts(items, marketplaceId) {
         return;
       }
       try {
-        const res = await browseResearch.soldCount(item, marketplaceId);
+        const res = await browseUsage.as('research', () => browseResearch.soldCount(item, marketplaceId));
         item.sold = res.sold;
         calls += res.calls;
       } catch (err) {
@@ -104,9 +108,9 @@ async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, m
   const { site, pricing } = await accountOf(ownerId, connectionId);
   const left = await budget();
   if (left.remaining <= 0) {
-    throw new ResearchError(`Research has used today's ${left.limit} eBay reads. It resets at midnight (UTC).`, 429);
+    throw new ResearchError(`Research has used today's ${left.limit} eBay reads. It resets at ${resetText()}.`, 429);
   }
-  const found = await browseResearch.search({ q: query, marketplaceId: site.id, condition, minPrice: clean(minPrice), maxPrice: clean(maxPrice) });
+  const found = await browseUsage.as('research', () => browseResearch.search({ q: query, marketplaceId: site.id, condition, minPrice: clean(minPrice), maxPrice: clean(maxPrice) }));
   await spend(found.calls);
   const top = await withSoldCounts(found.items.slice(0, SOLD_READS), site.id);
   const rest = found.items.slice(SOLD_READS).map((item) => ({ ...item, sold: browseResearch.keptSold(item.itemId, site.id) }));

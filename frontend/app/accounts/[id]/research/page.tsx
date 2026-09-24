@@ -127,7 +127,7 @@ export default function ResearchPage() {
         const fresh = await api.researchSearch(connection.id, asked.current).catch(() => null);
         if (fresh) setResult((r) => (r ? { ...fresh, advice: fresh.advice ?? r.advice } : fresh));
       }
-      if (data.soldLimited) setProblem("Research has used today's eBay reads, so some sold counts are still missing. They reset at midnight (UTC).");
+      if (data.soldLimited) setProblem("Research has used today's eBay reads, so some sold counts are still missing. They reset at 07:00 UTC.");
     } catch (err) {
       setProblem(err instanceof ApiError ? err.message : "Couldn't read the sold counts.");
     } finally {

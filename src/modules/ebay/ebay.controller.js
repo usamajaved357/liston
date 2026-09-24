@@ -9,6 +9,8 @@ const ebayPush = require('./ebay-push');
 const connectionRepository = require('../connections/connection.repository');
 const governor = require('./request-governor');
 const analyticsBudget = require('./analytics-budget');
+const browseUsage = require('./browse-usage');
+const researchService = require('../research/research.service');
 const analyticsService = require('../analytics/analytics.service');
 const config = require('../../config');
 const logger = require('../../utils/logger');
@@ -206,9 +208,19 @@ async function commerceNotification(req, res) {
 
 // Today's use of the shared eBay allowance, for the admin's usage page:
 // totals, what is paused, per call and per account (with labels).
+// The Browse API's allowance: who used it today, and research's capped share.
+async function browseAdminUsage() {
+  const snap = browseUsage.snapshot();
+  const sorted = (counts) =>
+    Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  return { ...snap, byCall: sorted(snap.byCall), byKind: sorted(snap.byKind), research: await researchService.budget() };
+}
+
 async function usage(req, res, next) {
   try {
-    if (req.query.sync === '1') await Promise.all([governor.syncWithEbay(), analyticsBudget.syncWithEbay()]);
+    if (req.query.sync === '1') await Promise.all([governor.syncWithEbay(), analyticsBudget.syncWithEbay(), browseUsage.syncWithEbay()]);
     const snap = governor.snapshot();
     const accounts = await connectionRepository.findAllEbay();
     const labels = new Map(accounts.map((a) => [String(a.id), a.label]));
@@ -231,6 +243,7 @@ async function usage(req, res, next) {
       listingPushLive: accounts.filter((a) => ebayService.pushEnabled(a).listings).length,
       // The traffic report's separate allowance (see analytics-budget).
       analytics: await analyticsService.adminUsage(labels),
+      browse: await browseAdminUsage(),
     });
   } catch (err) {
     next(err);

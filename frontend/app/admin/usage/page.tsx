@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AnalyticsUsage, api, ApiError, EbayUsage, User } from "@/lib/api";
+import { AnalyticsUsage, api, ApiError, BrowseUsage, EbayUsage, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
@@ -139,20 +139,132 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
   );
 }
 
-type UsageTab = "trading" | "traffic";
+// The Browse API's own allowance: public listing reads with Liston's app
+// key. Drafting and health checks take what they need; research stops at its
+// share so they always have calls left.
+const BROWSE_USE: Record<string, { label: string; sub: string }> = {
+  drafting: { label: "Drafting", sub: "reading the competitor listing a draft is made from" },
+  research: { label: "Product research", sub: "searches and sold counts" },
+  health: { label: "Listing health", sub: "similar listings for a health check" },
+};
+const BROWSE_CALL: Record<string, string> = {
+  search: "search results (item_summary/search)",
+  getItem: "one listing, its sold count (item)",
+  getItemsByItemGroup: "a listing with variations (get_items_by_item_group)",
+  getItemByLegacyId: "a listing by its eBay number (get_item_by_legacy_id)",
+};
+
+function BrowseUsageSection({ usage }: { usage: BrowseUsage }) {
+  const research = usage.research;
+  const count = (name: string) => usage.byKind.find((k) => k.name === name)?.count ?? 0;
+  const researchMark = usage.limit ? Math.min(100, Math.round((research.limit / usage.limit) * 100)) : 0;
+  const researchPct = research.limit ? Math.min(100, Math.round((research.used / research.limit) * 100)) : 0;
+  return (
+    <section className="space-y-4">
+      <p className="text-[12.5px] text-[var(--color-muted)]">
+        Public listing reads with Liston&apos;s app key, a separate allowance from Trading&apos;s, shared by every account: drafting reads the competitor
+        listing, health checks read similar listings, and product research reads searches and sold counts. Research stops at{" "}
+        {research.limit.toLocaleString()} a day so drafting always has {Math.max(0, usage.limit - research.limit).toLocaleString()} left. Resets{" "}
+        {fmtTime(usage.resetAt)}.
+      </p>
+      <div className="card px-5 py-4">
+        <div className="flex items-baseline justify-between">
+          <p className="text-sm font-semibold text-[var(--color-ink)]">
+            {usage.used.toLocaleString()} of {usage.limit.toLocaleString()} Browse calls used today
+          </p>
+          <p className="text-xs text-[var(--color-muted)]">{usage.lastSyncedWithEbay ? `Confirmed with eBay ${fmtTime(usage.lastSyncedWithEbay)}` : "Counted by Liston"}</p>
+        </div>
+        <UsageBar used={usage.used} limit={usage.limit} exhausted={usage.exhausted} marks={[{ at: researchMark, title: `Research's share: up to ${research.limit.toLocaleString()} calls` }]} />
+        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[var(--color-muted)]">
+          <span>
+            Research&apos;s share · up to {research.limit.toLocaleString()}
+            {research.remaining <= 0 ? " (used up, research paused until the reset)" : ""}
+          </span>
+          <span>The rest · drafting and health checks</span>
+        </div>
+        {usage.exhausted && (
+          <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further Browse calls today: new drafts from an eBay link and research wait for the reset.</p>
+        )}
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="Browse calls until reset" />
+        <div className="card px-5 py-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Product research</p>
+          <p className="mt-1 text-2xl font-bold text-[var(--color-ink)]">
+            {research.used.toLocaleString()}
+            <span className="text-sm font-semibold text-[var(--color-muted)]"> / {research.limit.toLocaleString()}</span>
+          </p>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-line)]">
+            <div className={`h-full rounded-full ${researchPct >= 92 ? "bg-[var(--color-danger)]" : researchPct >= 80 ? "bg-[var(--color-warning)]" : "bg-[var(--color-accent)]"}`} style={{ width: `${researchPct}%` }} />
+          </div>
+          <p className="mt-1 text-xs text-[var(--color-muted)]">about {Math.floor(research.remaining / 21).toLocaleString()} searches left (≈21 calls each)</p>
+        </div>
+        <Tile label="Drafting" value={count("drafting").toLocaleString()} sub={BROWSE_USE.drafting.sub} />
+        <Tile label="Listing health" value={count("health").toLocaleString()} sub={BROWSE_USE.health.sub} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section className="card px-5 py-4">
+          <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By use</h2>
+          {usage.byKind.length === 0 ? (
+            <p className="mt-2 text-sm text-[var(--color-muted)]">No Browse calls yet today.</p>
+          ) : (
+            <ul className="mt-2 divide-y divide-[var(--color-line)]">
+              {usage.byKind.map((k) => (
+                <li key={k.name} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <span className="min-w-0">
+                    <span className="text-[var(--color-ink)]">{BROWSE_USE[k.name]?.label ?? k.name}</span>
+                    {BROWSE_USE[k.name] && <span className="block text-xs text-[var(--color-muted)]">{BROWSE_USE[k.name].sub}</span>}
+                  </span>
+                  <span className="font-semibold tabular-nums text-[var(--color-ink)]">{k.count.toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+        <section className="card px-5 py-4">
+          <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By call</h2>
+          {usage.byCall.length === 0 ? (
+            <p className="mt-2 text-sm text-[var(--color-muted)]">No Browse calls yet today.</p>
+          ) : (
+            <ul className="mt-2 divide-y divide-[var(--color-line)]">
+              {usage.byCall.map((c) => (
+                <li key={c.name} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <span className="min-w-0">
+                    <span className="font-mono text-[12px] text-[var(--color-ink)]">{c.name}</span>
+                    {BROWSE_CALL[c.name] && <span className="block text-xs text-[var(--color-muted)]">{BROWSE_CALL[c.name]}</span>}
+                  </span>
+                  <span className="font-semibold tabular-nums text-[var(--color-ink)]">{c.count.toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+      <p className="text-xs text-[var(--color-muted)]">
+        Counted by Liston as each call is made. &ldquo;Check with eBay&rdquo; replaces the total with eBay&apos;s own figure; the split by use stays Liston&apos;s count.
+      </p>
+    </section>
+  );
+}
+
+type UsageTab = "trading" | "traffic" | "browse";
 const USAGE_TABS: { key: UsageTab; label: string }[] = [
   { key: "trading", label: "Trading API" },
   { key: "traffic", label: "Traffic API" },
+  { key: "browse", label: "Browse API" },
 ];
 
 function EbayUsageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   // One allowance per tab; the tab lives in the URL so a reload keeps it.
-  const [tab, setTab] = useState<UsageTab>(searchParams.get("tab") === "traffic" ? "traffic" : "trading");
+  const asked = searchParams.get("tab");
+  const [tab, setTab] = useState<UsageTab>(asked === "traffic" || asked === "browse" ? asked : "trading");
   function changeTab(next: UsageTab) {
     setTab(next);
-    router.replace(`/admin/usage${next === "traffic" ? "?tab=traffic" : ""}`, {
+    router.replace(`/admin/usage${next === "trading" ? "" : `?tab=${next}`}`, {
       scroll: false,
     });
   }
@@ -216,7 +328,7 @@ function EbayUsageInner() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">eBay usage</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">eBay&apos;s daily call allowances, each shared by every account on Liston.</p>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">eBay&apos;s daily call allowances (Trading, Traffic and Browse, each separate), each shared by every account on Liston.</p>
           </div>
           <button type="button" onClick={syncNow} disabled={syncing} className="btn btn-secondary btn-sm">
             {syncing ? "Asking eBay…" : "Check with eBay"}
@@ -237,7 +349,15 @@ function EbayUsageInner() {
               {t.label}
               {usage && (
                 <span className={tab === t.key ? "text-white/70" : "text-[var(--color-muted)]/70"}>
-                  {t.key === "trading" ? `${Math.round((usage.used / usage.limit) * 100)}%` : usage.analytics ? `${Math.round((usage.analytics.used / usage.analytics.limit) * 100)}%` : ""}
+                  {t.key === "trading"
+                    ? `${Math.round((usage.used / usage.limit) * 100)}%`
+                    : t.key === "traffic"
+                      ? usage.analytics
+                        ? `${Math.round((usage.analytics.used / usage.analytics.limit) * 100)}%`
+                        : ""
+                      : usage.browse
+                        ? `${Math.round((usage.browse.used / usage.browse.limit) * 100)}%`
+                        : ""}
                 </span>
               )}
             </button>
@@ -253,6 +373,8 @@ function EbayUsageInner() {
 
       {loading || !usage ? (
         <PageSkeleton rows={2} />
+      ) : tab === "browse" ? (
+        usage.browse ? <BrowseUsageSection usage={usage.browse} /> : <Alert>Browse figures aren&apos;t available from this server yet.</Alert>
       ) : tab === "traffic" ? (
         usage.analytics ? (
           <AnalyticsUsageSection usage={usage.analytics} />

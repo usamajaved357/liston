@@ -6,6 +6,7 @@ const ebayFinances = require('./api/ebay.finances');
 const ebaySignature = require('./api/ebay.signature');
 const ebayPostOrder = require('./api/ebay.postorder');
 const ebayBrowse = require('./api/ebay.browse');
+const browseUsage = require('./browse-usage');
 const ebayTaxonomy = require('./api/ebay.taxonomy');
 const ebayIdentity = require('./api/ebay.identity');
 const { createSwrCache } = require('./swr-cache');
@@ -2427,7 +2428,7 @@ function pushEnabled(connection, now = Date.now()) {
 // Similar listings on a site (public data, 1 Browse call), for a listing's
 // health check: the cheapest by price in the same category.
 function searchSimilarListings({ q, categoryId, filter, limit = 20 }, marketplaceId) {
-  return ebayBrowse.searchItemSummaries({ q, limit, filter, categoryIds: categoryId || undefined, sort: 'price' }, marketplaceId);
+  return browseUsage.as('health', () => ebayBrowse.searchItemSummaries({ q, limit, filter, categoryIds: categoryId || undefined, sort: 'price' }, marketplaceId));
 }
 
 // A category's item specifics with required/recommended flags (cached by

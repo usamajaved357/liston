@@ -127,7 +127,8 @@ test('research reads the top listings\' sold counts within its daily share, then
     // 1 search + 10 sold reads = the day's 11.
     assert.strictEqual(result.items.filter((i) => i.sold !== null).length, 10);
     assert.strictEqual(result.soldLimited, true);
-    assert.deepStrictEqual(result.budget, { used: 11, limit: 11, remaining: 0 });
+    assert.deepStrictEqual({ ...result.budget, resetAt: undefined }, { used: 11, limit: 11, remaining: 0, resetAt: undefined });
+    assert.match(result.budget.resetAt, /T07:00:00\.000Z$/, "the Browse allowance's own reset");
     assert.strictEqual(result.market.id, 'EBAY_GB');
     assert.strictEqual(result.summary.total, 30);
     await assert.rejects(researchService.search('owner', 'conn', { q: 'hats' }), (err) => err.statusCode === 429);
@@ -335,4 +336,24 @@ test('a brand the AI flags as a takedown risk never stays in its suggested title
   assert.strictEqual(advisor.withoutBrands('Shockproof Magnetic Magsafe Phone Case for iPhone 12', ['MagSafe']), 'Shockproof Magnetic Phone Case for iPhone 12');
   assert.strictEqual(advisor.withoutBrands("Dr. Scholl's Bunion Pads", ["Dr. Scholl's"]), 'Bunion Pads');
   assert.strictEqual(advisor.withoutBrands('Nikelike Socks by Nike', ['Nike']), 'Nikelike Socks by', 'whole words only');
+});
+
+test("research's eBay calls show under research in the Browse usage the admin sees", async () => {
+  const browseUsage = require('../../src/modules/ebay/browse-usage');
+  browseUsage._reset();
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' } }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => []);
+  mock.method(global, 'fetch', async (url) => {
+    const u = String(url);
+    if (/oauth/.test(u)) return { ok: true, status: 200, json: async () => ({ access_token: 't', expires_in: 7200 }) };
+    if (/item_summary\/search/.test(u)) return { ok: true, status: 200, json: async () => ({ total: 1, itemSummaries: [{ itemId: 'v1|1|0', title: 'Socks', price: { value: '5.00', currency: 'GBP' } }] }) };
+    return { ok: true, status: 200, json: async () => ({ estimatedAvailabilities: [{ estimatedSoldQuantity: 3 }] }) };
+  });
+  await researchService.search('owner', 'conn', { q: 'socks' });
+  const snap = browseUsage.snapshot();
+  assert.deepStrictEqual(snap.byKind, { research: 2 }, 'one search, one sold count');
+  assert.deepStrictEqual(snap.byCall, { search: 1, getItem: 1 });
+  browseUsage._reset();
 });

@@ -217,6 +217,8 @@ export interface ResearchBudget {
   used: number;
   limit: number;
   remaining: number;
+  // When research's share starts again: the Browse allowance's reset.
+  resetAt?: string;
 }
 
 export interface ResearchResult {
@@ -283,6 +285,23 @@ export interface EbayUsage {
   waiting: number;
   // eBay's traffic report has its own, much smaller allowance.
   analytics: AnalyticsUsage;
+  // …and the Browse API (public listing reads) its own too.
+  browse: BrowseUsage;
+}
+
+// The Browse API's daily allowance, one pool for the app: who used it
+// (byKind: drafting, health, research) and with which calls; research is
+// capped at its own share of it.
+export interface BrowseUsage {
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAt: string | null;
+  exhausted: boolean;
+  lastSyncedWithEbay: string | null;
+  byCall: { name: string; count: number }[];
+  byKind: { name: string; count: number }[];
+  research: ResearchBudget;
 }
 
 export interface AnalyticsUsage {
