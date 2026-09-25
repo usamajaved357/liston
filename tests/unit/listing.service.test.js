@@ -1889,3 +1889,12 @@ test("step two drafts with only the photos the seller kept, in their order; phot
     (err) => err.statusCode === 400 && /Keep at least one/.test(err.message)
   );
 });
+
+test("\"Visit our eBay store\" goes to the seller's eBay Store, else to every item they sell on the account's site", () => {
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: 'https://www.ebay.co.uk/str/flashinggoodsltd' }, 'flashin79', 'EBAY_GB'), 'https://www.ebay.co.uk/str/flashinggoodsltd');
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: 'http://www.ebay.com/str/novaglobalmart' }, null, 'EBAY_US'), 'https://www.ebay.com/str/novaglobalmart');
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: null }, 'selvora-goods', 'EBAY_GB'), 'https://www.ebay.co.uk/sch/i.html?_ssn=selvora-goods');
+  assert.strictEqual(listingService.storeLinkFor({ username: 'minsu-ltd' }, null, 'EBAY_AU'), 'https://www.ebay.com.au/sch/i.html?_ssn=minsu-ltd', "the username from eBay's profile when the account has none saved");
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: 'javascript:alert(1)' }, null, 'EBAY_GB'), null, 'only an eBay address is used');
+  assert.strictEqual(listingService.storeLinkFor(null, null, 'EBAY_GB'), null);
+});

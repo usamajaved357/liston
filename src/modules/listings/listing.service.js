@@ -1118,6 +1118,17 @@ function renderTemplatePreview(connectionId, userId, template, sample) {
   return renderWithTemplate(connectionId, userId, { template, ...sample, exclude: null, seed: null });
 }
 
+// Where "Visit our eBay store" goes: the seller's eBay Store when they have
+// one (eBay's own StoreURL), else every item they have for sale on the
+// account's site — which works for any seller. Null when eBay can't say who
+// the seller is.
+function storeLinkFor(profile, username, marketplaceId) {
+  const url = String(profile?.storeUrl || '').trim();
+  if (/^https?:\/\/[^/\s]*ebay\.[a-z.]+\//i.test(url)) return url.replace(/^http:/i, 'https:');
+  const seller = username || profile?.username;
+  return seller ? `https://${marketplaces.summary(marketplaceId).itemHost}/sch/i.html?_ssn=${encodeURIComponent(seller)}` : null;
+}
+
 async function renderWithTemplate(connectionId, userId, { template: override, productName, description, condition, images, specifics, exclude, seed }) {
   return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
     const marketplaceId = connection.settings?.ebay?.marketplaceId;
@@ -1126,25 +1137,23 @@ async function renderWithTemplate(connectionId, userId, { template: override, pr
     // Anything the seller hasn't filled in comes from the store itself —
     // eBay already holds the store's name, the logo they uploaded and the
     // live feedback score. A blank field means "use eBay's", never "leave a
-    // hole". Failure here just leaves the blanks blank.
-    if (!template.storeName || !template.logoUrl || !template.feedbackPercent) {
-      try {
-        const profile = await ebayService.getStoreProfile(credentials, connection.id);
-        template = {
-          ...template,
-          storeName: template.storeName || profile.storeName || connection.label,
-          logoUrl: template.logoUrl || profile.logoUrl || '',
-          feedbackPercent: template.feedbackPercent || profile.feedbackPercent || '',
-        };
-      } catch {
-        template = { ...template, storeName: template.storeName || connection.label };
-      }
+    // hole". The profile is kept by the account's cache, so this costs no
+    // call on most renders; failure just leaves the blanks blank.
+    let profile = null;
+    try {
+      profile = await ebayService.getStoreProfile(credentials, connection.id);
+    } catch {
+      profile = null;
     }
+    template = {
+      ...template,
+      storeName: template.storeName || profile?.storeName || connection.label,
+      logoUrl: template.logoUrl || profile?.logoUrl || '',
+      feedbackPercent: template.feedbackPercent || profile?.feedbackPercent || '',
+    };
 
     const recommended = await recommendedListings(credentials, connection, { exclude, count: template.recommendedCount, seed });
-    // The seller's other items on eBay, for "Visit our eBay store".
-    const username = connection.settings?.ebay?.username;
-    const storeUrl = username ? `https://${marketplaces.summary(marketplaceId).itemHost}/sch/i.html?_ssn=${encodeURIComponent(username)}` : null;
+    const storeUrl = storeLinkFor(profile, connection.settings?.ebay?.username, marketplaceId);
     // The preview has no photos of its own: the account's listings stand in.
     const photos = images || recommended.map((r) => r.imageUrl).filter(Boolean).slice(0, 4);
     return descriptionTemplate.renderDescription({ template, marketplaceId, productName, description, recommended, condition, images: photos, specifics: specifics || {}, storeUrl });
@@ -2137,6 +2146,7 @@ function withSkus(draft, connectionId) {
 }
 
 module.exports = {
+  storeLinkFor,
   pageOfListings,
   editSnapshot,
   editDifferences,

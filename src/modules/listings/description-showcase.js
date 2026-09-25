@@ -291,8 +291,8 @@ ${slides}
 .sx-tile i{font-style:normal;font-size:24px;display:block}
 .sx-tile b{display:block;color:${d};margin-top:6px;font-size:14.5px}
 .sx-tile span{font-size:12.5px;color:#6b6b78}
-.sx-shop{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
-.sx-prod{flex:0 0 200px;max-width:200px;border:1px solid ${soft};border-radius:10px;padding:10px;text-align:center;background:#fff;text-decoration:none;color:${d}}
+.sx-shop{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.sx-prod{display:block;min-width:0;border:1px solid ${soft};border-radius:10px;padding:10px;text-align:center;background:#fff;text-decoration:none;color:${d}}
 .sx-prod img{width:100%;height:160px;object-fit:contain;display:block}
 .sx-prod b{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;font-size:13px;line-height:1.35;margin:8px 0;min-height:2.7em;overflow:hidden}
 .sx-btn{display:inline-block;background:${a};color:#fff;border-radius:6px;padding:7px 14px;font-size:13px;font-weight:800;text-decoration:none}
@@ -323,7 +323,7 @@ ${slides}
 .sx-rev span{font-size:11px;color:#8a8a94}
 .sx-prod em{display:block;font-style:normal;font-size:13px;font-weight:800;color:${a};margin:-4px 0 8px}
 .sx-closing{text-align:center;font-size:15px;color:#3a3a44;margin:0 0 16px}
-@media(max-width:640px){.sx{padding:10px}.sx-title{font-size:23px}.sx-gl{display:block}.sx-tw{position:static;width:100%}.sx-thumbs{position:static;display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;overflow:visible}.sx-thumbs label{width:18%;height:64px}.sx-feat{width:100%}.sx-pair{display:block}.sx-pair>div{margin-bottom:12px}.sx-prod{flex-basis:45%}}
+@media(max-width:640px){.sx{padding:10px}.sx-title{font-size:23px}.sx-gl{display:block}.sx-tw{position:static;width:100%}.sx-thumbs{position:static;display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;overflow:visible}.sx-thumbs label{width:18%;height:64px}.sx-feat{width:100%}.sx-pair{display:block}.sx-pair>div{margin-bottom:12px}.sx-shop{grid-template-columns:repeat(2,minmax(0,1fr))}}
 ${variantStyles(variant, t)}
 </style>`;
 }
@@ -482,11 +482,11 @@ function renderShowcase(ctx, h, variant = 'showcase') {
         `<div class="sx-shop">${more
           .map(
             (item) =>
-              `<a class="sx-prod" href="${e(item.url)}">${item.imageUrl ? `<img src="${e(item.imageUrl)}" alt="${e(item.name)}"/>` : ''}<b>${e(item.name)}</b>${
+              `<a class="sx-prod" href="${e(item.url)}" target="_blank" rel="noopener">${item.imageUrl ? `<img src="${e(item.imageUrl)}" alt="${e(item.name)}"/>` : ''}<b>${e(item.name)}</b>${
                 item.price ? `<em>${item.sold > 1 ? `${e(String(item.sold))} sold · ` : ''}${e(item.price)}</em>` : ''
               }<span class="sx-btn">View Item ➜</span></a>`
           )
-          .join('')}</div>${storeUrl ? `<div class="sx-center"><a class="sx-btn sx-dark" href="${e(storeUrl)}">🏬 Visit Our eBay Store ➜</a></div>` : ''}`,
+          .join('')}</div>${storeUrl ? `<div class="sx-center"><a class="sx-btn sx-dark" href="${e(storeUrl)}" target="_blank" rel="noopener">🏬 Visit Our eBay Store ➜</a></div>` : ''}`,
         { dark: true }
       )
     );

@@ -353,7 +353,7 @@ function renderDescription({ template, marketplaceId, productName, description, 
     <div class="eb-rgrid">${recommended
       .slice(0, listingCount(t))
       .map(
-        (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard">${
+        (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard" target="_blank" rel="noopener">${
           item.imageUrl ? `<img class="eb-rimg" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : '<div class="eb-rimg"></div>'
         }<div class="eb-rinfo"><div class="eb-rname">${escapeHtml(item.name)}</div>${
           item.price ? `<span class="eb-rfrom">${item.sold > 1 ? `${escapeHtml(String(item.sold))} sold` : 'From'}</span><div class="eb-rprice">${escapeHtml(item.price)}</div>` : ''

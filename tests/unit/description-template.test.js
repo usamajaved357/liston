@@ -298,3 +298,17 @@ test('every layout takes the same data from the Theme settings as Classic: store
     assert.doesNotMatch(none, /return policy/, `${id}: no returns, no returns text`);
   }
 });
+
+test("every link in every layout opens outside eBay's description frame, and the store's listings sit four to a row", () => {
+  const recommended = Array.from({ length: 8 }, (_, i) => ({ url: `https://www.ebay.co.uk/itm/${i}`, imageUrl: `https://i.ebayimg.com/${i}.jpg`, name: `Item ${i}`, price: '£5' }));
+  for (const { id } of LAYOUTS) {
+    const html = renderDescription({ template: { ...base, layout: id, recommendedCount: 8 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    const links = html.match(/<a [^>]*>/g) || [];
+    assert.ok(links.length >= 8, `${id}: links rendered`);
+    for (const link of links) assert.match(link, /target="_blank" rel="noopener"/, `${id}: ${link}`);
+    if (id !== 'classic') {
+      assert.match(html, /href="https:\/\/www\.ebay\.co\.uk\/str\/walexo"/, `${id}: visit the store`);
+      assert.match(html, /\.sx-shop\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/, `${id}: four to a row`);
+    }
+  }
+});
