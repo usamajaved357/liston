@@ -83,6 +83,13 @@ function templateWithDefaults(template = {}, marketplaceId) {
   return { ...DEFAULT_TEMPLATE, ...local, ...cleaned };
 }
 
+// How many of the store's listings a description shows: the Theme setting,
+// 0 for none, 12 when it was never set. Every layout reads it the same way.
+function listingCount(t) {
+  const n = Number(t?.recommendedCount);
+  return t?.recommendedCount === undefined || t?.recommendedCount === null || t?.recommendedCount === '' || !Number.isFinite(n) ? 12 : Math.max(0, n);
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -344,7 +351,7 @@ function renderDescription({ template, marketplaceId, productName, description, 
     <div class="eb-stitle">Best Sellers From Our Store</div>
     <p class="eb-rhint">Scroll to see more →</p>
     <div class="eb-rgrid">${recommended
-      .slice(0, Number(t.recommendedCount) || 12)
+      .slice(0, listingCount(t))
       .map(
         (item) => `<a href="${escapeHtml(item.url)}" class="eb-rcard">${
           item.imageUrl ? `<img class="eb-rimg" src="${escapeHtml(item.imageUrl)}" alt="${escapeHtml(item.name)}" />` : '<div class="eb-rimg"></div>'
@@ -380,8 +387,8 @@ function renderDescription({ template, marketplaceId, productName, description, 
 
   if (showcase.VARIANTS.includes(t.layout) && descriptionHtml === undefined) {
     return showcase.renderShowcase(
-      { t, copy, productName, description: dropSellerNotes(description), images, specifics, recommended, storeUrl, condition: conditionLabel, storeName },
-      { escapeHtml, inline, listItem, isNoteLine, fontStack },
+      { t, copy, productName, description: dropSellerNotes(description), images, specifics, recommended, storeUrl, condition: conditionLabel, storeName, feedback },
+      { escapeHtml, inline, listItem, isNoteLine, fontStack, listingCount },
       t.layout
     );
   }

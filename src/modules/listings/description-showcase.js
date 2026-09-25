@@ -144,8 +144,9 @@ function variantStyles(variant, t) {
 .sx-card{border:0;border-radius:0;border-bottom:1px solid #eeeef1;margin-bottom:6px}
 .sx-head,.sx-head.sx-dark{background:transparent;color:${a};font-size:12px;letter-spacing:2px;padding:18px 0 6px}
 .sx-body{padding:6px 0 18px}
-.sx-gl{flex-direction:column;max-width:600px}
-.sx-thumbs,.sx-thumbs.sx-two{width:100%;height:auto;flex:none;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;overflow:visible}
+.sx-gl{flex-direction:column;max-width:680px}
+.sx-tw{position:static;width:100%;flex:none}
+.sx-thumbs{position:static;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;overflow:visible}
 .sx-thumbs label{width:76px;height:76px;border-width:1px;border-color:#e3e3e8}
 .sx-feat{border-bottom:0;padding:8px 10px}
 .sx-feat b:before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:${a};margin-right:8px;vertical-align:middle}
@@ -158,6 +159,9 @@ function variantStyles(variant, t) {
 .sx-tile{background:transparent;border:0;border-top:2px solid ${a};border-radius:0}
 .sx-prod{border-color:#ececf0}
 .sx-thanks{background:transparent;color:#6b6b78;border-top:1px solid #eeeef1;border-radius:0}
+.sx-deliv div,.sx-rev{background:#fafafb;border:1px solid #ececf0;border-bottom:2px solid ${a}}
+.sx-rev{border-bottom:1px solid #ececf0;border-top:2px solid ${a}}
+.sx-fb{background:transparent;border-color:#dcdce2}
 .sx-thanks strong{color:${d}}`;
   }
   if (variant === 'bold') {
@@ -209,6 +213,12 @@ function variantStyles(variant, t) {
 .sx-btn{background:#c9ae82}
 .sx-btn.sx-dark{background:${d}}
 .sx-thanks{background:transparent;color:#6d5a44;font-family:Georgia,serif;font-style:italic;font-size:16px}
+.sx-deliv div,.sx-rev{background:#fff;border:1px solid #eee5d6;border-radius:14px}
+.sx-deliv div{border-bottom:2px solid #c9ae82}
+.sx-rev{border-top:2px solid #c9ae82}
+.sx-rstars{color:#b08d57}
+.sx-fb{background:#fff;border-color:#e6dccb;color:#6d5a44}
+.sx-bname b{font-family:Georgia,serif;font-weight:400}
 .sx-thanks strong{color:${d}}
 @media(max-width:640px){.sx-feat{width:50%}.sx-title{font-size:26px}}`;
   }
@@ -241,14 +251,15 @@ function styles(t, fontStack, images, variant = 'showcase') {
 .sx-intro p{margin:0 0 8px}
 .sx-r{display:none}
 .sx-slide{display:none}
-.sx-gl{display:flex;gap:12px;align-items:stretch;max-width:820px;margin:0 auto}
+.sx-gl{display:flex;gap:10px;align-items:stretch;max-width:860px;margin:0 auto}
 .sx-stage{flex:1;min-width:0}
 .sx-zoom{display:block;position:relative;width:100%;height:560px;overflow:hidden;border-radius:10px;background:#fff;cursor:zoom-in}
-.sx-zoom img{display:block;width:100%;height:100%;object-fit:contain;transition:transform .35s ease}
+@supports (aspect-ratio:1/1){.sx-zoom{height:auto;aspect-ratio:1/1;max-height:680px}}
+.sx-fill{position:absolute;top:-24px;right:-24px;bottom:-24px;left:-24px;background-size:cover;background-position:center;filter:blur(22px);opacity:.38}
+.sx-zoom img{position:relative;display:block;width:100%;height:100%;object-fit:contain;transition:transform .35s ease}
 .sx-zb{position:absolute;bottom:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.62);color:#fff;font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;white-space:nowrap}
-.sx-thumbs{flex:0 0 118px;width:118px;height:560px;overflow-y:auto;display:grid;grid-template-columns:1fr;grid-auto-rows:130px;gap:8px;align-content:start}
-.sx-gl.sx-one{max-width:600px}
-.sx-thumbs.sx-two{flex-basis:206px;width:206px;grid-template-columns:1fr 1fr;grid-auto-rows:99px}
+.sx-tw{position:relative;flex:0 0 96px;width:96px}
+.sx-thumbs{position:absolute;top:0;right:0;bottom:0;left:0;overflow-y:auto;display:grid;grid-template-columns:1fr;grid-auto-rows:96px;gap:8px;align-content:start;scrollbar-width:thin}
 .sx-thumbs label{display:block;border:2px solid ${soft};border-radius:8px;padding:3px;margin:0;background:#fff;cursor:pointer;overflow:hidden}
 .sx-thumbs img{display:block;width:100%;height:100%;object-fit:contain}
 ${slides}
@@ -283,13 +294,36 @@ ${slides}
 .sx-shop{display:flex;flex-wrap:wrap;gap:10px;justify-content:center}
 .sx-prod{flex:0 0 200px;max-width:200px;border:1px solid ${soft};border-radius:10px;padding:10px;text-align:center;background:#fff;text-decoration:none;color:${d}}
 .sx-prod img{width:100%;height:160px;object-fit:contain;display:block}
-.sx-prod b{display:block;font-size:13px;line-height:1.35;margin:8px 0;height:3.9em;overflow:hidden}
+.sx-prod b{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;font-size:13px;line-height:1.35;margin:8px 0;min-height:2.7em;overflow:hidden}
 .sx-btn{display:inline-block;background:${a};color:#fff;border-radius:6px;padding:7px 14px;font-size:13px;font-weight:800;text-decoration:none}
 .sx-btn.sx-dark{background:${d};padding:10px 22px;font-size:14px}
 .sx-center{text-align:center;margin-top:14px}
 .sx-thanks{background:${d};color:#fff;text-align:center;border-radius:12px;padding:16px;font-size:14px}
+.sx-thanks span{display:block;margin-top:6px;font-size:12.5px;opacity:.85}
+.sx-brand{display:flex;align-items:center;gap:12px;padding:4px 4px 14px}
+.sx-logo{width:46px;height:46px;flex:0 0 46px;border-radius:10px;overflow:hidden;background:${a};border:2px solid ${a};display:flex;align-items:center;justify-content:center}
+.sx-logo img{width:100%;height:100%;object-fit:cover;display:block}
+.sx-logo span{color:#fff;font-weight:800;font-size:19px}
+.sx-bname{flex:1;min-width:0}
+.sx-bname b{display:block;font-size:18px;color:${d};line-height:1.2}
+.sx-bname span{display:block;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#8a8a94}
+.sx-fb{flex:0 0 auto;font-size:12.5px;font-weight:700;color:${d};background:${pale};border:1px solid ${soft};border-radius:20px;padding:5px 12px}
+.sx-deliv{display:flex;flex-wrap:wrap;gap:10px}
+.sx-deliv div{flex:1;min-width:140px;background:${pale};border:1px solid ${soft};border-bottom:3px solid ${a};border-radius:10px;padding:12px 14px}
+.sx-deliv small{display:block;font-size:10.5px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#8a8a94}
+.sx-deliv b{display:block;font-size:15px;color:${d};margin-top:4px}
+.sx-deliv span{display:block;font-size:12px;color:#8a8a94}
+.sx-ret{font-size:14.5px;margin:14px 0 4px}
+.sx-retn{font-size:12.5px;color:#8a8a94;margin:0}
+.sx-revs{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px}
+.sx-rev{flex:0 0 250px;background:${pale};border:1px solid ${soft};border-top:3px solid ${a};border-radius:10px;padding:14px}
+.sx-rstars{color:${a};letter-spacing:1px}
+.sx-rev p{font-size:13px;font-style:italic;margin:8px 0}
+.sx-rev b{display:block;font-size:12px;color:${d}}
+.sx-rev span{font-size:11px;color:#8a8a94}
+.sx-prod em{display:block;font-style:normal;font-size:13px;font-weight:800;color:${a};margin:-4px 0 8px}
 .sx-closing{text-align:center;font-size:15px;color:#3a3a44;margin:0 0 16px}
-@media(max-width:640px){.sx{padding:10px}.sx-title{font-size:23px}.sx-gl{display:block}.sx-zoom{height:340px}.sx-thumbs,.sx-thumbs.sx-two{width:100%;height:auto;display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;overflow:visible}.sx-thumbs label{width:18%;height:64px}.sx-feat{width:100%}.sx-pair{display:block}.sx-pair>div{margin-bottom:12px}.sx-prod{flex-basis:45%}}
+@media(max-width:640px){.sx{padding:10px}.sx-title{font-size:23px}.sx-gl{display:block}.sx-tw{position:static;width:100%}.sx-thumbs{position:static;display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;overflow:visible}.sx-thumbs label{width:18%;height:64px}.sx-feat{width:100%}.sx-pair{display:block}.sx-pair>div{margin-bottom:12px}.sx-prod{flex-basis:45%}}
 ${variantStyles(variant, t)}
 </style>`;
 }
@@ -304,7 +338,7 @@ ${variantStyles(variant, t)}
  *   listItem, isNoteLine, fontStack }
  */
 function renderShowcase(ctx, h, variant = 'showcase') {
-  const { t, copy, productName, description, images = [], specifics = {}, recommended = [], storeUrl, condition, storeName } = ctx;
+  const { t, copy, productName, description, images = [], specifics = {}, recommended = [], storeUrl, condition, storeName, feedback } = ctx;
   const e = h.escapeHtml;
   const s = readSections(description, h);
   const photos = images.filter(Boolean).slice(0, 8);
@@ -315,6 +349,10 @@ function renderShowcase(ctx, h, variant = 'showcase') {
     `<div class="sx-card"><div class="sx-head${dark ? ' sx-dark' : ''}">${head}</div><div class="sx-body">${body}</div></div>`;
 
   const parts = [];
+  // The store's own header, from the Theme settings as in Classic: logo,
+  // name, tagline and feedback.
+  const logo = t.logoUrl ? `<img src="${e(t.logoUrl)}" alt="${storeName}"/>` : `<span>${e((t.storeName || 'S').slice(0, 1).toUpperCase())}</span>`;
+  parts.push(`<div class="sx-brand"><div class="sx-logo">${logo}</div><div class="sx-bname"><b>${storeName}</b>${t.tagline ? `<span>${e(t.tagline)}</span>` : ''}</div>${feedback ? `<div class="sx-fb">⭐ ${e(feedback)}</div>` : ''}</div>`);
   parts.push(`<div class="sx-top">
   <div class="sx-stars">⭐⭐⭐⭐⭐ ${e(t.bannerText || 'Top Quality • Fast Dispatch')}</div>
   <div class="sx-title">${h.inline(title)}</div>
@@ -325,12 +363,13 @@ function renderShowcase(ctx, h, variant = 'showcase') {
   if (photos.length) {
     const radios = photos.map((_, i) => `<input type="radio" name="sxg" id="sxg${i + 1}" class="sx-r"${i === 0 ? ' checked' : ''}/><input type="checkbox" id="sxz${i + 1}" class="sx-r"/>`).join('');
     const slides = photos
-      .map((url, i) => `<div class="sx-slide sx-s${i + 1}"><label for="sxz${i + 1}" class="sx-zoom"><img src="${e(url)}" alt="${e(title)} photo ${i + 1}"/><span class="sx-zb">🔍 Click to zoom</span></label></div>`)
+      .map((url, i) => `<div class="sx-slide sx-s${i + 1}"><label for="sxz${i + 1}" class="sx-zoom"><span class="sx-fill" style="background-image:url('${e(url)}')"></span><img src="${e(url)}" alt="${e(title)} photo ${i + 1}"/><span class="sx-zb">🔍 Click to zoom</span></label></div>`)
       .join('');
-    // One column of thumbnails beside the photo for up to four, two columns
-    // beyond that, never taller than the photo (it scrolls instead).
-    const thumbs = photos.length > 1 ? `<div class="sx-thumbs${photos.length > 4 ? ' sx-two' : ''}">${photos.map((url, i) => `<label for="sxg${i + 1}" class="sx-t${i + 1}"><img src="${e(url)}" alt=""/></label>`).join('')}</div>` : '';
-    parts.push(card('📸 Product Gallery', `${radios}<div class="sx-gl${photos.length === 1 ? ' sx-one' : ''}"><div class="sx-stage">${slides}</div>${thumbs}</div>`, { dark: true }));
+    // A slim column of thumbnails beside the photo, exactly as tall as the
+    // photo's square frame (it scrolls when there are more): the photo gets
+    // all the width the column doesn't need.
+    const thumbs = photos.length > 1 ? `<div class="sx-tw"><div class="sx-thumbs">${photos.map((url, i) => `<label for="sxg${i + 1}" class="sx-t${i + 1}"><img src="${e(url)}" alt=""/></label>`).join('')}</div></div>` : '';
+    parts.push(card('📸 Product Gallery', `${radios}<div class="sx-gl"><div class="sx-stage">${slides}</div>${thumbs}</div>`, { dark: true }));
   }
 
   if (s.intro.length) parts.push(`<div class="sx-card"><div class="sx-body sx-intro">${s.intro.map((p) => `<p>${h.inline(p)}</p>`).join('')}</div></div>`);
@@ -390,6 +429,7 @@ function renderShowcase(ctx, h, variant = 'showcase') {
   if (s.closing.length) parts.push(`<p class="sx-closing">${s.closing.map((l) => h.inline(l)).join('<br/>')}</p>`);
 
   const returnsDays = Number(t.returnsDays) || 0;
+  const postage = t.freePostage ? `Free ${copy.postageWord}` : `Tracked ${copy.postageWord}`;
   const promises = [
     ['🚚', 'Fast Dispatch', `Dispatched within ${t.dispatchTime}${t.freePostage ? `, free ${copy.postageWord.toLowerCase()}` : ''}`],
     ['✅', 'Quality Checked', /NEW/i.test(String(condition)) ? 'Every item is brand new and checked before dispatch' : 'Every item is checked before dispatch'],
@@ -398,20 +438,63 @@ function renderShowcase(ctx, h, variant = 'showcase') {
   ].filter(Boolean);
   parts.push(card('💎 Why Choose Us', `<div class="sx-tiles">${promises.map(([i, b, sub]) => `<div class="sx-tile"><i>${i}</i><b>${b}</b><span>${e(sub)}</span></div>`).join('')}</div>`));
 
-  const more = recommended.slice(0, 4);
+  // Delivery and returns, from the Theme settings as in Classic.
+  const delivery = [
+    ['Dispatch', t.dispatchTime, t.dispatchNote],
+    ['Carrier', t.carrier, 'Tracked service'],
+    ['Delivery', t.deliveryTime, 'After dispatch'],
+    ['Postage', postage, copy.addresses],
+  ];
+  parts.push(
+    card(
+      '📦 Delivery &amp; Returns',
+      `<div class="sx-deliv">${delivery.map(([label, value, note]) => `<div><small>${label}</small><b>${e(value)}</b><span>${e(note || '')}</span></div>`).join('')}</div>${
+        returnsDays
+          ? `<p class="sx-ret">We offer a <strong>${returnsDays}-day hassle-free return policy</strong> on all items. Not completely satisfied? Message us through eBay and we'll sort it immediately.</p><p class="sx-retn">Items must be returned in original condition and packaging. Buyer pays return postage unless the item is faulty or not as described. Refunds processed within 2 business days of receiving the return.</p>`
+          : ''
+      }`
+    )
+  );
+
+  // Genuine reviews the seller entered in Settings (never invented); the
+  // section is left out when there are none, as in Classic.
+  const reviews = (t.reviews || []).filter((r) => r && r.text).slice(0, 10);
+  if (reviews.length) {
+    parts.push(
+      card(
+        '⭐ What Customers Say',
+        `<div class="sx-revs">${reviews
+          .map(
+            (r) =>
+              `<div class="sx-rev"><div class="sx-rstars">${'★'.repeat(Math.min(5, Math.max(1, Number(r.stars) || 5)))}</div><p>"${e(r.text)}"</p><b>${e(r.buyer || 'eBay buyer')}</b><span>${e(r.date || '')}${r.date ? ' · ' : ''}Verified Purchase</span></div>`
+          )
+          .join('')}</div>`
+      )
+    );
+  }
+
+  // As many of the store's listings as Settings asks for (0 hides them).
+  const more = recommended.slice(0, h.listingCount(t));
   if (more.length) {
     parts.push(
       card(
         '🛍️ More From Our Store',
         `<div class="sx-shop">${more
-          .map((item) => `<a class="sx-prod" href="${e(item.url)}">${item.imageUrl ? `<img src="${e(item.imageUrl)}" alt="${e(item.name)}"/>` : ''}<b>${e(item.name)}</b><span class="sx-btn">View Item ➜</span></a>`)
+          .map(
+            (item) =>
+              `<a class="sx-prod" href="${e(item.url)}">${item.imageUrl ? `<img src="${e(item.imageUrl)}" alt="${e(item.name)}"/>` : ''}<b>${e(item.name)}</b>${
+                item.price ? `<em>${item.sold > 1 ? `${e(String(item.sold))} sold · ` : ''}${e(item.price)}</em>` : ''
+              }<span class="sx-btn">View Item ➜</span></a>`
+          )
           .join('')}</div>${storeUrl ? `<div class="sx-center"><a class="sx-btn sx-dark" href="${e(storeUrl)}">🏬 Visit Our eBay Store ➜</a></div>` : ''}`,
         { dark: true }
       )
     );
   }
 
-  parts.push(`<div class="sx-thanks">🌸 Thank you for shopping with <strong>${storeName}</strong>. Check our other listings for more great deals!</div>`);
+  parts.push(`<div class="sx-thanks">🌸 Thank you for shopping with <strong>${storeName}</strong>. Check our other listings for more great deals!
+  <span>Questions? <strong>Message us on eBay</strong>. We respond within ${e(t.responseTime)}.</span>
+  <span>⭐ Love ${storeName}? Click "Save seller" to never miss a new listing or deal · © ${storeName} · ${e(copy.business)}</span></div>`);
 
   return `${styles(t, h.fontStack(t.fontFamily), photos, VARIANTS.includes(variant) ? variant : 'showcase')}
 <div class="sx">

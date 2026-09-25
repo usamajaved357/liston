@@ -264,3 +264,37 @@ test('every layout renders; the card layouts show the photos as a working galler
 test('without a layout saved an account keeps the Classic layout', () => {
   assert.match(renderDescription({ template: base, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED }), /class="eb"/);
 });
+
+test('every layout takes the same data from the Theme settings as Classic: store, feedback, delivery, returns, reviews, how many store listings, response time', () => {
+  const template = {
+    storeName: 'Walexo',
+    tagline: 'Official UK Store',
+    logoUrl: 'https://i.ebayimg.com/logo.jpg',
+    feedbackPercent: '99.4',
+    dispatchTime: 'Same Day Dispatch',
+    dispatchNote: 'From our Leeds warehouse',
+    carrier: 'Royal Mail Tracked 48',
+    deliveryTime: '2 to 3 Business Days',
+    freePostage: true,
+    returnsDays: 60,
+    responseTime: '6 hours',
+    recommendedCount: 6,
+    reviews: [{ stars: 5, text: 'Arrived next day, great quality', buyer: 'j***n', date: 'Aug 2026' }],
+  };
+  const recommended = Array.from({ length: 10 }, (_, i) => ({ url: `https://www.ebay.co.uk/itm/${i}`, imageUrl: `https://i.ebayimg.com/${i}.jpg`, name: `Item ${i}`, price: '£9.99', sold: 12 }));
+  for (const { id } of LAYOUTS) {
+    const html = renderDescription({ template: { ...template, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended });
+    for (const value of ['Walexo', 'Official UK Store', 'https://i.ebayimg.com/logo.jpg', '99.4% Positive', 'Same Day Dispatch', 'From our Leeds warehouse', 'Royal Mail Tracked 48', '2 to 3 Business Days', '60-day hassle-free return policy', '6 hours', 'Arrived next day, great quality', 'j***n']) {
+      assert.ok(html.includes(value), `${id} shows "${value}"`);
+    }
+    const cards = (html.match(/https:\/\/www\.ebay\.co\.uk\/itm\/\d/g) || []).length;
+    assert.strictEqual(cards, 6, `${id}: the ${template.recommendedCount} store listings Settings asks for`);
+    assert.ok(html.includes('£9.99'), `${id}: store listing prices`);
+  }
+  for (const { id } of LAYOUTS) {
+    const none = renderDescription({ template: { ...template, layout: id, reviews: [], recommendedCount: 0, returnsDays: 0 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended });
+    assert.doesNotMatch(none, /What Customers Say/, `${id}: no reviews, no section`);
+    assert.doesNotMatch(none, /itm\/\d/, `${id}: 0 store listings hides them`);
+    assert.doesNotMatch(none, /return policy/, `${id}: no returns, no returns text`);
+  }
+});
