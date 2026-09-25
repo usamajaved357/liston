@@ -424,6 +424,8 @@ async function updatePolicies(req, res, next) {
 // The store's description template — the branding, delivery and returns
 // copy that wraps every listing this account publishes.
 const updateTemplateSchema = z.object({
+  layout: z.enum(descriptionTemplate.LAYOUTS.map((l) => l.id)).default('classic'),
+  bannerText: z.string().max(60).default('Top Quality • Fast Dispatch'),
   storeName: z.string().max(60).default(''),
   tagline: z.string().max(60).default('Official UK Store'),
   logoUrl: z.string().url().or(z.literal('')).default(''),
@@ -453,11 +455,25 @@ const updateTemplateSchema = z.object({
     .default(''),
 });
 
+// The preview's product, written the way Liston drafts descriptions, so
+// every layout shows each of its sections.
 const SAMPLE_PRODUCT = {
-  productName: 'Sample Product Title — This Is How Your Listing Will Look',
+  productName: 'Sample Product Title: This Is How Your Listing Will Look',
   description:
-    'This is where the drafted description goes.\n\nFEATURES\n- Durable, well made and ready to ship\n- Exactly what buyers searched for\n- Packed with care\n\nSPECIFICATIONS\n- Colour: Black\n- Material: Steel',
+    '**Sample Product: The Main Benefit Buyers Get**\n' +
+    'This is where the drafted introduction goes: what the product is, who it is for and why to buy it.\n\n' +
+    '**Key Features**\n' +
+    '✨ Premium Finish: A short sentence on why this feature matters.\n' +
+    '🛡️ Built To Last: Durable materials made for everyday use.\n' +
+    '📦 Ready To Use: Arrives complete and ready out of the box.\n' +
+    '🎁 Great Gift: Well presented and packed with care.\n\n' +
+    '**Perfect For**\n✓ Everyday use\n✓ Home and travel\n✓ Gifting\n\n' +
+    '**How To Use**\n1. Unpack the product\n2. Set it up in a few seconds\n3. Enjoy it every day\n\n' +
+    '**Package Includes**\n• 1 × Sample Product\n\n' +
+    '**Important:** Please check the size before ordering.\n\n' +
+    'A simple, reliable choice you will use every day.',
   condition: 'NEW',
+  specifics: { Brand: ['Unbranded'], Material: ['Premium ABS'], Colour: ['Black'] },
 };
 
 // The built-in layout as editable HTML with {{placeholders}}.

@@ -1104,6 +1104,9 @@ async function renderDraftDescription(listing, userId) {
     productName: isVariation ? draft.commonTitle : draft.title,
     description: isVariation ? draft.commonDescription : draft.description,
     condition: (isVariation ? draft.variants[0]?.condition : draft.condition) || 'NEW',
+    // The card layouts show the listing's photos and item specifics.
+    images: draft.imageUrls || [],
+    specifics: (isVariation ? draft.variesBy?.aspects : draft.aspects) || {},
     exclude: listing.external_product_id || listing.edit_of_item_id,
     // The listing's own mix of best sellers, stable across preview and publish.
     seed: listing.edit_of_item_id || listing.id,
@@ -1115,7 +1118,7 @@ function renderTemplatePreview(connectionId, userId, template, sample) {
   return renderWithTemplate(connectionId, userId, { template, ...sample, exclude: null, seed: null });
 }
 
-async function renderWithTemplate(connectionId, userId, { template: override, productName, description, condition, exclude, seed }) {
+async function renderWithTemplate(connectionId, userId, { template: override, productName, description, condition, images, specifics, exclude, seed }) {
   return connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
     const marketplaceId = connection.settings?.ebay?.marketplaceId;
     let template = descriptionTemplate.templateWithDefaults(override || connection.settings?.template, marketplaceId);
@@ -1139,7 +1142,12 @@ async function renderWithTemplate(connectionId, userId, { template: override, pr
     }
 
     const recommended = await recommendedListings(credentials, connection, { exclude, count: template.recommendedCount, seed });
-    return descriptionTemplate.renderDescription({ template, marketplaceId, productName, description, recommended, condition });
+    // The seller's other items on eBay, for "Visit our eBay store".
+    const username = connection.settings?.ebay?.username;
+    const storeUrl = username ? `https://${marketplaces.summary(marketplaceId).itemHost}/sch/i.html?_ssn=${encodeURIComponent(username)}` : null;
+    // The preview has no photos of its own: the account's listings stand in.
+    const photos = images || recommended.map((r) => r.imageUrl).filter(Boolean).slice(0, 4);
+    return descriptionTemplate.renderDescription({ template, marketplaceId, productName, description, recommended, condition, images: photos, specifics: specifics || {}, storeUrl });
   });
 }
 

@@ -1042,7 +1042,13 @@ export const TEMPLATE_FONTS: { id: string; name: string; stack: string; note: st
   { id: "elegant", name: "Elegant Serif", stack: "'Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif", note: "Refined, boutique" },
 ];
 
+// The description layouts an account can pick (the server's LAYOUTS).
+export type DescriptionLayout = "classic" | "showcase" | "minimal" | "bold" | "boutique";
+
 export interface DescriptionTemplate {
+  layout: DescriptionLayout;
+  // The card layouts' star line ("Top Quality • Fast Dispatch").
+  bannerText: string;
   storeName: string;
   tagline: string;
   logoUrl: string;

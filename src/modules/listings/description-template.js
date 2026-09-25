@@ -10,6 +10,7 @@
 // Liston install get two different descriptions from the same draft.
 
 const marketplaces = require('../ebay/marketplaces');
+const showcase = require('./description-showcase');
 
 // Tagline, warehouse note and carrier default to the account's own market
 // (see templateWithDefaults); the values here are the UK ones.
@@ -28,7 +29,23 @@ const FONTS = [
 ];
 const fontStack = (id) => (FONTS.find((f) => f.id === id) || FONTS[0]).stack;
 
+// Built-in layouts an account picks from. 'classic': the store header, one
+// description block, trust badges, delivery and returns (below). The rest
+// are card layouts (description-showcase.js): the description split into a
+// gallery, a features grid, specifications, steps and notes, each with its
+// own look.
+const LAYOUTS = [
+  { id: 'classic', name: 'Classic', blurb: 'Store header, one description block, trust badges, delivery and returns.' },
+  { id: 'showcase', name: 'Showcase', blurb: 'Product first: photo gallery, features grid, specifications, how to use, why choose us.' },
+  { id: 'minimal', name: 'Minimal', blurb: 'Clean white, thin lines and small accent headings. Lets the product speak.' },
+  { id: 'bold', name: 'Bold', blurb: 'Dark hero banner, feature cards with icon circles, strong contrast.' },
+  { id: 'boutique', name: 'Boutique', blurb: 'Warm cream, serif headings, centred sections. Suits home, fashion and gifts.' },
+];
+
 const DEFAULT_TEMPLATE = {
+  layout: 'classic',
+  // The Showcase layout's star line.
+  bannerText: 'Top Quality • Fast Dispatch',
   storeName: '',
   tagline: 'Official UK Store',
   logoUrl: '',
@@ -295,7 +312,9 @@ function fillPlaceholders(html, values) {
   return String(html).replace(/\{\{\s*([a-zA-Z]+)\s*\}\}/g, (match, key) => (key in values ? String(values[key]) : match));
 }
 
-function renderDescription({ template, marketplaceId, productName, description, descriptionHtml, recommended = [], condition = 'NEW' }) {
+// images: the listing's photos; specifics: its item specifics; storeUrl:
+// the seller's other items on eBay — all used by the Showcase layout.
+function renderDescription({ template, marketplaceId, productName, description, descriptionHtml, recommended = [], condition = 'NEW', images = [], specifics = {}, storeUrl = null }) {
   const t = templateWithDefaults(template, marketplaceId);
   const copy = marketplaces.templateCopy(marketplaceId);
   const storeName = escapeHtml(t.storeName || 'Our Store');
@@ -357,6 +376,14 @@ function renderDescription({ template, marketplaceId, productName, description, 
       recommended: recommendedHtml,
       reviews: reviewsHtml,
     });
+  }
+
+  if (showcase.VARIANTS.includes(t.layout) && descriptionHtml === undefined) {
+    return showcase.renderShowcase(
+      { t, copy, productName, description: dropSellerNotes(description), images, specifics, recommended, storeUrl, condition: conditionLabel, storeName },
+      { escapeHtml, inline, listItem, isNoteLine, fontStack },
+      t.layout
+    );
   }
 
   const logo = t.logoUrl
@@ -452,7 +479,9 @@ function renderDescription({ template, marketplaceId, productName, description, 
 // that change per listing left as {{placeholders}}. What the seller sees
 // when they press "Edit code", and what they start from.
 function renderTemplateSource({ template, marketplaceId }) {
-  const t = { ...templateWithDefaults(template, marketplaceId), customHtml: '' };
+  // The code a seller edits starts from the Classic layout: Showcase splits
+  // the description into cards, which a single {{description}} can't.
+  const t = { ...templateWithDefaults(template, marketplaceId), customHtml: '', layout: 'classic' };
   return renderDescription({
     template: t,
     marketplaceId,
@@ -466,4 +495,4 @@ function renderTemplateSource({ template, marketplaceId }) {
     .replace(/\{\{Condition\}\}/g, '{{condition}}');
 }
 
-module.exports = { renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, dropSellerNotes, listItem, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };
+module.exports = { LAYOUTS, renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, dropSellerNotes, listItem, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };

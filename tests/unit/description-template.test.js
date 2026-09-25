@@ -204,3 +204,63 @@ test('renderDescription sets the template font, and {{fontFamily}} is available 
   const custom = renderDescription({ template: { ...base, fontFamily: 'elegant', customHtml: '<div style="font-family:{{fontFamily}}">{{productName}}</div>' }, productName: 'P', description: 'd' });
   assert.ok(custom.includes("font-family:&#39;Palatino Linotype&#39;") || custom.includes("font-family:'Palatino Linotype'"));
 });
+
+// ---- the card layouts -------------------------------------------------------------
+
+const { readSections } = require('../../src/modules/listings/description-showcase');
+const { LAYOUTS, listItem } = require('../../src/modules/listings/description-template');
+
+const DRAFTED =
+  '**Shockproof Magnetic iPhone Case: MagSafe Charging Rugged Cover**\n' +
+  'Get a distinctive metallic look without the weight of real metal.\n\n' +
+  '**Key Features**\n✨ Metallic Paint Finish: Plated look without the weight.\n🧲 MagSafe Compatible: Aligns with MagSafe chargers.\n\n' +
+  '**Available Models**\niPhone 15 / iPhone 16\n\nPlease select your required model before placing your order.\n\n' +
+  '**Perfect For**\n✓ MagSafe users\n✓ Everyday protection\n\n' +
+  '**How To Use**\n1. Select your model\n2. Fit the case\n\n' +
+  '**Package Includes**\n• 1 × Magnetic Case\n\n' +
+  '**Important:** This is a back case only.\n\n' +
+  'A smart way to protect your phone.';
+
+test("a drafted description is read into the card layouts' sections", () => {
+  const s = readSections(DRAFTED, { listItem, isNoteLine: (l) => /^\*\*important/i.test(l) });
+  assert.strictEqual(s.title, 'Shockproof Magnetic iPhone Case');
+  assert.strictEqual(s.subtitle, 'MagSafe Charging Rugged Cover');
+  assert.deepStrictEqual(s.intro, ['Get a distinctive metallic look without the weight of real metal.']);
+  assert.deepStrictEqual(s.features[0], { icon: '✨', name: 'Metallic Paint Finish', text: 'Plated look without the weight.' });
+  assert.deepStrictEqual(s.options, { heading: 'Available Models', values: ['iPhone 15', 'iPhone 16'], note: 'Please select your required model before placing your order.' });
+  assert.deepStrictEqual(s.perfectFor, ['MagSafe users', 'Everyday protection']);
+  assert.deepStrictEqual(s.steps, ['Select your model', 'Fit the case']);
+  assert.deepStrictEqual(s.includes, ['1 × Magnetic Case']);
+  assert.deepStrictEqual(s.notes, ['This is a back case only.']);
+  assert.deepStrictEqual(s.closing, ['A smart way to protect your phone.']);
+});
+
+test('every layout renders; the card layouts show the photos as a working gallery, the specifics as a table, and the store link', () => {
+  assert.deepStrictEqual(LAYOUTS.map((l) => l.id), ['classic', 'showcase', 'minimal', 'bold', 'boutique']);
+  const images = ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'];
+  const specifics = { Brand: ['Unbranded'], Material: ['PC'], MPN: ['Does not apply'] };
+  for (const { id } of LAYOUTS) {
+    const html = renderDescription({ template: { ...base, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, images, specifics, storeUrl: 'https://www.ebay.co.uk/sch/i.html?_ssn=walexo', recommended: [{ url: 'https://www.ebay.co.uk/itm/1', imageUrl: 'https://i.ebayimg.com/c.jpg', name: 'Other' }] });
+    assert.ok(html.includes('Shockproof Magnetic iPhone Case'), id);
+    assert.doesNotMatch(html, /<script/i, `${id}: no scripts, eBay refuses them`);
+    if (id === 'classic') {
+      assert.match(html, /class="eb"/);
+      continue;
+    }
+    assert.match(html, /id="sxg1" class="sx-r" checked/, `${id}: gallery radios`);
+    assert.match(html, /label for="sxg2"/, `${id}: a thumbnail switches the photo`);
+    assert.match(html, /<td>Material<\/td><td>PC<\/td>/, `${id}: specifics table`);
+    assert.doesNotMatch(html, /MPN/, `${id}: "Does not apply" is left out`);
+    assert.match(html, /_ssn=walexo/, `${id}: visit the store`);
+    assert.match(html, /sx-steps/, `${id}: how to use`);
+    assert.match(html, /Thank you for shopping with <strong>Walexo<\/strong>/);
+  }
+  // The skins differ.
+  const css = (id) => renderDescription({ template: { ...base, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED }).split('</style>')[0];
+  assert.notStrictEqual(css('bold'), css('boutique'));
+  assert.notStrictEqual(css('minimal'), css('showcase'));
+});
+
+test('without a layout saved an account keeps the Classic layout', () => {
+  assert.match(renderDescription({ template: base, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED }), /class="eb"/);
+});
