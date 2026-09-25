@@ -34,6 +34,9 @@ const generateDraftSchema = z.union([
     // { axisName: [value, ...] } — only combinations whose value on every
     // listed axis was chosen are drafted.
     variantSelection: z.record(z.array(z.string().min(1))).optional(),
+    // The supplier photos the seller kept in step two, in their order (the
+    // first is the main photo). Only photos from the same preview count.
+    imageUrls: z.array(z.string().min(1)).min(1, 'Keep at least one photo.').max(100).optional(),
   }),
 ]);
 

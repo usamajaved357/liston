@@ -332,98 +332,6 @@ test('compositeSlotCount limits how many paid AI treatments a draft pays for', (
   assert.strictEqual(slotPlan.compositeSlotCount(slotPlan.DEFAULT_PLAN), 2);
 });
 
-// --- image screening -------------------------------------------------------
-
-const imageScreen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
-
-function screened(overrides) {
-  return {
-    sourceUrl: overrides.sourceUrl || 'https://example.com/a.jpg',
-    screen: {
-      hasTextOrGraphics: false,
-      overlayTextLanguage: 'none',
-      hasSupplierBranding: false,
-      isCollage: false,
-      kind: 'product_photo',
-      showsWholeProduct: true,
-      ...overrides,
-    },
-  };
-}
-
-test('rankScreened keeps supplier feature shots with English text, but never first', () => {
-  // Competitor listings carry these as secondary images and buyers use them.
-  // A rule that dropped every image with text left a listing with 2 of 6
-  // photos. They stay — ranked after the clean photography.
-  const { usable, rejected } = imageScreen.rankScreened([
-    screened({ sourceUrl: 'infographic.jpg', hasTextOrGraphics: true, overlayTextLanguage: 'english', kind: 'product_photo' }),
-    screened({ sourceUrl: 'clean.jpg' }),
-  ]);
-
-  assert.deepStrictEqual(usable.map((i) => i.sourceUrl), ['clean.jpg', 'infographic.jpg']);
-  assert.deepStrictEqual(rejected, []);
-  assert.strictEqual(imageScreen.isHeroEligible(usable[0].screen), true);
-  assert.strictEqual(imageScreen.isHeroEligible(usable[1].screen), false);
-});
-
-test('rankScreened rejects supplier branding, non-English text and size charts outright', () => {
-  const { usable, rejected } = imageScreen.rankScreened([
-    screened({ sourceUrl: 'clean.jpg' }),
-    screened({ sourceUrl: 'watermark.jpg', hasSupplierBranding: true }),
-    screened({ sourceUrl: 'chinese.jpg', hasTextOrGraphics: true, overlayTextLanguage: 'other' }),
-    screened({ sourceUrl: 'sizes.jpg', kind: 'size_chart' }),
-  ]);
-
-  assert.deepStrictEqual(usable.map((i) => i.sourceUrl), ['clean.jpg']);
-  assert.deepStrictEqual(rejected.map((i) => i.sourceUrl), ['watermark.jpg', 'chinese.jpg', 'sizes.jpg']);
-});
-
-test('rankScreened keeps a collage but ranks it last and never as the hero', () => {
-  const { usable } = imageScreen.rankScreened([
-    screened({ sourceUrl: 'grid.jpg', isCollage: true, kind: 'lifestyle_photo' }),
-    screened({ sourceUrl: 'clean.jpg' }),
-  ]);
-  assert.deepStrictEqual(usable.map((i) => i.sourceUrl), ['clean.jpg', 'grid.jpg']);
-  assert.strictEqual(imageScreen.isHeroEligible(usable[1].screen), false);
-});
-
-test('rankScreened puts the best whole-product shot first', () => {
-  // The first image becomes the search thumbnail, so ordering is not cosmetic.
-  const { usable } = imageScreen.rankScreened([
-    screened({ sourceUrl: 'lifestyle.jpg', kind: 'lifestyle_photo', showsWholeProduct: false }),
-    screened({ sourceUrl: 'packaging.jpg', kind: 'packaging', showsWholeProduct: false }),
-    screened({ sourceUrl: 'hero.jpg', kind: 'product_photo', showsWholeProduct: true }),
-  ]);
-
-  assert.strictEqual(usable[0].sourceUrl, 'hero.jpg');
-  assert.strictEqual(usable[1].sourceUrl, 'lifestyle.jpg');
-});
-
-test('rankScreened keeps unscreened images rather than discarding them', () => {
-  // When screening is unavailable the gallery still has to work.
-  const { usable, rejected } = imageScreen.rankScreened([{ sourceUrl: 'a.jpg', screen: null }]);
-  assert.strictEqual(usable.length, 1);
-  assert.strictEqual(rejected.length, 0);
-});
-
-test('screenImages returns images unchanged when no AI key is configured', async () => {
-  const original = require('../../src/config');
-  const previous = original.anthropicApiKey;
-  original.anthropicApiKey = null;
-  try {
-    const input = [{ buffer: await makeImage(600, 600), sourceUrl: 'a.jpg' }];
-    assert.strictEqual(await imageScreen.screenImages(input), input);
-  } finally {
-    original.anthropicApiKey = previous;
-  }
-});
-
-test('the screen tool requires a verdict on text and collage for every image', () => {
-  const required = imageScreen.SCREEN_TOOL.input_schema.properties.images.items.required;
-  assert.ok(required.includes('hasTextOrGraphics'));
-  assert.ok(required.includes('isCollage'));
-});
-
 // --- gallery assembly (no generator) --------------------------------------
 
 const pipeline = require('../../src/modules/ai-generation/image-pipeline');
@@ -433,8 +341,6 @@ const config = require('../../src/config');
 test('the gallery is the supplier photos exactly as they are — no retouching, no badges by default', async () => {
   const source = await makeImage(900, 700);
   mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
-  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
-  mock.method(screen, 'screenImages', async (images) => images.map((i) => ({ ...i, screen: null })));
   const enhanceMock = mock.method(imageOps, 'enhance', async (b) => b);
   const badgeMock = mock.method(heroBadges, 'brandHero', async (b) => b);
   let uploaded = [];
@@ -458,56 +364,27 @@ test('the gallery is the supplier photos exactly as they are — no retouching, 
   assert.deepStrictEqual([meta.width, meta.height], [900, 700]);
 });
 
-test('when every supplier photo is branded or foreign, they are still listed with a loud warning', async () => {
+test("every photo the seller kept is used, in the seller's order, with no AI photo check", async () => {
   const source = await makeImage(900, 900);
   mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
-  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
-  mock.method(screen, 'screenImages', async (images) =>
-    images.map((i) => ({ ...i, screen: { hasTextOrGraphics: true, overlayTextLanguage: 'other', hasSupplierBranding: true, isCollage: false, kind: 'product_photo', showsWholeProduct: true } }))
-  );
-  mock.method(imageOps, 'enhance', async (b) => b);
-  mock.method(heroBadges, 'brandHero', async (b) => b);
+  const Anthropic = require('@anthropic-ai/sdk');
+  const messagesProto = Object.getPrototypeOf(new Anthropic({ apiKey: 'test-key' }).messages);
+  const claude = mock.method(messagesProto, 'create', async () => {
+    throw new Error('no Claude call expected');
+  });
   mock.method(eps, 'uploadAll', async (token, prepared) => prepared.map((p) => p.sourceUrl));
 
-  const { imageUrls, warnings } = await pipeline.buildGalleryImages({
-    sourceImageUrls: ['https://example.com/a.jpg'],
-    accessToken: 't',
-    marketplaceId: 'EBAY_GB',
-    categoryId: '20349',
-  });
-
-  assert.strictEqual(imageUrls.length, 1);
-  assert.match(warnings.join(' '), /Every supplier photo carries supplier branding/);
-});
-
-test('photos with text or branding are kept at the end of the gallery, clean ones first, and the draft says so', async () => {
-  const source = await makeImage(900, 900);
-  mock.method(global, 'fetch', async () => ({ ok: true, status: 200, arrayBuffer: async () => source }));
-  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
-  const clean = { hasTextOrGraphics: false, overlayTextLanguage: 'none', hasSupplierBranding: false, isCollage: false, kind: 'product_photo', showsWholeProduct: true };
-  mock.method(screen, 'screenImages', async (images) =>
-    images.map((i) => ({ ...i, screen: /slide/.test(i.sourceUrl) ? { ...clean, hasTextOrGraphics: true, overlayTextLanguage: 'other' } : clean }))
-  );
-  mock.method(eps, 'uploadAll', async (token, prepared) => prepared.map((p) => p.sourceUrl));
-
-  const { imageUrls, warnings } = await pipeline.buildGalleryImages({
-    sourceImageUrls: ['https://example.com/slide1.jpg', 'https://example.com/a.jpg', 'https://example.com/slide2.jpg', 'https://example.com/b.jpg'],
-    accessToken: 't',
-    marketplaceId: 'EBAY_GB',
-    categoryId: '20349',
-  });
-  assert.strictEqual(imageUrls.length, 4, 'none left out');
-  assert.deepStrictEqual(imageUrls.slice(0, 2).sort(), ['https://example.com/a.jpg', 'https://example.com/b.jpg']);
-  assert.deepStrictEqual(imageUrls.slice(2).sort(), ['https://example.com/slide1.jpg', 'https://example.com/slide2.jpg']);
-  assert.match(warnings.join(' '), /The last 2 photos carry text/);
+  const order = ['https://example.com/slide1.jpg', 'https://example.com/a.jpg', 'https://example.com/slide2.jpg', 'https://example.com/b.jpg'];
+  const { imageUrls, warnings } = await pipeline.buildGalleryImages({ sourceImageUrls: order, accessToken: 't', marketplaceId: 'EBAY_GB', categoryId: '20349' });
+  assert.deepStrictEqual(imageUrls, order, 'none left out, none reordered');
+  assert.strictEqual(claude.mock.callCount(), 0);
+  assert.doesNotMatch(warnings.join(' '), /text|branding/);
 });
 
 test('a photo just under eBay\'s 500px minimum is enlarged rather than lost; a thumbnail is still skipped', async () => {
   const small = await makeImage(400, 300);
   const thumb = await makeImage(48, 48);
   mock.method(global, 'fetch', async (url) => ({ ok: true, status: 200, arrayBuffer: async () => (/thumb/.test(String(url)) ? thumb : small) }));
-  const screen = require('../../src/modules/ai-generation/image-pipeline/image-screen.service');
-  mock.method(screen, 'screenImages', async (images) => images.map((i) => ({ ...i, screen: null })));
   let uploaded = [];
   mock.method(eps, 'uploadAll', async (token, prepared) => {
     uploaded = prepared;

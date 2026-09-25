@@ -47,7 +47,9 @@ test("the admin's eBay usage includes the Browse allowance: who used it, which c
 
   const res = await fetch(`${baseUrl}/api/ebay/usage`, { headers: { Authorization: `Bearer ${auth}` } });
   assert.strictEqual(res.status, 200);
-  const { browse } = await res.json();
+  const { browse, claude } = await res.json();
+  assert.strictEqual(claude.days.length, 14);
+  assert.ok(claude.purposes['draft.write']);
   assert.strictEqual(browse.used, 4);
   assert.strictEqual(browse.limit, 5000);
   assert.deepStrictEqual(browse.byKind, [

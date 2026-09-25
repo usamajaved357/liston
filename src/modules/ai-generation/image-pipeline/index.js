@@ -1,22 +1,24 @@
 const imageOps = require('./image.ops');
 const eps = require('./eps');
 const slotPlan = require('./slot-plan');
-const imageScreen = require('./image-screen.service');
 const heroBadges = require('./hero-badges');
 const config = require('../../../config');
 const logger = require('../../../utils/logger');
 
 // The listing image pipeline, in one place.
 //
-//   supplier photo → screen (drop text slides / collages) → enhance
-//     (trim margins, 1600², sharpen, lift) → badges on the hero only → EPS
+//   supplier photo (the ones the seller kept, in their order) → size check
+//     → badges on the hero only → EPS
 //
 // No generative model and no retouching. Both were tried: generation cost
 // ~$0.20 an image and drifted from the product; sharpening/re-framing/badges
 // didn't make the seller happier with the result. The supplier's file is
 // published exactly as it is — the seller replaces or adds their own photos
-// from the draft editor when they want something different. Screening stays,
-// but only to keep other sellers' branding and foreign-language slides out.
+// from the draft editor when they want something different. There is no AI
+// photo check any more: the seller picks and orders the photos before
+// drafting (step two of a new draft), and every photo they kept is used —
+// a vision call per draft only to reorder them cost ~40% of drafting's AI
+// spend.
 //
 // Badges on the main image (UK flag / FREE SHIPPING / border) are still
 // available, all off by default — see config.imageGeneration.
@@ -40,9 +42,9 @@ async function buildGalleryImages({ sourceImageUrls, accessToken, marketplaceId,
     return { imageUrls: [], warnings: ['This product had no source images to work from.'] };
   }
 
-  // Screen BEFORE spending anything. Supplier galleries mix real photography
-  // with junk — a live AliExpress listing served a 48×48 tracking thumbnail
-  // among its product shots.
+  // Size check before anything is uploaded: supplier galleries can carry
+  // junk — a live AliExpress listing served a 48×48 tracking thumbnail among
+  // its product shots.
   const screened = (
     await Promise.all(
       sourceImageUrls.map(async (url) => {
@@ -56,38 +58,8 @@ async function buildGalleryImages({ sourceImageUrls, accessToken, marketplaceId,
     return { imageUrls: [], warnings: ["None of this product's photos met eBay's minimum image size."] };
   }
 
-  // Resolution isn't the only way a supplier photo is unusable. Supplier
-  // galleries are sales decks — infographic slides with text callouts sit
-  // alongside the real photography, and eBay demotes listings whose images
-  // carry text. This looks at what each image actually shows, drops the
-  // marketing graphics, and puts the best product shot first (it becomes the
-  // search thumbnail).
-  const reviewed = await imageScreen.screenImages(screened.map((image) => image.prepared));
-  const { usable, rejected } = imageScreen.rankScreened(reviewed);
-
+  const chosen = screened.map((image) => image.prepared);
   const warnings = [];
-  let chosen = usable;
-  if (!chosen.length) {
-    // Every photo carries supplier branding or foreign text (a GPS-tag
-    // listing shipped seven such slides). A listing with no images is worse
-    // than one with them — the seller's call, flagged loudly.
-    chosen = rankRejectedForListing(rejected);
-    warnings.push(
-      'Every supplier photo carries supplier branding or non-English text. They are used as-is because nothing ' +
-        'cleaner exists — replace them with your own photos before publishing.'
-    );
-  } else {
-    if (!imageScreen.isHeroEligible(chosen[0].screen)) {
-      warnings.push(
-        'No clean photo of the whole product was found for the main image, so the best available one is used — ' +
-          "eBay's picture policy is strictest on the main photo; consider replacing it."
-      );
-    }
-    // Every supplier photo is kept (the seller wants all of them): the ones
-    // carrying text, prices or another seller's branding go last, so the
-    // main photo and the first few stay clean, and the seller decides.
-    if (rejected.length) chosen = [...usable, ...rankRejectedForListing(rejected)];
-  }
 
   const finished = chosen.slice(0, plan.recommendedImages);
   const settings = config.imageGeneration;
@@ -115,12 +87,6 @@ async function buildGalleryImages({ sourceImageUrls, accessToken, marketplaceId,
   if (enlarged) {
     warnings.push(`${enlarged} small photo${enlarged === 1 ? ' was' : 's were'} enlarged to eBay's 500px minimum, so ${enlarged === 1 ? 'it' : 'they'}'ll look soft.`);
   }
-  if (usable.length && rejected.length) {
-    warnings.push(
-      `The last ${rejected.length} photo${rejected.length === 1 ? '' : 's'} carr${rejected.length === 1 ? 'ies' : 'y'} text, prices or another seller's branding. ` +
-        'eBay can show listings with text on their photos lower, so delete them in the editor if you want.'
-    );
-  }
   const soft = finished.filter(
     (image) => image.sourceMeta && Math.max(image.sourceMeta.width, image.sourceMeta.height) < imageOps.TARGET_SIZE
   ).length;
@@ -139,19 +105,6 @@ async function buildGalleryImages({ sourceImageUrls, accessToken, marketplaceId,
 
   const imageUrls = await eps.uploadAll(accessToken, shots, { marketplaceId });
   return { imageUrls, warnings };
-}
-
-// Among rejected slides, the ones that at least photograph the whole product
-// come first; collages last.
-function rankRejectedForListing(rejected) {
-  const score = (image) => {
-    const screen = image.screen || {};
-    if (screen.isCollage) return 3;
-    if (screen.kind === 'product_photo' && screen.showsWholeProduct) return 0;
-    if (screen.kind === 'product_photo') return 1;
-    return 2;
-  };
-  return [...rejected].sort((a, b) => score(a) - score(b));
 }
 
 /**

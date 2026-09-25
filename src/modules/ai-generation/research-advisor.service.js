@@ -1,6 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../../config');
 const logger = require('../../utils/logger');
+const aiUsage = require('./ai-usage');
 
 // The judgement calls in product research that numbers can't make: is this
 // a brand that has eBay take listings down (VeRO), is the product restricted
@@ -113,6 +114,7 @@ async function advise(key, input) {
       tool_choice: { type: 'tool', name: TOOL.name },
       messages: [{ role: 'user', content: prompt(input) }],
     });
+    aiUsage.record('research', response);
     const out = response.content.find((c) => c.type === 'tool_use')?.input;
     if (!out) return null;
     const flagged = out.brandRisk?.level === 'none' ? [] : out.brandRisk?.brands;

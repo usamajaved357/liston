@@ -368,7 +368,9 @@ async function generateDraftInput({
     source = {
       ...source,
       specifics: { ...(source.specifics || {}), ...only.attributes },
-      imageUrls: only.imageUrl ? [only.imageUrl, ...(source.imageUrls || []).filter((u) => u !== only.imageUrl)] : source.imageUrls,
+      // The option's own photo leads, unless the seller already chose the
+      // photos and their order.
+      imageUrls: only.imageUrl && !source.imagesChosen ? [only.imageUrl, ...(source.imageUrls || []).filter((u) => u !== only.imageUrl)] : source.imageUrls,
       priceText: only.priceText || source.priceText,
       variants: [],
       variantAxes: [],

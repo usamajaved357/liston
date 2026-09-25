@@ -1424,7 +1424,7 @@ test('a policy block clears what the attempt created on eBay and renews the SKU'
 
 // --- rewording eBay's filter words ------------------------------------------
 
-test('fixPolicyWords applies the AI rewording, then swaps whatever it left behind, and saves', async () => {
+test('fixPolicyWords swaps the words the table covers without asking the AI, and saves', async () => {
   const revisionService = require('../../src/modules/listings/listing-revision.service');
   let stored = pendingDraft({
     commonTitle: 'Fluorocarbon Hooklink Braid 20m',
@@ -1441,21 +1441,43 @@ test('fixPolicyWords applies the AI rewording, then swaps whatever it left behin
     stored = { ...stored, generated_data: data };
     return stored;
   });
-  // The model fixes the title and description but forgets the specific and the option.
-  mock.method(revisionService, 'reviseText', async ({ instruction }) => {
-    assert.match(instruction, /"fluorocarbon", "lead"/);
-    return { changes: { commonTitle: 'Low-Vis Hooklink Braid 20m', commonDescription: 'Clear low-visibility coated braid. Pairs with weight clips.' }, summary: 'Reworded.' };
+  const ai = mock.method(revisionService, 'reviseText', async () => {
+    throw new Error('no AI call expected');
   });
 
   const result = await listingService.fixPolicyWords('listing-1', USER_ID);
 
+  assert.strictEqual(ai.mock.callCount(), 0, 'every word has safe wording in the table');
   assert.strictEqual(result.changed, true);
   assert.deepStrictEqual(result.remaining, []);
   const data = stored.generated_data;
-  assert.strictEqual(data.commonTitle, 'Low-Vis Hooklink Braid 20m');
+  assert.strictEqual(data.commonTitle, 'Low-visibility Hooklink Braid 20m');
+  assert.strictEqual(data.commonDescription, 'Low-visibility coated braid. Pairs with weight clips.');
   assert.deepStrictEqual(data.variesBy.aspects.Material, ['Low-visibility']);
   assert.deepStrictEqual(data.variesBy.specifications[0].values, ['Camo Brown', 'Weight Grey']);
-  assert.deepStrictEqual(data.variants[1].aspects.Colour, ['Weight Grey']);
+  assert.match(result.summary, /Swapped "fluorocarbon", "lead" for safe wording/);
+});
+
+test('fixPolicyWords asks the AI only about words the table has no wording for, as passages', async () => {
+  const revisionService = require('../../src/modules/listings/listing-revision.service');
+  let stored = pendingDraft({ title: 'Aerosol Cleaner with Lead Clips', description: 'An aerosol can for bikes.', aspects: {}, imageUrls: [] });
+  mock.method(listingRepository, 'findByIdForUser', async () => stored);
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => {
+    stored = { ...stored, generated_data: data };
+    return stored;
+  });
+  mock.method(revisionService, 'reviseText', async ({ instruction, purpose }) => {
+    assert.strictEqual(purpose, 'editor.policy');
+    assert.match(instruction, /Remove every occurrence of "aerosol" from/);
+    assert.doesNotMatch(instruction, /"lead"/, 'the table handles lead');
+    assert.match(instruction, /descriptionEdits/);
+    return { changes: { title: 'Pump Cleaner with Lead Clips', description: 'A pump can for bikes.' }, summary: 'Reworded.' };
+  });
+
+  const result = await listingService.fixPolicyWords('listing-1', USER_ID);
+  assert.deepStrictEqual(result.remaining, []);
+  assert.strictEqual(stored.generated_data.title, 'Pump Cleaner with Weight Clips', 'the AI rewording, then the table for lead');
+  assert.strictEqual(stored.generated_data.description, 'A pump can for bikes.');
 });
 
 test('fixPolicyWords still clears the words when the AI editor is unavailable', async () => {
@@ -1795,4 +1817,35 @@ test('a removed variation is kept on the draft, follows renames, and can be put 
   await listingService.updateDraft('listing-1', USER_ID, { restoreVariants: [1] });
   assert.strictEqual(stored.variants.filter((v) => v.aspects.Color[0] === 'Pink').length, 1);
   assert.strictEqual(stored.removedVariants.length, 1);
+});
+
+test("step two drafts with only the photos the seller kept, in their order; photos from elsewhere are ignored", async () => {
+  const taxonomy = require('../../src/modules/ebay/api/ebay.taxonomy');
+  const offered = ['https://ae01.alicdn.com/a.jpg', 'https://ae01.alicdn.com/b.jpg', 'https://ae01.alicdn.com/c.jpg'];
+  mock.method(connectionService, 'getConnectionSummary', async () => ebayConnection());
+  mock.method(orchestrator, 'readSources', async () => ({ competitor: null, source: { title: 'Lamp', imageUrls: offered, variants: [], specifics: {} }, categorySuggestions: [] }));
+  mock.method(orchestrator, 'resolveCategory', async () => ({ categoryId: '1', categoryPath: ['Lamps'] }));
+  mock.method(orchestrator, 'planVariationAxes', () => ({ axes: [], fixed: {} }));
+  mock.method(taxonomy, 'getAspectSchema', async () => []);
+  const preview = await listingService.previewDraftSources(CONNECTION_ID, USER_ID, { sourceUrl: 'https://www.aliexpress.com/item/1.html' });
+
+  let drafted = null;
+  mock.method(orchestrator, 'generateDraftInput', async (input) => {
+    drafted = input.source;
+    throw new Error('stop here');
+  });
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
+
+  await assert.rejects(
+    listingService.generateEbayDraftFromUrls(CONNECTION_ID, USER_ID, { previewId: preview.previewId, imageUrls: [offered[2], 'https://evil.example/x.jpg', offered[0]] }),
+    /stop here/
+  );
+  assert.deepStrictEqual(drafted.imageUrls, [offered[2], offered[0]], 'b removed, c made the main photo, the stranger ignored');
+  assert.strictEqual(drafted.imagesChosen, true);
+
+  await assert.rejects(
+    listingService.generateEbayDraftFromUrls(CONNECTION_ID, USER_ID, { previewId: preview.previewId, imageUrls: ['https://evil.example/x.jpg'] }),
+    (err) => err.statusCode === 400 && /Keep at least one/.test(err.message)
+  );
 });

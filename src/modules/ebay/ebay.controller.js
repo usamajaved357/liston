@@ -11,6 +11,7 @@ const governor = require('./request-governor');
 const analyticsBudget = require('./analytics-budget');
 const browseUsage = require('./browse-usage');
 const researchService = require('../research/research.service');
+const aiUsage = require('../ai-generation/ai-usage');
 const analyticsService = require('../analytics/analytics.service');
 const config = require('../../config');
 const logger = require('../../utils/logger');
@@ -244,6 +245,8 @@ async function usage(req, res, next) {
       // The traffic report's separate allowance (see analytics-budget).
       analytics: await analyticsService.adminUsage(labels),
       browse: await browseAdminUsage(),
+      // Claude's spend by feature, per day (ai-generation/ai-usage).
+      claude: await aiUsage.snapshot(14),
     });
   } catch (err) {
     next(err);

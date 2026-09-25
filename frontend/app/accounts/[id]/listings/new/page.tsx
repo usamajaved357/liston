@@ -25,11 +25,24 @@ function ThinkingDots() {
   );
 }
 
-// The supplier's photos, large enough to judge, before anything is drafted.
-function PhotoCarousel({ images }: { images: string[] }) {
-  const [index, setIndex] = useState(0);
-  const count = images.length;
-  const go = (delta: number) => setIndex((i) => (i + delta + count) % count);
+// eBay's limit on photos per listing; the draft uses the first this many.
+const EBAY_MAX_PHOTOS = 24;
+
+// The supplier's photos, large enough to judge, before anything is drafted:
+// the seller removes the ones they don't want and picks the main photo. Only
+// the kept photos go into the draft, in this order (the first is the main
+// photo and eBay's search thumbnail).
+function PhotoPicker({ images, kept, onChange }: { images: string[]; kept: string[]; onChange: (next: string[]) => void }) {
+  const [viewing, setViewing] = useState(images[0]);
+  const removed = images.filter((url) => !kept.includes(url));
+  const shown = [...kept, ...removed];
+  const at = Math.max(0, shown.indexOf(viewing));
+  const current = shown[at];
+  const isKept = kept.includes(current);
+  const go = (delta: number) => setViewing(shown[(at + delta + shown.length) % shown.length]);
+  const remove = (url: string) => onChange(kept.filter((u) => u !== url));
+  const restore = (url: string) => onChange([...kept, url]);
+  const makeMain = (url: string) => onChange([url, ...kept.filter((u) => u !== url)]);
   const arrow =
     "absolute top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--color-line)] bg-white/95 text-[var(--color-ink)] shadow-sm transition-colors hover:border-[var(--color-line-strong)]";
 
@@ -37,12 +50,13 @@ function PhotoCarousel({ images }: { images: string[] }) {
     <div>
       <div className="relative aspect-square overflow-hidden rounded-xl border border-[var(--color-line)] bg-white">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={images[index]} alt="" className="h-full w-full object-contain" />
-        {index === 0 && <span className="chip chip-primary absolute left-3 top-3 h-7">Main photo</span>}
+        <img src={current} alt="" className={`h-full w-full object-contain ${isKept ? "" : "opacity-40 grayscale"}`} />
+        {isKept && kept[0] === current && <span className="chip chip-primary absolute left-3 top-3 h-7">Main photo</span>}
+        {!isKept && <span className="chip absolute left-3 top-3 h-7 bg-white">Removed</span>}
         <span className="absolute right-3 top-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-semibold text-white">
-          {index + 1} / {count}
+          {at + 1} / {shown.length}
         </span>
-        {count > 1 && (
+        {shown.length > 1 && (
           <>
             <button type="button" onClick={() => go(-1)} aria-label="Previous photo" className={`${arrow} left-3`}>
               <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
@@ -56,22 +70,82 @@ function PhotoCarousel({ images }: { images: string[] }) {
             </button>
           </>
         )}
+        <div className="absolute inset-x-3 bottom-3 flex justify-center gap-2">
+          {isKept ? (
+            <>
+              {kept[0] !== current && (
+                <button type="button" onClick={() => makeMain(current)} className="btn btn-secondary btn-sm bg-white/95">
+                  Make main photo
+                </button>
+              )}
+              <button type="button" onClick={() => remove(current)} className="btn btn-secondary btn-sm bg-white/95 text-[var(--color-danger)]">
+                Remove photo
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={() => restore(current)} className="btn btn-secondary btn-sm bg-white/95">
+              Put it back
+            </button>
+          )}
+        </div>
       </div>
-      <div className="mt-2.5 grid grid-cols-6 gap-2 sm:grid-cols-8">
-        {images.map((url, i) => (
-          <button
-            key={`${url}-${i}`}
-            type="button"
-            onClick={() => setIndex(i)}
-            aria-label={`Photo ${i + 1}`}
-            className={`aspect-square overflow-hidden rounded-lg border-2 bg-white transition-colors ${
-              i === index ? "border-[var(--color-primary)]" : "border-[var(--color-line)] hover:border-[var(--color-line-strong)]"
-            }`}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt="" className="h-full w-full object-contain" />
+
+      <div className="mt-2.5 flex items-center justify-between text-xs">
+        <span className="text-[var(--color-muted)]">
+          <span className="font-semibold text-[var(--color-ink)]">{Math.min(kept.length, EBAY_MAX_PHOTOS)}</span> of {images.length} photos go into the draft
+          {kept.length > EBAY_MAX_PHOTOS && (
+            <span className="text-amber-700"> · eBay takes {EBAY_MAX_PHOTOS}, so the last {kept.length - EBAY_MAX_PHOTOS} are left out; remove some to choose which</span>
+          )}
+        </span>
+        {removed.length > 0 && (
+          <button type="button" onClick={() => onChange([...kept, ...removed])} className="font-semibold text-[var(--color-primary)] hover:underline">
+            Keep all
           </button>
-        ))}
+        )}
+      </div>
+      <div className="mt-2 grid grid-cols-5 gap-2 sm:grid-cols-6">
+        {shown.map((url, i) => {
+          const keptHere = i < kept.length;
+          return (
+            <div key={url} className="group relative">
+              <button
+                type="button"
+                onClick={() => setViewing(url)}
+                aria-label={`Photo ${i + 1}${keptHere ? "" : ", removed"}`}
+                className={`block aspect-square w-full overflow-hidden rounded-lg border-2 bg-white transition-colors ${
+                  url === current ? "border-[var(--color-primary)]" : "border-[var(--color-line)] hover:border-[var(--color-line-strong)]"
+                }`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={url} alt="" className={`h-full w-full object-contain ${keptHere ? "" : "opacity-30 grayscale"}`} />
+              </button>
+              {i === 0 && keptHere && (
+                <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-[var(--color-primary)] px-1 text-[9.5px] font-semibold text-white">Main</span>
+              )}
+              <button
+                type="button"
+                onClick={() => (keptHere ? remove(url) : restore(url))}
+                aria-label={keptHere ? `Remove photo ${i + 1}` : `Put photo ${i + 1} back`}
+                title={keptHere ? "Remove" : "Put back"}
+                className={`absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border shadow-sm ${
+                  keptHere
+                    ? "border-[var(--color-line)] bg-white text-[var(--color-muted)] hover:border-[var(--color-danger)] hover:text-[var(--color-danger)]"
+                    : "border-[var(--color-primary)] bg-[var(--color-primary)] text-white"
+                }`}
+              >
+                {keptHere ? (
+                  <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3" aria-hidden>
+                    <path d="M5 5l10 10M15 5L5 15" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+                    <path d="M5 10.5l3.2 3.2L15 6.8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -91,6 +165,8 @@ export default function DraftListingPage() {
   const [preview, setPreview] = useState<DraftPreview | null>(null);
   // { axisName: Set of ticked values }
   const [selection, setSelection] = useState<Record<string, Set<string>>>({});
+  // The supplier photos going into the draft, in order (first = main photo).
+  const [keptPhotos, setKeptPhotos] = useState<string[]>([]);
   const [busy, setBusy] = useState<"read" | "draft" | null>(null);
   const [statusIndex, setStatusIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -123,6 +199,7 @@ export default function DraftListingPage() {
     try {
       const data = await api.previewDraftListing(params.id, { competitorUrl: competitorUrl.trim() || undefined, sourceUrl });
       setPreview(data);
+      setKeptPhotos(data.source.imageUrls);
       // Everything ticked to start with — the seller unticks what they
       // don't want, which is the faster direction for most products.
       const all: Record<string, Set<string>> = {};
@@ -163,7 +240,11 @@ export default function DraftListingPage() {
     try {
       const variantSelection: Record<string, string[]> = {};
       for (const axis of preview.source.axes) variantSelection[axis.name] = [...(selection[axis.name] || [])];
-      const { listing } = await api.generateDraftListing(params.id, { previewId: preview.previewId, variantSelection });
+      const { listing } = await api.generateDraftListing(params.id, {
+        previewId: preview.previewId,
+        variantSelection,
+        imageUrls: preview.source.imageUrls.length ? keptPhotos : undefined,
+      });
       router.push(`/accounts/${params.id}/listings/draft/${listing.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't draft this listing. Try again.");
@@ -311,18 +392,16 @@ export default function DraftListingPage() {
                     <span className="chip">
                       {preview.source.totalCombinations || 1} option{preview.source.totalCombinations === 1 ? "" : "s"}
                     </span>
-                    <span className="chip">
-                      {preview.source.imageUrls.length} photo{preview.source.imageUrls.length === 1 ? "" : "s"}
-                    </span>
                   </div>
                   {preview.source.imageUrls.length > 0 && (
                     <div className="mt-4">
-                      <PhotoCarousel images={preview.source.imageUrls} />
+                      <p className={labelClass}>Photos</p>
+                      <p className="mb-2.5 mt-1 text-xs text-[var(--color-muted)]">
+                        Remove any you don&apos;t want (text, logos, size charts) and pick the main photo. You can still change them in the editor.
+                      </p>
+                      <PhotoPicker images={preview.source.imageUrls} kept={keptPhotos} onChange={setKeptPhotos} />
                     </div>
                   )}
-                  <p className="mt-3 text-xs text-[var(--color-muted)]">
-                    All supplier photos go into the draft as they are. Remove, reorder or replace them in the editor.
-                  </p>
                 </div>
               </div>
 
@@ -463,11 +542,19 @@ export default function DraftListingPage() {
                 ) : (
                   "Single listing"
                 )}
+                {preview.source.imageUrls.length > 0 && (
+                  <span className={keptPhotos.length ? "" : "font-semibold text-[var(--color-danger)]"}>
+                    {" · "}
+                    {keptPhotos.length
+                      ? `${Math.min(keptPhotos.length, EBAY_MAX_PHOTOS)} photo${keptPhotos.length === 1 ? "" : "s"}`
+                      : "keep at least one photo"}
+                  </span>
+                )}
               </p>
               <button
                 type="button"
                 onClick={handleDraft}
-                disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0)}
+                disabled={busy !== null || (preview.source.axes.length > 0 && selectedCount === 0) || (preview.source.imageUrls.length > 0 && keptPhotos.length === 0)}
                 className="btn btn-primary"
               >
                 {busy === "draft" ? (

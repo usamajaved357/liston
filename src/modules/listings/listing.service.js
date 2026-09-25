@@ -8,7 +8,7 @@ const imageGates = require('../ai-generation/image-pipeline/gates');
 const { prepareAspectsForEbay, canonicalizeVariationValues } = require('../ai-generation/aspect-validator');
 const storeCategory = require('./store-category');
 const logger = require('../../utils/logger');
-const { hazmatTriggersIn, HAZMAT_TRIGGERS, scrubDraft } = require('./policy-words');
+const { hazmatTriggersIn, HAZMAT_TRIGGERS, REPLACEMENTS, scrubDraft } = require('./policy-words');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
@@ -261,10 +261,20 @@ function generateEbayDraftFromUrls(connectionId, userId, input) {
   );
 }
 
+// The supplier photos the seller kept in step two, in their order. Only
+// photos the preview read are accepted, so a draft can't be pointed at
+// anything else.
+function keptPhotos(source, imageUrls) {
+  const offered = new Set(source.imageUrls || []);
+  const kept = [...new Set(imageUrls)].filter((url) => offered.has(url));
+  if (!kept.length) throw new ListingError('Keep at least one of the supplier\'s photos.', 400);
+  return { ...source, imageUrls: kept, imagesChosen: true };
+}
+
 async function generateEbayDraftFromUrlsNow(
   connectionId,
   userId,
-  { competitorUrl, sourceUrl, previewId, variantSelection }
+  { competitorUrl, sourceUrl, previewId, variantSelection, imageUrls }
 ) {
   // STEP TWO picks up the listings read in step one. A preview belongs to the
   // user and connection that made it; anything else is treated as expired.
@@ -275,7 +285,7 @@ async function generateEbayDraftFromUrlsNow(
     if (!preview || preview.userId !== userId || preview.connectionId !== connectionId) {
       throw new ListingError('That preview has expired. Read the listings again.', 400);
     }
-    preRead = preview;
+    preRead = imageUrls ? { ...preview, source: keptPhotos(preview.source, imageUrls) } : preview;
     competitorUrl = preview.competitorUrl;
     sourceUrl = preview.sourceUrl;
   }
@@ -671,7 +681,7 @@ async function updateDraft(id, userId, patch) {
       draft.aspects = aspects;
     }
     draft.warnings = [...(draft.warnings || []).filter((w) => !/^Category changed/.test(w)), ...refit.warnings];
-    draft.warnings.unshift(`Category changed to ${draft.categoryPath.join(' > ')}: title, description and item specifics were refitted. Check them.`);
+    draft.warnings.unshift(`Category changed to ${draft.categoryPath.join(' > ')}: the title and item specifics were refitted to it. Check them.`);
     // Nothing the patch also carries for these fields should win over a
     // refit the seller just asked for; the editor sends the category alone.
   }
@@ -764,11 +774,13 @@ async function proposeTextRevision(id, userId, instruction, current = null) {
 }
 
 // Rewrites every word eBay's hazardous-materials filter reacts to, on the
-// draft itself. The model goes first — it can rephrase a sentence rather
-// than swap a word — under an instruction that leaves it no discretion;
-// whatever it leaves behind is swapped by the fixed replacement table, so
-// the draft never comes back still carrying a trigger word. Applied and
-// saved, not proposed: the seller asked for exactly this.
+// draft itself. Words with a safe replacement in the fixed table (the
+// common ones: lead → weight, battery → power cell…) are swapped straight
+// away, at no cost. Only a word the table has no wording for goes to the
+// model, which can rephrase the sentence rather than just drop the word —
+// and it returns the passages it changes, not the whole listing. Whatever
+// is left after that is swapped by the table. Applied and saved, not
+// proposed: the seller asked for exactly this.
 async function fixPolicyWords(id, userId) {
   const listing = await loadEditableDraft(id, userId);
   let draft = listing.generated_data || {};
@@ -776,33 +788,37 @@ async function fixPolicyWords(id, userId) {
   if (!before.length) return { changed: false, before: [], remaining: [], summary: 'No word from the filter list is in this draft.' };
 
   const words = [...new Set(before.map((entry) => entry.match(/^"([^"]+)"/)[1]))];
+  const uncovered = words.filter((w) => !Object.prototype.hasOwnProperty.call(REPLACEMENTS, w.toLowerCase()));
   const applied = [];
-  try {
-    const proposal = await revisionService.reviseText({
-      draft,
-      instruction:
-        `Remove every occurrence of ${words.map((w) => `"${w}"`).join(', ')} from the title, the description, the item specifics and the variation option names. ` +
-        `This is mandatory even where the word describes the product accurately — eBay's automated filter refuses the listing while any of them is present. ` +
-        `Rephrase so the meaning survives without the word (a fluorocarbon coating becomes "clear low-visibility coating", lead becomes "weight", ` +
-        `lead-free becomes "eco-friendly"). Return the complete new title and description, every changed item specific, and a renameAxisValues entry for every option name that contained one of the words.`,
-      options: {},
-    });
-    if (!proposal.cannotDo && Object.keys(proposal.changes).length) {
-      const patch = {};
-      for (const key of ['title', 'commonTitle', 'description', 'commonDescription']) if (proposal.changes[key] !== undefined) patch[key] = proposal.changes[key];
-      if (proposal.changes.aspects) {
-        const current = Array.isArray(draft.variants) && draft.variants.length ? draft.variesBy?.aspects : draft.aspects;
-        patch.aspects = { ...(current || {}), ...proposal.changes.aspects };
+  if (uncovered.length) {
+    try {
+      const proposal = await revisionService.reviseText({
+        draft,
+        purpose: 'editor.policy',
+        instruction:
+          `Remove every occurrence of ${uncovered.map((w) => `"${w}"`).join(', ')} from the title, the description, the item specifics and the variation option names. ` +
+          `This is mandatory even where the word describes the product accurately — eBay's automated filter refuses the listing while any of them is present. ` +
+          `Rephrase so the meaning survives without the word. Change only the sentences that contain it: return the new title if it has one, ` +
+          `descriptionEdits for the description, every changed item specific, and a renameAxisValues entry for every option name that contained one of the words.`,
+        options: {},
+      });
+      if (!proposal.cannotDo && Object.keys(proposal.changes).length) {
+        const patch = {};
+        for (const key of ['title', 'commonTitle', 'description', 'commonDescription']) if (proposal.changes[key] !== undefined) patch[key] = proposal.changes[key];
+        if (proposal.changes.aspects) {
+          const current = Array.isArray(draft.variants) && draft.variants.length ? draft.variesBy?.aspects : draft.aspects;
+          patch.aspects = { ...(current || {}), ...proposal.changes.aspects };
+        }
+        if (proposal.changes.renameAxisValues?.length) patch.renameAxisValues = proposal.changes.renameAxisValues;
+        if (Object.keys(patch).length) {
+          const result = await updateDraft(id, userId, patch);
+          draft = result.listing.generated_data || draft;
+          applied.push(proposal.summary || 'Reworded by the AI editor.');
+        }
       }
-      if (proposal.changes.renameAxisValues?.length) patch.renameAxisValues = proposal.changes.renameAxisValues;
-      if (Object.keys(patch).length) {
-        const result = await updateDraft(id, userId, patch);
-        draft = result.listing.generated_data || draft;
-        applied.push(proposal.summary || 'Reworded by the AI editor.');
-      }
+    } catch (err) {
+      logger.warn('AI rewording of policy words failed; falling back to replacement', { listingId: id, error: err.message });
     }
-  } catch (err) {
-    logger.warn('AI rewording of policy words failed; falling back to replacement', { listingId: id, error: err.message });
   }
 
   // Backstop: whatever is still there is swapped for safe wording.
@@ -811,7 +827,7 @@ async function fixPolicyWords(id, userId) {
     if (Object.keys(changes).length) {
       const result = await updateDraft(id, userId, changes);
       draft = result.listing.generated_data || draft;
-      applied.push('Remaining words swapped for safe wording.');
+      applied.push(uncovered.length ? 'Remaining words swapped for safe wording.' : `Swapped ${words.map((w) => `"${w}"`).join(', ')} for safe wording.`);
     }
   }
 

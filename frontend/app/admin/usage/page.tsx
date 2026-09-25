@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AnalyticsUsage, api, ApiError, BrowseUsage, EbayUsage, User } from "@/lib/api";
+import { AnalyticsUsage, api, ApiError, BrowseUsage, ClaudeUsage, EbayUsage, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
@@ -249,11 +249,106 @@ function BrowseUsageSection({ usage }: { usage: BrowseUsage }) {
   );
 }
 
-type UsageTab = "trading" | "traffic" | "browse";
+// Claude's spend by feature, counted from each response's own token figures
+// and priced per model. The Console shows the bill; this shows where it went.
+const usd = (n: number) => `$${n < 0.1 && n > 0 ? n.toFixed(4) : n.toFixed(2)}`;
+const dayLabel = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" });
+
+function ClaudeUsageSection({ usage }: { usage: ClaudeUsage }) {
+  const week = usage.days.slice(0, 7);
+  const weekTotal = week.reduce((sum, d) => sum + d.total, 0);
+  const byPurpose = new Map<string, { label: string; calls: number; input: number; output: number; cost: number }>();
+  for (const day of week) {
+    for (const row of day.byPurpose) {
+      const into = byPurpose.get(row.purpose) || { label: row.label, calls: 0, input: 0, output: 0, cost: 0 };
+      into.calls += row.calls;
+      into.input += row.input;
+      into.output += row.output;
+      into.cost += row.cost;
+      byPurpose.set(row.purpose, into);
+    }
+  }
+  const features = [...byPurpose.entries()].sort((a, b) => b[1].cost - a[1].cost);
+  const maxDay = Math.max(0.0001, ...usage.days.map((d) => d.total));
+  const today = usage.days[0];
+  return (
+    <section className="space-y-4">
+      <p className="text-[12.5px] text-[var(--color-muted)]">
+        What each Claude call cost, by the feature that made it, from the token counts Claude returns ({usage.model}; list prices). Counted from when
+        this was switched on; days are UTC, as in the Claude Console.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Tile label="Today" value={usd(today?.total ?? 0)} sub={`${(today?.calls ?? 0).toLocaleString()} calls`} />
+        <Tile label="Last 7 days" value={usd(weekTotal)} sub={`about ${usd(weekTotal / 7)} a day`} />
+        <Tile label="Biggest cost (7 days)" value={features[0] ? usd(features[0][1].cost) : "—"} sub={features[0]?.[1].label ?? "no calls yet"} />
+        <Tile
+          label="Per draft"
+          value={byPurpose.get("draft.write")?.calls ? usd(((byPurpose.get("draft.write")?.cost ?? 0) + (byPurpose.get("draft.title")?.cost ?? 0)) / byPurpose.get("draft.write")!.calls) : "—"}
+          sub="writing + title top-up, average"
+        />
+      </div>
+
+      <section className="card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-[var(--color-paper)] text-left text-[11px] uppercase tracking-wide text-[var(--color-muted)]">
+            <tr>
+              <th className="px-5 py-2.5 font-semibold">Feature · last 7 days</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Calls</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Tokens in / out</th>
+              <th className="px-3 py-2.5 text-right font-semibold">Per call</th>
+              <th className="px-5 py-2.5 text-right font-semibold">Cost</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--color-line)]">
+            {features.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-5 py-6 text-center text-[var(--color-muted)]">
+                  No Claude calls counted yet.
+                </td>
+              </tr>
+            )}
+            {features.map(([purpose, f]) => (
+              <tr key={purpose}>
+                <td className="px-5 py-2.5 text-[var(--color-ink)]">
+                  {f.label}
+                  <span className="ml-2 text-xs text-[var(--color-muted)]">{weekTotal ? `${Math.round((f.cost / weekTotal) * 100)}%` : ""}</span>
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{f.calls.toLocaleString()}</td>
+                <td className="px-3 py-2.5 text-right text-xs tabular-nums text-[var(--color-muted)]">
+                  {Math.round(f.input / Math.max(1, f.calls)).toLocaleString()} / {Math.round(f.output / Math.max(1, f.calls)).toLocaleString()} each
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums">{usd(f.cost / Math.max(1, f.calls))}</td>
+                <td className="px-5 py-2.5 text-right font-semibold tabular-nums text-[var(--color-ink)]">{usd(f.cost)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="card px-5 py-4">
+        <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By day</h2>
+        <ul className="mt-2 space-y-1.5">
+          {usage.days.map((d) => (
+            <li key={d.day} className="grid grid-cols-[64px_1fr_72px] items-center gap-3 text-sm" title={d.byPurpose.map((r) => `${r.label}: ${usd(r.cost)}`).join("\n")}>
+              <span className="text-xs text-[var(--color-muted)]">{dayLabel(d.day)}</span>
+              <span className="h-2.5 overflow-hidden rounded-full bg-[var(--color-line)]">
+                <span className="block h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${(d.total / maxDay) * 100}%` }} />
+              </span>
+              <span className="text-right tabular-nums text-[var(--color-ink)]">{usd(d.total)}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </section>
+  );
+}
+
+type UsageTab = "trading" | "traffic" | "browse" | "claude";
 const USAGE_TABS: { key: UsageTab; label: string }[] = [
   { key: "trading", label: "Trading API" },
   { key: "traffic", label: "Traffic API" },
   { key: "browse", label: "Browse API" },
+  { key: "claude", label: "Claude AI" },
 ];
 
 function EbayUsageInner() {
@@ -261,7 +356,7 @@ function EbayUsageInner() {
   const searchParams = useSearchParams();
   // One allowance per tab; the tab lives in the URL so a reload keeps it.
   const asked = searchParams.get("tab");
-  const [tab, setTab] = useState<UsageTab>(asked === "traffic" || asked === "browse" ? asked : "trading");
+  const [tab, setTab] = useState<UsageTab>(asked === "traffic" || asked === "browse" || asked === "claude" ? asked : "trading");
   function changeTab(next: UsageTab) {
     setTab(next);
     router.replace(`/admin/usage${next === "trading" ? "" : `?tab=${next}`}`, {
@@ -328,7 +423,7 @@ function EbayUsageInner() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">eBay usage</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">eBay&apos;s daily call allowances (Trading, Traffic and Browse, each separate), each shared by every account on Liston.</p>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">eBay&apos;s daily call allowances (Trading, Traffic and Browse, each separate, each shared by every account on Liston), and what Claude costs by feature.</p>
           </div>
           <button type="button" onClick={syncNow} disabled={syncing} className="btn btn-secondary btn-sm">
             {syncing ? "Asking eBay…" : "Check with eBay"}
@@ -355,9 +450,13 @@ function EbayUsageInner() {
                       ? usage.analytics
                         ? `${Math.round((usage.analytics.used / usage.analytics.limit) * 100)}%`
                         : ""
-                      : usage.browse
-                        ? `${Math.round((usage.browse.used / usage.browse.limit) * 100)}%`
-                        : ""}
+                      : t.key === "browse"
+                        ? usage.browse
+                          ? `${Math.round((usage.browse.used / usage.browse.limit) * 100)}%`
+                          : ""
+                        : usage.claude
+                          ? usd(usage.claude.days[0]?.total ?? 0)
+                          : ""}
                 </span>
               )}
             </button>
@@ -373,6 +472,8 @@ function EbayUsageInner() {
 
       {loading || !usage ? (
         <PageSkeleton rows={2} />
+      ) : tab === "claude" ? (
+        usage.claude ? <ClaudeUsageSection usage={usage.claude} /> : <Alert>Claude figures aren&apos;t available from this server yet.</Alert>
       ) : tab === "browse" ? (
         usage.browse ? <BrowseUsageSection usage={usage.browse} /> : <Alert>Browse figures aren&apos;t available from this server yet.</Alert>
       ) : tab === "traffic" ? (

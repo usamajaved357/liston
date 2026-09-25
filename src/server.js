@@ -21,6 +21,8 @@ const server = app.listen(config.port, () => {
   analyticsScheduler.start();
   // The Browse API's own allowance (drafting, health checks, research).
   browseUsage.start();
+  // Claude's spend by feature, kept across restarts.
+  require('./modules/ai-generation/ai-usage').load();
 });
 
 async function shutdown(signal) {

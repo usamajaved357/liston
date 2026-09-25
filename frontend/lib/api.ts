@@ -287,6 +287,19 @@ export interface EbayUsage {
   analytics: AnalyticsUsage;
   // …and the Browse API (public listing reads) its own too.
   browse: BrowseUsage;
+  // Claude's spend, by feature, the last 14 days (newest first).
+  claude: ClaudeUsage;
+}
+
+export interface ClaudeUsage {
+  model: string;
+  days: {
+    day: string;
+    total: number;
+    calls: number;
+    byPurpose: { purpose: string; label: string; calls: number; input: number; output: number; cost: number }[];
+  }[];
+  purposes: Record<string, string>;
 }
 
 // The Browse API's daily allowance, one pool for the app: who used it
@@ -986,7 +999,8 @@ export interface DraftPreview {
 
 export type GenerateDraftInput =
   | { competitorUrl?: string; sourceUrl: string }
-  | { previewId: string; variantSelection?: Record<string, string[]> };
+  // imageUrls: the supplier photos kept in step two, in order (first = main).
+  | { previewId: string; variantSelection?: Record<string, string[]>; imageUrls?: string[] };
 
 // Listing settings — every sell price is derived from these plus the
 // supplier's own cost, so the seller never types a price per draft.
