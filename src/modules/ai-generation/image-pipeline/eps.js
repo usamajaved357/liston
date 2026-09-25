@@ -52,31 +52,70 @@ function siteIdFor(marketplaceId) {
 // (or two variants sharing a photo) doesn't re-upload. In memory first,
 // then the ebay_image_uploads table, so a restart or a second instance
 // doesn't repeat uploads either — each one is a Trading call.
+//
+// Per account: an eBay picture belongs to the seller who uploaded it, and a
+// listing that mixes its own pictures with another seller's is refused ("A
+// mixture of Self Hosted and EPS pictures are not allowed"). Keyed by bytes
+// alone, the cache handed a second account drafting the same supplier
+// product the first account's URLs. With no account known nothing is reused.
 const uploadCache = new Map();
 
 // Tests upload the same fixture bytes with different expectations; the
 // durable cache would carry one test's answer into the next.
 const PERSIST = config.env !== 'test';
 
-async function findUploaded(hash) {
-  if (uploadCache.has(hash)) return uploadCache.get(hash);
+// The account an upload is for: given, or the one the surrounding work is
+// tagged with (drafting and publishing run inside the governor's context).
+const accountFor = (account) => (account ? String(account) : governor.current().connectionId || null);
+
+async function findUploaded(hash, account) {
+  if (!account) return null;
+  const key = `${account}:${hash}`;
+  if (uploadCache.has(key)) return uploadCache.get(key);
   if (!PERSIST) return null;
   try {
-    const { rows } = await query('SELECT url FROM ebay_image_uploads WHERE content_hash = $1', [hash]);
-    if (rows[0]) uploadCache.set(hash, rows[0].url);
+    const { rows } = await query('SELECT url FROM ebay_image_uploads WHERE content_hash = $1 AND account = $2', [hash, account]);
+    if (rows[0]) uploadCache.set(key, rows[0].url);
     return rows[0]?.url || null;
   } catch {
     return null;
   }
 }
 
-function rememberUploaded(hash, url) {
-  uploadCache.set(hash, url);
+function rememberUploaded(hash, url, account) {
+  if (!account) return;
+  uploadCache.set(`${account}:${hash}`, url);
   if (!PERSIST) return;
   query(
-    `INSERT INTO ebay_image_uploads (content_hash, url) VALUES ($1, $2) ON CONFLICT (content_hash) DO UPDATE SET url = EXCLUDED.url`,
-    [hash, url]
+    `INSERT INTO ebay_image_uploads (content_hash, account, url) VALUES ($1, $2, $3)
+     ON CONFLICT (content_hash, account) DO UPDATE SET url = EXCLUDED.url`,
+    [hash, account, url]
   ).catch(() => {});
+}
+
+/**
+ * Of these eBay picture URLs, the ones Liston uploaded for a DIFFERENT
+ * account than `account` — pictures that would make eBay refuse the
+ * listing as a mixture. URLs Liston has no owner for are left alone.
+ */
+async function foreignUrls(urls, account) {
+  const list = [...new Set((urls || []).filter(Boolean))];
+  if (!account || !list.length) return [];
+  const own = new Set();
+  const others = new Set();
+  for (const [key, url] of uploadCache) {
+    if (!list.includes(url)) continue;
+    (key.startsWith(`${account}:`) ? own : others).add(url);
+  }
+  if (PERSIST) {
+    try {
+      const { rows } = await query(`SELECT url, account FROM ebay_image_uploads WHERE url = ANY($1) AND account <> ''`, [list]);
+      for (const row of rows) (row.account === String(account) ? own : others).add(row.url);
+    } catch {
+      // unknown owners are left as they are
+    }
+  }
+  return list.filter((url) => others.has(url) && !own.has(url));
 }
 
 function hashOf(buffer) {
@@ -169,9 +208,10 @@ let retryDelayMs = 1500;
  * re-encoded. So: the bytes as they are, then the same bytes again after a
  * pause, then a clean JPEG. Throws when all three fail.
  */
-async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureName = 'Liston listing image' } = {}) {
+async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureName = 'Liston listing image', account } = {}) {
+  const owner = accountFor(account);
   const hash = hashOf(buffer);
-  const cached = await findUploaded(hash);
+  const cached = await findUploaded(hash, owner);
   if (cached) return cached;
 
   const options = { marketplaceId, pictureName };
@@ -186,7 +226,7 @@ async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureN
     if (index > 0 && retryDelayMs) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     try {
       const url = await attempt();
-      rememberUploaded(hash, url);
+      rememberUploaded(hash, url, owner);
       return url;
     } catch (err) {
       lastError = err;
@@ -204,12 +244,16 @@ function isEbayHosted(url) {
   }
 }
 
-/** Puts a picture that lives elsewhere (a supplier's CDN) on eBay. */
-async function hostUrl(accessToken, url, { marketplaceId } = {}) {
-  if (isEbayHosted(url)) return url;
+/**
+ * Puts a picture that lives elsewhere (a supplier's CDN) on eBay under this
+ * account. `force` does it for an eBay picture too — one uploaded under a
+ * different seller account.
+ */
+async function hostUrl(accessToken, url, { marketplaceId, account, force = false } = {}) {
+  if (isEbayHosted(url) && !force) return url;
   const imageOps = require('./image.ops');
   const buffer = await imageOps.download(url);
-  return upload(accessToken, buffer, { marketplaceId });
+  return upload(accessToken, buffer, { marketplaceId, account });
 }
 
 /**
@@ -219,11 +263,11 @@ async function hostUrl(accessToken, url, { marketplaceId } = {}) {
  * disappearing: a publicly-reachable original is still better than a gap in
  * the gallery, and the publish gate reports what didn't make it.
  */
-async function uploadAll(accessToken, prepared, { marketplaceId } = {}) {
+async function uploadAll(accessToken, prepared, { marketplaceId, account } = {}) {
   return Promise.all(
     prepared.map(async (image) => {
       try {
-        return await upload(accessToken, image.buffer, { marketplaceId });
+        return await upload(accessToken, image.buffer, { marketplaceId, account });
       } catch (err) {
         logger.warn('EPS upload failed. Falling back to the source image URL', {
           sourceUrl: image.sourceUrl,
@@ -243,4 +287,4 @@ function setRetryDelay(ms) {
   retryDelayMs = ms;
 }
 
-module.exports = { upload, uploadAll, hostUrl, isEbayHosted, siteIdFor, buildMultipartBody, resetUploadCache, setRetryDelay };
+module.exports = { upload, uploadAll, hostUrl, foreignUrls, isEbayHosted, siteIdFor, buildMultipartBody, resetUploadCache, setRetryDelay };

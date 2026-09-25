@@ -642,6 +642,11 @@ export interface OrderDetail {
   buyer: { username: string | null; feedbackScore?: number | null; feedbackPercent?: string | null; repeatBuyer?: boolean };
   buyerCheckoutNotes: string | null;
   shipTo: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string; email: string } | null;
+  // Global Shipping Programme: shipTo is eBay's UK hub (the Ref # goes on
+  // the label) and finalDestination the buyer's own address.
+  shipToReferenceId?: string | null;
+  shippingProgramme?: "GSP" | null;
+  finalDestination?: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string } | null;
   shippingService: string | null;
   shippingCarrier: string | null;
   // When the carrier confirmed delivery (from the account's order copy).

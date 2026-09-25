@@ -87,3 +87,29 @@ test('an order line shows the price of one unit, and the line total after discou
   assert.deepStrictEqual(order.lineItems[0].unitPrice, { value: 4.74, currency: 'GBP' });
   assert.deepStrictEqual(order.lineItems[0].total, { value: 9, currency: 'GBP' });
 });
+
+test("a Global Shipping Programme order posts to eBay's hub with the Ref #, and keeps the buyer's own address apart", () => {
+  const { mapOrder } = require('../../src/modules/ebay/api/ebay.fulfillment');
+  const order = mapOrder({
+    orderId: '26-15179-49854',
+    fulfillmentStartInstructions: [
+      {
+        ebaySupportedFulfillment: false,
+        finalDestinationAddress: { addressLine1: 'Cal Rei 19', city: "castell d´Aro", stateOrProvince: 'Cataluña', postalCode: '17249', countryCode: 'ES' },
+        shippingStep: {
+          shipToReferenceId: 'A6539148534ES',
+          shipTo: { fullName: 'paul diamond', contactAddress: { addressLine1: 'GSP, Unit 3 Dove CL, Fradley Pk', city: 'LICHFIELD', postalCode: 'WS13 8UR', countryCode: 'GB' } },
+        },
+      },
+    ],
+    lineItems: [],
+  });
+  assert.strictEqual(order.shipTo.street1, 'GSP, Unit 3 Dove CL, Fradley Pk');
+  assert.strictEqual(order.shipToReferenceId, 'A6539148534ES');
+  assert.strictEqual(order.shippingProgramme, 'GSP');
+  assert.deepStrictEqual([order.finalDestination.name, order.finalDestination.country, order.finalDestination.postalCode], ['paul diamond', 'ES', '17249']);
+
+  const plain = mapOrder({ orderId: '1', fulfillmentStartInstructions: [{ shippingStep: { shipTo: { fullName: 'A', contactAddress: { countryCode: 'GB' } } } }], lineItems: [] });
+  assert.strictEqual(plain.shippingProgramme, null);
+  assert.strictEqual(plain.finalDestination, null);
+});

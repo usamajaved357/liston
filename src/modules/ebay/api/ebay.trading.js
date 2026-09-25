@@ -242,6 +242,27 @@ function mapShippingAddress(a) {
   return Object.values(address).some(Boolean) ? address : null;
 }
 
+// eBay's Global Shipping Programme: the buyer is abroad, but the seller
+// posts to eBay's UK hub, which ships it on. ShippingAddress is the buyer's
+// own; where the seller actually posts (with the Ref # that must go on the
+// label), the postage the seller charges for that leg, and its service, are
+// in MultiLegShippingDetails. The buyer's international postage is paid to
+// eBay and isn't the seller's, so the order's total for the seller is the
+// items plus that first leg — what Seller Hub shows.
+function globalShipping(order) {
+  const multi = order.IsMultiLegShipping === true || String(order.IsMultiLegShipping) === 'true';
+  const leg = multi ? order.MultiLegShippingDetails?.SellerShipmentToLogisticsProvider : null;
+  const hub = leg ? mapShippingAddress(leg.ShipToAddress) : null;
+  if (!hub) return null;
+  const ref = leg.ShipToAddress?.ReferenceID;
+  return {
+    hub,
+    referenceId: ref !== undefined && ref !== null ? String(typeof ref === 'object' ? ref['#text'] ?? '' : ref) || null : null,
+    postage: money(leg.ShippingServiceDetails?.TotalShippingCost),
+    service: leg.ShippingServiceDetails?.ShippingService || null,
+  };
+}
+
 function mapOrder(order) {
   const transactions = toArray(order.TransactionArray?.Transaction);
   const firstItem = transactions[0]?.Item;
@@ -251,18 +272,31 @@ function mapOrder(order) {
   // Delivered once every item has arrived: the last arrival.
   const deliveredAt = lineItems.length && lineItems.every((li) => li.deliveredAt) ? lineItems.map((li) => li.deliveredAt).sort().slice(-1)[0] : null;
 
+  const gsp = globalShipping(order);
+  const subtotal = money(order.Subtotal);
+  const sellerTotal =
+    gsp && subtotal ? { amount: Math.round((subtotal.amount + (gsp.postage?.amount || 0)) * 100) / 100, currency: subtotal.currency } : money(order.Total);
+
   return {
     orderId: order.OrderID,
     status: order.OrderStatus,
     createdAt: order.CreatedTime,
-    total: money(order.Total),
-    subtotal: money(order.Subtotal),
+    total: sellerTotal,
+    subtotal,
     buyerName: [buyer?.UserFirstName, buyer?.UserLastName].filter(Boolean).join(' ') || null,
     buyerUserId: order.BuyerUserID || null,
     // eBay's relay address for the buyer, and Seller Hub's sales record no.
     buyerEmail: buyer?.Email && !/invalid request/i.test(String(buyer.Email)) ? String(buyer.Email) : null,
     salesRecordNumber: order.ShippingDetails?.SellingManagerSalesRecordNumber ? String(order.ShippingDetails.SellingManagerSalesRecordNumber) : null,
-    shippingAddress: mapShippingAddress(order.ShippingAddress),
+    // Where the seller posts: eBay's hub for a Global Shipping Programme
+    // order (with its Ref #), the buyer otherwise.
+    shippingAddress: gsp ? { ...gsp.hub, referenceId: gsp.referenceId } : mapShippingAddress(order.ShippingAddress),
+    shippingProgramme: gsp ? 'GSP' : null,
+    // The buyer's own address, when eBay delivers the last leg.
+    finalDestination: gsp ? mapShippingAddress(order.ShippingAddress) : null,
+    // What the buyer paid in all (their international postage included).
+    buyerTotal: gsp ? money(order.Total) : null,
+    gspService: gsp?.service || null,
     itemTitle: firstItem?.Title || null,
     itemId: firstItem?.ItemID ? String(firstItem.ItemID) : null,
     itemCount: transactions.length,
@@ -333,6 +367,8 @@ const GET_ORDERS_FIELDS = [
   'OrderArray.Order.ShippedTime',
   'OrderArray.Order.CancelStatus',
   'OrderArray.Order.ShippingAddress',
+  'OrderArray.Order.IsMultiLegShipping',
+  'OrderArray.Order.MultiLegShippingDetails',
   'OrderArray.Order.TransactionArray.Transaction.Item.ItemID',
   'OrderArray.Order.TransactionArray.Transaction.Item.Title',
   'OrderArray.Order.TransactionArray.Transaction.Item.Site',

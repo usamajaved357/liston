@@ -118,6 +118,10 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
     buyerEmail: null,
     salesRecordNumber: null,
     shippingAddress: { name: 'Jane Doe', street1: '1 High Street', street2: 'Flat 2', city: 'Leeds', state: 'West Yorkshire', postalCode: 'LS1 1AA', country: 'United Kingdom', phone: '' },
+    shippingProgramme: null,
+    finalDestination: null,
+    buyerTotal: null,
+    gspService: null,
     itemTitle: 'Widget',
     itemId: '456',
     itemCount: 1,
@@ -282,4 +286,45 @@ test("eBay's refusal is shown to the seller, not hidden as an internal error", a
     () => ebayTrading.relistListing('token', '800539509961', { title: 'Case' }),
     (err) => err.expose === true && /already have on eBay/.test(err.message)
   );
+});
+
+// A Global Shipping Programme order, as eBay's GetOrders returns it (order
+// 26-15179-49854, Minsu LTD): the buyer in Spain, the seller posting to the
+// UK hub with a Ref #, the buyer's international postage paid to eBay.
+const GSP_ORDER = `<?xml version="1.0"?><GetOrdersResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack>
+  <PaginationResult><TotalNumberOfEntries>1</TotalNumberOfEntries><TotalNumberOfPages>1</TotalNumberOfPages></PaginationResult>
+  <OrderArray><Order><OrderID>26-15179-49854</OrderID><OrderStatus>Completed</OrderStatus>
+    <Subtotal currencyID="GBP">109.99</Subtotal><Total currencyID="GBP">152.96</Total>
+    <ShippingAddress><Name>paul diamond</Name><Street1>Cal Rei 19</Street1><CityName>castell d´Aro</CityName><StateOrProvince>Cataluña</StateOrProvince><PostalCode>17249</PostalCode><CountryName>Spain</CountryName><Phone>+34 634544265</Phone></ShippingAddress>
+    <IsMultiLegShipping>true</IsMultiLegShipping>
+    <MultiLegShippingDetails><SellerShipmentToLogisticsProvider>
+      <ShipToAddress><Name>paul diamond</Name><Street1>GSP, Unit 3 Dove CL, Fradley Pk</Street1><CityName>LICHFIELD</CityName><StateOrProvince>Staffordshire</StateOrProvince><PostalCode>WS13 8UR</PostalCode><CountryName>United Kingdom</CountryName><Phone>634544265</Phone><ReferenceID>A6539148534ES</ReferenceID></ShipToAddress>
+      <ShippingServiceDetails><ShippingService>UK_OtherCourier3To5Days</ShippingService><TotalShippingCost currencyID="GBP">0.0</TotalShippingCost></ShippingServiceDetails>
+    </SellerShipmentToLogisticsProvider></MultiLegShippingDetails>
+    <TransactionArray><Transaction><Item><ItemID>1</ItemID><Title>Unihertz Jelly Pro</Title></Item><QuantityPurchased>1</QuantityPurchased><TransactionPrice currencyID="GBP">109.99</TransactionPrice>
+      <ShippingServiceSelected><ShippingService>InternationalPriorityShipping</ShippingService></ShippingServiceSelected></Transaction></TransactionArray>
+  </Order></OrderArray></GetOrdersResponse>`;
+
+test("a Global Shipping Programme order posts to eBay's UK hub with its Ref #, for the seller's total, as Seller Hub shows", async () => {
+  let body = '';
+  mock.method(global, 'fetch', async (url, options) => {
+    body = options.body;
+    return fakeResponse(GSP_ORDER);
+  });
+  const [order] = (await ebayTrading.getOrders('token', { createTimeFrom: 'a', createTimeTo: 'b' })).orders;
+  assert.match(body, /MultiLegShippingDetails/);
+  assert.strictEqual(order.shippingProgramme, 'GSP');
+  assert.strictEqual(order.shippingAddress.street1, 'GSP, Unit 3 Dove CL, Fradley Pk');
+  assert.strictEqual(order.shippingAddress.postalCode, 'WS13 8UR');
+  assert.strictEqual(order.shippingAddress.referenceId, 'A6539148534ES');
+  assert.strictEqual(order.finalDestination.country, 'Spain', "the buyer's own address is kept for reference");
+  assert.deepStrictEqual(order.total, { amount: 109.99, currency: 'GBP' }, 'items plus the seller\'s leg (free), not the buyer\'s £152.96');
+  assert.deepStrictEqual(order.buyerTotal, { amount: 152.96, currency: 'GBP' });
+  assert.strictEqual(order.gspService, 'UK_OtherCourier3To5Days');
+
+  mock.restoreAll();
+  mock.method(global, 'fetch', async () => fakeResponse(orderWithDeliveries([null])));
+  const [plain] = (await ebayTrading.getOrders('token', { createTimeFrom: 'a', createTimeTo: 'b' })).orders;
+  assert.strictEqual(plain.shippingProgramme, null);
+  assert.strictEqual(plain.finalDestination, null);
 });

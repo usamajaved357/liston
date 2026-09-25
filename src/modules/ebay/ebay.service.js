@@ -1063,7 +1063,7 @@ async function persist(write) {
 }
 
 // Bump when mapOrder gains a field, so every mirrored order is re-read once.
-const ORDER_SHAPE = 6; // 6: each line's eBay site; 5: delivered time; 4: buyer email and sales record number; 3: delivery window and service
+const ORDER_SHAPE = 7; // 7: Global Shipping Programme hub, Ref # and seller-side total; 6: each line's eBay site; 5: delivered time; 4: buyer email and sales record number; 3: delivery window and service
 
 // A delivery is a carrier scan, which doesn't always move an order's
 // modified time, so the incremental read can miss it. Every few hours the
@@ -1879,8 +1879,11 @@ function legacyOrderDetail(o) {
     cancelRequests: [],
     buyer: { username: o.buyerUserId || null },
     buyerCheckoutNotes: null,
-    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: o.buyerEmail || '' } : null,
-    shippingService: (o.lineItems || []).map((li) => li.shippingService).find(Boolean) || null,
+    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: o.shippingProgramme ? '' : o.buyerEmail || '' } : null,
+    shipToReferenceId: o.shippingAddress?.referenceId || null,
+    shippingProgramme: o.shippingProgramme || null,
+    finalDestination: o.finalDestination || null,
+    shippingService: o.gspService || (o.lineItems || []).map((li) => li.shippingService).find(Boolean) || null,
     shippingCarrier: null,
     estimatedDelivery: {
       min: (o.lineItems || []).map((li) => li.estimatedDeliveryMin).filter(Boolean).sort()[0] || null,

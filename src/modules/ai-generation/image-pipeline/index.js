@@ -136,35 +136,17 @@ function unhostedImages(draft) {
   return [...new Set(all.filter((url) => url && !eps.isEbayHosted(url)))];
 }
 
+/** Every photo URL on a draft: gallery and variations. */
+function draftImages(draft) {
+  return [...new Set([...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])].filter(Boolean))];
+}
+
 /**
- * Puts every photo of a draft on eBay's picture service before it's sent.
- *
- * eBay refuses a listing whose photos mix its own hosting with anyone
- * else's ("A mixture of Self Hosted and EPS pictures are not allowed"), and
- * a draft gets supplier-hosted photos whenever an upload failed while it was
- * built. Each one is uploaded again here; one that still won't go is left
- * out (a variation that loses its only photo takes the main photo) and said
- * so. `ok` is false when no main photo could be hosted at all.
- *
- * @returns { draft, changed, dropped: string[], ok }
+ * The draft with its photos swapped by `hosted` (old URL → new) and the
+ * `dropped` ones left out; a variation that loses its only photo takes the
+ * main photo.
  */
-async function hostDraftImages(draft, { accessToken, marketplaceId }) {
-  const pending = unhostedImages(draft);
-  if (!pending.length) return { draft, changed: false, dropped: [], ok: true };
-
-  const hosted = new Map();
-  const dropped = [];
-  await Promise.all(
-    pending.map(async (url) => {
-      try {
-        hosted.set(url, await eps.hostUrl(accessToken, url, { marketplaceId }));
-      } catch (err) {
-        logger.warn('Photo could not be put on eBay. Left out of the listing', { sourceUrl: url, error: err.message });
-        dropped.push(url);
-      }
-    })
-  );
-
+function swapDraftImages(draft, hosted, dropped = []) {
   const swap = (urls) => [...new Set((urls || []).map((url) => hosted.get(url) || url).filter((url) => !dropped.includes(url)))];
   const imageUrls = swap(draft.imageUrls);
   const next = { ...draft, imageUrls };
@@ -174,7 +156,45 @@ async function hostDraftImages(draft, { accessToken, marketplaceId }) {
       return { ...variant, imageUrls: own.length ? own : imageUrls.slice(0, 1) };
     });
   }
-  return { draft: next, changed: true, dropped, ok: imageUrls.length > 0 };
+  return next;
 }
 
-module.exports = { buildGalleryImages, buildVariantImage, unhostedImages, hostDraftImages };
+/**
+ * Puts every photo of a draft on eBay's picture service, under this seller
+ * account, before it's sent.
+ *
+ * eBay refuses a listing whose photos mix its own hosting with anyone
+ * else's ("A mixture of Self Hosted and EPS pictures are not allowed"): a
+ * supplier-hosted photo (an upload that failed while the draft was built),
+ * or an eBay photo uploaded under ANOTHER seller account (the picture cache
+ * used to share uploads between accounts). Each is uploaded again here;
+ * `force` does it for every photo. One that still won't go is left out (a
+ * variation that loses its only photo takes the main photo) and said so.
+ * `ok` is false when no main photo could be hosted at all.
+ *
+ * @returns { draft, changed, dropped: string[], hosted: Map, ok }
+ */
+async function hostDraftImages(draft, { accessToken, marketplaceId, account, force = false }) {
+  const pending = force
+    ? draftImages(draft)
+    : [...new Set([...unhostedImages(draft), ...(await eps.foreignUrls(draftImages(draft).filter(eps.isEbayHosted), account))])];
+  if (!pending.length) return { draft, changed: false, dropped: [], hosted: new Map(), ok: true };
+
+  const hosted = new Map();
+  const dropped = [];
+  await Promise.all(
+    pending.map(async (url) => {
+      try {
+        hosted.set(url, await eps.hostUrl(accessToken, url, { marketplaceId, account, force: true }));
+      } catch (err) {
+        logger.warn('Photo could not be put on eBay. Left out of the listing', { sourceUrl: url, error: err.message });
+        dropped.push(url);
+      }
+    })
+  );
+
+  const next = swapDraftImages(draft, hosted, dropped);
+  return { draft: next, changed: true, dropped, hosted, ok: next.imageUrls.length > 0 };
+}
+
+module.exports = { buildGalleryImages, buildVariantImage, unhostedImages, hostDraftImages, swapDraftImages, draftImages };

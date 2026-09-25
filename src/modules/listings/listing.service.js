@@ -867,7 +867,7 @@ async function acceptImageRevision(id, userId, { proposalId, replaces }) {
 
   const hostedUrl = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
     const { accessToken } = await ebayService.ensureValidAccessToken(credentials);
-    return eps.upload(accessToken, proposal.buffer, { marketplaceId });
+    return eps.upload(accessToken, proposal.buffer, { marketplaceId, account: listing.connection_id });
   });
 
   draft.imageUrls = (draft.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url));
@@ -911,7 +911,7 @@ async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex
 
   const hostedUrl = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
     const { accessToken } = await ebayService.ensureValidAccessToken(credentials);
-    return eps.upload(accessToken, buffer, { marketplaceId: draft.marketplaceId });
+    return eps.upload(accessToken, buffer, { marketplaceId: draft.marketplaceId, account: listing.connection_id });
   });
 
   if (replaces) {
@@ -1723,7 +1723,7 @@ async function publishNow(listing, id, userId) {
   }
   if (readied.warnings.length) logger.info('Draft option values sent under eBay spelling', { listingId: id, warnings: readied.warnings });
   const tidied = dedupeVariationGroup(readied.draft);
-  const readyDraft = tidied.draft;
+  let readyDraft = tidied.draft;
   if (tidied.warnings.length) logger.warn('Draft variations deduplicated for publish', { listingId: id, warnings: tidied.warnings });
 
   // Drafts created before drafts went local already have their eBay objects;
@@ -1736,6 +1736,7 @@ async function publishNow(listing, id, userId) {
   // the "field is missing" retry below for how one gets added.
   let identifiers = { ...(draft.identifiers || {}) };
   let identifierRetried = false;
+  let photosRetried = false;
 
   const runAttempt = () =>
     connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
@@ -1796,6 +1797,27 @@ async function publishNow(listing, id, userId) {
         result = await runAttempt();
         break;
       } catch (err) {
+        // eBay still sees a mixture of its own photos and someone else's —
+        // an eBay photo uploaded under another seller account that Liston has
+        // no record of. Every photo is uploaded again under this account and
+        // the publish retried once.
+        if (isMixedPhotos(err) && !photosRetried && !alreadyOnEbay) {
+          photosRetried = true;
+          if (attempt.built && attempt.credentials) {
+            const skus = Array.isArray(attempt.built.variants) && attempt.built.variants.length ? attempt.built.variants.map((v) => v.sku) : [attempt.built.sku];
+            await ebayService.deleteInventoryObjects(attempt.credentials, { groupKey: attempt.built.groupKey, skus }).catch(() => {});
+          }
+          const rehosted = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
+            const { accessToken } = await ebayService.ensureValidAccessToken(credentials);
+            return imagePipeline.hostDraftImages(readyDraft, { accessToken, marketplaceId, account: listing.connection_id, force: true });
+          });
+          if (!rehosted.ok) throw err;
+          readyDraft = rehosted.draft;
+          draft = imagePipeline.swapDraftImages(draft, rehosted.hosted, rehosted.dropped);
+          await listingRepository.updateGeneratedData(id, draft);
+          logger.warn('Draft publish retried with every photo uploaded again under this account', { listingId: id, photos: rehosted.hosted.size, dropped: rehosted.dropped.length });
+          continue;
+        }
         // Some categories require a barcode (EAN/UPC/ISBN) on the product
         // itself. eBay's sanctioned answer for a product that has none is its
         // "Does not apply" text, so that is sent and the publish retried once,
@@ -1896,10 +1918,14 @@ async function publishNow(listing, id, userId) {
 async function readyPhotosForPublish(listing, draft, userId) {
   let ready = alignVariantPhotos(draft);
   const warnings = [];
-  if (imagePipeline.unhostedImages(ready).length) {
+  const account = listing.connection_id;
+  // eBay photos uploaded under another seller account count as foreign to
+  // this one (see eps.foreignUrls), like a supplier's.
+  const foreign = await eps.foreignUrls(imagePipeline.draftImages(ready).filter(eps.isEbayHosted), account);
+  if (imagePipeline.unhostedImages(ready).length || foreign.length) {
     const hosting = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
       const { accessToken } = await ebayService.ensureValidAccessToken(credentials);
-      return imagePipeline.hostDraftImages(ready, { accessToken, marketplaceId: ready.marketplaceId });
+      return imagePipeline.hostDraftImages(ready, { accessToken, marketplaceId: ready.marketplaceId, account });
     });
     if (!hosting.ok) {
       throw new ListingError("eBay couldn't take this listing's photos. Replace them with your own copies (Upload) and publish again.", 400);
@@ -1992,6 +2018,12 @@ function dedupeVariationGroup(draft) {
 function isPolicyBlock(err) {
   const text = `${err.message || ''} ${JSON.stringify(err.details || '')}`;
   return /Hazardous Materials|PI_HAZ|improper words|violation of eBay policy/i.test(text);
+}
+
+// eBay's "A mixture of Self Hosted and EPS pictures are not allowed".
+function isMixedPhotos(err) {
+  const text = `${err?.message || ''} ${JSON.stringify(err?.details || '')}`;
+  return /mixture of Self Hosted and EPS/i.test(text);
 }
 
 // eBay 25002 "The EAN field is missing. Please add EAN to the listing and

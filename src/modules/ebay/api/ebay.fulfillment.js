@@ -99,6 +99,23 @@ function mapAddress(shipTo) {
   };
 }
 
+// An Address (no contact wrapper): the final destination of a Global
+// Shipping Programme order.
+function mapPlainAddress(a, name = '') {
+  if (!a) return null;
+  return {
+    name: name || '',
+    street1: a.addressLine1 || '',
+    street2: a.addressLine2 || '',
+    city: a.city || '',
+    state: a.stateOrProvince || '',
+    postalCode: a.postalCode || '',
+    country: a.countryCode || '',
+    phone: '',
+    email: '',
+  };
+}
+
 function mapLineItem(li) {
   const quantity = Number(li.quantity ?? 1);
   // lineItemCost is the whole line (unit price × quantity, before any
@@ -152,7 +169,13 @@ function mapOrder(o, fulfillments = []) {
       taxIdentifier: o.buyer?.taxIdentifier?.taxpayerId || null,
     },
     buyerCheckoutNotes: o.buyerCheckoutNotes || null,
+    // For a Global Shipping Programme (or eBay International Shipping)
+    // order, shipTo is eBay's hub — where the seller posts — with a Ref #
+    // for the label; the buyer's own address is finalDestinationAddress.
     shipTo: mapAddress(shipping.shipTo),
+    shipToReferenceId: shipping.shipToReferenceId || null,
+    shippingProgramme: instruction.finalDestinationAddress ? 'GSP' : null,
+    finalDestination: instruction.finalDestinationAddress ? mapPlainAddress(instruction.finalDestinationAddress, shipping.shipTo?.fullName) : null,
     shippingService: shipping.shippingServiceCode || null,
     shippingCarrier: shipping.shippingCarrierCode || null,
     ebayShipment: instruction.ebaySupportedFulfillment || false,
@@ -234,8 +257,10 @@ function toListOrder(o) {
     buyerUserId: o.buyer?.username || null,
     buyerEmail: registration.email || shipTo?.email || null,
     salesRecordNumber: o.salesRecordReference ? String(o.salesRecordReference) : null,
+    shippingProgramme: (o.fulfillmentStartInstructions || [])[0]?.finalDestinationAddress ? 'GSP' : null,
     shippingAddress: street
       ? {
+          referenceId: (o.fulfillmentStartInstructions || [])[0]?.shippingStep?.shipToReferenceId || null,
           name: shipTo?.fullName || '',
           street1: address.addressLine1 || '',
           street2: address.addressLine2 || '',

@@ -112,18 +112,53 @@ test('upload returns the permanent eBay-hosted URL', async () => {
   assert.strictEqual(url, 'https://i.ebayimg.com/00/s/hosted.jpg');
 });
 
-test('upload caches by content hash so identical bytes upload only once', async () => {
+test("upload caches by content hash per account: the same account uploads identical bytes once, another account uploads its own", async () => {
+  let n = 0;
   const fetchMock = mock.method(global, 'fetch', async () => ({
     ok: true,
     status: 200,
-    text: async () => epsResponse('https://i.ebayimg.com/00/s/hosted.jpg'),
+    text: async () => epsResponse(`https://i.ebayimg.com/00/s/hosted-${++n}.jpg`),
   }));
   const buffer = await makeImage(600, 600);
 
-  await eps.upload('token', buffer);
-  await eps.upload('token', Buffer.from(buffer)); // same bytes, different object
-
+  const a1 = await eps.upload('token-a', buffer, { account: 'conn-a' });
+  const a2 = await eps.upload('token-a', Buffer.from(buffer), { account: 'conn-a' }); // same bytes, different object
+  assert.strictEqual(a1, a2);
   assert.strictEqual(fetchMock.mock.calls.length, 1);
+
+  // A second seller account drafting the same supplier photo gets its own
+  // picture: eBay refuses a listing mixing another seller's pictures in.
+  const b = await eps.upload('token-b', buffer, { account: 'conn-b' });
+  assert.notStrictEqual(b, a1);
+  assert.strictEqual(fetchMock.mock.calls.length, 2);
+  assert.deepStrictEqual(await eps.foreignUrls([a1, b], 'conn-b'), [a1], "conn-a's picture is foreign to conn-b");
+  assert.deepStrictEqual(await eps.foreignUrls([a1, b], 'conn-a'), [b]);
+
+  // With no account known, nothing is reused.
+  await eps.upload('token', buffer);
+  await eps.upload('token', buffer);
+  assert.strictEqual(fetchMock.mock.calls.length, 4);
+});
+
+test("publishing re-uploads a photo that belongs to another seller account before sending it", async () => {
+  let n = 0;
+  mock.method(global, 'fetch', async (url) => {
+    if (/ws\/api\.dll/.test(String(url))) return { ok: true, status: 200, text: async () => epsResponse(`https://i.ebayimg.com/00/s/fresh-${++n}.jpg`) };
+    return { ok: true, status: 200, arrayBuffer: async () => makeImage(700, 700) };
+  });
+  const theirs = await eps.upload('token-a', await makeImage(640, 640), { account: 'conn-a' });
+  const ours = await eps.upload('token-b', await makeImage(650, 650), { account: 'conn-b' });
+  const draft = { imageUrls: [theirs, ours], variants: [{ imageUrls: [theirs] }] };
+
+  const result = await pipeline.hostDraftImages(draft, { accessToken: 'token-b', marketplaceId: 'EBAY_GB', account: 'conn-b' });
+  assert.strictEqual(result.changed, true);
+  assert.strictEqual(result.draft.imageUrls[1], ours, 'our own photo stays');
+  assert.notStrictEqual(result.draft.imageUrls[0], theirs);
+  assert.match(result.draft.imageUrls[0], /fresh-/);
+  assert.strictEqual(result.draft.variants[0].imageUrls[0], result.draft.imageUrls[0]);
+
+  const forced = await pipeline.hostDraftImages(result.draft, { accessToken: 'token-b', marketplaceId: 'EBAY_GB', account: 'conn-b', force: true });
+  assert.strictEqual(forced.hosted.size, 2, 'force: every photo uploaded again');
 });
 
 test('upload surfaces an eBay rejection', async () => {
