@@ -55,6 +55,9 @@ body {
   color: var(--color-ink);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
+  /* The app's pages scroll inside their own panel; the window never
+     rubber-bands behind them. */
+  overscroll-behavior: none;
 }
 
 /* In @layer base so utilities (btn-primary's white text, for one) win over it. */

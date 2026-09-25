@@ -25,7 +25,6 @@ import { DeliveryBar } from "@/components/research/DeliveryBar";
 // those that deliver like this account).
 type Params = { q: string; condition: string; minPrice: string; maxPrice: string; delivery?: ResearchDeliveryFilter };
 const PAGE = 50;
-const EXAMPLES = ["toe corrector bunion", "magsafe phone case", "led solar garden lights", "bike phone holder"];
 
 function Stat({ label, value, lines }: { label: string; value: string; lines: string[] }) {
   return (
@@ -185,52 +184,62 @@ export default function ResearchPage() {
         </div>
       }
     >
-      <form onSubmit={onSubmit} className="card flex flex-wrap items-end gap-3 p-4">
-        <label className="min-w-[240px] flex-1">
-          <span className="label">Product</span>
-          <div className="relative mt-1">
-            <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
-              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="e.g. toe corrector bunion" className="input !pl-10" autoFocus />
-          </div>
+      <form onSubmit={onSubmit} className="card flex flex-wrap items-center gap-2 p-2">
+        <label className="relative min-w-[220px] flex-1">
+          <span className="sr-only">Product</span>
+          <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={`Search a product on ${market?.name ?? "eBay"}`}
+            className="input input-sm !h-9 !pl-9"
+            autoFocus
+          />
         </label>
-        <div>
-          <span className="label">Condition</span>
-          <div role="radiogroup" aria-label="Condition" className="mt-1 inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-            {[
-              { key: "new", label: "New" },
-              { key: "used", label: "Used" },
-              { key: "any", label: "Any" },
-            ].map((c) => (
-              <button
-                key={c.key}
-                type="button"
-                role="radio"
-                aria-checked={condition === c.key}
-                onClick={() => setCondition(c.key)}
-                className={`h-8 rounded-full px-3 text-[12.5px] font-medium ${condition === c.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"}`}
-              >
-                {c.label}
-              </button>
-            ))}
-          </div>
+        <div role="radiogroup" aria-label="Condition" className="inline-flex h-9 items-center rounded-lg bg-[var(--color-paper)] p-0.5">
+          {[
+            { key: "new", label: "New" },
+            { key: "used", label: "Used" },
+            { key: "any", label: "Any" },
+          ].map((c) => (
+            <button
+              key={c.key}
+              type="button"
+              role="radio"
+              aria-checked={condition === c.key}
+              onClick={() => setCondition(c.key)}
+              className={`h-8 rounded-md px-3 text-[12.5px] font-medium transition-colors ${
+                condition === c.key ? "bg-[var(--color-panel)] text-[var(--color-ink)] shadow-sm ring-1 ring-[var(--color-line)]" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
         </div>
-        <label className="w-28">
-          <span className="label">Min price ({currencySymbol(currency)})</span>
-          <input value={minPrice} onChange={(e) => setMinPrice(e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="0" className="input mt-1" />
-        </label>
-        <label className="w-28">
-          <span className="label">Max price ({currencySymbol(currency)})</span>
-          <input value={maxPrice} onChange={(e) => setMaxPrice(e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="Any" className="input mt-1" />
-        </label>
-        <button type="submit" disabled={searching || q.trim().length < 2} className="btn btn-primary h-10">
-          {searching ? "Searching eBay…" : "Research"}
+        <div className="flex h-9 items-center rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-panel)] text-[13px] transition-colors hover:border-[var(--color-line-strong)] focus-within:!border-[var(--color-primary)]">
+          <label className="flex h-full items-center pl-3">
+            <span className="text-[var(--color-muted)]">{currencySymbol(currency)}</span>
+            <span className="sr-only">Min price</span>
+            <input value={minPrice} onChange={(e) => setMinPrice(e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="Min" className="h-full w-14 bg-transparent px-1.5 outline-none placeholder:text-[var(--color-muted)]" />
+          </label>
+          <span className="text-[var(--color-muted)]" aria-hidden>
+            –
+          </span>
+          <label className="flex h-full items-center pl-2 pr-1">
+            <span className="text-[var(--color-muted)]">{currencySymbol(currency)}</span>
+            <span className="sr-only">Max price</span>
+            <input value={maxPrice} onChange={(e) => setMaxPrice(e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="Max" className="h-full w-14 bg-transparent px-1.5 outline-none placeholder:text-[var(--color-muted)]" />
+          </label>
+        </div>
+        <button type="submit" disabled={searching || q.trim().length < 2} className="btn btn-primary btn-sm !h-9 px-4">
+          {searching ? "Searching…" : "Research"}
         </button>
       </form>
-      <p className="mt-2 text-[12px] text-[var(--color-muted)]">
-        {market?.flag} {market?.name ?? "eBay"} · fixed-price listings · each search reads up to 200 listings and the sold counts of the top 20
+      <p className="mt-2 px-1 text-[12px] text-[var(--color-muted)]">
+        {market?.name ?? "eBay"} · fixed-price listings · each search reads up to 200 listings and the sold counts of the top 20
         {budget && ` · ${count(budget.remaining)} of today's ${count(budget.limit)} research reads left`}
       </p>
 
@@ -241,27 +250,18 @@ export default function ResearchPage() {
       )}
 
       {!result && !searching && (
-        <div className="card mt-6 px-6 py-10 text-center">
-          <p className="text-sm font-medium text-[var(--color-ink)]">Search a product to see how it sells on {market?.name ?? "eBay"}</p>
-          <p className="mx-auto mt-1 max-w-xl text-[13px] text-[var(--color-muted)]">
-            You&apos;ll see how many listings compete, the prices buyers pay with postage, who the big sellers are, how much ships from overseas, and
-            how many the leading listings have sold.
+        <div className="card mt-5 flex flex-col items-center px-6 py-12 text-center">
+          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)]">
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
+              <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+              <path d="M15.5 15.5L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              <path d="M7.5 12l2-2.5 2 1.5 2-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <p className="mt-3 text-[14px] font-semibold text-[var(--color-ink)]">Research a product before you list it</p>
+          <p className="mt-1 max-w-md text-[13px] leading-relaxed text-[var(--color-muted)]">
+            See what buyers pay, how much it sells, who you&apos;d compete with, and a recommended price and title for {connection.label}.
           </p>
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
-            {EXAMPLES.map((example) => (
-              <button
-                key={example}
-                type="button"
-                onClick={() => {
-                  setQ(example);
-                  run(example);
-                }}
-                className="rounded-full bg-[var(--color-paper)] px-3 py-1.5 text-[12.5px] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)] hover:text-[var(--color-ink)]"
-              >
-                {example}
-              </button>
-            ))}
-          </div>
         </div>
       )}
 

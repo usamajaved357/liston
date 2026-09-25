@@ -47,7 +47,7 @@ function DraftIcon() {
 
 export function ResearchListings({ items, currency, connectionId, maxSold }: { items: ResearchItem[]; currency: string; connectionId: string; maxSold: number }) {
   return (
-    <div className="overflow-x-auto">
+    <div className="relative overflow-x-auto">
       <table className="w-full min-w-[860px] text-[13px]">
         <thead className="bg-[var(--color-paper)] text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
           <tr>
