@@ -100,6 +100,7 @@ async function subscribeAccount(connectionId, credentials) {
     settings[topic.setting] = { subscriptionId, destinationId, subscribedAt: new Date().toISOString() };
   }
   await connectionRepository.mergeEbaySettings(connectionId, settings);
+  ebayService.forgetMarketScopes();
   // eBay sends a test notification per subscription to the destination.
   for (const subscriptionId of Object.values(topics)) {
     if (subscriptionId) await notificationApi.testSubscription(accessToken, subscriptionId).catch(() => {});

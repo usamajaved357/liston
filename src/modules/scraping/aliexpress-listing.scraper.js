@@ -3,11 +3,16 @@ const logger = require('../../utils/logger');
 const { ScrapingError } = require('./scraping.errors');
 const { extractAliexpressFields } = require('./dom-extractors/aliexpress');
 
-// Upgrades AliExpress's resized thumbnail URLs (e.g. "...jpg_220x220q75.jpg_.avif")
-// to the original file where possible.
+// Upgrades AliExpress's resized thumbnail URLs to the original file. The CDN
+// names a resize by appending to the original's name — "…S1a2b.jpg_220x220q75.jpg_.avif",
+// "…S1a2b.jpg_80x80.jpg_.webp", "…S1a2b.png_.avif" — so everything after the
+// first image extension is the resize. The gallery strip on the page holds
+// those small thumbnails; left as they were, they fell under eBay's 500px
+// minimum and the photos were dropped.
 function upscaleImage(src) {
   if (!src) return src;
-  return src.replace(/_\d+x\d+q\d+\.jpg_\.avif$/, '');
+  const full = src.replace(/(\.(?:jpe?g|png|webp|gif))_[^/?#]*$/i, '$1');
+  return full.startsWith('//') ? `https:${full}` : full;
 }
 
 // Pure function so it's unit-testable without launching a real browser.
@@ -36,7 +41,10 @@ function normalize({ title, priceText, description, imageUrls, specifics, varian
     sourceUrl: null,
     title: title.trim(),
     description: (description || '').trim(),
-    imageUrls: (imageUrls || []).map(upscaleImage),
+    // The gallery, then each option's own photo (a colour swatch is often a
+    // photo the gallery doesn't repeat), full size and each once — as the
+    // API read does.
+    imageUrls: [...new Set([...(imageUrls || []), ...groups.flatMap((group) => group.options.map((option) => option.imageUrl))].filter(Boolean).map(upscaleImage))],
     priceText: priceText || null,
     specifics: { ...(specifics || {}) },
     categoryBreadcrumb: [],

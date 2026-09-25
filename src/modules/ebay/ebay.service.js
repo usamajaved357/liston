@@ -6,7 +6,9 @@ const ebayFinances = require('./api/ebay.finances');
 const ebaySignature = require('./api/ebay.signature');
 const ebayPostOrder = require('./api/ebay.postorder');
 const ebayBrowse = require('./api/ebay.browse');
+const browseUsage = require('./browse-usage');
 const ebayTaxonomy = require('./api/ebay.taxonomy');
+const ebayIdentity = require('./api/ebay.identity');
 const { createSwrCache } = require('./swr-cache');
 const mirror = require('./ebay-mirror.repository');
 const logger = require('../../utils/logger');
@@ -16,6 +18,9 @@ const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
 const analyticsDays = require('../analytics/analytics-days');
 const orderSort = require('../orders/order-sort');
+const marketScope = require('./market-scope');
+const money = require('../../utils/money');
+const connectionRepository = require('../connections/connection.repository');
 
 class EbayError extends Error {
   constructor(message, statusCode = 400) {
@@ -441,9 +446,31 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
   };
 }
 
+// Right after its items are built, eBay sometimes answers a publish with
+// "Seller Inventory Service can not publish the data. Product not found."
+// — its inventory hasn't caught up with the items yet — and the same
+// publish goes through a few seconds later. One more try, after a pause.
+let productNotFoundDelayMs = 4000;
+const isProductNotFound = (err) => /product not found/i.test(err?.message || '');
+
+async function publishWhenReady(publishCall) {
+  try {
+    return await publishCall();
+  } catch (err) {
+    if (!isProductNotFound(err)) throw err;
+    logger.warn('eBay had not caught up with the new items. Publishing again', { error: err.message });
+    if (productNotFoundDelayMs) await new Promise((resolve) => setTimeout(resolve, productNotFoundDelayMs));
+    return publishCall();
+  }
+}
+
+function setProductNotFoundDelay(ms) {
+  productNotFoundDelayMs = ms;
+}
+
 async function publishDraft(credentials, offerId, marketplaceId) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayClient.publishOffer(accessToken, offerId, marketplaceId);
+  const result = await publishWhenReady(() => ebayClient.publishOffer(accessToken, offerId, marketplaceId));
   return {
     externalProductId: result.listingId,
     status: 'published',
@@ -454,7 +481,7 @@ async function publishDraft(credentials, offerId, marketplaceId) {
 
 async function publishGroup(credentials, groupKey, marketplaceId) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
-  const result = await ebayClient.publishOfferByInventoryItemGroup(accessToken, groupKey, marketplaceId || 'EBAY_GB');
+  const result = await publishWhenReady(() => ebayClient.publishOfferByInventoryItemGroup(accessToken, groupKey, marketplaceId || 'EBAY_GB'));
   return {
     externalProductId: result.listingId,
     status: 'published',
@@ -526,7 +553,12 @@ const activeCountCache = createSwrCache({
 
 async function countActiveListings(credentials, connectionId, { push = false } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  const totalEntries = await activeCountCache.get(`${connectionId}`, { accessToken, siteId, push, connectionId });
+  // Shared with another site: eBay's count covers both, so it's counted
+  // from this site's listings instead.
+  const scope = await scopeOf(connectionId);
+  const totalEntries = scope?.claimed?.length
+    ? (await cachedListings(connectionId, 'active', { accessToken, siteId, push })).length
+    : await activeCountCache.get(`${connectionId}`, { accessToken, siteId, push, connectionId });
   return { totalEntries, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -698,6 +730,21 @@ async function detectMarketplace(credentials) {
   }
   market = market || marketplaces.byId(marketplaces.DEFAULT_ID);
   return { marketplaceId: market.id, profile, credentialsChanged, credentials: refreshedCredentials };
+}
+
+/**
+ * Which eBay seller a token belongs to: { userId, username }, the same
+ * account whatever site it's connected for. Identity API first (not
+ * rationed), GetUser when that fails.
+ */
+async function identifySeller(credentials) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  let seller = await ebayIdentity.getUser(accessToken).catch(() => null);
+  if (!seller?.userId && !seller?.username) {
+    const profile = await ebayTrading.getUserProfile(accessToken).catch(() => null);
+    seller = { userId: null, username: profile?.username || null };
+  }
+  return { ...seller, credentialsChanged, credentials: refreshedCredentials };
 }
 
 // Creates an Inventory API location (what an offer's merchantLocationKey
@@ -1016,7 +1063,31 @@ async function persist(write) {
 }
 
 // Bump when mapOrder gains a field, so every mirrored order is re-read once.
-const ORDER_SHAPE = 4; // 4: buyer email and sales record number; 3: delivery window and service
+const ORDER_SHAPE = 6; // 6: each line's eBay site; 5: delivered time; 4: buyer email and sales record number; 3: delivery window and service
+
+// A delivery is a carrier scan, which doesn't always move an order's
+// modified time, so the incremental read can miss it. Every few hours the
+// dispatched orders not yet delivered are read again by number (50 to a
+// call: usually one call), for up to 30 days after dispatch.
+let DELIVERY_CHECK_MS = 6 * 60 * 60 * 1000;
+function setDeliveryCheckInterval(ms) {
+  DELIVERY_CHECK_MS = ms;
+}
+const DELIVERY_WATCH_DAYS = 30;
+const ORDER_ID_BATCH = 50;
+
+/** Dispatched orders still waiting for a delivery scan, worth reading again. */
+function awaitingDelivery(orders, now = new Date()) {
+  const since = now.getTime() - DELIVERY_WATCH_DAYS * DAY_MS;
+  return orders.filter((o) => o.shippedTime && !o.deliveredAt && classifyOrderStatus(o) === 'dispatched' && new Date(o.shippedTime).getTime() >= since);
+}
+
+async function fetchOrdersById(accessToken, orderIds, siteId) {
+  const batches = [];
+  for (let i = 0; i < orderIds.length; i += ORDER_ID_BATCH) batches.push(orderIds.slice(i, i + ORDER_ID_BATCH));
+  const results = await Promise.all(batches.map((ids) => ebayTrading.getOrders(accessToken, { orderIds: ids, entriesPerPage: ORDER_ID_BATCH, siteId })));
+  return results.flatMap((r) => r.orders);
+}
 
 function ordersHorizon(now = new Date()) {
   return new Date(now.getTime() - MAX_WINDOW_DAYS * DAY_MS);
@@ -1070,21 +1141,77 @@ async function fetchOrdersIncrementally({ accessToken, siteId, connectionId }, m
       const changed = await fetchOrdersModifiedSince(accessToken, from.toISOString(), now.toISOString(), siteId);
       const byId = new Map(current.map((o) => [o.orderId, o]));
       for (const order of changed) byId.set(order.orderId, order);
+      const deliveryDue = !meta?.deliveryCheckAt || now - new Date(meta.deliveryCheckAt) >= DELIVERY_CHECK_MS;
+      if (deliveryDue) {
+        const changedIds = new Set(changed.map((o) => o.orderId));
+        const watch = awaitingDelivery([...byId.values()], now).filter((o) => !changedIds.has(o.orderId)).map((o) => o.orderId);
+        const reread = watch.length ? await fetchOrdersById(accessToken, watch, siteId) : [];
+        for (const order of reread) byId.set(order.orderId, order);
+        changed.push(...reread);
+        meta = { ...(meta || {}), deliveryCheckAt: now.toISOString() };
+      }
       orders = [...byId.values()].filter((o) => new Date(o.createdAt) >= horizon);
       if (changed.length) await persist(() => mirror.upsertOrders(connectionId, changed));
     } else {
       const result = await fetchAllOrdersInWindow(accessToken, horizon.toISOString(), now.toISOString(), meta?.totalPages, siteId);
       orders = result.orders;
       await persist(() => mirror.upsertOrders(connectionId, orders));
-      meta = { ...(meta || {}), totalPages: result.totalPages };
+      // A full read is as current as a delivery check.
+      meta = { ...(meta || {}), totalPages: result.totalPages, deliveryCheckAt: now.toISOString() };
     }
     await persist(() => mirror.pruneOrdersBefore(connectionId, horizon));
     return { value: orders, meta: { ...(meta || {}), lastSyncAt: now.toISOString(), shape: ORDER_SHAPE } };
   }
 }
 
-function getOrdersLast90Cached(connectionId, accessToken, siteId, push = false) {
-  return ordersCache.get(connectionId, { accessToken, siteId, connectionId, push });
+// One eBay account connected on several sites: eBay hands every connection
+// the account's listings and orders from all of them, so each keeps its own
+// site's (market-scope.js). The copies hold everything; the split is made
+// as they're read, so connecting or removing a site needs no re-read.
+const SCOPE_TTL_MS = 5 * 60 * 1000;
+const scopes = new Map(); // connectionId -> { at, scope: Promise }
+function scopeOf(connectionId) {
+  const id = String(connectionId);
+  const known = scopes.get(id);
+  if (known && Date.now() - known.at < SCOPE_TTL_MS) return known.scope;
+  const scope = connectionRepository.findMarketScope(id).catch(() => null);
+  scopes.set(id, { at: Date.now(), scope });
+  return scope;
+}
+
+/**
+ * Which eBay sites this account's listings and orders are on, from the
+ * copies eBay sent (all sites, whatever the connection's own): [{
+ * marketplaceId, listings, orders }], busiest first. Reads only the copies.
+ */
+async function accountSites(credentials, connectionId) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const ctx = { accessToken, siteId, connectionId: id };
+  const [items, orders] = await Promise.all([
+    listingsCache.get(listingsKey(id, 'active'), { ...ctx, status: 'active' }).catch(() => []),
+    ordersCache.get(id, ctx).catch(() => []),
+  ]);
+  const sites = new Map();
+  const bump = (market, key) => {
+    if (!market) return;
+    const site = sites.get(market) || { marketplaceId: market, listings: 0, orders: 0 };
+    site[key] += 1;
+    sites.set(market, site);
+  };
+  for (const item of items || []) bump(marketScope.marketOfListing(item), 'listings');
+  for (const order of orders || []) bump(marketScope.marketOfOrder(order), 'orders');
+  return [...sites.values()].sort((a, b) => b.listings + b.orders - (a.listings + a.orders));
+}
+
+/** After a connection is added, removed or tagged with its site or seller. */
+function forgetMarketScopes() {
+  scopes.clear();
+}
+
+async function getOrdersLast90Cached(connectionId, accessToken, siteId, push = false) {
+  const [orders, scope] = await Promise.all([ordersCache.get(connectionId, { accessToken, siteId, connectionId, push }), scopeOf(connectionId)]);
+  return marketScope.ordersIn(scope, orders);
 }
 
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
@@ -1124,6 +1251,13 @@ const listingsCache = createSwrCache({
 // Cache keys double as snapshot ids: "<connectionId>:listings:active" is
 // snapshot kind "listings:active" of that connection.
 const listingsKey = (connectionId, status) => `${connectionId}:listings:${status}`;
+
+// The cached listings of one tab, this connection's site only.
+async function cachedListings(connectionId, status, ctx) {
+  const id = String(connectionId);
+  const [items, scope] = await Promise.all([listingsCache.get(listingsKey(id, status), { ...ctx, status, connectionId: id }), scopeOf(id)]);
+  return marketScope.listingsIn(scope, items);
+}
 function splitListingsKey(key) {
   const at = key.indexOf(':');
   return [key.slice(0, at), key.slice(at + 1)];
@@ -1135,7 +1269,7 @@ function splitListingsKey(key) {
  */
 async function listListingsDetailed(credentials, { connectionId, status = 'active', search, page = 1, perPage = 25, hiddenItemIds = [], push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
-  let all = await listingsCache.get(listingsKey(connectionId, status), { accessToken, status, siteId, push, connectionId });
+  let all = await cachedListings(connectionId, status, { accessToken, siteId, push });
   if (hiddenItemIds.length) {
     const hidden = new Set(hiddenItemIds.map(String));
     all = all.filter((item) => !hidden.has(item.itemId));
@@ -1214,7 +1348,7 @@ async function analyticsInputs(credentials, connectionId, { push = false } = {})
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const id = String(connectionId);
   const [items, orders] = await Promise.all([
-    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }).catch(() => []),
+    cachedListings(id, 'active', { accessToken, siteId, push }).catch(() => []),
     getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
   ]);
   return {
@@ -1233,7 +1367,7 @@ async function bestSellingListings(credentials, connectionId, { exclude, count =
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const id = String(connectionId);
   const [items, orders] = await Promise.all([
-    listingsCache.get(listingsKey(id, 'active'), { accessToken, status: 'active', siteId, push, connectionId: id }),
+    cachedListings(id, 'active', { accessToken, siteId, push }),
     getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
   ]);
 
@@ -1406,6 +1540,12 @@ async function getOrderDetail(credentials, { connectionId, orderId }) {
     if (!legacy) throw new EbayError('Order not found in the last 90 days of this account.', 404);
     order = legacyOrderDetail(legacy);
     source = 'trading';
+  }
+  // When the buyer received it: the Fulfillment API doesn't say, the
+  // account's order copy (GetOrders) does. (The Trading shape carries it.)
+  if (!order.deliveredAt) {
+    const mirrored = (await getOrdersLast90Cached(connectionId, accessToken, siteId, false).catch(() => [])).find((o) => o.orderId === orderId);
+    order.deliveredAt = mirrored?.deliveredAt || null;
   }
   const itemIds = [...new Set(order.lineItems.map((li) => li.itemId).filter(Boolean))];
   // The rest of what Seller Hub's order page shows, each best-effort: the
@@ -2061,10 +2201,11 @@ function classifyOrderStatus(order) {
   if (order.status === 'Cancelled') return 'cancelled';
   if (order.checkoutStatus !== 'Complete') return 'awaiting_payment';
   if (!order.shippedTime) return 'awaiting_dispatch';
+  if (order.deliveredAt) return 'delivered';
   return 'dispatched';
 }
 
-const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatched', 'cancelled'];
+const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatched', 'delivered', 'cancelled'];
 
 /**
  * The Orders page's data source: fetches every order in the range, tags each
@@ -2076,8 +2217,11 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
  * orders the page never shows.
  */
 // `archivedOrderIds` are the orders the team put away: left out unless
-// `archived` asks for exactly those.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false }) {
+// `archived` asks for exactly those. `supplierStateOf(order)` says where the
+// supplier order stands (orders/order-supplier.js); `supplier` keeps one
+// state. The tab counts don't depend on it; `supplierCounts` count each
+// state within the chosen tab.
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2093,6 +2237,23 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   }
 
   let filtered = status && status !== 'all' ? tagged.filter((o) => o.derivedStatus === status) : tagged;
+
+  // What needs doing among the paid orders waiting to ship: past their
+  // dispatch-by date, and not yet ordered from the supplier.
+  const awaiting = tagged.filter((o) => o.derivedStatus === 'awaiting_dispatch');
+  const nowMs = Date.now();
+  const attention = {
+    overdue: awaiting.filter((o) => o.dispatchByTime && new Date(o.dispatchByTime).getTime() < nowMs).length,
+    notOrdered: supplierStateOf ? awaiting.filter((o) => supplierStateOf(o) === 'pending').length : null,
+  };
+
+  let supplierCounts = null;
+  if (supplierStateOf) {
+    const states = new Map(filtered.map((o) => [o.orderId, supplierStateOf(o)]));
+    supplierCounts = { any: filtered.length };
+    for (const state of states.values()) supplierCounts[state] = (supplierCounts[state] || 0) + 1;
+    if (supplier && supplier !== 'any') filtered = filtered.filter((o) => states.get(o.orderId) === supplier);
+  }
 
   if (search && search.trim()) {
     const needle = search.trim().toLowerCase();
@@ -2129,6 +2290,9 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   return {
     orders: enrichedOrders,
     counts,
+    attention,
+    supplierCounts,
+    supplier: supplierStateOf ? supplier || 'any' : 'any',
     totalEntries,
     totalPages,
     page,
@@ -2146,27 +2310,98 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
 // is, honestly, "as far back as eBay lets us look": the last 90 days. The
 // `truncated` flag lets the frontend say so instead of implying a true
 // lifetime total.
-async function getEarningsSummary(credentials, { connectionId, range, from, to, push = false }) {
+// `timeZone`: whose day "today" and the months are (the owner's dashboard
+// passes the viewer's); the account's site's otherwise.
+/** The account's own orders placed in a range (its site only), from the mirror. */
+async function ordersInRange(credentials, { connectionId, range, from, to, timeZone = null, push = false }) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  const [start, end] = resolveRangeWindow(range === 'all_time' ? '90d' : range, from, to, timeZone || analyticsDays.timeZoneFor(credentials.marketplaceId || 'EBAY_GB'));
+  return ordersWithin(await getOrdersLast90Cached(String(connectionId), accessToken, siteId, push), start, end);
+}
+
+// Each order's money as eBay's Finances API has it (fees, ad fees, what
+// reached the seller, refunds), kept in ebay_order_finances for the
+// Overview. Read in bulk: every transaction in a date window, 1,000 to a
+// call. The first read covers eBay's 90 days; after that the window since
+// the last read (with a few days' overlap for fees and refunds eBay books
+// late), at most every FINANCES_FRESH_MS. An order whose sale fell before
+// the window but got a refund or an ad fee inside it is read on its own.
+const FINANCES_FRESH_MS = 30 * 60 * 1000;
+const FINANCES_OVERLAP_MS = 3 * DAY_MS;
+const FINANCES_MAX_PAGES = 20;
+const FINANCES_LATE_ORDERS = 50;
+const financesRunning = new Map();
+
+function syncOrderFinances(credentials, connectionId, { force = false } = {}) {
+  const id = String(connectionId);
+  if (financesRunning.has(id)) return financesRunning.get(id);
+  const run = syncOrderFinancesNow(credentials, id, { force }).finally(() => financesRunning.delete(id));
+  financesRunning.set(id, run);
+  return run;
+}
+
+async function syncOrderFinancesNow(credentials, id, { force }) {
+  if (!ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES)) return { skipped: 'scope', credentialsChanged: false, credentials };
+  const state = await mirror.loadSnapshot(id, 'finances').catch(() => null);
+  const now = new Date();
+  if (!force && state && now - state.syncedAt < FINANCES_FRESH_MS) return { skipped: 'fresh', credentialsChanged: false, credentials };
+
+  const { accessToken, credentials: refreshed, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || marketplaces.DEFAULT_ID;
+  const signed = await ensureSigningKey({ ...refreshed, marketplaceId }, accessToken);
+  const lastSyncAt = state?.meta?.lastSyncAt ? new Date(state.meta.lastSyncAt) : null;
+  const from = lastSyncAt ? new Date(lastSyncAt.getTime() - FINANCES_OVERLAP_MS) : ordersHorizon(now);
+
+  // The first page says how many there are; the rest are read together
+  // (each takes eBay a few seconds).
+  const window = { from: from.toISOString(), to: now.toISOString() };
+  const first = await ebayFinances.getTransactions(accessToken, { ...window, offset: 0 }, marketplaceId, signed.key);
+  const pageSize = (first?.transactions || []).length;
+  const pages = pageSize ? Math.min(FINANCES_MAX_PAGES, Math.ceil(Number(first?.total || 0) / pageSize)) : 1;
+  const rest = await Promise.all(
+    Array.from({ length: pages - 1 }, (_, i) =>
+      ebayFinances.getTransactions(accessToken, { ...window, offset: (i + 1) * pageSize }, marketplaceId, signed.key)
+    )
+  );
+  const transactions = [first, ...rest].flatMap((res) => res?.transactions || []);
+  const rows = ebayFinances.orderFinancesFrom(transactions);
+  // After the first read: a refund or a late ad fee on an order sold before
+  // the window brings that order's whole history, so its row stays complete.
+  // (On the first read those orders are older than the 90 days shown.)
+  if (lastSyncAt) {
+    const found = new Set(rows.map((r) => r.orderId));
+    const late = [...new Set(transactions.map(ebayFinances.orderIdOf).filter((orderId) => orderId && !found.has(orderId)))].slice(0, FINANCES_LATE_ORDERS);
+    const histories = await mapWithConcurrency(late, 4, (orderId) =>
+      ebayFinances.getOrderTransactions(accessToken, orderId, marketplaceId, signed.key).catch(() => null)
+    );
+    for (const res of histories) rows.push(...ebayFinances.orderFinancesFrom(res?.transactions || []));
+  }
+  await mirror.upsertOrderFinances(id, rows);
+  await mirror.saveSnapshot(id, 'finances', { count: rows.length }, { lastSyncAt: now.toISOString() });
+  const changed = credentialsChanged || signed.credentialsChanged;
+  return { orders: rows.length, credentialsChanged: changed, credentials: signed.credentialsChanged ? signed.credentials : refreshed };
+}
+
+async function getEarningsSummary(credentials, { connectionId, range, from, to, timeZone = null, push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
 
   const effectiveRange = range === 'all_time' ? '90d' : range;
-  const [start, end] = resolveRangeWindow(effectiveRange, from, to, analyticsDays.timeZoneFor(credentials.marketplaceId || 'EBAY_GB'));
+  const [start, end] = resolveRangeWindow(effectiveRange, from, to, timeZone || analyticsDays.timeZoneFor(credentials.marketplaceId || 'EBAY_GB'));
   const orders = connectionId
     ? ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end)
     : (await fetchAllOrdersInWindow(accessToken, start.toISOString(), end.toISOString(), 1, siteId)).orders;
 
-  let amount = 0;
-  let currency = null;
-  for (const order of orders) {
-    if (order.total) {
-      amount += order.total.amount;
-      currency = currency || order.total.currency;
-    }
-  }
+  // In the account's own currency; sales in another (a site of the account
+  // not linked separately) are totalled beside it, never added in.
+  // A day with no orders is still £0.00, not a bare 0.00.
+  const { main, others } = money.splitByCurrency(
+    orders.map((order) => order.total),
+    marketplaces.currencyFor(credentials.marketplaceId || 'EBAY_GB')
+  );
 
   return {
-    // A day with no orders is still £0.00, not a bare 0.00.
-    earnings: { amount: Math.round(amount * 100) / 100, currency: currency || marketplaces.currencyFor(credentials.marketplaceId || 'EBAY_GB') },
+    earnings: main,
+    otherEarnings: others,
     orderCount: orders.length,
     truncated: range === 'all_time',
     credentialsChanged,
@@ -2193,7 +2428,7 @@ function pushEnabled(connection, now = Date.now()) {
 // Similar listings on a site (public data, 1 Browse call), for a listing's
 // health check: the cheapest by price in the same category.
 function searchSimilarListings({ q, categoryId, filter, limit = 20 }, marketplaceId) {
-  return ebayBrowse.searchItemSummaries({ q, limit, filter, categoryIds: categoryId || undefined, sort: 'price' }, marketplaceId);
+  return browseUsage.as('health', () => ebayBrowse.searchItemSummaries({ q, limit, filter, categoryIds: categoryId || undefined, sort: 'price' }, marketplaceId));
 }
 
 // A category's item specifics with required/recommended flags (cached by
@@ -2232,6 +2467,7 @@ module.exports = {
   getMerchantLocations,
   publishDraft,
   publishGroup,
+  setProductNotFoundDelay,
   withdrawDraft,
   listActiveListings,
   countActiveListings,
@@ -2242,6 +2478,7 @@ module.exports = {
   listOrders,
   getLiveItem,
   detectMarketplace,
+  identifySeller,
   getStoreCategories,
   getStoreCategoriesCached,
   addStoreCategory,
@@ -2269,6 +2506,13 @@ module.exports = {
   applyListingChanges,
   enableNotifications,
   listOrdersDetailed,
+  awaitingDelivery,
+  forgetMarketScopes,
+  accountSites,
+  ordersInRange,
+  syncOrderFinances,
+  classifyOrderStatus,
+  setDeliveryCheckInterval,
   getEarningsSummary,
   resolveRangeWindow,
 };

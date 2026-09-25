@@ -36,7 +36,7 @@ function Freshness({ data }: { data: AccountAnalytics }) {
   const details = [
     sync.finalThrough && `Complete to ${dayLabelLong(sync.finalThrough)}.`,
     "Today's traffic arrives once eBay closes the day; sales are live.",
-    `Next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" })}.`,
+    `Next day added ${new Date(sync.nextSyncAt).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: data.timeZone })}.`,
     sync.history && !sync.history.complete && `Listing history: ${sync.history.stored} of ${sync.history.needed} days stored.`,
     `Days follow ${data.timeZone.replace("_", " ")} time. Last read from eBay ${timeAgo(sync.lastSyncedAt)}.`,
   ]

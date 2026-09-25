@@ -1,7 +1,12 @@
 const { query } = require('../../db/client');
 
+// One eBay account connected on several sites (UK and Australia) is one
+// account for the plan: connections count once per seller.
 async function countByUser(userId) {
-  const result = await query('SELECT count(*) FROM connections WHERE user_id = $1', [userId]);
+  const result = await query(
+    `SELECT count(DISTINCT COALESCE(settings->'ebay'->>'userId', settings->'ebay'->>'username', id::text)) FROM connections WHERE user_id = $1`,
+    [userId]
+  );
   return parseInt(result.rows[0].count, 10);
 }
 
@@ -74,6 +79,39 @@ async function findIdsByEbayUser({ userId, username }) {
   return result.rows;
 }
 
+// One owner's connections of the same eBay account (by immutable user id or
+// username), each on its own site. `exceptId` leaves one out.
+async function findOwnerEbayAccount(ownerId, { userId, username }, exceptId = null) {
+  if (!userId && !username) return [];
+  const result = await query(
+    `SELECT id, label, settings FROM connections
+     WHERE user_id = $1 AND ($4::uuid IS NULL OR id <> $4)
+       AND (($2::text IS NOT NULL AND settings->'ebay'->>'userId' = $2) OR ($3::text IS NOT NULL AND settings->'ebay'->>'username' = $3))`,
+    [ownerId, userId || null, username || null, exceptId]
+  );
+  return result.rows;
+}
+
+// A connection's site and the sites the other connections of its eBay
+// account hold: { own, claimed }, or null when the connection is gone.
+async function findMarketScope(connectionId) {
+  const result = await query(
+    `SELECT c.settings->'ebay'->>'marketplaceId' AS own,
+            COALESCE(array_agg(DISTINCT o.settings->'ebay'->>'marketplaceId')
+              FILTER (WHERE o.settings->'ebay'->>'marketplaceId' IS NOT NULL), '{}') AS claimed
+     FROM connections c
+     LEFT JOIN connections o ON o.user_id = c.user_id AND o.id <> c.id
+      AND ((c.settings->'ebay'->>'userId' IS NOT NULL AND o.settings->'ebay'->>'userId' = c.settings->'ebay'->>'userId')
+        OR (c.settings->'ebay'->>'username' IS NOT NULL AND o.settings->'ebay'->>'username' = c.settings->'ebay'->>'username'))
+     WHERE c.id = $1
+     GROUP BY c.id`,
+    [connectionId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return { own: row.own || null, claimed: row.claimed.filter((id) => id && id !== row.own) };
+}
+
 /**
  * Merges fields into settings.ebay in place (one statement, no read first),
  * for bookkeeping written from eBay's callbacks. The push records
@@ -141,6 +179,8 @@ module.exports = {
   findIdsByEbayUsername,
   findAllEbay,
   countByUser,
+  findOwnerEbayAccount,
+  findMarketScope,
   getMaxConnectionsForUser,
   findPlatformByKey,
   findAllPlatforms,

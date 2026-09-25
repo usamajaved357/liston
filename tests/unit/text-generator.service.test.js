@@ -216,15 +216,19 @@ test('refitContentForCategory drops the variation axes from the shared specifics
   delete require.cache[require.resolve('../../src/modules/ai-generation/text-generator.service')];
   const textGenerator = require('../../src/modules/ai-generation/text-generator.service');
 
-  mock.method(messagesProto, 'create', async () => ({
-    content: [
-      {
-        type: 'tool_use',
-        name: 'submit_refit',
-        input: { title: 'y'.repeat(75), description: 'new desc', aspects: { Type: ['Cup Holder'], Colour: ['Black'] } },
-      },
-    ],
-  }));
+  let request;
+  mock.method(messagesProto, 'create', async (args) => {
+    request = args;
+    return {
+      content: [
+        {
+          type: 'tool_use',
+          name: 'submit_refit',
+          input: { title: 'y'.repeat(75), aspects: { Type: ['Cup Holder'], Colour: ['Black'] } },
+        },
+      ],
+    };
+  });
 
   const result = await textGenerator.refitContentForCategory({
     draft: { commonTitle: 'old', commonDescription: 'old desc', variesBy: { aspects: { Type: ['Coin Holder'] } }, variants: [{}] },
@@ -236,6 +240,9 @@ test('refitContentForCategory drops the variation axes from the shared specifics
 
   assert.deepStrictEqual(result.aspects, { Type: ['Cup Holder'] });
   assert.strictEqual(result.title.length, 75);
+  // The description is kept as the seller has it, not paid for again.
+  assert.strictEqual(result.description, 'old desc');
+  assert.strictEqual(request.tools[0].input_schema.properties.description, undefined);
 });
 
 test('generateListingContent tells the model to name variations the way the competitor does', async () => {

@@ -126,10 +126,12 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
     shippedTime: '2026-01-03T09:00:00.000Z',
     cancelStatus: 'NotApplicable',
     dispatchByTime: '2026-01-02T23:59:59.000Z',
+    deliveredAt: null,
     lineItems: [
       {
         itemId: '456',
         title: 'Widget',
+        site: null,
         quantityPurchased: 2,
         price: { amount: 6.25, currency: 'GBP' },
         variation: [{ name: 'Color', value: 'Blue' }],
@@ -138,10 +140,49 @@ test('getOrders maps buyer, payment/dispatch state, and line item details', asyn
         handleByTime: '2026-01-02T23:59:59.000Z',
         estimatedDeliveryMin: null,
         estimatedDeliveryMax: null,
+        deliveredAt: null,
         shippingService: null,
       },
     ],
   });
+});
+
+// An order counts as delivered once every item on it has a carrier-confirmed
+// delivery time; the last one is when it was delivered.
+function orderWithDeliveries(times) {
+  const transactions = times
+    .map(
+      (t, i) => `<Transaction><Item><ItemID>${i + 1}</ItemID><Title>T${i}</Title></Item><QuantityPurchased>1</QuantityPurchased>
+        <ShippingServiceSelected><ShippingPackageInfo>${t ? `<ActualDeliveryTime>${t}</ActualDeliveryTime>` : ''}</ShippingPackageInfo></ShippingServiceSelected></Transaction>`
+    )
+    .join('');
+  return `<?xml version="1.0"?><GetOrdersResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack>
+    <PaginationResult><TotalNumberOfEntries>1</TotalNumberOfEntries><TotalNumberOfPages>1</TotalNumberOfPages></PaginationResult>
+    <OrderArray><Order><OrderID>ORD-2</OrderID><ShippedTime>2026-01-03T09:00:00.000Z</ShippedTime><TransactionArray>${transactions}</TransactionArray></Order></OrderArray></GetOrdersResponse>`;
+}
+
+test('getOrders reads when each item was delivered, and the order is delivered once all of them are', async () => {
+  mock.method(global, 'fetch', async () => fakeResponse(orderWithDeliveries(['2026-01-06T11:00:00.000Z', '2026-01-05T10:00:00.000Z'])));
+  const [all] = (await ebayTrading.getOrders('token', { createTimeFrom: 'a', createTimeTo: 'b' })).orders;
+  assert.deepStrictEqual(all.lineItems.map((li) => li.deliveredAt), ['2026-01-06T11:00:00.000Z', '2026-01-05T10:00:00.000Z']);
+  assert.strictEqual(all.deliveredAt, '2026-01-06T11:00:00.000Z');
+
+  mock.restoreAll();
+  mock.method(global, 'fetch', async () => fakeResponse(orderWithDeliveries(['2026-01-06T11:00:00.000Z', null])));
+  const [some] = (await ebayTrading.getOrders('token', { createTimeFrom: 'a', createTimeTo: 'b' })).orders;
+  assert.strictEqual(some.deliveredAt, null);
+});
+
+test('getOrders can read particular orders by number, and asks eBay for the delivery time', async () => {
+  let body = '';
+  mock.method(global, 'fetch', async (url, options) => {
+    body = options.body;
+    return fakeResponse(orderWithDeliveries([null]));
+  });
+  await ebayTrading.getOrders('token', { orderIds: ['12-345-678', 'A&B'] });
+  assert.match(body, /<OrderIDArray><OrderID>12-345-678<\/OrderID><OrderID>A&amp;B<\/OrderID><\/OrderIDArray>/);
+  assert.doesNotMatch(body, /CreateTimeFrom|ModTimeFrom/);
+  assert.match(body, /ShippingPackageInfo\.ActualDeliveryTime/);
 });
 
 test('a Trading API failure response throws EbayTradingError with eBay\'s message', async () => {

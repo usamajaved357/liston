@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { AnalyticsBenchmarks, HealthCheck, HealthRates, HealthReason, ListingEdit, ListingEditFigures, ListingHealth } from "@/lib/api";
 import { formatDateTime, formatDay, formatMoney, formatShortDate } from "@/lib/format";
+import { useAccountTimeZone } from "@/lib/timezone";
 import { fullNumber } from "@/components/charts/chart-format";
 import { StakeLabel } from "./InsightCards";
 import { TONE, STAGE_TAG, editedFields } from "./insights";
@@ -177,6 +178,7 @@ function Movement({ label, before, after, format, perDay, light }: { label: stri
 // newest sits at the top of the check (`latest`), so a change just applied
 // is the first thing seen; older ones are listed at the bottom.
 function EditRow({ edit, currency, latest }: { edit: ListingEdit; currency: string | null; latest?: boolean }) {
+  const timeZone = useAccountTimeZone();
   const b: ListingEditFigures | null = edit.figuresBefore;
   const a: ListingEditFigures | null = edit.figuresAfter;
   const measured = Boolean(a && b);
@@ -195,7 +197,7 @@ function EditRow({ edit, currency, latest }: { edit: ListingEdit; currency: stri
           )}
           {editedFields(edit.fields)} changed in Liston
         </p>
-        <span className="text-[11px] text-[var(--color-muted)]" title={formatDateTime(edit.changedAt)}>
+        <span className="text-[11px] text-[var(--color-muted)]" title={formatDateTime(edit.changedAt, timeZone)}>
           {formatDay(edit.day)}
         </span>
       </div>
@@ -293,6 +295,7 @@ export function HealthPanel({
   onApply: (plan: HealthPlan) => Promise<void> | void;
   onCheck: (competitor: boolean) => Promise<void>;
 }) {
+  const timeZone = useAccountTimeZone();
   // Similar listings' prices cost a second call: only when the seller asks.
   const [competitor, setCompetitor] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -433,7 +436,7 @@ export function HealthPanel({
             <p className="text-[12.5px] font-semibold text-[var(--color-ink)]">Deeper check</p>
             <p className="text-[11.5px] text-[var(--color-muted)]">
               {check
-                ? `Checked ${formatShortDate(check.checkedAt)} · ${check.calls} eBay call${check.calls === 1 ? "" : "s"}${check.quality.editedAt ? ` · updated with your edit on ${formatShortDate(check.quality.editedAt)}` : ""}`
+                ? `Checked ${formatShortDate(check.checkedAt, timeZone)} · ${check.calls} eBay call${check.calls === 1 ? "" : "s"}${check.quality.editedAt ? ` · updated with your edit on ${formatShortDate(check.quality.editedAt, timeZone)}` : ""}`
                 : "Reads the live listing from eBay. Nothing is read until you press it."}
             </p>
           </div>

@@ -4,6 +4,7 @@ const ebayOauth = require('../ebay/api/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
+const ebayPush = require('../ebay/ebay-push');
 const ebayTaxonomy = require('../ebay/api/ebay.taxonomy');
 const descriptionTemplate = require('../listings/description-template');
 const listingService = require('../listings/listing.service');
@@ -12,6 +13,9 @@ const accountEvents = require('../ebay/account-events');
 
 const startEbayAuthSchema = z.object({
   label: z.string().min(1, 'Label is required').max(100),
+  // The eBay site to link the account for; one account can be linked once
+  // per site. Left out, the account's home site is detected.
+  marketplaceId: z.enum(marketplaces.MARKETPLACES.map((m) => m.id)).optional(),
 });
 
 // Re-runs eBay's consent for an EXISTING connection, so the new token (with
@@ -39,9 +43,15 @@ async function startEbayAuth(req, res, next) {
 
     // Fail fast on plan limit before sending the user through eBay's consent
     // screen — nothing worse than a "connection added" surprise 403 after.
-    await connectionService.assertUnderPlanLimit(req.ownerId);
+    // Another site of an account already linked takes no slot, and which
+    // account it is only shows after sign-in, so an owner with eBay accounts
+    // goes through and the callback decides.
+    await connectionService.assertUnderPlanLimit(req.ownerId).catch(async (err) => {
+      const { connections } = await connectionService.listConnections(req.ownerId);
+      if (!connections.some((c) => c.platform_key === 'ebay')) throw err;
+    });
 
-    const state = ebayOauth.signState({ userId: req.ownerId, label: parsed.data.label });
+    const state = ebayOauth.signState({ userId: req.ownerId, label: parsed.data.label, marketplaceId: parsed.data.marketplaceId });
     const authorizeUrl = ebayOauth.buildAuthorizeUrl(state);
     res.status(200).json({ authorizeUrl });
   } catch (err) {
@@ -90,9 +100,36 @@ async function getOne(req, res, next) {
   }
 }
 
+// The eBay sites this account sells on, and which connection holds each.
+async function listSites(req, res, next) {
+  try {
+    const sites = await connectionService.ebaySites(req.ownerId, req.params.id, ebayService);
+    res.status(200).json({ sites });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const addSiteSchema = z.object({ marketplaceId: z.enum(marketplaces.MARKETPLACES.map((m) => m.id)) });
+
+// Another site of this account, as its own connection (no eBay sign-in).
+async function addSite(req, res, next) {
+  try {
+    const parsed = addSiteSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Pick an eBay site Liston sells on.' });
+    const connection = await connectionService.addEbaySite(req.ownerId, req.params.id, parsed.data.marketplaceId, ebayService);
+    ebayPush.subscribeInBackground(connection.id, req.ownerId);
+    res.status(201).json({ connection: await connectionService.getConnectionSummary(connection.id, req.ownerId) });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function remove(req, res, next) {
   try {
     await connectionService.deleteConnection(req.params.id, req.ownerId);
+    // Another site of the same account takes back what this one held.
+    ebayService.forgetMarketScopes();
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -100,7 +137,8 @@ async function remove(req, res, next) {
 }
 
 const LIST_ORDER_RANGES = ['7d', '30d', '90d'];
-const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'cancelled'];
+const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'delivered', 'cancelled'];
+const { FILTERS: SUPPLIER_FILTERS } = require('../orders/order-supplier');
 const ORDER_PAGE_SIZES = [25, 50, 100, 200];
 const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month', 'custom', 'all_time'];
 
@@ -153,13 +191,18 @@ async function getOrders(req, res, next) {
     const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
     const archived = req.query.archived === '1' || req.query.archived === 'true';
     const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
-    const archivedOrderIds = await require('../orders/order.service').archivedOrderIds(req.params.id).catch(() => []);
+    const supplier = SUPPLIER_FILTERS.includes(req.query.supplier) ? req.query.supplier : 'any';
+    const orderService = require('../orders/order.service');
+    const [archivedOrderIds, supplierStateOf] = await Promise.all([
+      orderService.archivedOrderIds(req.params.id).catch(() => []),
+      orderService.supplierStateLookup(req.params.id).catch(() => null),
+    ]);
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived, supplier, supplierStateOf });
     });
 
     // Each row's supplier-order state, so the list can show it and take a
@@ -171,6 +214,9 @@ async function getOrders(req, res, next) {
     res.status(200).json({
       orders: result.orders.map((o) => ({ ...o, sourcing: sourcingByOrder[o.orderId] || [] })),
       counts: result.counts,
+      attention: result.attention,
+      supplier: result.supplier,
+      supplierCounts: result.supplierCounts,
       sort: result.sort,
       totalEntries: result.totalEntries,
       totalPages: result.totalPages,
@@ -244,7 +290,7 @@ async function getEarnings(req, res, next) {
       return ebayService.getEarningsSummary(credentials, { connectionId: req.params.id, range, from, to, push: ebayService.pushEnabled(connection) });
     });
 
-    res.status(200).json({ earnings: result.earnings, orderCount: result.orderCount, truncated: result.truncated });
+    res.status(200).json({ earnings: result.earnings, otherEarnings: result.otherEarnings, orderCount: result.orderCount, truncated: result.truncated });
   } catch (err) {
     next(err);
   }
@@ -636,6 +682,8 @@ module.exports = {
   remove,
   startEbayAuth,
   reauthorizeEbay,
+  listSites,
+  addSite,
   getListings,
   getOrders,
   getEarnings,

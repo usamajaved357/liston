@@ -15,10 +15,15 @@ router.post('/ebay/authorize', requireAuth, requireOwner, connectionController.s
 router.get('/:id', requireAuth, requireAnyFeature(KNOWN_FEATURES), connectionController.getOne);
 router.post('/:id/reauthorize', requireAuth, requireAnyFeature(KNOWN_FEATURES), connectionController.reauthorizeEbay);
 router.delete('/:id', requireAuth, requireOwner, connectionController.remove);
+// The eBay sites the account sells on; another one split off as its own connection.
+router.get('/:id/sites', requireAuth, requireOwner, connectionController.listSites);
+router.post('/:id/sites', requireAuth, requireOwner, connectionController.addSite);
 router.get('/:id/listings', requireAuth, requireFeature('listings'), connectionController.getListings);
 router.get('/:id/orders', requireAuth, requireFeature('orders'), connectionController.getOrders);
 router.use('/:id/orders', require('../orders/order.routes'));
 router.get('/:id/earnings', requireAuth, requireFeature('orders'), connectionController.getEarnings);
+// The account's Overview money (sales, fees, earnings, source cost, profit) and listing work: owner-only, like the business Overview.
+router.get('/:id/overview', requireAuth, requireOwner, require('../overview/overview.controller').getAccountOverview);
 router.use('/:id/analytics', require('../analytics/analytics.routes'));
 router.post('/:id/refresh', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.refresh);
 router.get('/:id/events', requireAuth, requireAnyFeature(['listings', 'orders', 'analytics']), connectionController.events);
@@ -35,6 +40,12 @@ router.post('/:id/template/preview', requireAuth, requireOwner, express.json({ l
 router.get('/:id/store-reviews', requireAuth, requireOwner, connectionController.storeReviews);
 router.get('/:id/store-profile', requireAuth, requireOwner, connectionController.getStoreProfile);
 // Category picker data. Anyone who can edit listings can browse categories.
+// Product research on the account's eBay site (Browse API; see modules/research).
+const researchController = require('../research/research.controller');
+router.get('/:id/research', requireAuth, requireFeature('listings'), researchController.search);
+router.get('/:id/research/advice', requireAuth, requireFeature('listings'), researchController.advice);
+router.post('/:id/research/sold', requireAuth, requireFeature('listings'), researchController.soldCounts);
+router.get('/:id/research/budget', requireAuth, requireFeature('listings'), researchController.budget);
 router.get('/:id/categories/search', requireAuth, requireFeature('listings'), connectionController.searchCategories);
 router.get('/:id/categories/children', requireAuth, requireFeature('listings'), connectionController.categoryChildren);
 router.get('/:id/categories/:categoryId', requireAuth, requireFeature('listings'), connectionController.categoryDetail);

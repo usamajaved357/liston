@@ -151,7 +151,18 @@ async function getResolvedPermissions(memberId, connectionId, features = KNOWN_F
   return Object.fromEntries(entries);
 }
 
+// A new connection split off another (the same eBay account's second site)
+// is worked by the same people: each member's grants on the one are copied.
+async function copyConnectionPermissions(fromConnectionId, toConnectionId) {
+  await query(
+    `INSERT INTO member_permissions (member_user_id, connection_id, feature, allowed)
+     SELECT member_user_id, $2, feature, allowed FROM member_permissions WHERE connection_id = $1`,
+    [fromConnectionId, toConnectionId]
+  );
+}
+
 module.exports = {
+  copyConnectionPermissions,
   KNOWN_FEATURES,
   listMembers,
   createMember,

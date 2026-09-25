@@ -14,8 +14,13 @@ class TeamError extends Error {
   }
 }
 
-// The owner's day: their eBay accounts' site time zone (the same days the
-// rest of Liston counts in).
+// The day team figures are counted in: the viewer's own time zone (their
+// browser's), so "today" is their today wherever the accounts sell. Without
+// one, the owner's eBay site's.
+async function zoneFor(ownerId, timeZone, connections = null) {
+  return timeZone || ownerTimeZone(ownerId, connections);
+}
+
 async function ownerTimeZone(ownerId, connections = null) {
   const list = connections || (await connectionRepository.findAllByUser(ownerId));
   for (const c of list) {
@@ -29,9 +34,9 @@ async function ownerTimeZone(ownerId, connections = null) {
  * The Team page: each member with their access, when they last logged in
  * and last did something, and what they've done today.
  */
-async function listMembers(ownerId) {
+async function listMembers(ownerId, { timeZone = null } = {}) {
   const [members, connections] = await Promise.all([teamRepository.listMembers(ownerId), connectionRepository.findAllByUser(ownerId)]);
-  const today = activity.rangeWindow('today', { timeZone: await ownerTimeZone(ownerId, connections) });
+  const today = activity.rangeWindow('today', { timeZone: await zoneFor(ownerId, timeZone, connections) });
   const { last, recent } = await activityRepository.teamSince(ownerId, today.startsAt);
   const lastBy = new Map(last.map((r) => [r.actor_user_id, r.last_active_at]));
   return Promise.all(
@@ -48,11 +53,11 @@ async function listMembers(ownerId) {
  * A member's page for a range: who they are, their access, their figures
  * against the period before, day by day and per eBay account.
  */
-async function getMemberOverview(ownerId, memberId, { range, from, to } = {}) {
+async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone = null } = {}) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
   if (!member) throw new TeamError('Team member not found', 404);
   const connections = await connectionRepository.findAllByUser(ownerId);
-  const win = activity.rangeWindow(range, { from, to, timeZone: await ownerTimeZone(ownerId, connections) });
+  const win = activity.rangeWindow(range, { from, to, timeZone: await zoneFor(ownerId, timeZone, connections) });
   const [rows, prevRows, permissions, lastActive, recordingSince] = await Promise.all([
     activityRepository.rowsFor(ownerId, memberId, win.startsAt, win.endsAt),
     activityRepository.rowsFor(ownerId, memberId, win.previous.startsAt, win.previous.endsAt),
@@ -105,10 +110,10 @@ const FEED_MAX = 5000;
  * A member's activity log for a range, newest first, a page at a time
  * (`before` = the last id shown), or all of it (up to 5,000) for a CSV.
  */
-async function getMemberActivity(ownerId, memberId, { range, from, to, kind, connectionId, before, limit = 50 } = {}) {
+async function getMemberActivity(ownerId, memberId, { range, from, to, timeZone = null, kind, connectionId, before, limit = 50 } = {}) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
   if (!member) throw new TeamError('Team member not found', 404);
-  const win = activity.rangeWindow(range, { from, to, timeZone: await ownerTimeZone(ownerId) });
+  const win = activity.rangeWindow(range, { from, to, timeZone: await zoneFor(ownerId, timeZone) });
   // A figure's name (e.g. "cases") stands for all of its kinds.
   const metric = activity.METRICS.find((m) => m.key === kind);
   const kinds = metric ? metric.kinds : kind && activity.KINDS[kind] ? [kind] : null;

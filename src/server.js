@@ -5,6 +5,7 @@ const { pool } = require('./db/client');
 const aliexpressApi = require('./modules/sourcing/aliexpress/ds-api');
 const governor = require('./modules/ebay/request-governor');
 const analyticsBudget = require('./modules/ebay/analytics-budget');
+const browseUsage = require('./modules/ebay/browse-usage');
 const analyticsScheduler = require('./modules/analytics/analytics.scheduler');
 
 const app = createApp();
@@ -18,6 +19,10 @@ const server = app.listen(config.port, () => {
   // account's traffic (02:00 Pacific, 10:00 UK).
   analyticsBudget.start();
   analyticsScheduler.start();
+  // The Browse API's own allowance (drafting, health checks, research).
+  browseUsage.start();
+  // Claude's spend by feature, kept across restarts.
+  require('./modules/ai-generation/ai-usage').load();
 });
 
 async function shutdown(signal) {

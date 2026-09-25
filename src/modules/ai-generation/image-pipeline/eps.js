@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const sharp = require('sharp');
 const governor = require('../../ebay/request-governor');
 const { query } = require('../../../db/client');
 const config = require('../../../config');
@@ -82,7 +83,13 @@ function hashOf(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-function buildMultipartBody(buffer, boundary, pictureName) {
+// eBay takes JPG, PNG and GIF bytes as they are; anything else (WEBP, AVIF
+// and so on from a supplier's CDN) is sent as a JPEG, and so is a retry of a
+// picture eBay couldn't process.
+const FILE_TYPES = { jpeg: ['image/jpeg', 'jpg'], png: ['image/png', 'png'], gif: ['image/gif', 'gif'] };
+
+function buildMultipartBody(buffer, boundary, pictureName, format = 'jpeg') {
+  const [contentType, extension] = FILE_TYPES[format] || FILE_TYPES.jpeg;
   const xmlPayload =
     `<?xml version="1.0" encoding="utf-8"?>` +
     `<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">` +
@@ -96,8 +103,8 @@ function buildMultipartBody(buffer, boundary, pictureName) {
       `Content-Type: text/xml; charset=utf-8\r\n\r\n` +
       `${xmlPayload}\r\n` +
       `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="image"; filename="image.jpg"\r\n` +
-      `Content-Type: image/jpeg\r\n\r\n`,
+      `Content-Disposition: form-data; name="image"; filename="image.${extension}"\r\n` +
+      `Content-Type: ${contentType}\r\n\r\n`,
     'utf8'
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
@@ -105,15 +112,21 @@ function buildMultipartBody(buffer, boundary, pictureName) {
   return Buffer.concat([head, buffer, tail]);
 }
 
-/**
- * Uploads one prepared image buffer and returns its permanent eBay URL.
- * Throws on failure — the caller decides whether to fall back.
- */
-async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureName = 'Liston listing image' } = {}) {
-  const hash = hashOf(buffer);
-  const cached = await findUploaded(hash);
-  if (cached) return cached;
+async function formatOf(buffer) {
+  try {
+    return (await sharp(buffer).metadata()).format || null;
+  } catch {
+    return null;
+  }
+}
 
+// The same picture as a plain JPEG on white.
+function asJpeg(buffer) {
+  return sharp(buffer).rotate().flatten({ background: { r: 255, g: 255, b: 255 } }).jpeg({ quality: 92 }).toBuffer();
+}
+
+// One UploadSiteHostedPictures call. Throws on any failure.
+async function send(accessToken, buffer, format, { marketplaceId, pictureName }) {
   const boundary = `----ListonEPS${crypto.randomBytes(12).toString('hex')}`;
 
   const res = await governor.run('UploadSiteHostedPictures', () => fetch(TRADING_API_URL, {
@@ -125,7 +138,7 @@ async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureN
       'X-EBAY-API-IAF-TOKEN': accessToken,
       'Content-Type': `multipart/form-data; boundary=${boundary}`,
     },
-    body: buildMultipartBody(buffer, boundary, pictureName),
+    body: buildMultipartBody(buffer, boundary, pictureName, format),
     signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
   }));
 
@@ -141,9 +154,62 @@ async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureN
 
   const fullUrl = body.SiteHostedPictureDetails?.FullURL;
   if (!fullUrl) throw new Error('eBay accepted the picture but returned no URL');
-
-  rememberUploaded(hash, fullUrl);
   return fullUrl;
+}
+
+// Pause between tries; tests set it to 0.
+let retryDelayMs = 1500;
+
+/**
+ * Uploads one image buffer and returns its permanent eBay URL.
+ *
+ * eBay's picture service fails some uploads with "Internal error to the
+ * application" that go through on a second try, and refuses some supplier
+ * files (a WEBP sent as a JPEG, an odd colour profile) that it takes once
+ * re-encoded. So: the bytes as they are, then the same bytes again after a
+ * pause, then a clean JPEG. Throws when all three fail.
+ */
+async function upload(accessToken, buffer, { marketplaceId = 'EBAY_GB', pictureName = 'Liston listing image' } = {}) {
+  const hash = hashOf(buffer);
+  const cached = await findUploaded(hash);
+  if (cached) return cached;
+
+  const options = { marketplaceId, pictureName };
+  const format = await formatOf(buffer);
+  const tries = FILE_TYPES[format]
+    ? [() => send(accessToken, buffer, format, options), () => send(accessToken, buffer, format, options)]
+    : [];
+  tries.push(async () => send(accessToken, await asJpeg(buffer), 'jpeg', options));
+
+  let lastError;
+  for (const [index, attempt] of tries.entries()) {
+    if (index > 0 && retryDelayMs) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    try {
+      const url = await attempt();
+      rememberUploaded(hash, url);
+      return url;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
+}
+
+/** Whether a URL is already on eBay's picture service. */
+function isEbayHosted(url) {
+  try {
+    return /(^|\.)ebayimg\.com$/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Puts a picture that lives elsewhere (a supplier's CDN) on eBay. */
+async function hostUrl(accessToken, url, { marketplaceId } = {}) {
+  if (isEbayHosted(url)) return url;
+  const imageOps = require('./image.ops');
+  const buffer = await imageOps.download(url);
+  return upload(accessToken, buffer, { marketplaceId });
 }
 
 /**
@@ -173,4 +239,8 @@ function resetUploadCache() {
   uploadCache.clear();
 }
 
-module.exports = { upload, uploadAll, siteIdFor, buildMultipartBody, resetUploadCache };
+function setRetryDelay(ms) {
+  retryDelayMs = ms;
+}
+
+module.exports = { upload, uploadAll, hostUrl, isEbayHosted, siteIdFor, buildMultipartBody, resetUploadCache, setRetryDelay };

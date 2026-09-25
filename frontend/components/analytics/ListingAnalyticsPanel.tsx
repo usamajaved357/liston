@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, AnalyticsRange, ListingAnalytics } from "@/lib/api";
 import { formatMoney, formatShortDate } from "@/lib/format";
+import { useAccountTimeZone } from "@/lib/timezone";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { BarList } from "@/components/charts/BarList";
@@ -31,6 +32,7 @@ export function ListingAnalyticsPanel({
   initialRange?: AnalyticsRange;
   onClose: () => void;
 }) {
+  const timeZone = useAccountTimeZone();
   const [range, setRange] = useState<AnalyticsRange>(initialRange);
   const [byKey, setByKey] = useState<Record<string, ListingAnalytics | { error: string }>>({});
   const [reload, setReload] = useState(0);
@@ -158,7 +160,7 @@ export function ListingAnalyticsPanel({
                   {listing.quantityAvailable != null && <span>{listing.quantityAvailable} in stock</span>}
                   {listing.quantitySold != null && <span>{fullNumber(listing.quantitySold)} sold in total</span>}
                   {listing.watchers != null && <span>{fullNumber(listing.watchers)} watching</span>}
-                  {listing.startTime && <span>Listed {formatShortDate(listing.startTime)}</span>}
+                  {listing.startTime && <span>Listed {formatShortDate(listing.startTime, timeZone)}</span>}
                   <span className="font-mono text-[11px]">#{listing.itemId}</span>
                 </p>
               )}

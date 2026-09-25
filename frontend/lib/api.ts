@@ -1,5 +1,17 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
+
+// The viewer's own time zone (their browser's), for figures about the
+// team and the owner's own dashboard. An account's pages use the account's
+// eBay site's zone instead (lib/timezone.tsx).
+export function viewerTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -42,24 +54,214 @@ async function request<T>(
   return data as T;
 }
 
+// One account's (or one market's) money for a range, in its own currency:
+// sales (what buyers paid), eBay and ad fees, refunds, earnings (what reached
+// the seller, eBay's figure), supplier cost and profit (earnings − cost).
+export interface MoneySummary {
+  currency: string;
+  sales: number;
+  fees: number;
+  adFees: number;
+  refunds: number;
+  earnings: number;
+  sourceCost: number;
+  profit: number;
+  settledSales: number;
+  // Orders placed (cancelled ones apart).
+  orders: number;
+  cancelled: number;
+  // Orders eBay has fee/earnings figures for; the newest are still settling.
+  withEarnings: number;
+  awaitingEbay: number;
+  // Orders with a supplier cost entered.
+  withCost: number;
+  // Profit as a share of the sales it covers.
+  margin: number | null;
+}
+
+// Listing work for the Overview: live on eBay now, drafts waiting now, and
+// drafts created / listings published from Liston in the chosen dates.
+export interface ListingWork {
+  live: number;
+  waiting: number;
+  drafted: number;
+  published: number;
+}
+
+export interface OverviewAccount {
+  id: string;
+  label: string;
+  status: string;
+  marketplace: Marketplace | null;
+  ok: boolean;
+  error?: string;
+  activeListings: number;
+  listings: ListingWork | null;
+  money: MoneySummary | null;
+  financesPending: boolean;
+  // False: linked before Liston asked eBay for its finances permission, so
+  // fees and earnings need the account reconnected.
+  financesAccess: boolean;
+}
+
+// One account's Overview: its money and listing work for a range, in its
+// own currency and time zone.
+export interface AccountOverview {
+  range: string;
+  activeListings: number;
+  listings: ListingWork;
+  money: MoneySummary;
+  financesPending: boolean;
+  financesAccess: boolean;
+}
+
+// Product research: live eBay listings for a search on the account's site.
+export interface ResearchItem {
+  itemId: string;
+  legacyItemId: string | null;
+  title: string;
+  image: string | null;
+  url: string | null;
+  price: { value: number; currency: string } | null;
+  shipping: { cost: number; free: boolean; type: string | null } | null;
+  seller: { username: string; feedbackScore: number | null; feedbackPercentage: number | null; business: boolean } | null;
+  location: { country: string | null; postalCode: string | null } | null;
+  condition: string | null;
+  category: string | null;
+  categoryId: string | null;
+  createdAt: string | null;
+  hasVariations: boolean;
+  topRated: boolean;
+  // eBay's count of how many have sold (read for the top listings; null otherwise).
+  sold: number | null;
+  soldPerMonth: number | null;
+  // Sold × today's price with postage (eBay gives no sale prices), or null.
+  revenue: number | null;
+  daysLive: number | null;
+}
+
+export interface ResearchSummary {
+  total: number;
+  sampled: number;
+  price: { min: number; max: number; median: number; average: number } | null;
+  // to: null is the top band, everything from `from` up.
+  bands: { from: number; to: number | null; count: number }[];
+  sellers: number;
+  // sold/revenue: across the seller's listings whose sold count was read.
+  topSellers: { username: string; listings: number; feedbackScore: number | null; feedbackPercentage: number | null; sold: number | null; revenue: number | null }[];
+  topSellerShare: number;
+  freePostage: number;
+  domestic: number;
+  newInLast30Days: number;
+  sold: { read: number; total: number; perMonth: number; selling: number; revenue: number; revenuePerMonth: number } | null;
+}
+
+export type ResearchRiskLevel = "ok" | "warn" | "bad" | "unknown";
+export interface ResearchRisk {
+  key: "history" | "words" | "brand" | "safety";
+  label: string;
+  level: ResearchRiskLevel;
+  detail: string;
+  // history: the refused drafts; brand: the brands at issue.
+  items?: { title: string; account: string; at: string; reason: string; kind: "ip" | "words" | "policy" }[];
+  brands?: string[];
+}
+
+export interface ResearchPrice {
+  recommended: number;
+  low: number;
+  high: number;
+  salesMiddle: number;
+  // "sales": weighted by what each listing sells; "listings": too few sales, every listing counts once.
+  basis: "sales" | "listings";
+  basedOn: number;
+  confidence: "high" | "medium" | "low";
+  // What's left after eBay's ads, final value and fixed fees, and the most a
+  // supplier can cost for the account's target return.
+  afterFees: number;
+  maxCost: number;
+  targetRoiPercent: number;
+  fees: { adsPercent: number; processingPercent: number; fixed: number; shipping: number };
+}
+
+export interface ResearchKeyword {
+  term: string;
+  share: number;
+  inQuery: boolean;
+}
+
+export interface ResearchVerdict {
+  status: "healthy" | "caution" | "unhealthy";
+  label: string;
+  score: number;
+  reasons: { tone: "good" | "warn" | "bad"; text: string }[];
+}
+
+export interface ResearchAnalysis {
+  price: ResearchPrice | null;
+  keywords: { words: ResearchKeyword[]; phrases: ResearchKeyword[] };
+  breakdown: { brands: { name: string; count: number; unbranded: boolean }[]; categories: { id: string; name: string; count: number }[]; categoryId: string | null } | null;
+  risks: ResearchRisk[];
+  verdict: ResearchVerdict;
+}
+
+export interface ResearchAdvice {
+  title: string;
+  keywords: string[];
+  brandRisk: { level: "none" | "low" | "high"; brands: string[]; reason: string };
+  safetyRisk: { level: "none" | "low" | "high"; reason: string };
+  summary: string;
+}
+
+export interface ResearchBudget {
+  used: number;
+  limit: number;
+  remaining: number;
+  // When research's share starts again: the Browse allowance's reset.
+  resetAt?: string;
+}
+
+export interface ResearchResult {
+  query: string;
+  market: Marketplace;
+  total: number;
+  summary: ResearchSummary;
+  analysis: ResearchAnalysis;
+  // The AI's reading, when one was written for this search today.
+  advice: ResearchAdvice | null;
+  items: ResearchItem[];
+  soldLimited: boolean;
+  budget: ResearchBudget;
+}
+
+export interface OverviewMarket {
+  id: string;
+  label: string;
+  name: string;
+  flag: string;
+  currency: string;
+  accounts: number;
+  activeListings: number;
+  listings: ListingWork;
+  money: MoneySummary;
+}
+
 export interface Overview {
   range: string;
   accounts: { total: number; active: number; needsAttention: number };
   activeListings: number;
-  earnings: { amount: number; currency: string };
   orders: number;
   drafts: number;
   publishedViaListon: number;
-  perAccount: {
-    id: string;
-    label: string;
-    status: string;
-    ok: boolean;
-    error?: string;
-    activeListings: number;
-    earnings: { amount: number; currency: string } | null;
-    orders: number;
-  }[];
+  // Busiest first; each in its own currency.
+  markets: OverviewMarket[];
+  // Every market as one figure in the busiest market's currency, the others
+  // converted at the day's ECB rate (rates: how many of each currency 1 of
+  // it buys). Null when no rate could be had.
+  combined: { money: MoneySummary; rates: Record<string, number>; ratesDate: string | null } | null;
+  // Some accounts' fees and earnings were still being read from eBay.
+  financesPending: boolean;
+  perAccount: OverviewAccount[];
 }
 
 export interface EbayUsage {
@@ -83,6 +285,36 @@ export interface EbayUsage {
   waiting: number;
   // eBay's traffic report has its own, much smaller allowance.
   analytics: AnalyticsUsage;
+  // …and the Browse API (public listing reads) its own too.
+  browse: BrowseUsage;
+  // Claude's spend, by feature, the last 14 days (newest first).
+  claude: ClaudeUsage;
+}
+
+export interface ClaudeUsage {
+  model: string;
+  days: {
+    day: string;
+    total: number;
+    calls: number;
+    byPurpose: { purpose: string; label: string; calls: number; input: number; output: number; cost: number }[];
+  }[];
+  purposes: Record<string, string>;
+}
+
+// The Browse API's daily allowance, one pool for the app: who used it
+// (byKind: drafting, health, research) and with which calls; research is
+// capped at its own share of it.
+export interface BrowseUsage {
+  limit: number;
+  used: number;
+  remaining: number;
+  resetAt: string | null;
+  exhausted: boolean;
+  lastSyncedWithEbay: string | null;
+  byCall: { name: string; count: number }[];
+  byKind: { name: string; count: number }[];
+  research: ResearchBudget;
 }
 
 export interface AnalyticsUsage {
@@ -248,6 +480,15 @@ export interface PermissionUpdate {
   allowed: boolean | null;
 }
 
+// One eBay site an account sells on, as eBay's copies show it, and the
+// connection holding it (null: not linked separately yet).
+export interface EbaySite {
+  marketplace: Marketplace;
+  listings: number;
+  orders: number;
+  connectionId: string | null;
+}
+
 export interface Platform {
   id: string;
   key: string;
@@ -255,6 +496,8 @@ export interface Platform {
   role: "source" | "destination" | "both";
   status: "active" | "coming_soon";
   connectable: boolean;
+  // eBay: the sites an account can be linked for, one connection each.
+  marketplaces?: Marketplace[];
 }
 
 export interface Money {
@@ -317,6 +560,8 @@ export interface Order {
   shippedTime: string | null;
   cancelStatus: string | null;
   dispatchByTime: string | null;
+  // When the carrier confirmed the last item delivered.
+  deliveredAt?: string | null;
   lineItems: OrderLineItem[];
   derivedStatus?: OrderStatusFilter;
   // Liston's supplier-order rows for this order (one per line item).
@@ -399,6 +644,8 @@ export interface OrderDetail {
   shipTo: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string; email: string } | null;
   shippingService: string | null;
   shippingCarrier: string | null;
+  // When the carrier confirmed delivery (from the account's order copy).
+  deliveredAt?: string | null;
   estimatedDelivery: { min: string | null; max: string | null };
   pricing: { subtotal: Amount | null; discount: Amount | null; delivery: Amount | null; deliveryDiscount: Amount | null; tax: Amount | null; adjustment: Amount | null; total: Amount | null };
   payments: { method: string | null; status: string; amount: Amount | null; date: string; referenceId: string | null }[];
@@ -522,8 +769,12 @@ export interface OrderCounts {
   awaiting_payment: number;
   awaiting_dispatch: number;
   dispatched: number;
+  delivered: number;
   cancelled: number;
 }
+
+// Where an order's supplier order stands (the Orders page's Supplier filter).
+export type SupplierFilter = "any" | "pending" | "ordered" | "shipped" | "delivered" | "problem";
 
 export interface Policy {
   fulfillmentPolicyId?: string;
@@ -562,6 +813,8 @@ export interface Marketplace {
   country: string;
   countryName: string;
   itemHost: string;
+  // The site's own time zone ("Europe/London"): the account's dates are shown in it.
+  timeZone?: string;
   // The market's wording for the description template.
   template?: { tagline: string; warehouse: string; carrier: string; region: string; postageWord: string };
 }
@@ -694,6 +947,9 @@ export interface VariationDraftContent {
     specifications: { name: string; values: string[] }[];
   };
   variants: VariationDraftVariant[];
+  // Variations removed in the editor, kept until the draft is published so
+  // one can be put back (never sent to eBay).
+  removedVariants?: (VariationDraftVariant & { removedAt?: string })[];
   categoryId: string;
   categoryPath?: string[];
   categorySuggestions?: CategorySuggestion[];
@@ -743,7 +999,8 @@ export interface DraftPreview {
 
 export type GenerateDraftInput =
   | { competitorUrl?: string; sourceUrl: string }
-  | { previewId: string; variantSelection?: Record<string, string[]> };
+  // imageUrls: the supplier photos kept in step two, in order (first = main).
+  | { previewId: string; variantSelection?: Record<string, string[]>; imageUrls?: string[] };
 
 // Listing settings — every sell price is derived from these plus the
 // supplier's own cost, so the seller never types a price per draft.
@@ -846,6 +1103,8 @@ export interface DraftPatch {
   renameAxes?: { from: string; to: string }[];
   addAxisValues?: { axis: string; value: string; copyFrom?: string }[];
   variantSkusToRemove?: string[];
+  // Removed variations to put back, by their place in removedVariants.
+  restoreVariants?: number[];
   sku?: string;
   categoryId?: string;
   secondaryCategoryId?: string | null;
@@ -933,7 +1192,7 @@ export interface DraftListing {
 
 export type ListingStatusFilter = "active" | "inactive";
 export type OrderRange = "7d" | "30d" | "90d";
-export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "cancelled";
+export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "delivered" | "cancelled";
 // ---- listing analytics ---------------------------------------------------------
 // Days are eBay's reporting days (US Pacific), "YYYY-MM-DD".
 
@@ -1210,7 +1469,8 @@ export const api = {
     }),
 
   me: () => request<{ user: User }>("/api/users/me"),
-  overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}`),
+  // The owner's dashboard: "today" is the viewer's own day.
+  overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}&tz=${encodeURIComponent(viewerTimeZone())}`),
 
   verifyEmail: (token: string) =>
     request<{ user: User }>("/api/auth/verify-email", {
@@ -1256,11 +1516,19 @@ export const api = {
 
   getConnection: (id: string) => request<{ connection: Connection }>(`/api/connections/${id}`),
 
-  startEbayAuth: (label: string) =>
+  // `marketplaceId`: the eBay site to link the account for. The same eBay
+  // account can be linked once per site.
+  startEbayAuth: (label: string, marketplaceId?: string) =>
     request<{ authorizeUrl: string }>("/api/connections/ebay/authorize", {
       method: "POST",
-      body: JSON.stringify({ label }),
+      body: JSON.stringify({ label, marketplaceId }),
     }),
+
+  getEbaySites: (id: string) => request<{ sites: EbaySite[] }>(`/api/connections/${id}/sites`),
+
+  // Another site of the account as its own connection; no eBay sign-in.
+  addEbaySite: (id: string, marketplaceId: string) =>
+    request<{ connection: Connection }>(`/api/connections/${id}/sites`, { method: "POST", body: JSON.stringify({ marketplaceId }) }),
 
   deleteConnection: (id: string) => request<void>(`/api/connections/${id}`, { method: "DELETE" }),
 
@@ -1290,7 +1558,7 @@ export const api = {
 
   getConnectionOrders: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean; supplier?: SupplierFilter }
   ) => {
     const query = new URLSearchParams({
       range: params.range,
@@ -1301,9 +1569,16 @@ export const api = {
     if (params.search) query.set("search", params.search);
     if (params.sort) query.set("sort", params.sort);
     if (params.archived) query.set("archived", "1");
+    if (params.supplier && params.supplier !== "any") query.set("supplier", params.supplier);
     return request<{
       orders: Order[];
       counts: OrderCounts;
+      // Among paid orders waiting to ship: past their dispatch-by date, and
+      // not yet ordered from the supplier (null when unknown).
+      attention?: { overdue: number; notOrdered: number | null };
+      supplier?: SupplierFilter;
+      // Orders in the chosen tab at each supplier state.
+      supplierCounts?: Partial<Record<SupplierFilter, number>> | null;
       totalEntries: number;
       totalPages: number;
       syncedAt: string | null;
@@ -1362,13 +1637,39 @@ export const api = {
   checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
     request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
 
+  researchSearch: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+    const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
+    if (params.minPrice) query.set("minPrice", params.minPrice);
+    if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    return request<ResearchResult>(`/api/connections/${id}/research?${query.toString()}`);
+  },
+  // The AI's reading of a search (title, keywords, brand and safety risk) and
+  // the analysis redone with it; reuses the search's kept eBay reads.
+  researchAdvice: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+    const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
+    if (params.minPrice) query.set("minPrice", params.minPrice);
+    if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    return request<{ advice: ResearchAdvice | null; analysis: ResearchAnalysis; budget: ResearchBudget }>(`/api/connections/${id}/research/advice?${query.toString()}`);
+  },
+  // Sold counts for more listings of a search (up to 20 at a time).
+  researchSold: (id: string, items: Pick<ResearchItem, "itemId" | "legacyItemId" | "hasVariations" | "createdAt">[]) =>
+    request<{ items: { itemId: string; sold: number | null; soldPerMonth: number | null }[]; soldLimited: boolean; budget: ResearchBudget }>(
+      `/api/connections/${id}/research/sold`,
+      { method: "POST", body: JSON.stringify({ items }) }
+    ),
+  researchBudget: (id: string) => request<ResearchBudget>(`/api/connections/${id}/research/budget`),
+
+  getAccountOverview: (id: string, range: string) => request<AccountOverview>(`/api/connections/${id}/overview?range=${range}`),
+
   getConnectionEarnings: (id: string, range: EarningsRange, custom?: { from: string; to: string }) => {
     const params = new URLSearchParams({ range });
     if (range === "custom" && custom) {
       params.set("from", custom.from);
       params.set("to", custom.to);
     }
-    return request<{ earnings: Money; orderCount: number; truncated: boolean }>(
+    // `otherEarnings`: sales on the account's other eBay sites (not linked
+    // separately), in their own currencies; never added into `earnings`.
+    return request<{ earnings: Money; otherEarnings?: Money[]; orderCount: number; truncated: boolean }>(
       `/api/connections/${id}/earnings?${params.toString()}`
     );
   },
@@ -1547,7 +1848,7 @@ export const api = {
   },
 
   listTeamMembers: () =>
-    request<{ members: TeamMember[]; knownFeatures: string[] }>("/api/team/members"),
+    request<{ members: TeamMember[]; knownFeatures: string[] }>(`/api/team/members?tz=${encodeURIComponent(viewerTimeZone())}`),
 
   addTeamMember: (input: { email: string; name?: string; password: string }) =>
     request<{ member: TeamMember }>("/api/team/members", {
@@ -1558,9 +1859,9 @@ export const api = {
   removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
   restoreTeamMember: (id: string) => request<void>(`/api/team/members/${id}/restore`, { method: "POST" }),
 
-  // A member's page: figures for a range (the owner's days), per day and account.
+  // A member's page: figures for a range (the viewer's own days), per day and account.
   getMemberOverview: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
-    const q = new URLSearchParams({ range });
+    const q = new URLSearchParams({ range, tz: viewerTimeZone() });
     if (range === "custom" && custom) {
       q.set("from", custom.from);
       q.set("to", custom.to);
@@ -1573,7 +1874,7 @@ export const api = {
     id: string,
     params: { range: TeamRange; from?: string; to?: string; kind?: string; connectionId?: string; before?: string; limit?: number }
   ) => {
-    const q = new URLSearchParams({ range: params.range });
+    const q = new URLSearchParams({ range: params.range, tz: viewerTimeZone() });
     for (const [k, v] of Object.entries(params)) if (k !== "range" && v !== undefined && v !== "") q.set(k, String(v));
     return request<{ items: MemberActivityItem[]; next: string | null; range: { key: TeamRange; from: string; to: string; timeZone: string } }>(
       `/api/team/members/${id}/activity?${q.toString()}`

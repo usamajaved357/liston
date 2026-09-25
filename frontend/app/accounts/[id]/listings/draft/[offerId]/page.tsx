@@ -18,6 +18,7 @@ import {
   RevisionCurrentState,
   StoreCategory,
   TextProposal,
+  VariationDraftContent,
   VariationDraftVariant,
   VariationFixes,
   isVariationDraft,
@@ -223,7 +224,77 @@ function policyName(
 // which needs the whole set in view. The first tile is the main image (the
 // search thumbnail).
 
-const IMAGE_ACCEPT = "image/jpeg,image/png,image/gif,image/webp";
+// Variations removed from this draft, kept until it's published: each can
+// be put back (it saves like any other edit). Nothing here goes to eBay.
+function RemovedVariations({
+  removed,
+  restoring,
+  onRestore,
+  disabled,
+}: {
+  removed: NonNullable<VariationDraftContent["removedVariants"]>;
+  restoring: number[];
+  onRestore: (indexes: number[]) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(true);
+  const waiting = removed.map((v, index) => ({ v, index })).filter(({ index }) => !restoring.includes(index));
+  if (!waiting.length) return null;
+  const label = (v: VariationDraftVariant) => Object.values(v.aspects || {}).map((values) => values[0]).join(" / ");
+  return (
+    <section className="card mt-4 overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3">
+        <button type="button" onClick={() => setOpen((o) => !o)} className="flex items-center gap-2 text-left" aria-expanded={open}>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden className={`h-4 w-4 text-[var(--color-muted)] transition-transform ${open ? "rotate-90" : ""}`}>
+            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="text-[14px] font-semibold text-[var(--color-ink)]">Removed variations</span>
+          <span className="rounded-full bg-[var(--color-paper)] px-2 py-0.5 text-[12px] font-medium text-[var(--color-muted)]">{waiting.length}</span>
+        </button>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-[12px] text-[var(--color-muted)] sm:inline">Kept until you publish; not sent to eBay</span>
+          {waiting.length > 1 && (
+            <button type="button" onClick={() => onRestore(waiting.map((w) => w.index))} disabled={disabled} className="btn btn-secondary btn-sm">
+              Undo all
+            </button>
+          )}
+        </div>
+      </div>
+      {open && (
+        <ul className="divide-y divide-[var(--color-line)]">
+          {waiting.map(({ v, index }) => (
+            <li key={index} className="flex items-center gap-3 px-4 py-2.5">
+              {v.imageUrls?.[0] ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={v.imageUrls[0]} alt="" className="h-10 w-10 shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-contain opacity-70" />
+              ) : (
+                <span className="h-10 w-10 shrink-0 rounded-lg border border-dashed border-[var(--color-line)]" />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13.5px] font-medium text-[var(--color-muted)] line-through decoration-[var(--color-line-strong)]">{label(v) || "Variation"}</span>
+                <span className="text-[12px] text-[var(--color-muted)]">
+                  {formatPrice(v.price.value, v.price.currency)} · {v.quantity} in stock
+                </span>
+              </span>
+              <button type="button" onClick={() => onRestore([index])} disabled={disabled} className="btn btn-ghost btn-sm text-[var(--color-primary)]">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-4 w-4">
+                  <path d="M9 14L4 9l5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M4 9h10.5a5.5 5.5 0 010 11H11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+                Undo
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// Every picture type, by type and by extension: AI tools and phones save
+// .avif, .jfif, .heic and the like, which a picker limited to JPG/PNG/GIF/WebP
+// greyed out. The server reads the file itself and converts what eBay needs.
+const IMAGE_ACCEPT = "image/*,.jpg,.jpeg,.jfif,.pjpeg,.png,.gif,.webp,.avif,.heic,.heif,.bmp,.tif,.tiff";
 
 function FileButton({
   label,
@@ -640,6 +711,7 @@ function VariationsTable({
   priceOverrides,
   quantityOverrides,
   imageOverrides,
+  imageAxis,
   onRemoveRow,
   onRestoreRow,
   onRemoveAxisValue,
@@ -699,13 +771,14 @@ function VariationsTable({
   priceOverrides: Record<number, string>;
   quantityOverrides: Record<number, string>;
   imageOverrides: Record<number, string>;
+  imageAxis?: string;
   onRemoveRow: (index: number) => void;
   onRestoreRow: (index: number) => void;
   onRemoveAxisValue: (r: AxisRemoval) => void;
   onRestoreAxisValue: (r: AxisRemoval) => void;
   onPriceChange: (index: number, value: string) => void;
   onQuantityChange: (index: number, value: string) => void;
-  onImageChange: (index: number, url: string) => void;
+  onImageChange: (indexes: number[], url: string) => void;
   onUploadImage: (index: number, file: File) => void;
   onApplyAll: (field: "price" | "quantity", value: string) => void;
   disabled: boolean;
@@ -736,6 +809,27 @@ function VariationsTable({
     removedIndexes.has(index) || Object.entries(variant.aspects).some(([axis, values]) => axisRemoved(axis, values[0]));
   const axes = specifications.map((s) => s.name);
   const remaining = variants.filter((v, i) => !isRowGone(v, i)).length;
+  // eBay shows one photo per option of one attribute (Colour, usually): on
+  // a Colour × Size listing, every size of Red shows Red's photo. So a photo
+  // picked on one row goes to every row with that option. Same rule as the
+  // server's (variant-photos.js).
+  const photoAxis =
+    imageAxis && axes.includes(imageAxis)
+      ? imageAxis
+      : axes.length <= 1
+        ? axes[0]
+        : axes.find((a) => /colou?r|pattern|style|design|print|flavou?r|scent|finish/i.test(a)) || axes[0];
+  const otherAxes = axes.filter((a) => a !== photoAxis);
+  const photoValue = (index: number) => (photoAxis ? variants[index]?.aspects[photoAxis]?.[0] : undefined);
+  const photoRows = (index: number) => {
+    const value = photoValue(index);
+    if (value === undefined || !otherAxes.length) return [index];
+    return variants.map((v, i) => (v.aspects[photoAxis!]?.[0] === value ? i : -1)).filter((i) => i >= 0);
+  };
+  const photoTitle = (index: number) =>
+    otherAxes.length && photoValue(index) !== undefined
+      ? `Photo for ${showValue(photoAxis!, photoValue(index)!)} · every ${otherAxes.map(showAxis).join(" and ")}`
+      : `Photo for ${axes.map((axis) => showValue(axis, variants[index].aspects[axis]?.[0] || "")).filter(Boolean).join(" · ") || `variation ${index + 1}`}`;
   const currency = variants[0]?.price.currency || "GBP";
   const cell = "px-2.5 py-1 align-middle";
   const numInput = "input input-sm !h-7 text-center text-[12.5px]";
@@ -1042,7 +1136,7 @@ function VariationsTable({
                       type="button"
                       disabled={disabled || gone}
                       onClick={() => setPickerFor(i)}
-                      title={disabled || gone ? undefined : "Change this variation's photo"}
+                      title={disabled || gone ? undefined : otherAxes.length && photoValue(i) !== undefined ? `Change the photo for every ${showValue(photoAxis!, photoValue(i)!)} variation` : "Change this variation's photo"}
                       className="group relative block h-9 w-9 rounded-lg disabled:cursor-default"
                     >
                       {image ? (
@@ -1179,11 +1273,11 @@ function VariationsTable({
       </div>
       {pickerFor !== null && variants[pickerFor] && (
         <ImagePickerDialog
-          title={`Photo for ${axes.map((axis) => showValue(axis, variants[pickerFor].aspects[axis]?.[0] || "")).filter(Boolean).join(" · ") || `variation ${pickerFor + 1}`}`}
+          title={photoTitle(pickerFor)}
           images={allImages}
           current={imageOverrides[pickerFor] ?? variants[pickerFor].imageUrls[0] ?? null}
           onPick={(url) => {
-            onImageChange(pickerFor, url);
+            onImageChange(photoRows(pickerFor), url);
             setPickerFor(null);
           }}
           onUpload={(file) => {
@@ -1522,6 +1616,8 @@ export default function DraftEditorPage() {
   const [images, setImages] = useState<string[]>([]);
   const [selectedImage, setSelectedImage] = useState(0);
   const [removedRows, setRemovedRows] = useState<Set<number>>(new Set());
+  // Removed variations (kept on the draft until it's published) being put back.
+  const [restoreQueue, setRestoreQueue] = useState<number[]>([]);
   const [removedAxisValues, setRemovedAxisValues] = useState<AxisRemoval[]>([]);
   // Renamed option and attribute names, keyed by the draft's current names.
   const [valueRenames, setValueRenames] = useState<Renames>({});
@@ -1775,32 +1871,6 @@ export default function DraftEditorPage() {
     return [...found].map(([word, places]) => `“${word}” in ${[...places].join(", ")}`);
   }, [policyWords, title, description, specifics, variation, valueRenames, axisRenames, addedValues]);
 
-  const dirty = useMemo(() => {
-    if (!content) return false;
-    const origTitle = variation ? variation.commonTitle : single!.title;
-    const origDesc = variation ? variation.commonDescription : single!.description;
-    return (
-      title !== origTitle ||
-      description !== origDesc ||
-      aspectsChanged ||
-      condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW") ||
-      (single ? singlePrice !== single.price.value || singleQuantity !== String(single.quantity ?? 1) : false) ||
-      policiesChanged ||
-      JSON.stringify(images) !== JSON.stringify(content.imageUrls) ||
-      removedRows.size > 0 ||
-      removedAxisValues.length > 0 ||
-      Object.keys(priceOverrides).length > 0 ||
-      Object.keys(quantityOverrides).length > 0 ||
-      Object.keys(imageOverrides).length > 0 ||
-      Object.keys(valueRenames).length > 0 ||
-      Object.keys(axisRenames).length > 0 ||
-      addedValues.length > 0 ||
-      sku !== (content.sku || "") ||
-      (secondaryCategoryId || null) !== (content.secondaryCategoryId || null) ||
-      JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])
-    );
-  }, [content, variation, single, title, description, aspectsChanged, condition, singlePrice, singleQuantity, policiesChanged, images, removedRows, removedAxisValues, priceOverrides, quantityOverrides, imageOverrides, valueRenames, axisRenames, addedValues, sku, secondaryCategoryId, storeCategoryNames]);
-
   function buildPatch(): DraftPatch {
     const patch: DraftPatch = {};
     if (variation) {
@@ -1836,6 +1906,7 @@ export default function DraftEditorPage() {
     }
     if (Object.keys(variantChanges).length) patch.variants = variantChanges;
     if (removedRows.size) patch.variantSkusToRemove = [...removedRows].map(String);
+    if (restoreQueue.length) patch.restoreVariants = restoreQueue;
     // Renames are applied first on the server, so removals are expressed in
     // the renamed names.
     const renameAxisValues = Object.entries(valueRenames).flatMap(([axis, map]) => Object.entries(map).map(([from, to]) => ({ axis, from, to })));
@@ -1861,6 +1932,12 @@ export default function DraftEditorPage() {
     if (content && JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])) patch.storeCategoryNames = storeCategoryNames;
     return patch;
   }
+  // Unsaved means the save would carry something. Judged on the patch
+  // itself: a price typed and put back is an override but no change, and
+  // counting it sent an empty save the server refused ("Nothing to update"),
+  // which also stopped the publish behind it.
+  const dirty = Boolean(content) && Object.keys(buildPatch()).length > 0;
+
 
   // The primary category is applied immediately: the server refits title,
   // specifics and description to it, which is a change the seller should see
@@ -1977,6 +2054,7 @@ export default function DraftEditorPage() {
       setListing(data.listing);
       setImageCheck(data.imageCheck);
       setRemovedRows(new Set());
+      setRestoreQueue([]);
       setRemovedAxisValues([]);
       setValueRenames({});
       setAxisRenames({});
@@ -3044,6 +3122,7 @@ export default function DraftEditorPage() {
                   priceOverrides={priceOverrides}
                   quantityOverrides={quantityOverrides}
                   imageOverrides={imageOverrides}
+                  imageAxis={variation.variesBy.aspectsImageVariesBy?.[0]}
                   onRemoveRow={(i) => setRemovedRows((s) => new Set([...s, i]))}
                   onRestoreRow={(i) =>
                     setRemovedRows((s) => {
@@ -3056,7 +3135,7 @@ export default function DraftEditorPage() {
                   onRestoreAxisValue={(r) => setRemovedAxisValues((list) => list.filter((x) => !(x.axis === r.axis && x.value === r.value)))}
                   onPriceChange={(i, value) => setPriceOverrides((p) => ({ ...p, [i]: value }))}
                   onQuantityChange={(i, value) => setQuantityOverrides((p) => ({ ...p, [i]: value }))}
-                  onImageChange={(i, url) => setImageOverrides((p) => ({ ...p, [i]: url }))}
+                  onImageChange={(rows, url) => setImageOverrides((p) => ({ ...p, ...Object.fromEntries(rows.map((i) => [i, url])) }))}
                   onUploadImage={(i, file) => uploadFiles([file], { variantIndex: i })}
                   valueRenames={valueRenames}
                   axisRenames={axisRenames}
@@ -3078,6 +3157,14 @@ export default function DraftEditorPage() {
                   accountId={params.id}
                   onApplyAll={applyToAllVariants}
                   disabled={!editable || busy}
+                />
+              )}
+              {variation && editable && (variation.removedVariants?.length ?? 0) > 0 && (
+                <RemovedVariations
+                  removed={variation.removedVariants!}
+                  restoring={restoreQueue}
+                  onRestore={(indexes) => setRestoreQueue((q) => [...new Set([...q, ...indexes])])}
+                  disabled={busy}
                 />
               )}
             </div>

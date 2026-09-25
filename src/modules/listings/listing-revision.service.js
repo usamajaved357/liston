@@ -7,6 +7,7 @@ const config = require('../../config');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
 const heroBadges = require('../ai-generation/image-pipeline/hero-badges');
 const { AiGenerationError } = require('../ai-generation/ai-generation.errors');
+const aiUsage = require('../ai-generation/ai-usage');
 
 // "Make the description shorter", "add a heading to the main image" — the
 // seller describes a change in their own words and gets a PROPOSAL back.
@@ -35,7 +36,21 @@ const TEXT_TOOL = {
     type: 'object',
     properties: {
       title: { type: 'string', maxLength: 80, description: 'New listing title (eBay allows 80 characters).' },
-      description: { type: 'string', description: 'New full description text, plain text in the description layout: **Heading** lines, emoji-led Key Features lines, blank lines between sections.' },
+      description: {
+        type: 'string',
+        description:
+          'The whole new description, ONLY when the seller asks for the description to be rewritten, restructured or reformatted. ' +
+          'Plain text in the description layout: **Heading** lines, emoji-led Key Features lines, blank lines between sections. ' +
+          'For any smaller change use descriptionEdits instead.',
+      },
+      descriptionEdits: {
+        type: 'array',
+        description:
+          'For a change to part of the description: each passage to change, copied EXACTLY from the current description ' +
+          '(find), and its new text (replace; "" deletes it). Keep each find short but unique. Use this rather than ' +
+          'returning the whole description.',
+        items: { type: 'object', properties: { find: { type: 'string' }, replace: { type: 'string' } }, required: ['find', 'replace'] },
+      },
       aspects: {
         type: 'object',
         description: 'Item specifics to set or replace, as { name: [value] }. Only the ones that change.',
@@ -127,7 +142,32 @@ function describeCurrent(current, options) {
  * edits) in the shape the frontend sends; falls back to the stored draft.
  * Returns { changes, summary } — the caller decides whether to apply it.
  */
-async function reviseText({ draft, instruction, current: given, options = {} }) {
+// The description layout rules (~1,000 tokens) go with an instruction that
+// could reshape the description; a title, price or specifics change, or a
+// word swap, doesn't need them.
+const LAYOUT_WORDS = /descri|bullet|heading|section|feature|paragraph|intro|layout|format|structure|rewrite|re-write|shorter|shorten|longer|expand|improve|recommend/i;
+function touchesDescriptionLayout(instruction) {
+  return LAYOUT_WORDS.test(String(instruction || ''));
+}
+
+// The description with the model's passage edits applied: every exact
+// occurrence of each `find` replaced. Edits whose text isn't in the
+// description are counted, not guessed at.
+function applyDescriptionEdits(text, edits = []) {
+  let out = String(text || '');
+  let missed = 0;
+  for (const edit of edits) {
+    const find = String(edit?.find || '');
+    if (!find || !out.includes(find)) {
+      missed += 1;
+      continue;
+    }
+    out = out.split(find).join(String(edit.replace ?? ''));
+  }
+  return { text: out.replace(/\n{3,}/g, '\n\n'), missed };
+}
+
+async function reviseText({ draft, instruction, current: given, options = {}, purpose = 'editor.revise' }) {
   const anthropic = client();
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
   const current = given || currentFromDraft(draft);
@@ -147,11 +187,10 @@ async function reviseText({ draft, instruction, current: given, options = {} }) 
           `When the seller asks for a word to be removed or replaced, remove it from EVERYWHERE it appears — title, description, ` +
           `item specifics and option names — without exception, even if it describes the product accurately; rephrase so the ` +
           `meaning survives.\n` +
-          `Descriptions follow the layout below. For a small change, edit the description in place and keep its ` +
-          `layout; when the seller asks for the description to be rewritten, restructured or reformatted, use this ` +
-          `layout exactly.\n` +
-          descriptionFormat.PROMPT_GUIDANCE +
-          `\n` +
+          `For a change to part of the description (a word, a line, a section), return descriptionEdits (the ` +
+          `exact passages and their new text), never the whole description; return the whole description only ` +
+          `when the seller asks for it to be rewritten, restructured or reformatted` +
+          (touchesDescriptionLayout(instruction) ? `, in this layout exactly:\n${descriptionFormat.PROMPT_GUIDANCE}\n` : `.\n`) +
           `Item specific values must be facts the listing itself states (title, description, existing specifics). ` +
           `Never invent or infer one it doesn't: a warranty, country of origin, part number, EAN or brand has to be ` +
           `stated, and a returns or postage policy is not a warranty. Leave out any specific the listing can't support ` +
@@ -164,14 +203,22 @@ async function reviseText({ draft, instruction, current: given, options = {} }) 
     ],
   });
 
+  aiUsage.record(purpose, response);
+
   const toolUse = response.content.find((block) => block.type === 'tool_use');
   if (!toolUse?.input) {
     throw new AiGenerationError('The AI editor returned an unexpected response. Try rewording your instruction.');
   }
 
-  const { summary, cannotDo, ...changes } = toolUse.input;
+  const { summary, cannotDo, descriptionEdits, ...changes } = toolUse.input;
   if (cannotDo) return { changes: {}, summary: cannotDo, cannotDo: true };
-  return { changes: mapChangesForDraft(tidyChanges(changes, current, options), isVariation), summary };
+  let note = summary;
+  if (changes.description === undefined && Array.isArray(descriptionEdits) && descriptionEdits.length) {
+    const edited = applyDescriptionEdits(current.description, descriptionEdits);
+    if (edited.text !== String(current.description || '')) changes.description = edited.text;
+    if (edited.missed) note = `${summary || ''} (${edited.missed} part${edited.missed === 1 ? '' : 's'} of the description couldn't be matched and ${edited.missed === 1 ? 'was' : 'were'} left as ${edited.missed === 1 ? 'it was' : 'they were'}.)`.trim();
+  }
+  return { changes: mapChangesForDraft(tidyChanges(changes, current, options), isVariation), summary: note };
 }
 
 // The editor's shape of the stored draft, for when the frontend sends nothing.
@@ -272,8 +319,7 @@ const IMAGE_OP_TOOL = {
 };
 
 // eBay prohibits text, watermarks and badges on listing images and demotes
-// listings that carry them — it's the same rule image-screen.service.js
-// enforces on supplier photos. Sellers ask for it anyway, so it's supported,
+// listings that carry them. Sellers ask for it anyway, so it's supported,
 // but never silently: the proposal carries this warning to the accept button.
 const TEXT_OVERLAY_WARNING =
   "eBay doesn't allow text, badges or watermarks on listing images and reduces the visibility of listings that " +
@@ -328,6 +374,7 @@ async function reviseImage({ imageUrl, instruction }) {
     ],
   });
 
+  aiUsage.record('editor.photo', response);
   const plan = response.content.find((block) => block.type === 'tool_use')?.input;
   if (!plan) {
     throw new AiGenerationError('The AI editor returned an unexpected response. Try rewording your instruction.');
@@ -391,4 +438,4 @@ function pruneProposals() {
   }
 }
 
-module.exports = { reviseText, reviseImage, overlayText, mapChangesForDraft, takeProposal, pruneProposals, TEXT_OVERLAY_WARNING };
+module.exports = { applyDescriptionEdits, touchesDescriptionLayout, reviseText, reviseImage, overlayText, mapChangesForDraft, takeProposal, pruneProposals, TEXT_OVERLAY_WARNING };

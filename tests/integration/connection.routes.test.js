@@ -7,6 +7,7 @@ const createApp = require('../../src/app');
 const { pool } = require('../../src/db/client');
 const config = require('../../src/config');
 const connectionService = require('../../src/modules/connections/connection.service');
+const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
 
 const app = createApp();
 let server;
@@ -60,6 +61,8 @@ test('GET /api/connections/platforms lists destination platforms with a connecta
   const ebay = data.platforms.find((p) => p.key === 'ebay');
   assert.ok(ebay, 'expected ebay in the platform list');
   assert.strictEqual(ebay.connectable, true);
+  // One connection per eBay site: the sites it can be linked for.
+  assert.ok(ebay.marketplaces.some((m) => m.id === 'EBAY_AU' && m.flag && m.currency === 'AUD'));
 
   const tiktok = data.platforms.find((p) => p.key === 'tiktok_shop');
   assert.ok(tiktok, 'expected tiktok_shop in the platform list');
@@ -86,23 +89,53 @@ test('POST /api/connections/ebay/authorize rejects once the plan connection limi
   process.env.ENFORCE_PLAN_LIMITS = 'true';
   const email = `test-${crypto.randomUUID()}@example.com`;
   const { userId, token } = await signupAndLogin(email, 'testpassword123');
+  const basic = await pool.query("SELECT id FROM plans WHERE name = 'basic'");
+  await pool.query('UPDATE users SET plan_id = $1 WHERE id = $2', [basic.rows[0].id, userId]);
 
-  // Starter plan allows 1 connection — simulate a completed OAuth connection
-  // directly through the service (the HTTP path only exists via eBay's own
+  // Basic allows 2 — simulate two completed OAuth connections of other
+  // platforms' kind directly (the HTTP path only exists via eBay's own
   // redirect, which we can't drive in a test).
+  const { rows } = await pool.query("SELECT id FROM platforms WHERE key <> 'ebay' LIMIT 1");
+  for (const label of ['One', 'Two']) {
+    await pool.query('INSERT INTO connections (user_id, destination_platform_id, label, credentials) VALUES ($1, $2, $3, $4)', [userId, rows[0].id, label, {}]);
+  }
+
+  try {
+    const { status, data } = await request('POST', '/api/connections/ebay/authorize', { label: 'New Store' }, token);
+    assert.strictEqual(status, 403);
+    assert.match(data.error, /allows up to 2 connections/);
+  } finally {
+    delete process.env.ENFORCE_PLAN_LIMITS;
+  }
+});
+
+test('POST /api/connections/ebay/authorize at the limit still lets an eBay owner link another site (checked after sign-in)', async () => {
+  process.env.ENFORCE_PLAN_LIMITS = 'true';
+  const email = `test-${crypto.randomUUID()}@example.com`;
+  const { userId, token } = await signupAndLogin(email, 'testpassword123');
   await connectionService.createConnection(userId, {
     platformKey: 'ebay',
     label: 'Existing Store',
     credentials: { accessToken: 'x', refreshToken: 'y', accessTokenExpiresAt: Date.now() + 10000 },
   });
-
+  const original = { ...config.ebay };
+  Object.assign(config.ebay, { clientId: 'cid', clientSecret: 'csecret', ruName: 'test-runame' });
   try {
-    const { status, data } = await request('POST', '/api/connections/ebay/authorize', { label: 'New Store' }, token);
-    assert.strictEqual(status, 403);
-    assert.match(data.error, /allows up to 1 connection/);
+    const { status, data } = await request('POST', '/api/connections/ebay/authorize', { label: 'Existing Store', marketplaceId: 'EBAY_AU' }, token);
+    assert.strictEqual(status, 200);
+    const state = ebayOauth.verifyState(new URL(data.authorizeUrl).searchParams.get('state'));
+    assert.strictEqual(state.marketplaceId, 'EBAY_AU');
   } finally {
+    Object.assign(config.ebay, original);
     delete process.env.ENFORCE_PLAN_LIMITS;
   }
+});
+
+test('POST /api/connections/ebay/authorize refuses a site Liston does not sell on', async () => {
+  const email = `test-${crypto.randomUUID()}@example.com`;
+  const { token } = await signupAndLogin(email, 'testpassword123');
+  const { status } = await request('POST', '/api/connections/ebay/authorize', { label: 'X', marketplaceId: 'EBAY_XX' }, token);
+  assert.strictEqual(status, 400);
 });
 
 test('POST /api/connections/ebay/authorize allows more connections than the plan when limits are off', async () => {

@@ -8,7 +8,7 @@ const imageGates = require('../ai-generation/image-pipeline/gates');
 const { prepareAspectsForEbay, canonicalizeVariationValues } = require('../ai-generation/aspect-validator');
 const storeCategory = require('./store-category');
 const logger = require('../../utils/logger');
-const { hazmatTriggersIn, HAZMAT_TRIGGERS, scrubDraft } = require('./policy-words');
+const { hazmatTriggersIn, HAZMAT_TRIGGERS, REPLACEMENTS, scrubDraft } = require('./policy-words');
 const revisionService = require('./listing-revision.service');
 const eps = require('../ai-generation/image-pipeline/eps');
 const imageOps = require('../ai-generation/image-pipeline/image.ops');
@@ -18,6 +18,8 @@ const textGenerator = require('../ai-generation/text-generator.service');
 const governor = require('../ebay/request-governor');
 const analyticsService = require('../analytics/analytics.service');
 const listingSort = require('./listing-sort');
+const { alignVariantPhotos } = require('./variant-photos');
+const imagePipeline = require('../ai-generation/image-pipeline');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -259,10 +261,20 @@ function generateEbayDraftFromUrls(connectionId, userId, input) {
   );
 }
 
+// The supplier photos the seller kept in step two, in their order. Only
+// photos the preview read are accepted, so a draft can't be pointed at
+// anything else.
+function keptPhotos(source, imageUrls) {
+  const offered = new Set(source.imageUrls || []);
+  const kept = [...new Set(imageUrls)].filter((url) => offered.has(url));
+  if (!kept.length) throw new ListingError('Keep at least one of the supplier\'s photos.', 400);
+  return { ...source, imageUrls: kept, imagesChosen: true };
+}
+
 async function generateEbayDraftFromUrlsNow(
   connectionId,
   userId,
-  { competitorUrl, sourceUrl, previewId, variantSelection }
+  { competitorUrl, sourceUrl, previewId, variantSelection, imageUrls }
 ) {
   // STEP TWO picks up the listings read in step one. A preview belongs to the
   // user and connection that made it; anything else is treated as expired.
@@ -273,7 +285,7 @@ async function generateEbayDraftFromUrlsNow(
     if (!preview || preview.userId !== userId || preview.connectionId !== connectionId) {
       throw new ListingError('That preview has expired. Read the listings again.', 400);
     }
-    preRead = preview;
+    preRead = imageUrls ? { ...preview, source: keptPhotos(preview.source, imageUrls) } : preview;
     competitorUrl = preview.competitorUrl;
     sourceUrl = preview.sourceUrl;
   }
@@ -465,6 +477,42 @@ function removeAxisValue(draft, axisName, value) {
   };
 }
 
+// Puts removed variations back (`indexes` into draft.removedVariants): each
+// returns to the list, and any option it carries that its attribute no
+// longer lists (the whole value was removed) is listed again. One that
+// matches a variation already there (the seller re-added it by hand) isn't
+// doubled.
+function restoreVariants(draft, indexes) {
+  const removed = draft.removedVariants || [];
+  const wanted = new Set(indexes.map(Number));
+  const keyOf = (variant) => JSON.stringify(Object.entries(variant.aspects || {}).sort(([a], [b]) => a.localeCompare(b)));
+  const present = new Set((draft.variants || []).map(keyOf));
+  const back = [];
+  for (const [index, entry] of removed.entries()) {
+    if (!wanted.has(index)) continue;
+    const { removedAt, ...variant } = entry;
+    void removedAt;
+    if (present.has(keyOf(variant))) continue;
+    present.add(keyOf(variant));
+    back.push(variant);
+  }
+  let specifications = draft.variesBy?.specifications || [];
+  for (const variant of back) {
+    for (const [axis, [value]] of Object.entries(variant.aspects || {})) {
+      if (value === undefined) continue;
+      const spec = specifications.find((s) => s.name === axis);
+      if (!spec) specifications = [...specifications, { name: axis, values: [value] }];
+      else if (!spec.values.includes(value)) specifications = specifications.map((s) => (s === spec ? { ...s, values: [...s.values, value] } : s));
+    }
+  }
+  return {
+    ...draft,
+    variants: [...(draft.variants || []), ...back],
+    removedVariants: removed.filter((_, index) => !wanted.has(index)),
+    ...(draft.variesBy ? { variesBy: { ...draft.variesBy, specifications } } : {}),
+  };
+}
+
 /**
  * Applies an edit to a draft. The patch carries only what changed; anything
  * absent is left alone.
@@ -488,6 +536,9 @@ async function updateDraft(id, userId, patch) {
         ...(change.imageUrls !== undefined ? { imageUrls: change.imageUrls } : {}),
       };
     });
+    // A photo set on one row is its option's photo (every size of that colour).
+    const photoRows = Object.keys(patch.variants).filter((index) => patch.variants[index]?.imageUrls !== undefined);
+    if (photoRows.length) draft = alignVariantPhotos(draft, photoRows);
   }
 
   // Renames come first: removals and everything after refer to the new
@@ -498,9 +549,11 @@ async function updateDraft(id, userId, patch) {
       (variant) => variant.aspects?.[rename.axis]?.[0] === rename.to && variant.aspects?.[rename.axis]?.[0] !== rename.from
     );
     if (clash) throw new ListingError(`"${rename.to}" is already an option on ${rename.axis}.`, 400);
-    draft.variants = (draft.variants || []).map((variant) =>
-      variant.aspects?.[rename.axis]?.[0] === rename.from ? { ...variant, aspects: { ...variant.aspects, [rename.axis]: [rename.to] } } : variant
-    );
+    const renameValue = (variant) =>
+      variant.aspects?.[rename.axis]?.[0] === rename.from ? { ...variant, aspects: { ...variant.aspects, [rename.axis]: [rename.to] } } : variant;
+    draft.variants = (draft.variants || []).map(renameValue);
+    // A removed variation put back later must match the names it returns to.
+    if (draft.removedVariants?.length) draft.removedVariants = draft.removedVariants.map(renameValue);
     if (draft.variesBy?.specifications) {
       draft.variesBy = {
         ...draft.variesBy,
@@ -527,12 +580,14 @@ async function updateDraft(id, userId, patch) {
         400
       );
     }
-    draft.variants = (draft.variants || []).map((variant) => {
+    const renameAxis = (variant) => {
       if (!variant.aspects || !(rename.from in variant.aspects)) return variant;
       const aspects = {};
       for (const [name, values] of Object.entries(variant.aspects)) aspects[name === rename.from ? rename.to : name] = values;
       return { ...variant, aspects };
-    });
+    };
+    draft.variants = (draft.variants || []).map(renameAxis);
+    if (draft.removedVariants?.length) draft.removedVariants = draft.removedVariants.map(renameAxis);
     if (draft.variesBy) {
       draft.variesBy = {
         ...draft.variesBy,
@@ -566,14 +621,26 @@ async function updateDraft(id, userId, patch) {
     }
   }
 
+  // Removed variations are kept on the draft (removedVariants) until it's
+  // published, so the editor can put one back; eBay is never sent them.
+  const before = draft.variants || [];
   if (patch.variantSkusToRemove?.length) {
     const drop = new Set(patch.variantSkusToRemove);
-    draft.variants = (draft.variants || []).filter((_, index) => !drop.has(String(index)));
+    draft.variants = before.filter((_, index) => !drop.has(String(index)));
   }
 
   for (const removal of patch.removeAxisValues || []) {
     draft = removeAxisValue(draft, removal.axis, removal.value);
   }
+  const kept = new Set(draft.variants || []);
+  const removedNow = before.filter((variant) => !kept.has(variant));
+  if (removedNow.length) {
+    const at = new Date().toISOString();
+    draft.removedVariants = [...(draft.removedVariants || []), ...removedNow.map((variant) => ({ ...variant, removedAt: at }))];
+  }
+
+  // Putting removed variations back (by their place in removedVariants).
+  if (patch.restoreVariants?.length) draft = restoreVariants(draft, patch.restoreVariants);
 
   for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'imageUrls', 'sku', 'storeCategoryNames']) {
     if (patch[field] !== undefined) draft[field] = patch[field];
@@ -614,7 +681,7 @@ async function updateDraft(id, userId, patch) {
       draft.aspects = aspects;
     }
     draft.warnings = [...(draft.warnings || []).filter((w) => !/^Category changed/.test(w)), ...refit.warnings];
-    draft.warnings.unshift(`Category changed to ${draft.categoryPath.join(' > ')}: title, description and item specifics were refitted. Check them.`);
+    draft.warnings.unshift(`Category changed to ${draft.categoryPath.join(' > ')}: the title and item specifics were refitted to it. Check them.`);
     // Nothing the patch also carries for these fields should win over a
     // refit the seller just asked for; the editor sends the category alone.
   }
@@ -707,11 +774,13 @@ async function proposeTextRevision(id, userId, instruction, current = null) {
 }
 
 // Rewrites every word eBay's hazardous-materials filter reacts to, on the
-// draft itself. The model goes first — it can rephrase a sentence rather
-// than swap a word — under an instruction that leaves it no discretion;
-// whatever it leaves behind is swapped by the fixed replacement table, so
-// the draft never comes back still carrying a trigger word. Applied and
-// saved, not proposed: the seller asked for exactly this.
+// draft itself. Words with a safe replacement in the fixed table (the
+// common ones: lead → weight, battery → power cell…) are swapped straight
+// away, at no cost. Only a word the table has no wording for goes to the
+// model, which can rephrase the sentence rather than just drop the word —
+// and it returns the passages it changes, not the whole listing. Whatever
+// is left after that is swapped by the table. Applied and saved, not
+// proposed: the seller asked for exactly this.
 async function fixPolicyWords(id, userId) {
   const listing = await loadEditableDraft(id, userId);
   let draft = listing.generated_data || {};
@@ -719,33 +788,37 @@ async function fixPolicyWords(id, userId) {
   if (!before.length) return { changed: false, before: [], remaining: [], summary: 'No word from the filter list is in this draft.' };
 
   const words = [...new Set(before.map((entry) => entry.match(/^"([^"]+)"/)[1]))];
+  const uncovered = words.filter((w) => !Object.prototype.hasOwnProperty.call(REPLACEMENTS, w.toLowerCase()));
   const applied = [];
-  try {
-    const proposal = await revisionService.reviseText({
-      draft,
-      instruction:
-        `Remove every occurrence of ${words.map((w) => `"${w}"`).join(', ')} from the title, the description, the item specifics and the variation option names. ` +
-        `This is mandatory even where the word describes the product accurately — eBay's automated filter refuses the listing while any of them is present. ` +
-        `Rephrase so the meaning survives without the word (a fluorocarbon coating becomes "clear low-visibility coating", lead becomes "weight", ` +
-        `lead-free becomes "eco-friendly"). Return the complete new title and description, every changed item specific, and a renameAxisValues entry for every option name that contained one of the words.`,
-      options: {},
-    });
-    if (!proposal.cannotDo && Object.keys(proposal.changes).length) {
-      const patch = {};
-      for (const key of ['title', 'commonTitle', 'description', 'commonDescription']) if (proposal.changes[key] !== undefined) patch[key] = proposal.changes[key];
-      if (proposal.changes.aspects) {
-        const current = Array.isArray(draft.variants) && draft.variants.length ? draft.variesBy?.aspects : draft.aspects;
-        patch.aspects = { ...(current || {}), ...proposal.changes.aspects };
+  if (uncovered.length) {
+    try {
+      const proposal = await revisionService.reviseText({
+        draft,
+        purpose: 'editor.policy',
+        instruction:
+          `Remove every occurrence of ${uncovered.map((w) => `"${w}"`).join(', ')} from the title, the description, the item specifics and the variation option names. ` +
+          `This is mandatory even where the word describes the product accurately — eBay's automated filter refuses the listing while any of them is present. ` +
+          `Rephrase so the meaning survives without the word. Change only the sentences that contain it: return the new title if it has one, ` +
+          `descriptionEdits for the description, every changed item specific, and a renameAxisValues entry for every option name that contained one of the words.`,
+        options: {},
+      });
+      if (!proposal.cannotDo && Object.keys(proposal.changes).length) {
+        const patch = {};
+        for (const key of ['title', 'commonTitle', 'description', 'commonDescription']) if (proposal.changes[key] !== undefined) patch[key] = proposal.changes[key];
+        if (proposal.changes.aspects) {
+          const current = Array.isArray(draft.variants) && draft.variants.length ? draft.variesBy?.aspects : draft.aspects;
+          patch.aspects = { ...(current || {}), ...proposal.changes.aspects };
+        }
+        if (proposal.changes.renameAxisValues?.length) patch.renameAxisValues = proposal.changes.renameAxisValues;
+        if (Object.keys(patch).length) {
+          const result = await updateDraft(id, userId, patch);
+          draft = result.listing.generated_data || draft;
+          applied.push(proposal.summary || 'Reworded by the AI editor.');
+        }
       }
-      if (proposal.changes.renameAxisValues?.length) patch.renameAxisValues = proposal.changes.renameAxisValues;
-      if (Object.keys(patch).length) {
-        const result = await updateDraft(id, userId, patch);
-        draft = result.listing.generated_data || draft;
-        applied.push(proposal.summary || 'Reworded by the AI editor.');
-      }
+    } catch (err) {
+      logger.warn('AI rewording of policy words failed; falling back to replacement', { listingId: id, error: err.message });
     }
-  } catch (err) {
-    logger.warn('AI rewording of policy words failed; falling back to replacement', { listingId: id, error: err.message });
   }
 
   // Backstop: whatever is still there is swapped for safe wording.
@@ -754,7 +827,7 @@ async function fixPolicyWords(id, userId) {
     if (Object.keys(changes).length) {
       const result = await updateDraft(id, userId, changes);
       draft = result.listing.generated_data || draft;
-      applied.push('Remaining words swapped for safe wording.');
+      applied.push(uncovered.length ? 'Remaining words swapped for safe wording.' : `Swapped ${words.map((w) => `"${w}"`).join(', ')} for safe wording.`);
     }
   }
 
@@ -820,9 +893,17 @@ async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex
   const listing = await loadEditableDraft(id, userId);
   const draft = { ...(listing.generated_data || {}) };
 
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl || '');
-  if (!match) throw new ListingError('Upload a JPG, PNG, GIF or WEBP image.', 400);
-  const buffer = Buffer.from(match[2], 'base64');
+  // Whatever the browser labelled it — AI tools save .avif, .jfif, .webp, or
+  // a file with no type at all — the bytes decide: anything that reads as a
+  // picture is taken, and a format eBay doesn't take is sent as a JPEG.
+  const match = /^data:[^,]*;base64,(.+)$/is.exec(dataUrl || '');
+  if (!match) throw new ListingError('Choose a photo to upload.', 400);
+  const buffer = await imageOps.toUploadable(Buffer.from(match[1], 'base64')).catch(() => {
+    throw new ListingError(
+      "That file couldn't be read as a picture. Save it as JPG or PNG and upload it again (iPhone HEIC photos need converting first).",
+      400
+    );
+  });
   const check = await imageOps.validate(buffer);
   if (!check.ok) throw new ListingError(check.errors.join(' '), 400);
   const source = await imageOps.validateSource(buffer);
@@ -842,6 +923,7 @@ async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex
   } else if (variantIndex !== undefined && Array.isArray(draft.variants)) {
     if (!draft.variants[variantIndex]) throw new ListingError('That variation no longer exists.', 400);
     draft.variants = draft.variants.map((variant, i) => (i === variantIndex ? { ...variant, imageUrls: [hostedUrl] } : variant));
+    Object.assign(draft, alignVariantPhotos(draft, [variantIndex]));
   } else {
     if ((draft.imageUrls || []).length >= 24) throw new ListingError('eBay allows at most 24 images per listing.', 400);
     draft.imageUrls = [...(draft.imageUrls || []), hostedUrl];
@@ -1282,13 +1364,15 @@ async function pageOfListings(credentials, { connectionId, status, search, sort,
 }
 
 async function publishLiveEdit(listing, userId) {
-  const draft = listing.generated_data || {};
+  let draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
   // An ended listing can't be revised (eBay refuses any change to it); it
   // is relisted instead, with the edit's fields, as a new item.
   let relist = Boolean(listing.source_data?.ended);
   const imageCheck = imageGates.checkDraftImages(draft);
   if (!imageCheck.ok) throw new ListingError(imageCheck.errors.join(' '), 400);
+  const photos = await readyPhotosForPublish(listing, draft, userId);
+  draft = photos.draft;
   if (relist) {
     const stock = isVariation ? draft.variants.reduce((sum, v) => sum + (Number(v.quantity) || 0), 0) : Number(draft.quantity) || 0;
     if (stock <= 0) throw new ListingError('Set the quantity above 0 before relisting: eBay won’t relist a listing with no stock.', 400);
@@ -1395,6 +1479,7 @@ async function publishLiveEdit(listing, userId) {
       return reviseViaInventory(credentials, guessed);
     }
   }
+  if (photos.warnings.length && revised) revised.warnings = [...photos.warnings, ...(revised.warnings || [])];
   resyncListings(listing.connection_id, userId);
   if (relist) return finishRelist(listing, draft, own, revised);
   // What changed, for the listing's before/after figures in Analytics. A
@@ -1585,7 +1670,7 @@ async function publishNow(listing, id, userId) {
     throw new ListingError(imageCheck.errors.join(' '), 400);
   }
 
-  const draft = listing.generated_data || {};
+  let draft = listing.generated_data || {};
   const marketplaceId = draft.marketplaceId;
 
   const gaps = draftGaps(draft);
@@ -1611,6 +1696,12 @@ async function publishNow(listing, id, userId) {
       );
     }
   }
+  // Every photo on eBay, and every row of an option with that option's
+  // photo. Drafts made before drafts went local already have their eBay
+  // objects, photos included.
+  const alreadyBuilt = Boolean(listing.platform_offer_id || listing.platform_group_key);
+  const photos = alreadyBuilt ? { draft, warnings: [] } : await readyPhotosForPublish(listing, draft, userId);
+  draft = photos.draft;
   // The item specifics eBay will actually accept: no variation attribute
   // repeated in the shared set, identifiers the product lacks marked "Does
   // Not Apply", and anything still required but empty named here rather
@@ -1735,7 +1826,7 @@ async function publishNow(listing, id, userId) {
 
     resyncListings(listing.connection_id, userId);
     const row = await listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
-    const warnings = [...skuWarnings, ...readied.warnings, ...tidied.warnings];
+    const warnings = [...photos.warnings, ...skuWarnings, ...readied.warnings, ...tidied.warnings];
     return warnings.length ? { ...row, warnings } : row;
   } catch (err) {
     // Publishing 100+ variants is minutes of eBay calls and can fail part way
@@ -1786,9 +1877,45 @@ async function publishNow(listing, id, userId) {
       err.message = explainRejectedAxisValue(rejected, readied.unmatched);
       err.statusCode = 400;
     }
+    // Anything else eBay refused about the draft itself (a value it won't
+    // take, a field it wants) is the seller's to fix: a 400 with eBay's
+    // words, not a server error.
+    if (err.ebayStatus >= 400 && err.ebayStatus < 500 && err.statusCode >= 500) {
+      err.statusCode = 400;
+      err.message = String(err.message || '').replace(/^A user error has occurred\.\s*/i, '');
+    }
     await listingRepository.updateStatus(id, 'pending_review', { errorMessage: err.message?.slice(0, 500) });
     throw err;
   }
+}
+
+// Before anything goes to eBay: every photo on eBay's own picture service
+// (eBay refuses a listing whose photos mix its hosting with a supplier's)
+// and every row of an option showing that option's photo. Saved on the
+// draft, so it happens once.
+async function readyPhotosForPublish(listing, draft, userId) {
+  let ready = alignVariantPhotos(draft);
+  const warnings = [];
+  if (imagePipeline.unhostedImages(ready).length) {
+    const hosting = await connectionService.withDecryptedCredentials(listing.connection_id, userId, async (credentials) => {
+      const { accessToken } = await ebayService.ensureValidAccessToken(credentials);
+      return imagePipeline.hostDraftImages(ready, { accessToken, marketplaceId: ready.marketplaceId });
+    });
+    if (!hosting.ok) {
+      throw new ListingError("eBay couldn't take this listing's photos. Replace them with your own copies (Upload) and publish again.", 400);
+    }
+    ready = hosting.draft;
+    const n = hosting.dropped.length;
+    if (n) {
+      warnings.push(
+        n === 1
+          ? "1 photo couldn't be put on eBay and was left out. Add it again with Upload if you need it."
+          : `${n} photos couldn't be put on eBay and were left out. Add them again with Upload if you need them.`
+      );
+    }
+  }
+  if (ready !== draft) await listingRepository.updateGeneratedData(listing.id, ready);
+  return { draft: ready, warnings };
 }
 
 // eBay treats "Camo Brown", "camo brown" and "Camo  Brown" as the same

@@ -1,6 +1,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../../config');
 const { AiGenerationError } = require('./ai-generation.errors');
+const aiUsage = require('./ai-usage');
 const { validateAspects, describeSchemaForPrompt, prepareAspectsForEbay } = require('./aspect-validator');
 
 const MODEL = config.aiModel;
@@ -219,6 +220,7 @@ async function ensureTitleLength(anthropic, title, facts) {
         },
       ],
     });
+    aiUsage.record('draft.title', response);
     const toolUse = response.content.find((block) => block.type === 'tool_use');
     const longer = toolUse?.input?.title;
     return typeof longer === 'string' && longer.length > title.length ? trimTitle(longer) : title;
@@ -243,6 +245,7 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
       { role: 'user', content: buildPrompt({ competitor, source, costPrice, sellPrice, currency, aspectSchema, categoryPath }) },
     ],
   });
+  aiUsage.record('draft.write', response);
 
   const toolUse = response.content.find((block) => block.type === 'tool_use');
   if (!toolUse || !toolUse.input) {
@@ -287,7 +290,9 @@ async function generateListingContent({ competitor, source, costPrice, sellPrice
   // The list sections take the editor's default bullets even when the model
   // leaves them off, and any dash it used as punctuation is rewritten.
   const descKey = hasVariants ? 'commonDescription' : 'description';
-  content[descKey] = descriptionFormat.cleanDashes(descriptionFormat.applyDefaultBullets(content[descKey]));
+  // Lines the model wrote to the seller ("confirm the contents before
+  // publishing") are taken out of the buyer's text.
+  content[descKey] = descriptionFormat.dropSellerNotes(descriptionFormat.cleanDashes(descriptionFormat.applyDefaultBullets(content[descKey])));
 
   // The schema says maxLength 80 but the model doesn't always honour it (an
   // 89-character camera title came back and blocked Save). Trim at a word
@@ -323,20 +328,21 @@ const REFIT_TOOL = {
     type: 'object',
     properties: {
       title: { type: 'string', maxLength: 80, description: 'Between 70 and 80 characters. Use the full space.' },
-      description: { type: 'string' },
       aspects: {
         type: 'object',
         description: 'The complete set of item specifics for the new category, as { aspectName: [value] }',
         additionalProperties: { type: 'array', items: { type: 'string' } },
       },
     },
-    required: ['title', 'description', 'aspects'],
+    required: ['title', 'aspects'],
   },
 };
 
 // A listing moved to a different category needs its specifics re-expressed
 // in that category's vocabulary (a bag's "Exterior Colour" is a phone case's
-// "Colour"), and often a title/description angle to match. The product facts
+// "Colour"), and often a title angle to match. The description stays as the
+// seller has it: rewriting it here was most of this call's cost (output
+// tokens), for wording the category rarely changes. The product facts
 // come from the draft as it stands plus the original supplier data; nothing
 // is invented to fill a required aspect.
 async function refitContentForCategory({ draft, source, categoryPath, aspectSchema, variationAxes = [] }) {
@@ -356,10 +362,9 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
       {
         role: 'user',
         content:
-          `An eBay seller has moved their draft listing to a different category. Rewrite the title, description ` +
-          `and item specifics so they fit the NEW category, keeping every product fact the same. Keep the ` +
-          `description's structure and tone; change wording only where the category angle calls for it. Never ` +
-          `use a dash as punctuation in the description (no "–", "—" or " - "): use a colon or comma.\n` +
+          `An eBay seller has moved their draft listing to a different category. Rewrite the title and item ` +
+          `specifics so they fit the NEW category, keeping every product fact the same. The description stays as ` +
+          `it is; it is shown only for facts.\n` +
           `The seller is a UK business dispatching from the UK. Never mention China, AliExpress, overseas shipping, ` +
           `import, or any supplier.\n` +
           TITLE_RULE +
@@ -382,6 +387,7 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
       },
     ],
   });
+  aiUsage.record('draft.refit', response);
 
   const toolUse = response.content.find((block) => block.type === 'tool_use');
   if (!toolUse?.input) {
@@ -397,7 +403,7 @@ async function refitContentForCategory({ draft, source, categoryPath, aspectSche
     warnings.push(`eBay requires ${missing.join(', ')} in this category and the draft has no value yet — fill ${missing.length === 1 ? 'it' : 'them'} in item specifics before publishing.`);
   }
   const finalTitle = await ensureTitleLength(anthropic, trimTitle(content.title), source ? summarizeListing(source) : null);
-  return { title: finalTitle, description: descriptionFormat.cleanDashes(content.description), aspects: validated, warnings };
+  return { title: finalTitle, description, aspects: validated, warnings };
 }
 
 module.exports = { generateListingContent, refitContentForCategory };

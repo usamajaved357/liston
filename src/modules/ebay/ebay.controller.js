@@ -9,6 +9,9 @@ const ebayPush = require('./ebay-push');
 const connectionRepository = require('../connections/connection.repository');
 const governor = require('./request-governor');
 const analyticsBudget = require('./analytics-budget');
+const browseUsage = require('./browse-usage');
+const researchService = require('../research/research.service');
+const aiUsage = require('../ai-generation/ai-usage');
 const analyticsService = require('../analytics/analytics.service');
 const config = require('../../config');
 const logger = require('../../utils/logger');
@@ -37,29 +40,29 @@ async function oauthCallback(req, res) {
   try {
     const tokens = await ebayOauth.exchangeCodeForToken(String(code));
     if (statePayload.connectionId) {
-      // A reconnect: the fresh token replaces the old one on the same
-      // connection; everything else it holds (marketplace, signing key…)
-      // is kept.
-      const existing = await connectionService.getConnectionWithDecryptedCredentials(statePayload.connectionId, statePayload.userId);
-      await connectionService.updateConnectionCredentials(existing.id, { ...(existing.credentials || {}), ...tokens });
-      ebayPush.subscribeInBackground(existing.id, statePayload.userId);
-      const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') ? statePayload.returnTo : `/accounts/${existing.id}`;
+      // A reconnect: the fresh sign-in replaces the old one, on every site
+      // of that eBay account at once; everything else is kept.
+      const { connection, siblings } = await connectionService.reconnectEbayAccount(statePayload.userId, statePayload.connectionId, tokens, ebayService);
+      for (const id of [connection.id, ...siblings]) ebayPush.subscribeInBackground(id, statePayload.userId);
+      const returnTo = typeof statePayload.returnTo === 'string' && statePayload.returnTo.startsWith('/') ? statePayload.returnTo : `/accounts/${connection.id}`;
       const joiner = returnTo.includes('?') ? '&' : '?';
-      return res.redirect(`${config.frontendUrl}${returnTo}${joiner}reconnected=1`);
+      return res.redirect(`${config.frontendUrl}${returnTo}${joiner}reconnected=1${siblings.length ? `&sites=${siblings.length + 1}` : ''}`);
     }
-    const created = await connectionService.createConnection(statePayload.userId, {
-      platformKey: 'ebay',
-      label: statePayload.label,
-      credentials: tokens,
-    });
-    // Tag the account with its eBay site straight away; a failure here just
-    // means the tag is picked up on the next Connections visit.
-    await connectionService.ensureMarketplace(created.id, statePayload.userId, ebayService).catch(() => null);
-    ebayPush.subscribeInBackground(created.id, statePayload.userId);
+    // Linked for the site the seller picked. The same eBay account on
+    // another site is a connection of its own; on a site it already has,
+    // that connection's sign-in is refreshed rather than duplicated.
+    const { connection, existing } = await connectionService.connectEbayAccount(
+      statePayload.userId,
+      { label: statePayload.label, marketplaceId: statePayload.marketplaceId, tokens },
+      ebayService
+    );
+    ebayPush.subscribeInBackground(connection.id, statePayload.userId);
+    if (existing) return res.redirect(`${config.frontendUrl}/accounts/${connection.id}?alreadyConnected=1`);
     return res.redirect(`${config.frontendUrl}/dashboard?connected=ebay`);
   } catch (err) {
     logger.error('eBay OAuth callback failed', { message: err.message });
-    return res.redirect(`${failureUrl}${encodeURIComponent('connection_failed')}`);
+    const reason = err.statusCode === 403 ? (statePayload.connectionId ? 'different_account' : 'plan_limit') : 'connection_failed';
+    return res.redirect(`${failureUrl}${encodeURIComponent(reason)}`);
   }
 }
 
@@ -206,9 +209,19 @@ async function commerceNotification(req, res) {
 
 // Today's use of the shared eBay allowance, for the admin's usage page:
 // totals, what is paused, per call and per account (with labels).
+// The Browse API's allowance: who used it today, and research's capped share.
+async function browseAdminUsage() {
+  const snap = browseUsage.snapshot();
+  const sorted = (counts) =>
+    Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  return { ...snap, byCall: sorted(snap.byCall), byKind: sorted(snap.byKind), research: await researchService.budget() };
+}
+
 async function usage(req, res, next) {
   try {
-    if (req.query.sync === '1') await Promise.all([governor.syncWithEbay(), analyticsBudget.syncWithEbay()]);
+    if (req.query.sync === '1') await Promise.all([governor.syncWithEbay(), analyticsBudget.syncWithEbay(), browseUsage.syncWithEbay()]);
     const snap = governor.snapshot();
     const accounts = await connectionRepository.findAllEbay();
     const labels = new Map(accounts.map((a) => [String(a.id), a.label]));
@@ -231,6 +244,9 @@ async function usage(req, res, next) {
       listingPushLive: accounts.filter((a) => ebayService.pushEnabled(a).listings).length,
       // The traffic report's separate allowance (see analytics-budget).
       analytics: await analyticsService.adminUsage(labels),
+      browse: await browseAdminUsage(),
+      // Claude's spend by feature, per day (ai-generation/ai-usage).
+      claude: await aiUsage.snapshot(14),
     });
   } catch (err) {
     next(err);

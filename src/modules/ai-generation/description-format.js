@@ -11,7 +11,7 @@
 // out rather than invented. No dashes as punctuation: the seller doesn't
 // want them, so the model is told and cleanDashes removes any that slip in.
 
-const { listItem } = require('../listings/description-template');
+const { listItem, dropSellerNotes } = require('../listings/description-template');
 
 const PROMPT_GUIDANCE =
   `\nDESCRIPTION FORMAT: write the description as plain text in exactly this layout. Put ONE blank line ` +
@@ -41,7 +41,10 @@ const PROMPT_GUIDANCE =
   `write "• 1 × " followed by the product name.\n` +
   `7. Important note: ONLY when buyers genuinely need a caution (checking size measurements, checking ` +
   `compatibility with their model): one line starting "**Important:** ". The store template highlights it; ` +
-  `add no colour or highlight markers yourself. Otherwise leave it out.\n` +
+  `add no colour or highlight markers yourself. Otherwise leave it out. The note speaks to the BUYER about ` +
+  `the product. Never write reminders or instructions for the seller anywhere in the description (such as ` +
+  `"confirm the contents before publishing" or "add any extra items"): buyers read every line. When the ` +
+  `product data doesn't tell you something, leave it out instead of asking for it.\n` +
   `8. Closing: one short sentence on the benefit of owning it. No heading.\n` +
   `Only state features, materials, measurements and contents the product data supports; never invent ` +
   `them. No emoji anywhere except the start of each Key Features line (✓ and • are not emoji). No prices, ` +
@@ -128,4 +131,4 @@ function cleanDashes(text) {
     .join('\n');
 }
 
-module.exports = { PROMPT_GUIDANCE, applyDefaultBullets, cleanDashes };
+module.exports = { PROMPT_GUIDANCE, applyDefaultBullets, cleanDashes, dropSellerNotes };

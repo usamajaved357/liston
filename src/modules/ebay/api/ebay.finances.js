@@ -114,4 +114,60 @@ function mapOrderEarnings(response) {
   };
 }
 
-module.exports = { getOrderTransactions, mapOrderEarnings, baseUrl };
+// One page of every transaction booked in a date window (sales, refunds,
+// the ad fees charged apart from them…), up to 1,000 at a time: 90 days of
+// a busy account is a few calls, where the order page's read is one per
+// order. `from`/`to` are ISO times.
+function getTransactions(accessToken, { from, to, offset = 0, limit = 1000 }, marketplaceId, signingKey) {
+  const filter = encodeURIComponent(`transactionDate:[${from}..${to}]`);
+  return call(accessToken, 'GET', `/transaction?filter=${filter}&limit=${limit}&offset=${offset}`, undefined, marketplaceId, signingKey);
+}
+
+const money = (node) => Number(node?.value || 0);
+
+/**
+ * Each order's money from a batch of transactions (any order, any type):
+ * [{ orderId, currency, gross, fees, adFees, refunds, earnings, fundsStatus,
+ * saleDate }]. The sale side is exactly what the order page shows
+ * (mapOrderEarnings); refunds to the buyer come off the earnings as well.
+ * Orders with no SALE yet (payment still settling) are left out.
+ */
+// The order a transaction belongs to. A sale or refund says so directly; an
+// ad fee (NON_SALE_CHARGE) only names it among its references.
+function orderIdOf(t) {
+  return t.orderId || (t.references || []).find((r) => r.referenceType === 'ORDER_ID')?.referenceId || null;
+}
+
+function orderFinancesFrom(transactions = []) {
+  const byOrder = new Map();
+  for (const t of transactions) {
+    const orderId = orderIdOf(t);
+    if (!orderId) continue;
+    byOrder.set(orderId, [...(byOrder.get(orderId) || []), t]);
+  }
+  const round = (n) => Math.round(n * 100) / 100;
+  const rows = [];
+  for (const [orderId, list] of byOrder) {
+    const sale = mapOrderEarnings({ transactions: list });
+    if (!sale) continue;
+    const refunds = list
+      .filter((t) => t.transactionType === 'REFUND')
+      .reduce((sum, t) => sum + (t.bookingEntry === 'CREDIT' ? -1 : 1) * Math.abs(money(t.amount)), 0);
+    const adFees = sale.fees.filter((f) => /^AD_FEE/.test(f.code)).reduce((sum, f) => sum + f.amount.value, 0);
+    const saleDate = list.filter((t) => t.transactionType === 'SALE').map((t) => t.transactionDate).filter(Boolean).sort()[0] || null;
+    rows.push({
+      orderId,
+      currency: sale.gross.currency,
+      gross: sale.gross.value,
+      fees: sale.totalFees.value,
+      adFees: round(adFees),
+      refunds: round(refunds),
+      earnings: round(sale.earnings.value - refunds),
+      fundsStatus: sale.fundsStatus,
+      saleDate,
+    });
+  }
+  return rows;
+}
+
+module.exports = { getOrderTransactions, getTransactions, orderFinancesFrom, orderIdOf, mapOrderEarnings, baseUrl };

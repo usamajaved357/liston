@@ -132,3 +132,35 @@ test('aliexpress normalize returns an empty variants array for a product with no
   });
   assert.deepStrictEqual(result.variants, []);
 });
+
+test('aliexpress page read takes every gallery photo full size, and each colour\'s own photo too', () => {
+  const result = aliexpressScraper.normalize({
+    title: 'Socks',
+    imageUrls: [
+      'https://ae01.alicdn.com/kf/Sa1.jpg_220x220q75.jpg_.avif',
+      'https://ae01.alicdn.com/kf/Sa2.jpg_80x80.jpg_.webp',
+      'https://ae01.alicdn.com/kf/Sa3.png_.avif',
+      '//ae01.alicdn.com/kf/Sa4.jpg_50x50.jpg',
+      'https://ae01.alicdn.com/kf/Sa5.jpg',
+    ],
+    variantGroups: [
+      {
+        name: 'Color',
+        options: [
+          { label: 'Blue', imageUrl: 'https://ae01.alicdn.com/kf/Sblue.jpg_220x220.jpg_.webp' },
+          // The same photo as the first gallery one: listed once.
+          { label: 'Red', imageUrl: 'https://ae01.alicdn.com/kf/Sa1.jpg_640x640.jpg' },
+        ],
+      },
+    ],
+  });
+  assert.deepStrictEqual(result.imageUrls, [
+    'https://ae01.alicdn.com/kf/Sa1.jpg',
+    'https://ae01.alicdn.com/kf/Sa2.jpg',
+    'https://ae01.alicdn.com/kf/Sa3.png',
+    'https://ae01.alicdn.com/kf/Sa4.jpg',
+    'https://ae01.alicdn.com/kf/Sa5.jpg',
+    'https://ae01.alicdn.com/kf/Sblue.jpg',
+  ]);
+  assert.strictEqual(result.variants[0].imageUrl, 'https://ae01.alicdn.com/kf/Sblue.jpg');
+});

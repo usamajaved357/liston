@@ -67,6 +67,15 @@ async function listSourcingForOrder(connectionId, orderId) {
   return result.rows;
 }
 
+/** Every order's line statuses on an account: orderId → ['ordered', …]. */
+async function sourcingStatusesByOrder(connectionId) {
+  const result = await query(
+    `SELECT order_id, array_agg(status) AS statuses FROM order_sourcing WHERE connection_id = $1 GROUP BY order_id`,
+    [connectionId]
+  );
+  return new Map(result.rows.map((r) => [r.order_id, r.statuses]));
+}
+
 async function listSourcingForOrders(connectionId, orderIds) {
   if (!orderIds.length) return [];
   const result = await query(
@@ -167,7 +176,21 @@ async function listArchivedOrderIds(connectionId) {
   return result.rows.map((r) => r.order_id);
 }
 
+// What the supplier orders for these eBay orders cost, summed per order:
+// orderId -> { value, currency }. Lines with no cost entered don't count.
+async function sourceCostsByOrder(connectionId, orderIds) {
+  if (!orderIds.length) return new Map();
+  const result = await query(
+    `SELECT order_id, cost_currency, sum(cost_value)::float AS cost FROM order_sourcing
+     WHERE connection_id = $1 AND order_id = ANY($2) AND cost_value IS NOT NULL
+     GROUP BY order_id, cost_currency`,
+    [connectionId, orderIds]
+  );
+  return new Map(result.rows.map((r) => [r.order_id, { value: Number(r.cost), currency: r.cost_currency }]));
+}
+
 module.exports = {
+  sourceCostsByOrder,
   archiveOrder,
   unarchiveOrder,
   findArchived,
@@ -177,7 +200,7 @@ module.exports = {
   createSourceAccount,
   updateSourceAccount,
   listSourcingForOrder,
-  listSourcingForOrders,
+  listSourcingForOrders, sourcingStatusesByOrder,
   upsertSourcing,
   findSourcing,
   addEvent,

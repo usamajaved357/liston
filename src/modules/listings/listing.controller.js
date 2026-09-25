@@ -34,6 +34,9 @@ const generateDraftSchema = z.union([
     // { axisName: [value, ...] } — only combinations whose value on every
     // listed axis was chosen are drafted.
     variantSelection: z.record(z.array(z.string().min(1))).optional(),
+    // The supplier photos the seller kept in step two, in their order (the
+    // first is the main photo). Only photos from the same preview count.
+    imageUrls: z.array(z.string().min(1)).min(1, 'Keep at least one photo.').max(100).optional(),
   }),
 ]);
 
@@ -270,6 +273,8 @@ const updateDraftSchema = z
     // photo) so the seller edits from something rather than nothing.
     addAxisValues: z.array(z.object({ axis: z.string(), value: z.string().trim().min(1).max(50), copyFrom: z.string().optional() })).optional(),
     variantSkusToRemove: z.array(z.string()).optional(),
+    // Removed variations to put back, by their place in removedVariants.
+    restoreVariants: z.array(z.coerce.number().int().min(0)).optional(),
     // eBay's custom label: up to 50 characters, no whitespace at the ends.
     sku: z.string().trim().min(1).max(50, 'SKUs are limited to 50 characters').optional(),
     // Changing the primary category refits title/specifics/description (see

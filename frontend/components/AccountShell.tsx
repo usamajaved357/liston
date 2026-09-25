@@ -3,7 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { User } from "@/lib/api";
+import { Marketplace, User } from "@/lib/api";
+import { AccountTimeZoneProvider } from "@/lib/timezone";
+import { SyncStatus } from "@/components/SyncStatus";
+import { SITE_TIMEZONES } from "@/components/orders/order-ui";
 import { Logo } from "@/components/Logo";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
@@ -27,8 +30,12 @@ interface AccountShellProps {
   platformName: string;
   // Kept for callers; the shell no longer displays it (the header does).
   status?: string;
-  // The eBay site the account sells on, shown under the account name.
-  marketplace?: { flag: string; label: string; currency: string; name: string } | null;
+  // The eBay site the account sells on, shown under the account name. Its
+  // time zone is the clock every date on the account's pages reads in.
+  marketplace?: Marketplace | null;
+  // How fresh the page's copy of the eBay data is, with a re-read button:
+  // shown at the top right, in the same place on every account page.
+  sync?: { syncedAt: string | null; onRefresh: () => void; refreshing: boolean; note?: string | null };
   // Undefined for an owner (show every tab). For a team member, comes from
   // the connection's resolved `permissions` (see ConnectionPermissions in
   // lib/api.ts) — only tabs with `true` are shown. The backend enforces the
@@ -53,7 +60,9 @@ export function AccountShell({
   marketplace,
   permissions,
   user,
+  sync,
 }: AccountShellProps) {
+  const timeZone = marketplace?.timeZone || (marketplace?.id ? SITE_TIMEZONES[marketplace.id] : undefined);
   const router = useRouter();
   const canShow = (feature: string) => permissions === undefined || permissions[feature];
   const pathname = usePathname();
@@ -66,6 +75,7 @@ export function AccountShell({
   }
 
   return (
+    <AccountTimeZoneProvider value={timeZone}>
     <div className="h-screen flex overflow-hidden">
       <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-6">
         <div className="flex items-center gap-2.5 px-2">
@@ -104,6 +114,20 @@ export function AccountShell({
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                   <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
                   <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+                </svg>
+              }
+            />
+          )}
+          {canShow("listings") && (
+            <NavItem
+              href={`${base}/research`}
+              active={pathname.startsWith(`${base}/research`)}
+              label="Research"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M15.5 15.5L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M7.5 12l2-2.5 2 1.5 2-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               }
             />
@@ -206,6 +230,7 @@ export function AccountShell({
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">{header}</div>
             <div className="page-header-controls">
+              {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
               {/* Owners came from the main dashboard; members have no dashboard,
                   their way out is the sidebar footer. */}
@@ -237,5 +262,6 @@ export function AccountShell({
         onConfirm={handleLogout}
       />
     </div>
+    </AccountTimeZoneProvider>
   );
 }

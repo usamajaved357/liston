@@ -36,7 +36,7 @@ export default function AccountCampaignsPage() {
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Campaigns</h1>
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            {connection.label} · {connection.platform_name}
+            {connection.label} · {connection.marketplace?.name ?? connection.platform_name}
           </p>
         </div>
       }

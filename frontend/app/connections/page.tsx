@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { api, ApiError, Connection, Platform, User } from "@/lib/api";
 import { landingPathForConnection } from "@/lib/permissions";
 import { AppShell } from "@/components/AppShell";
@@ -11,26 +10,9 @@ import { cacheUser, useCachedUser } from "@/lib/session";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
-import { PlatformIcon } from "@/components/PlatformIcon";
+import { AccountCards } from "@/components/AccountCards";
 import { AddConnectionPanel } from "@/components/AddConnectionPanel";
-import { formatShortDate } from "@/lib/format";
-
-const STATUS: Record<Connection["status"], { label: string; dot: string; chip: string }> = {
-  active: { label: "Connected", dot: "bg-emerald-500", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
-  expired: { label: "Reconnect needed", dot: "bg-amber-500", chip: "bg-amber-50 text-amber-800 ring-amber-200" },
-  error: { label: "Needs attention", dot: "bg-rose-500", chip: "bg-rose-50 text-rose-700 ring-rose-200" },
-  suspended: { label: "Suspended", dot: "bg-rose-500", chip: "bg-rose-50 text-rose-700 ring-rose-200" },
-};
-
-function StatusPill({ status }: { status: Connection["status"] }) {
-  const s = STATUS[status];
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 ring-inset ${s.chip}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
-      {s.label}
-    </span>
-  );
-}
+import { ebayConnectError } from "@/lib/connect-errors";
 
 const TrashIcon = (
   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
@@ -38,29 +20,18 @@ const TrashIcon = (
   </svg>
 );
 
-// One connected account per row: who it is, whether it's healthy, and a
-// way in. Everything else lives inside the account itself.
-function AccountRow({ connection, onRemove }: { connection: Connection; onRemove: () => void }) {
-  const base = `/accounts/${connection.id}`;
+const ReconnectIcon = (
+  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+    <path d="M20 11a8 8 0 00-14.9-3.9M4 5v4h4M4 13a8 8 0 0014.9 3.9M20 19v-4h-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+// The owner's actions on a card, as icons in its corner: re-run eBay's
+// consent, or remove the account.
+function OwnerActions({ connection, onRemove }: { connection: Connection; onRemove: () => void }) {
+  const name = `${connection.label}${connection.marketplace ? ` · ${connection.marketplace.name}` : ""}`;
   return (
-    <li className="group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-[var(--color-paper)]">
-      <Link href={base} className="flex min-w-0 flex-1 items-center gap-4">
-        <PlatformIcon platformKey={connection.platform_key} size={44} />
-        <div className="min-w-0">
-          <p className="truncate text-[15px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{connection.label}</p>
-          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[12px] text-[var(--color-muted)]">
-            {connection.marketplace && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-paper)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-line)]" title={`${connection.marketplace.name} · ${connection.marketplace.currency}`}>
-                <span aria-hidden>{connection.marketplace.flag}</span> {connection.marketplace.label} · {connection.marketplace.currency}
-              </span>
-            )}
-            <span>
-              {connection.platform_name} · connected {formatShortDate(connection.created_at)}
-            </span>
-          </p>
-        </div>
-      </Link>
-      <StatusPill status={connection.status} />
+    <>
       {connection.platform_key === "ebay" && (
         <button
           type="button"
@@ -69,19 +40,26 @@ function AccountRow({ connection, onRemove }: { connection: Connection; onRemove
               const { authorizeUrl } = await api.reauthorizeConnection(connection.id, "/connections");
               window.location.href = authorizeUrl;
             } catch {
-              /* the row stays; nothing to undo */
+              /* the card stays; nothing to undo */
             }
           }}
-          className="btn btn-ghost btn-sm"
-          title="Re-run eBay's consent for this account (same account, fresh permissions)"
+          className="btn btn-ghost btn-icon !h-8 !w-8 text-[var(--color-muted)] hover:text-[var(--color-primary)]"
+          title={`Reconnect ${name} to eBay (same account, fresh permissions)`}
+          aria-label={`Reconnect ${name} to eBay`}
         >
-          Reconnect
+          {ReconnectIcon}
         </button>
       )}
-      <button type="button" onClick={onRemove} className="btn btn-danger-ghost btn-icon -mr-2" title="Remove this account" aria-label="Remove this account">
+      <button
+        type="button"
+        onClick={onRemove}
+        className="btn btn-danger-ghost btn-icon !h-8 !w-8 !text-[var(--color-muted)] hover:!text-[var(--color-danger)]"
+        title={`Remove ${name} from Liston`}
+        aria-label={`Remove ${name}`}
+      >
         {TrashIcon}
       </button>
-    </li>
+    </>
   );
 }
 
@@ -89,6 +67,9 @@ function ConnectionBanner() {
   const searchParams = useSearchParams();
   const connected = searchParams.get("connected");
   const ebayError = searchParams.get("ebayError");
+  const reconnected = searchParams.get("reconnected") === "1";
+  // How many sites of that eBay account the new sign-in went to.
+  const sites = Number(searchParams.get("sites") || 1);
 
   if (connected === "ebay") {
     return (
@@ -97,10 +78,21 @@ function ConnectionBanner() {
       </div>
     );
   }
+  if (reconnected) {
+    return (
+      <div className="mb-4">
+        <Alert variant="success">
+          {sites > 1
+            ? `Reconnected. This eBay account is linked on ${sites} markets, and ${sites === 2 ? "both" : `all ${sites}`} have the new sign-in.`
+            : "Reconnected. The account has eBay's latest permissions."}
+        </Alert>
+      </div>
+    );
+  }
   if (ebayError) {
     return (
       <div className="mb-4">
-        <Alert>Couldn&apos;t connect your eBay account ({ebayError}). Try again below.</Alert>
+        <Alert>{ebayConnectError(ebayError, "Try again below.")}</Alert>
       </div>
     );
   }
@@ -109,7 +101,7 @@ function ConnectionBanner() {
 
 // A team member never manages connections (no add/remove, no plan/billing
 // context) — they only ever see the account(s) an owner granted them access
-// to, as a bare list (no admin affordances at all). Deliberately no
+// to, as searchable cards (no admin affordances at all). Deliberately no
 // auto-redirect even with a single account: this page is also where
 // AccountShell's "Your accounts" link and its logout live, so it must always
 // be a real, working landing spot rather than something that immediately
@@ -120,7 +112,7 @@ function MemberAccountPicker({ user, connections }: { user: User; connections: C
 
   return (
     <main className="min-h-screen px-6 py-10">
-      <div className="mx-auto max-w-lg">
+      <div className="mx-auto max-w-6xl">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Your accounts</h1>
           <AccountMenu
@@ -137,23 +129,7 @@ function MemberAccountPicker({ user, connections }: { user: User; connections: C
             you access.
           </p>
         ) : (
-          <ul className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] overflow-hidden">
-            {connections.map((connection) => (
-              <li key={connection.id} className="border-b border-[var(--color-line)] last:border-b-0">
-                <Link
-                  href={landingPathForConnection(connection)}
-                  className="flex items-center gap-3.5 px-5 py-4 hover:bg-[var(--color-paper)] transition-colors"
-                >
-                  <PlatformIcon platformKey={connection.platform_key} size={40} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold text-[var(--color-ink)] truncate">{connection.label}</p>
-                    <p className="text-xs text-[var(--color-muted)]">{connection.platform_name}</p>
-                  </div>
-                  <StatusPill status={connection.status} />
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <AccountCards connections={connections} hrefFor={landingPathForConnection} />
         )}
       </div>
 
@@ -257,9 +233,6 @@ export default function ConnectionsPage() {
   const planName = user.plan_name ?? "Unassigned";
   const pendingDelete = connections.find((c) => c.id === pendingDeleteConnectionId);
 
-  const sortedConnections = [...connections].sort((a, b) =>
-    a.platform_name === b.platform_name ? a.label.localeCompare(b.label) : a.platform_name.localeCompare(b.platform_name)
-  );
   const needsAttention = connections.filter((c) => c.status !== "active").length;
   const showAddPanel = adding || (!loading && connections.length === 0);
 
@@ -298,31 +271,20 @@ export default function ConnectionsPage() {
       </Suspense>
 
       {loading ? (
-        <PageSkeleton rows={2} />
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-4" aria-hidden>
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="card flex gap-3 p-4">
+              <div className="h-10 w-10 animate-pulse rounded-lg bg-[var(--color-line)]" />
+              <div className="flex-1 space-y-2 pt-1">
+                <div className="h-3.5 w-2/5 animate-pulse rounded-full bg-[var(--color-line)]" />
+                <div className="h-3 w-3/5 animate-pulse rounded-full bg-[var(--color-line)]" />
+                <div className="h-5 w-24 animate-pulse rounded-full bg-[var(--color-line)]" />
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
         <>
-          {connections.length > 0 && (
-            <div className="mb-3 flex max-w-3xl flex-wrap items-center justify-between gap-3">
-              <p className="text-[13px] text-[var(--color-muted)]">
-                <span className="font-medium text-[var(--color-ink)]">{connections.length}</span> account{connections.length === 1 ? "" : "s"} connected
-                {needsAttention > 0 && (
-                  <>
-                    {" · "}
-                    <span className="font-medium text-amber-700">{needsAttention} need{needsAttention === 1 ? "s" : ""} attention</span>
-                  </>
-                )}
-              </p>
-              {!adding && (
-                <button type="button" onClick={() => setAdding(true)} className="btn btn-primary btn-sm">
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-                  </svg>
-                  Add account
-                </button>
-              )}
-            </div>
-          )}
-
           {showAddPanel && (
             <div className="mb-6 max-w-3xl">
               <AddConnectionPanel platforms={platforms} atLimit={atLimit} maxConnections={maxConnections} onCancel={connections.length > 0 ? () => setAdding(false) : undefined} />
@@ -330,11 +292,31 @@ export default function ConnectionsPage() {
           )}
 
           {connections.length > 0 && (
-            <ul className="card max-w-3xl divide-y divide-[var(--color-line)] overflow-hidden">
-              {sortedConnections.map((connection) => (
-                <AccountRow key={connection.id} connection={connection} onRemove={() => setPendingDeleteConnectionId(connection.id)} />
-              ))}
-            </ul>
+            <AccountCards
+              connections={connections}
+              actionsFor={(c) => <OwnerActions connection={c} onRemove={() => setPendingDeleteConnectionId(c.id)} />}
+              summary={
+                <>
+                  <span className="font-medium text-[var(--color-ink)]">{connections.length}</span> account{connections.length === 1 ? "" : "s"} connected
+                  {needsAttention > 0 && (
+                    <>
+                      {" · "}
+                      <span className="font-medium text-amber-700">{needsAttention} need{needsAttention === 1 ? "s" : ""} attention</span>
+                    </>
+                  )}
+                </>
+              }
+              toolbarEnd={
+                !adding && (
+                  <button type="button" onClick={() => setAdding(true)} className="btn btn-primary btn-sm">
+                    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                      <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+                    </svg>
+                    Add account
+                  </button>
+                )
+              }
+            />
           )}
         </>
       )}
@@ -349,7 +331,7 @@ export default function ConnectionsPage() {
       />
       <ConfirmDialog
         open={pendingDeleteConnectionId !== null}
-        title={pendingDelete ? `Remove ${pendingDelete.label}?` : "Remove this account?"}
+        title={pendingDelete ? `Remove ${pendingDelete.label}${pendingDelete.marketplace ? ` · ${pendingDelete.marketplace.name}` : ""}?` : "Remove this account?"}
         description="Liston will no longer be able to read orders or draft and publish listings for this account. Your live eBay listings are not affected."
         confirmLabel="Remove"
         danger

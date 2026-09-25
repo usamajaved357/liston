@@ -257,10 +257,11 @@ test('listOrdersDetailed classifies orders by payment/dispatch state and reports
   const awaitingDispatch = makeOrder({ orderId: 'ORD-AD', shippedTime: null });
   const dispatched = makeOrder({ orderId: 'ORD-D' });
   const cancelled = makeOrder({ orderId: 'ORD-C', cancelStatus: 'CancelClosed' });
+  const delivered = makeOrder({ orderId: 'ORD-DL', deliveredAt: '2026-01-08T10:00:00.000Z' });
 
   mock.method(ebayTrading, 'getOrders', async () => ({
-    orders: [awaitingPayment, awaitingDispatch, dispatched, cancelled],
-    totalEntries: 4,
+    orders: [awaitingPayment, awaitingDispatch, dispatched, cancelled, delivered],
+    totalEntries: 5,
     totalPages: 1,
   }));
   mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({
@@ -272,8 +273,9 @@ test('listOrdersDetailed classifies orders by payment/dispatch state and reports
 
   const result = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-1', range: '30d', status: 'all', search: '', page: 1, perPage: 25 });
 
-  assert.deepStrictEqual(result.counts, { all: 4, awaiting_payment: 1, awaiting_dispatch: 1, dispatched: 1, cancelled: 1 });
-  assert.strictEqual(result.totalEntries, 4);
+  // A delivered order leaves Dispatched for its own tab.
+  assert.deepStrictEqual(result.counts, { all: 5, awaiting_payment: 1, awaiting_dispatch: 1, dispatched: 1, delivered: 1, cancelled: 1 });
+  assert.strictEqual(result.totalEntries, 5);
   assert.strictEqual(result.orders[0].lineItems[0].imageUrl, 'https://example.com/pic.jpg');
 });
 
@@ -829,4 +831,111 @@ test('variationImageFor picks the photo of the option the buyer chose, loosely m
   // No matching option, or a single-variation listing → the main photo.
   assert.strictEqual(variationImageFor(summary, [{ name: 'Size', value: 'M' }]), 'https://i/main.jpg');
   assert.strictEqual(variationImageFor({ imageUrl: 'https://i/main.jpg', variationPictures: [] }, [{ name: 'Colour', value: 'Red' }]), 'https://i/main.jpg');
+});
+
+// --- publishing right after the items are built ---------------------------
+
+test('a publish eBay answers with "Product not found" is tried once more, and then goes live', async () => {
+  ebayService.setProductNotFoundDelay(0);
+  let calls = 0;
+  mock.method(ebayClient, 'publishOfferByInventoryItemGroup', async () => {
+    calls += 1;
+    if (calls === 1) throw new ebayClient.EbayApiError('Input error. Seller Inventory Service can not publish the data. Product not found. Please try again or contact customer support..', 502, []);
+    return { listingId: '800700000001' };
+  });
+
+  const result = await ebayService.publishGroup(freshCredentials(), 'Liston-group', 'EBAY_GB');
+  assert.strictEqual(calls, 2);
+  assert.strictEqual(result.externalProductId, '800700000001');
+});
+
+test('any other publish refusal is not retried', async () => {
+  ebayService.setProductNotFoundDelay(0);
+  const publish = mock.method(ebayClient, 'publishOffer', async () => {
+    throw new ebayClient.EbayApiError('A mixture of Self Hosted and EPS pictures are not allowed.', 502, []);
+  });
+  await assert.rejects(ebayService.publishDraft(freshCredentials(), 'offer-1', 'EBAY_GB'), /mixture/);
+  assert.strictEqual(publish.mock.calls.length, 1);
+});
+
+test('the supplier filter keeps one supplier state and counts every state within the tab, while the tab counts stay whole', async () => {
+  mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [
+      makeOrder({ orderId: 'ORD-NEW', shippedTime: null }),
+      makeOrder({ orderId: 'ORD-PLACED', shippedTime: null }),
+      makeOrder({ orderId: 'ORD-OLD', shippedTime: null }),
+      makeOrder({ orderId: 'ORD-SENT' }),
+    ],
+    totalEntries: 4,
+    totalPages: 1,
+  }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const states = { 'ORD-PLACED': 'ordered', 'ORD-SENT': 'delivered' };
+  const supplierStateOf = (order) => states[order.orderId] || 'pending';
+  const opts = { connectionId: 'test-conn-supplier', range: '30d', status: 'awaiting_dispatch', search: '', page: 1, perPage: 25, supplierStateOf };
+
+  const pending = await ebayService.listOrdersDetailed(freshCredentials(), { ...opts, supplier: 'pending' });
+  assert.deepStrictEqual(pending.orders.map((o) => o.orderId).sort(), ['ORD-NEW', 'ORD-OLD']);
+  assert.deepStrictEqual(pending.supplierCounts, { any: 3, pending: 2, ordered: 1 });
+  assert.strictEqual(pending.counts.awaiting_dispatch, 3);
+  assert.strictEqual(pending.supplier, 'pending');
+
+  const any = await ebayService.listOrdersDetailed(freshCredentials(), { ...opts, supplier: 'any' });
+  assert.strictEqual(any.orders.length, 3);
+});
+
+test('dispatched orders not yet delivered are re-read by number every few hours, so a delivery scan moves them to Delivered', async () => {
+  const shipped = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  const calls = [];
+  mock.method(ebayTrading, 'getOrders', async (token, opts) => {
+    calls.push(opts);
+    if (opts.orderIds) return { orders: [makeOrder({ orderId: 'ORD-OUT', shippedTime: shipped, deliveredAt: new Date().toISOString() })], totalPages: 1 };
+    if (opts.modTimeFrom) return { orders: [], totalPages: 1 };
+    return { orders: [makeOrder({ orderId: 'ORD-OUT', shippedTime: shipped }), makeOrder({ orderId: 'ORD-WAIT', shippedTime: null })], totalPages: 1 };
+  });
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const opts = { connectionId: 'test-conn-delivery', range: '30d', status: 'all', search: '', page: 1, perPage: 25 };
+
+  mock.method(ebayTrading, 'getActiveListings', async () => ({ items: [], totalEntries: 0, totalPages: 1 }));
+  mock.method(ebayTrading, 'getUnsoldListings', async () => ({ items: [], totalEntries: 0, totalPages: 1 }));
+
+  const first = await ebayService.listOrdersDetailed(freshCredentials(), opts);
+  assert.strictEqual(first.counts.dispatched, 1);
+  // The full read counts as a delivery check, so none is due straight after.
+  assert.strictEqual(calls.filter((c) => c.orderIds).length, 0);
+
+  // Hours later (here: at once), the next sync reads the one order out for
+  // delivery by its number, and it moves to Delivered.
+  ebayService.setDeliveryCheckInterval(0);
+  try {
+    await ebayService.refreshAccount(freshCredentials(), 'test-conn-delivery');
+  } finally {
+    ebayService.setDeliveryCheckInterval(6 * 60 * 60 * 1000);
+  }
+  assert.deepStrictEqual(calls.filter((c) => c.orderIds).map((c) => c.orderIds), [['ORD-OUT']]);
+  const after = await ebayService.listOrdersDetailed(freshCredentials(), opts);
+  assert.deepStrictEqual([after.counts.dispatched, after.counts.delivered], [0, 1]);
+
+  const later = ebayService.awaitingDelivery([makeOrder({ orderId: 'X', shippedTime: shipped }), makeOrder({ orderId: 'Y', shippedTime: shipped, deliveredAt: shipped }), makeOrder({ orderId: 'Z', shippedTime: null })]);
+  assert.deepStrictEqual(later.map((o) => o.orderId), ['X']);
+  const tooOld = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+  assert.strictEqual(ebayService.awaitingDelivery([makeOrder({ orderId: 'OLD', shippedTime: tooOld })]).length, 0);
+});
+
+test('listOrdersDetailed says what needs doing: paid orders past dispatch-by, and not yet ordered from the supplier', async () => {
+  const hour = 60 * 60 * 1000;
+  const late = makeOrder({ orderId: 'LATE', shippedTime: null, dispatchByTime: new Date(Date.now() - hour).toISOString() });
+  const onTime = makeOrder({ orderId: 'ONTIME', shippedTime: null, dispatchByTime: new Date(Date.now() + hour).toISOString() });
+  const shipped = makeOrder({ orderId: 'SHIPPED', dispatchByTime: new Date(Date.now() - 48 * hour).toISOString() });
+  mock.method(ebayTrading, 'getOrders', async () => ({ orders: [late, onTime, shipped], totalEntries: 3, totalPages: 1 }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const result = await ebayService.listOrdersDetailed(freshCredentials(), {
+    connectionId: 'test-conn-attention',
+    range: '30d',
+    status: 'all',
+    page: 1,
+    perPage: 25,
+    supplierStateOf: (o) => (o.orderId === 'ONTIME' ? 'ordered' : 'pending'),
+  });
+  assert.deepStrictEqual(result.attention, { overdue: 1, notOrdered: 1 });
 });

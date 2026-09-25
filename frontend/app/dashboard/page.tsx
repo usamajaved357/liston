@@ -7,12 +7,16 @@ import { api, ApiError, Overview, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { formatPrice } from "@/lib/format";
+import { ListingCards, MetricCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
 import { cacheUser, useCachedUser } from "@/lib/session";
+import { currencySymbol } from "@/lib/format";
+import { ebayConnectError } from "@/lib/connect-errors";
 
-// The overview: what's happening across every connected account, summed.
-// Plan/usage rings are gone until billing exists — the numbers that matter
-// day to day are listings live, money in, and what's waiting in drafts.
+// The business Overview: the money across every connected account for a
+// range, one eBay market at a time (each has its own currency). A tab per
+// figure — sales, fees, earnings, source cost, profit — and four cards
+// breaking the chosen one down. Per-account figures live on each account's
+// own Overview; here an account only appears when it needs attention.
 
 const RANGES: { key: string; label: string; phrase: string }[] = [
   { key: "today", label: "Today", phrase: "today" },
@@ -21,41 +25,6 @@ const RANGES: { key: string; label: string; phrase: string }[] = [
   { key: "this_month", label: "This month", phrase: "this month" },
   { key: "90d", label: "90 days", phrase: "in the last 90 days" },
 ];
-
-function Stat({
-  label,
-  value,
-  hint,
-  icon,
-  tone = "default",
-  href,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  icon: React.ReactNode;
-  tone?: "default" | "primary" | "accent";
-  href?: string;
-}) {
-  const iconBg = { default: "bg-[var(--color-paper)] text-[var(--color-muted)]", primary: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]", accent: "bg-[var(--color-accent-soft)] text-[var(--color-accent)]" }[tone];
-  const body = (
-    <>
-      <div className="flex items-center justify-between">
-        <span className="text-[13px] font-medium text-[var(--color-muted)]">{label}</span>
-        <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${iconBg}`}>{icon}</span>
-      </div>
-      <p className="mt-3 text-[28px] font-semibold leading-none tracking-tight text-[var(--color-ink)]">{value}</p>
-      {hint && <p className="mt-2 text-[12px] text-[var(--color-muted)]">{hint}</p>}
-    </>
-  );
-  return href ? (
-    <Link href={href} className="card block p-5 transition-colors hover:border-[var(--color-line-strong)]">
-      {body}
-    </Link>
-  ) : (
-    <div className="card p-5">{body}</div>
-  );
-}
 
 function ConnectionBanner() {
   const searchParams = useSearchParams();
@@ -72,7 +41,7 @@ function ConnectionBanner() {
   if (ebayError) {
     return (
       <div className="notice notice-danger mb-4">
-        <span className="flex-1">Couldn&apos;t connect your eBay account ({ebayError}). Try again from Connections.</span>
+        <span className="flex-1">{ebayConnectError(ebayError, "Try again from Connections.")}</span>
       </div>
     );
   }
@@ -88,6 +57,9 @@ export default function DashboardPage() {
   const user = liveUser ?? cachedUser;
   const [overview, setOverview] = useState<Overview | null>(null);
   const [range, setRange] = useState("today");
+  // "all", or one eBay site (EBAY_GB…): the busiest one until the viewer picks.
+  const [market, setMarket] = useState<string | null>(null);
+  const [metric, setMetric] = useState<Metric>("sales");
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
@@ -137,6 +109,18 @@ export default function DashboardPage() {
       });
   }, [router, loadOverview]);
 
+  // Fees and earnings are read from eBay in the background; while some are
+  // still coming, ask again a few times.
+  const [polls, setPolls] = useState(0);
+  useEffect(() => {
+    if (!overview?.financesPending || polls >= 6) return;
+    const timer = setTimeout(() => {
+      setPolls((n) => n + 1);
+      api.overview(range).then(setOverview).catch(() => {});
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [overview, polls, range]);
+
   function changeRange(r: string) {
     setRange(r);
     loadOverview(r);
@@ -176,10 +160,46 @@ export default function DashboardPage() {
 
   const planName = user.plan_name ?? "Unassigned";
   const o = overview;
-  const money = (n: number) => formatPrice(n, o?.earnings.currency || "GBP");
   const rangeLabel = RANGES.find((r) => r.key === range)?.label.toLowerCase() || range;
   const rangePhrase = RANGES.find((r) => r.key === range)?.phrase || `in the last ${rangeLabel}`;
-  const failed = o?.perAccount.filter((a) => !a.ok) || [];
+
+  // The market in view: the one picked, else the busiest (markets come busiest first).
+  const markets = o?.markets ?? [];
+  const current = market ?? (markets.length > 1 ? markets[0].id : "all");
+  const inView = current === "all" ? markets : markets.filter((m) => m.id === current);
+  const accounts = (o?.perAccount ?? []).filter((a) => current === "all" || (a.marketplace?.id ?? "EBAY_GB") === current);
+  // Only the money tabs lean on eBay's finances.
+  const needReconnect = metric === "listings" ? [] : accounts.filter((a) => a.ok && !a.financesAccess);
+  const failedHere = accounts.filter((a) => !a.ok);
+  // Money in view: one market's own figures, or every market as one figure
+  // converted into the main currency (each currency apart if no rate).
+  const combined = current === "all" && markets.length > 1 ? o?.combined ?? null : null;
+  const moneyInView = combined ? [combined.money] : inView.map((m) => m.money);
+  const others = markets.filter((m) => combined && m.currency !== combined.money.currency).map((m) => m.label);
+  const listed = others.length > 1 ? `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}` : others[0];
+  const converted = combined
+    ? `${listed} figures converted to ${currencySymbol(combined.money.currency)} at the European Central Bank rate${
+        combined.ratesDate ? ` of ${new Date(combined.ratesDate).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""
+      }: ${Object.entries(combined.rates)
+        .map(([code, rate]) => `${formatAmount(1, combined.money.currency).replace(/\.00$/, "")} = ${formatAmount(rate, code)}`)
+        .join(" · ")}. Pick a market for its exact figures.`
+    : null;
+
+  // The markets in view's listing work, added up (counts, not money).
+  const listingWork = inView.length
+    ? inView.reduce(
+        (sum, m) => ({ live: sum.live + m.listings.live, waiting: sum.waiting + m.listings.waiting, drafted: sum.drafted + m.listings.drafted, published: sum.published + m.listings.published }),
+        { live: 0, waiting: 0, drafted: 0, published: 0 }
+      )
+    : null;
+  // One name per account, its markets after it ("Minsu LTD (UK, AU)") when
+  // every market is in view: one reconnect covers all of them.
+  const names = (list: typeof accounts) => {
+    const byLabel = new Map<string, string[]>();
+    for (const a of list) byLabel.set(a.label, [...(byLabel.get(a.label) ?? []), a.marketplace?.label ?? ""]);
+    return [...byLabel].map(([label, sites]) => (current === "all" ? `${label} (${sites.filter(Boolean).join(", ")})` : label)).join(", ");
+  };
+  const accountCount = (list: typeof accounts) => new Set(list.map((a) => a.label)).size;
 
   return (
     <AppShell
@@ -227,171 +247,111 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {failed.map((a) => (
-        <div key={a.id} className="notice notice-warning mb-4">
-          <span className="flex-1">
-            <strong>{a.label}</strong> couldn&apos;t be read, so its numbers are left out of the totals. {a.error}
-          </span>
-          <Link href="/connections" className="btn btn-secondary btn-sm">
-            Connections
-          </Link>
-        </div>
-      ))}
 
       {!o ? (
         <>
-          <div className="mb-3 flex items-center justify-between">
-            <div className="h-4 w-56 animate-pulse rounded-full bg-[var(--color-line)]" />
-            <div className="h-7 w-72 animate-pulse rounded-full bg-[var(--color-line)]" />
+          <div className="mb-4 flex items-center justify-between">
+            <div className="h-8 w-72 animate-pulse rounded-full bg-[var(--color-line)]" />
+            <div className="h-8 w-80 animate-pulse rounded-full bg-[var(--color-line)]" />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="card p-5">
-                <div className="flex items-center justify-between">
-                  <div className="h-3.5 w-24 animate-pulse rounded-full bg-[var(--color-line)]" />
-                  <div className="h-8 w-8 animate-pulse rounded-lg bg-[var(--color-paper)]" />
-                </div>
-                <div className="mt-4 h-7 w-20 animate-pulse rounded-md bg-[var(--color-line)]" />
-                <div className="mt-2.5 h-3 w-32 animate-pulse rounded-full bg-[var(--color-paper)]" />
-              </div>
-            ))}
+          <MetricTabs metric={metric} onMetric={setMetric} />
+          <div className="mt-5">
+            {metric === "listings" ? <ListingCards work={null} loading /> : <MetricCards metric={metric} summaries={[]} loading />}
           </div>
         </>
       ) : o.accounts.total === 0 ? (
         <div className="card px-6 py-12 text-center">
           <p className="text-sm font-medium text-[var(--color-ink)]">No accounts connected yet</p>
-          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Connect your eBay store to see listings, orders and earnings here.</p>
+          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Connect your eBay store to see sales, fees, earnings and profit here.</p>
           <Link href="/connections" className="btn btn-primary btn-sm mt-4">
             Connect an account
           </Link>
         </div>
       ) : (
         <>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-[13px] text-[var(--color-muted)]">
-              Sales figures for <span className="font-medium text-[var(--color-ink)]">{rangePhrase.replace(/^in /, "")}</span>
-              {refreshing && <span className="ml-2 text-[var(--color-muted)]">· updating…</span>}
-            </p>
-            <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-              {RANGES.map((r) => (
-                <button
-                  key={r.key}
-                  type="button"
-                  onClick={() => changeRange(r.key)}
-                  className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
-                    range === r.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                  }`}
-                >
-                  {r.label}
-                </button>
-              ))}
+          {/* Which market and which dates. */}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            {markets.length > 1 ? (
+              <div role="radiogroup" aria-label="Market" className="inline-flex flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+                {[{ id: "all", flag: "", label: "All markets", accounts: o.perAccount.length }, ...markets].map((m) => {
+                  const on = current === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => setMarket(m.id)}
+                      className={`flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium transition-colors ${
+                        on ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                      }`}
+                    >
+                      {m.flag && <span aria-hidden>{m.flag}</span>}
+                      {m.label}
+                      <span className={on ? "text-white/70" : "opacity-60"}>{m.accounts}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-[13px] text-[var(--color-muted)]">
+                Sales figures for <span className="font-medium text-[var(--color-ink)]">{rangePhrase.replace(/^in /, "")}</span>
+              </p>
+            )}
+            <div className="flex items-center gap-3">
+              {refreshing && <span className="text-[12px] text-[var(--color-muted)]">Updating…</span>}
+              <div role="radiogroup" aria-label="Dates" className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+                {RANGES.map((r) => (
+                  <button
+                    key={r.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={range === r.key}
+                    onClick={() => changeRange(r.key)}
+                    className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
+                      range === r.key ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                    }`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Stat
-              label="Earnings"
-              value={o ? money(o.earnings.amount) : "—"}
-              hint={o ? `${o.orders} order${o.orders === 1 ? "" : "s"} ${rangePhrase}` : undefined}
-              tone="accent"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M4 17l5-5 4 4 7-8M15 8h5v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              }
-            />
-            <Stat
-              label="Active listings"
-              value={o ? String(o.activeListings) : "—"}
-              hint="Live on eBay right now"
-              tone="primary"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <rect x="3.5" y="4" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="3.5" y="10.5" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="3.5" y="17" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.8" />
-                </svg>
-              }
-            />
-            <Stat
-              label="Connected accounts"
-              value={o ? String(o.accounts.total) : "—"}
-              hint={o && o.accounts.needsAttention ? `${o.accounts.needsAttention} need${o.accounts.needsAttention === 1 ? "s" : ""} attention` : "All connections healthy"}
-              href="/connections"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" stroke="currentColor" strokeWidth="1.8" />
-                </svg>
-              }
-            />
-            <Stat
-              label="Drafts waiting"
-              value={o ? String(o.drafts) : "—"}
-              hint="Drafted in Liston, not yet published"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M4 20h4l10-10-4-4L4 16v4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M13 7l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              }
-            />
-            <Stat
-              label="Published with Liston"
-              value={o ? String(o.publishedViaListon) : "—"}
-              hint="Listings that went live from here"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-3z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              }
-            />
-            <Stat
-              label="Orders"
-              value={o ? String(o.orders) : "—"}
-              hint={rangePhrase.charAt(0).toUpperCase() + rangePhrase.slice(1)}
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M6 3h12l1 5H5l1-5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M5 8h14v11a2 2 0 01-2 2H7a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                </svg>
-              }
-            />
+          <MetricTabs metric={metric} onMetric={setMetric} />
+          <div className="mt-5">
+            {metric === "listings" ? <ListingCards work={listingWork} /> : <MetricCards metric={metric} summaries={moneyInView} />}
           </div>
+          {converted && metric !== "listings" && (
+            <p className="mt-3 text-[12px] text-[var(--color-muted)]">{converted}</p>
+          )}
 
-          {o && o.perAccount.length > 1 && (
-            <div className="card mt-6 overflow-hidden">
-              <div className="border-b border-[var(--color-line)] px-5 py-3">
-                <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By account</h2>
-              </div>
-              <table className="w-full text-sm">
-                <thead className="bg-[var(--color-paper)] text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-                  <tr>
-                    <th className="px-5 py-2">Account</th>
-                    <th className="w-40 px-3 py-2 text-center">Active listings</th>
-                    <th className="w-28 px-3 py-2 text-center">Orders</th>
-                    <th className="w-36 px-3 py-2 text-center">Earnings</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {o.perAccount.map((a) => (
-                    <tr key={a.id} className="border-t border-[var(--color-line)]">
-                      <td className="px-5 py-2.5 font-medium text-[var(--color-ink)]">
-                        <Link href={`/accounts/${a.id}`} className="hover:text-[var(--color-primary)] hover:underline">
-                          {a.label}
-                        </Link>
-                        {!a.ok && <span className="ml-2 text-xs text-[var(--color-danger)]">unavailable</span>}
-                      </td>
-                      <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{a.activeListings}</td>
-                      <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{a.orders}</td>
-                      <td className="px-3 py-2.5 text-center font-medium tabular-nums text-[var(--color-ink)]">{a.earnings ? formatPrice(a.earnings.amount, a.earnings.currency) : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {/* The one thing to know about what the figures leave out. */}
+          {(needReconnect.length > 0 || failedHere.length > 0 || (o.financesPending && metric !== "listings")) && (
+            <div className="mt-5 rounded-xl border border-[#fde68a] bg-[var(--color-warning-soft)] px-4 py-3 text-[13px] text-[#92400e]">
+              {o.financesPending && metric !== "listings" && <p>Reading fees and earnings from eBay. The figures update by themselves.</p>}
+              {needReconnect.length > 0 && (
+                <p>
+                  {accountCount(needReconnect) === 1
+                    ? `${names(needReconnect)} needs reconnecting before its fees, earnings and profit count here (its sales already do). `
+                    : `${accountCount(needReconnect)} accounts need reconnecting before their fees, earnings and profit count here (their sales already do): ${names(needReconnect)}. `}
+                  <Link href="/connections" className="font-medium underline">
+                    Reconnect in Connections
+                  </Link>
+                </p>
+              )}
+              {failedHere.length > 0 && (
+                <p>
+                  {`${names(failedHere)} couldn't be read from eBay just now, so ${failedHere.length === 1 ? "it's" : "they're"} left out. `}
+                  <Link href="/connections" className="font-medium underline">
+                    Check in Connections
+                  </Link>
+                </p>
+              )}
             </div>
           )}
+
         </>
       )}
 
