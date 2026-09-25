@@ -312,3 +312,34 @@ test("every link in every layout opens outside eBay's description frame, and the
     }
   }
 });
+
+test('the card layouts show each store listing as a card with its price and a View item button, and the store as one banner link, even with no listings shown', () => {
+  const recommended = [{ url: 'https://www.ebay.co.uk/itm/1', imageUrl: 'https://i.ebayimg.com/1.jpg', name: 'Lamp', price: '£12.99', sold: 40 }];
+  for (const id of ['showcase', 'minimal', 'bold', 'boutique']) {
+    const html = renderDescription({ template: { ...base, layout: id, recommendedCount: 4 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    assert.match(html, /<a class="sx-prod" href="https:\/\/www\.ebay\.co\.uk\/itm\/1"[^>]*><span class="sx-pimg"><img [^>]*\/><span class="sx-sold">40 sold<\/span><\/span><span class="sx-pinfo"><b>Lamp<\/b><em>£12\.99<\/em><span class="sx-view">View item/, id);
+    assert.match(html, /<a class="sx-cta" href="https:\/\/www\.ebay\.co\.uk\/str\/walexo" target="_blank" rel="noopener">.*Visit our eBay store/, id);
+    const none = renderDescription({ template: { ...base, layout: id, recommendedCount: 0 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    assert.match(none, /<a class="sx-cta sx-alone" href="https:\/\/www\.ebay\.co\.uk\/str\/walexo"/, `${id}: the store banner without listings`);
+    assert.doesNotMatch(none, /sx-prod"/, id);
+  }
+});
+
+test('four features sit two to a row in the three-column layouts', () => {
+  const html = renderDescription({ template: { ...base, layout: 'bold' }, marketplaceId: 'EBAY_GB', productName: 'Case', description: '**Case**\n\n**Key Features**\n• A: a\n• B: b\n• C: c\n• D: d' });
+  assert.match(html, /class="sx-grid sx-even"/);
+  const three = renderDescription({ template: { ...base, layout: 'bold' }, marketplaceId: 'EBAY_GB', productName: 'Case', description: '**Case**\n\n**Key Features**\n• A: a\n• B: b\n• C: c' });
+  assert.match(three, /class="sx-grid"/);
+});
+
+test('the card layouts carry no emoji, not even the ones the drafted features lead with', () => {
+  const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2B50}\u{2B06}\u{21A9}]/u;
+  const recommended = [{ url: 'https://www.ebay.co.uk/itm/1', imageUrl: 'https://i.ebayimg.com/1.jpg', name: 'Lamp', price: '£12.99', sold: 40 }];
+  const template = { ...base, feedbackPercent: '99.4', returnsDays: 30, reviews: [{ stars: 5, text: 'Great', buyer: 'j***n' }] };
+  for (const id of ['showcase', 'minimal', 'bold', 'boutique']) {
+    const html = renderDescription({ template: { ...template, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, images: ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'], recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    const found = html.replace(/★/g, '').match(emoji); // ★ is the rating star, a text glyph
+    assert.strictEqual(found, null, `${id}: ${found && html.slice(Math.max(0, found.index - 60), found.index + 20)}`);
+    assert.match(html, /Metallic Paint Finish/, `${id}: the feature itself stays`);
+  }
+});
