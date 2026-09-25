@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ResearchBudget, ResearchItem, ResearchResult } from "@/lib/api";
+import { api, ApiError, ResearchBudget, ResearchDeliveryFilter, ResearchItem, ResearchResult } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
@@ -11,6 +11,7 @@ import { currencySymbol } from "@/lib/format";
 import { bigMoney, count, money } from "@/components/research/format";
 import { PriceCard, RiskCard, TitleCard, VerdictCard } from "@/components/research/ResearchPanels";
 import { RESEARCH_SORTS, ResearchListings, ResearchSort, sortResearch } from "@/components/research/ResearchListings";
+import { DeliveryBar } from "@/components/research/DeliveryBar";
 
 // Product research on the account's eBay site: whether to list a product,
 // at what price, under what title, and what could get it taken down — from
@@ -20,7 +21,9 @@ import { RESEARCH_SORTS, ResearchListings, ResearchSort, sortResearch } from "@/
 // one more — within research's share of the app's daily allowance. The AI's
 // reading (title, brand and safety risk) follows the figures.
 
-type Params = { q: string; condition: string; minPrice: string; maxPrice: string };
+// delivery: which listings to compare with (left out: the server's default,
+// those that deliver like this account).
+type Params = { q: string; condition: string; minPrice: string; maxPrice: string; delivery?: ResearchDeliveryFilter };
 const PAGE = 50;
 const EXAMPLES = ["toe corrector bunion", "magsafe phone case", "led solar garden lights", "bike phone holder"];
 
@@ -80,7 +83,19 @@ export default function ResearchPage() {
 
   async function run(query: string) {
     if (!connection || query.trim().length < 2) return;
-    const params: Params = { q: query.trim(), condition, minPrice, maxPrice };
+    return runWith({ q: query.trim(), condition, minPrice, maxPrice });
+  }
+
+  // The same search, compared with listings that deliver faster, slower,
+  // like this account, or all of them. The search and sold counts read are
+  // kept, so this costs few or no eBay reads.
+  function compareWith(filter: ResearchDeliveryFilter) {
+    if (!asked.current) return;
+    runWith({ ...asked.current, delivery: filter }, { keepView: true });
+  }
+
+  async function runWith(params: Params, { keepView = false }: { keepView?: boolean } = {}) {
+    if (!connection) return;
     asked.current = params;
     setSearching(true);
     setChecking(false);
@@ -90,7 +105,7 @@ export default function ResearchPage() {
       if (asked.current !== params) return;
       setResult(data);
       setBudget(data.budget);
-      setSort("best");
+      if (!keepView) setSort("best");
       setShown(PAGE);
       if (!data.advice) readAdvice(params);
     } catch (err) {
@@ -262,9 +277,20 @@ export default function ResearchPage() {
         <div className={`mt-6 space-y-6 ${searching ? "opacity-60" : ""}`}>
           <p className="text-[14px] text-[var(--color-ink)]">
             <span className="font-semibold">{count(result.total)}</span> live listings for “{result.query}” on {result.market.flag} {result.market.name}
-            {s.sampled < result.total && <span className="text-[var(--color-muted)]"> · figures from the top {count(s.sampled)}</span>}
+            {result.delivery?.filter && result.delivery.filter !== "all" ? (
+              <span className="text-[var(--color-muted)]">
+                {" "}
+                · figures from the {count(s.sampled)} of the top {count(result.delivery.counts.all)} that deliver{" "}
+                {result.delivery.filter === "similar" ? "like you" : result.delivery.filter === "faster" ? "faster than you" : "slower than you"}
+              </span>
+            ) : (
+              s.sampled < result.total && <span className="text-[var(--color-muted)]"> · figures from the top {count(s.sampled)}</span>
+            )}
           </p>
 
+          {result.delivery && (
+            <DeliveryBar delivery={result.delivery} accountName={connection.label} busy={searching} onChange={compareWith} />
+          )}
           {a && <VerdictCard verdict={a.verdict} advice={result.advice} checking={checking} />}
           {a && (
             <div className="grid gap-4 lg:grid-cols-3">

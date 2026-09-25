@@ -21,7 +21,7 @@ const REQUEST_TIMEOUT_MS = 20 * 1000;
 // selects which site's catalogue (and currency) we read.
 // `callName` is how the admin's usage page lists it; every call is counted
 // against the app's daily Browse allowance (browse-usage.js).
-async function request(callName, path, params, marketplaceId) {
+async function request(callName, path, params, marketplaceId, extraHeaders = {}) {
   const accessToken = await getApplicationToken();
   const query = new URLSearchParams(params).toString();
   const url = `${apiBaseUrl()}${path}${query ? `?${query}` : ''}`;
@@ -33,6 +33,7 @@ async function request(callName, path, params, marketplaceId) {
         Authorization: `Bearer ${accessToken}`,
         'X-EBAY-C-MARKETPLACE-ID': marketplaceId,
         Accept: 'application/json',
+        ...extraHeaders,
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
@@ -72,7 +73,9 @@ function getItemsByItemGroup(itemGroupId, marketplaceId) {
 
 // fieldgroups "MATCHING_ITEMS,ASPECT_REFINEMENTS" adds, in the same call,
 // how the results split by category and by item specific (Brand included).
-function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort, fieldgroups }, marketplaceId) {
+// deliveryCountry: where the buyer is, so eBay can estimate each
+// listing's delivery dates (X-EBAY-C-ENDUSERCTX contextualLocation).
+function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort, fieldgroups, deliveryCountry }, marketplaceId) {
   return request(
     'search',
     '/buy/browse/v1/item_summary/search',
@@ -85,7 +88,8 @@ function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort,
       ...(sort ? { sort } : {}),
       ...(fieldgroups ? { fieldgroups } : {}),
     },
-    marketplaceId
+    marketplaceId,
+    deliveryCountry ? { 'X-EBAY-C-ENDUSERCTX': `contextualLocation=${encodeURIComponent(`country=${deliveryCountry}`)}` } : {}
   );
 }
 

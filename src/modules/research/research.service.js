@@ -6,6 +6,8 @@ const researchStats = require('./research-stats');
 const analysis = require('./research-analysis');
 const advisor = require('../ai-generation/research-advisor.service');
 const listingRepository = require('../listings/listing.repository');
+const ebayService = require('../ebay/ebay.service');
+const delivery = require('./delivery');
 const appState = require('../../db/app-state.repository');
 const config = require('../../config');
 const logger = require('../../utils/logger');
@@ -65,8 +67,25 @@ async function accountOf(ownerId, connectionId) {
   const connection = await connectionService.getConnectionSummary(connectionId, ownerId);
   if (connection.platform_key !== 'ebay') throw new ResearchError('Research needs an eBay account.', 400);
   const site = marketplaces.byId(connection.marketplace?.id) || marketplaces.byId(marketplaces.DEFAULT_ID);
-  return { site, pricing: connection.settings?.pricing || {} };
+  return { site, pricing: connection.settings?.pricing || {}, fulfillmentPolicyId: connection.settings?.ebay?.fulfillmentPolicyId || null };
 }
+
+// How fast this account delivers, from its postage policy: { min, max } in
+// working days with the policy and service behind it, or null when the
+// policy can't be read (research then compares with every listing).
+async function accountDelivery(ownerId, connectionId, site, fulfillmentPolicyId) {
+  try {
+    const details = await connectionService.withDecryptedCredentials(connectionId, ownerId, (credentials) =>
+      ebayService.postagePolicyDetails(credentials, { connectionId, marketplaceId: site.id, fulfillmentPolicyId })
+    );
+    return delivery.accountWindow(details.policy, details.services);
+  } catch (err) {
+    logger.warn('Research: postage policy not read', { connectionId, error: err.message });
+    return null;
+  }
+}
+
+const DELIVERY_FILTERS = ['similar', 'faster', 'slower', 'all'];
 const siteOf = async (ownerId, connectionId) => (await accountOf(ownerId, connectionId)).site;
 
 // Sold counts for these listings, as many as the allowance lets; the rest
@@ -101,19 +120,37 @@ async function withSoldCounts(items, marketplaceId) {
 const clean = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
 
 // A search, its top sold counts read (and any others read earlier the same
-// day, free), each listing with what its sales came to and its age.
-async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, maxPrice }) {
+// day, free), each listing with what its sales came to, its age, and how
+// its delivery compares with the account's. `delivery` keeps only the
+// listings that deliver like the account ('similar', the default when the
+// account's postage policy is known), faster, slower, or 'all'; the
+// figures, price and verdict are worked out from what's kept.
+async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, maxPrice, delivery: wanted }) {
   const query = String(q || '').trim();
   if (query.length < 2) throw new ResearchError('Type what you want to research.', 400);
-  const { site, pricing } = await accountOf(ownerId, connectionId);
+  const { site, pricing, fulfillmentPolicyId } = await accountOf(ownerId, connectionId);
   const left = await budget();
   if (left.remaining <= 0) {
     throw new ResearchError(`Research has used today's ${left.limit} eBay reads. It resets at ${resetText()}.`, 429);
   }
-  const found = await browseUsage.as('research', () => browseResearch.search({ q: query, marketplaceId: site.id, condition, minPrice: clean(minPrice), maxPrice: clean(maxPrice) }));
+  const [found, account] = await Promise.all([
+    browseUsage.as('research', () => browseResearch.search({ q: query, marketplaceId: site.id, condition, minPrice: clean(minPrice), maxPrice: clean(maxPrice), country: site.country })),
+    accountDelivery(ownerId, connectionId, site, fulfillmentPolicyId),
+  ]);
   await spend(found.calls);
-  const top = await withSoldCounts(found.items.slice(0, SOLD_READS), site.id);
-  const rest = found.items.slice(SOLD_READS).map((item) => ({ ...item, sold: browseResearch.keptSold(item.itemId, site.id) }));
+
+  const now = Date.now();
+  const placed = found.items.map((item) => {
+    const window = delivery.listingWindow(item, now);
+    return { ...item, delivery: window ? { ...window, compared: delivery.compare(window, account) } : { min: null, max: null, compared: 'unknown' } };
+  });
+  const counts = { similar: 0, faster: 0, slower: 0, unknown: 0, all: placed.length };
+  for (const item of placed) counts[item.delivery.compared] += 1;
+  const filter = DELIVERY_FILTERS.includes(wanted) ? wanted : account ? 'similar' : 'all';
+  const chosen = filter === 'all' || !account ? placed : placed.filter((item) => item.delivery.compared === filter);
+
+  const top = await withSoldCounts(chosen.slice(0, SOLD_READS), site.id);
+  const rest = chosen.slice(SOLD_READS).map((item) => ({ ...item, sold: browseResearch.keptSold(item.itemId, site.id) }));
   const items = [...top.items, ...rest].map((item) => ({
     ...item,
     soldPerMonth: researchStats.soldPerMonth(item),
@@ -121,10 +158,15 @@ async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, m
     daysLive: researchStats.daysLive(item),
   }));
   const summary = researchStats.summarise(items, { country: site.country, total: found.total });
-  return { query, site, pricing, found, items, summary, soldLimited: top.stopped };
+  const deliveryInfo = {
+    filter: account ? filter : 'all',
+    counts,
+    account: account ? { min: account.min, max: account.max, handling: account.handling, service: account.service, serviceName: account.serviceName, policyName: account.policyName } : null,
+  };
+  return { query, site, pricing, found, items, summary, soldLimited: top.stopped, delivery: deliveryInfo };
 }
 
-const adviceKey = (site, query, condition, minPrice, maxPrice) => JSON.stringify([site.id, query.toLowerCase(), condition, clean(minPrice), clean(maxPrice)]);
+const adviceKey = (site, query, condition, minPrice, maxPrice, filter = 'all') => JSON.stringify([site.id, query.toLowerCase(), condition, clean(minPrice), clean(maxPrice), filter]);
 
 // Everything the page shows beyond the raw figures; `advice` is the AI's
 // reading when there is one.
@@ -150,7 +192,7 @@ async function analyse(ownerId, { query, site, pricing, found, items, summary },
  */
 async function search(ownerId, connectionId, input) {
   const found = await gather(ownerId, connectionId, input);
-  const kept = advisor.keptAdvice(adviceKey(found.site, found.query, input.condition || 'any', input.minPrice, input.maxPrice));
+  const kept = advisor.keptAdvice(adviceKey(found.site, found.query, input.condition || 'any', input.minPrice, input.maxPrice, found.delivery.filter));
   return {
     query: found.query,
     market: marketplaces.summary(found.site.id),
@@ -159,6 +201,7 @@ async function search(ownerId, connectionId, input) {
     analysis: await analyse(ownerId, found, kept),
     advice: kept,
     items: found.items,
+    delivery: found.delivery,
     soldLimited: found.soldLimited,
     budget: await budget(),
   };
@@ -172,7 +215,7 @@ async function search(ownerId, connectionId, input) {
 async function advice(ownerId, connectionId, input) {
   const found = await gather(ownerId, connectionId, input);
   const base = await analyse(ownerId, found);
-  const ai = await advisor.advise(adviceKey(found.site, found.query, input.condition || 'any', input.minPrice, input.maxPrice), {
+  const ai = await advisor.advise(adviceKey(found.site, found.query, input.condition || 'any', input.minPrice, input.maxPrice, found.delivery.filter), {
     query: found.query,
     market: found.site.name,
     currency: found.site.currency,

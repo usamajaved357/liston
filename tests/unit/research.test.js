@@ -357,3 +357,74 @@ test("research's eBay calls show under research in the Browse usage the admin se
   assert.deepStrictEqual(snap.byCall, { search: 1, getItem: 1 });
   browseUsage._reset();
 });
+
+// ---- delivery next to the account's ------------------------------------------
+
+const delivery = require('../../src/modules/research/delivery');
+const ebayService = require('../../src/modules/ebay/ebay.service');
+
+test('working days skip weekends; a listing window comes from eBay\'s delivery dates', () => {
+  // Fri 25 Sep 2026 → Wed 30 Sep: Mon, Tue, Wed = 3 working days.
+  assert.strictEqual(delivery.workingDaysBetween('2026-09-25T12:00:00Z', '2026-09-30T12:00:00Z'), 3);
+  assert.strictEqual(delivery.workingDaysBetween('2026-09-25T12:00:00Z', '2026-09-24T12:00:00Z'), 0);
+  assert.deepStrictEqual(delivery.listingWindow({ deliveryDates: { min: '2026-09-29T00:00:00Z', max: '2026-10-02T00:00:00Z' } }, NOW), { min: 2, max: 5 });
+  assert.strictEqual(delivery.listingWindow({ deliveryDates: null }, NOW), null);
+});
+
+test("the account's window is its handling time plus its postage service's working days", () => {
+  const policy = {
+    name: 'Standard 5-7',
+    handlingTime: { value: 1, unit: 'DAY' },
+    shippingOptions: [{ optionType: 'DOMESTIC', shippingServices: [{ sortOrder: 2, shippingServiceCode: 'UK_RoyalMailFirstClassStandard' }, { sortOrder: 1, shippingServiceCode: 'UK_OtherCourier5To7Days' }] }],
+  };
+  const fromList = delivery.accountWindow(policy, [{ service: 'UK_OtherCourier5To7Days', description: 'Other courier (5 to 7 days)', min: 5, max: 7 }]);
+  assert.deepStrictEqual([fromList.min, fromList.max, fromList.service, fromList.serviceName], [6, 8, 'UK_OtherCourier5To7Days', 'Other courier (5 to 7 days)']);
+  const fromCode = delivery.accountWindow(policy, []);
+  assert.deepStrictEqual([fromCode.min, fromCode.max], [6, 8], 'read from the service code when eBay\'s list lacks it');
+  assert.deepStrictEqual(delivery.transitFromCode('UK_Parcelforce48'), { min: 2, max: 2 });
+  assert.strictEqual(delivery.accountWindow(null), null);
+
+  const account = { min: 6, max: 8 };
+  assert.strictEqual(delivery.compare({ min: 2, max: 3 }, account), 'faster');
+  assert.strictEqual(delivery.compare({ min: 5, max: 7 }, account), 'similar');
+  assert.strictEqual(delivery.compare({ min: 10, max: 15 }, account), 'slower');
+  assert.strictEqual(delivery.compare(null, account), 'unknown');
+});
+
+test("research compares with listings that deliver like the account by default, and says how many deliver faster or slower", async () => {
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' }, settings: { ebay: { fulfillmentPolicyId: 'p1' } } }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => []);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, owner, action) => action({ accessToken: 't' }));
+  mock.method(ebayService, 'postagePolicyDetails', async (credentials, { fulfillmentPolicyId }) => {
+    assert.strictEqual(fulfillmentPolicyId, 'p1');
+    return { policy: { handlingTime: { value: 1 }, shippingOptions: [{ optionType: 'DOMESTIC', shippingServices: [{ shippingServiceCode: 'UK_OtherCourier5To7Days' }] }] }, services: [] };
+  });
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString();
+  const searchCall = mock.method(ebayBrowse, 'searchItemSummaries', async (params) => {
+    assert.strictEqual(params.deliveryCountry, 'GB', 'eBay estimates delivery for a UK buyer');
+    return {
+      total: 3,
+      itemSummaries: [
+        { itemId: 'v1|1|0', title: 'Fast', price: { value: '9.99', currency: 'GBP' }, shippingOptions: [{ shippingCost: { value: '0' }, minEstimatedDeliveryDate: day(1), maxEstimatedDeliveryDate: day(3) }] },
+        { itemId: 'v1|2|0', title: 'Like us', price: { value: '6.99', currency: 'GBP' }, shippingOptions: [{ shippingCost: { value: '0' }, minEstimatedDeliveryDate: day(8), maxEstimatedDeliveryDate: day(11) }] },
+        { itemId: 'v1|3|0', title: 'No dates', price: { value: '5.99', currency: 'GBP' } },
+      ],
+    };
+  });
+  mock.method(ebayBrowse, 'getItem', async () => ({ estimatedAvailabilities: [{ estimatedSoldQuantity: 1 }] }));
+
+  const like = await researchService.search('owner', 'conn', { q: 'lamp' });
+  assert.deepStrictEqual(like.items.map((i) => i.title), ['Like us']);
+  assert.strictEqual(like.delivery.filter, 'similar');
+  assert.deepStrictEqual(like.delivery.counts, { similar: 1, faster: 1, slower: 0, unknown: 1, all: 3 });
+  assert.deepStrictEqual([like.delivery.account.min, like.delivery.account.max], [6, 8]);
+  assert.strictEqual(like.summary.price.median, 6.99, 'the figures are worked out from those listings only');
+
+  const all = await researchService.search('owner', 'conn', { q: 'lamp', delivery: 'all' });
+  assert.strictEqual(all.items.length, 3);
+  const faster = await researchService.search('owner', 'conn', { q: 'lamp', delivery: 'faster' });
+  assert.deepStrictEqual(faster.items.map((i) => i.title), ['Fast']);
+  assert.strictEqual(searchCall.mock.calls.length, 1, 'switching group re-reads nothing from eBay');
+});

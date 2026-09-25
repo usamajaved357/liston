@@ -310,6 +310,21 @@ function mapOrder(order) {
   };
 }
 
+// eBay's postage services for a site with how many working days each takes
+// ("UK_OtherCourier5To7Days": 5–7): what turns a postage policy into a
+// delivery time. One call per site; the list rarely changes.
+async function getShippingServiceDetails(accessToken, siteId = 0) {
+  const res = await tradingRequest(accessToken, 'GeteBayDetails', '<DetailName>ShippingServiceDetails</DetailName>', siteId);
+  return toArray(res.ShippingServiceDetails)
+    .map((s) => ({
+      service: String(s.ShippingService || ''),
+      description: s.Description ? String(s.Description) : null,
+      min: s.ShippingTimeMin !== undefined ? Number(s.ShippingTimeMin) : null,
+      max: s.ShippingTimeMax !== undefined ? Number(s.ShippingTimeMax) : null,
+    }))
+    .filter((s) => s.service);
+}
+
 // Used to enrich an order's line items with an image + live quantity —
 // GetOrders itself carries neither. OutputSelector trims the response to
 // just what we need.
@@ -724,6 +739,7 @@ module.exports = {
   getActiveListings,
   getUnsoldListings,
   getOrders,
+  getShippingServiceDetails,
   getListingItem,
   getItemSummary,
   getItem,

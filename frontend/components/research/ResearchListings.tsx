@@ -99,6 +99,14 @@ export function ResearchListings({ items, currency, connectionId, maxSold }: { i
               <td className="px-3 py-2.5 text-right tabular-nums">
                 <span className="font-semibold text-[var(--color-ink)]">{money(item.price?.value, item.price?.currency ?? currency)}</span>
                 <span className="block text-[11.5px] text-[var(--color-muted)]">{item.shipping?.free ? "Free postage" : item.shipping ? `+ ${money(item.shipping.cost, currency)}` : ""}</span>
+                {item.delivery?.max !== null && item.delivery?.max !== undefined && (
+                  <span
+                    className={`block text-[11.5px] ${item.delivery.compared === "faster" ? "text-amber-700" : item.delivery.compared === "similar" ? "text-emerald-700" : "text-[var(--color-muted)]"}`}
+                    title="Working days until it arrives, per eBay"
+                  >
+                    {item.delivery.min === item.delivery.max ? `${item.delivery.max}` : `${item.delivery.min}–${item.delivery.max}`} days
+                  </span>
+                )}
               </td>
               <td className="px-3 py-2.5 text-right tabular-nums">
                 {item.sold === null ? (

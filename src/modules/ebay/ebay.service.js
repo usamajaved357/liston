@@ -259,6 +259,48 @@ async function getBusinessPolicies(credentials, marketplaceId = 'EBAY_GB') {
   };
 }
 
+// The account's postage policy (the one its drafts use, else its first) and
+// eBay's postage services for the site with their working days — what
+// product research needs to compare delivery times. Kept 6 hours per
+// account; the service list a week per site (one Trading call).
+const postageCache = new Map(); // `${connectionId}:${policyId}` -> { at, value }
+const serviceListCache = new Map(); // siteId -> { at, value }
+const POSTAGE_TTL_MS = 6 * 60 * 60 * 1000;
+const SERVICE_LIST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function shippingServicesFor(accessToken, siteId) {
+  const hit = serviceListCache.get(siteId);
+  if (hit && Date.now() - hit.at < SERVICE_LIST_TTL_MS) return hit.value;
+  const appState = require('../../db/app-state.repository');
+  const key = `ebay-shipping-services:${siteId}`;
+  const kept = await appState.get(key).catch(() => null);
+  if (kept?.at && Date.now() - kept.at < SERVICE_LIST_TTL_MS) {
+    serviceListCache.set(siteId, { at: kept.at, value: kept.services });
+    return kept.services;
+  }
+  const services = await ebayTrading.getShippingServiceDetails(accessToken, siteId);
+  const at = Date.now();
+  serviceListCache.set(siteId, { at, value: services });
+  await appState.set(key, { at, services }).catch(() => {});
+  return services;
+}
+
+async function postagePolicyDetails(credentials, { connectionId, marketplaceId, fulfillmentPolicyId }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const key = `${connectionId}:${fulfillmentPolicyId || ''}`;
+  const hit = postageCache.get(key);
+  if (hit && Date.now() - hit.at < POSTAGE_TTL_MS) return { ...hit.value, credentialsChanged, credentials: refreshedCredentials };
+  const [policies, services] = await Promise.all([
+    ebayClient.getFulfillmentPolicies(accessToken, marketplaceId),
+    shippingServicesFor(accessToken, marketplaces.siteIdFor(marketplaceId)).catch(() => []),
+  ]);
+  const list = policies?.fulfillmentPolicies || [];
+  const policy = list.find((p) => String(p.fulfillmentPolicyId) === String(fulfillmentPolicyId)) || list[0] || null;
+  const value = { policy, services };
+  postageCache.set(key, { at: Date.now(), value });
+  return { ...value, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function getMerchantLocations(credentials) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
   const result = await ebayClient.getInventoryLocations(accessToken);
@@ -2441,6 +2483,7 @@ function categoryAspectSchema(marketplaceId, categoryId) {
 }
 
 module.exports = {
+  postagePolicyDetails,
   searchSimilarListings,
   categoryAspectSchema,
   pushEnabled,

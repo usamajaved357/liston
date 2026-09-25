@@ -138,6 +138,21 @@ export interface ResearchItem {
   // Sold × today's price with postage (eBay gives no sale prices), or null.
   revenue: number | null;
   daysLive: number | null;
+  // eBay's delivery window for a buyer on the site, in working days from
+  // now, next to the account's own delivery ('unknown': eBay gave no dates).
+  delivery: { min: number | null; max: number | null; compared: ResearchDeliveryGroup };
+}
+
+export type ResearchDeliveryGroup = "similar" | "faster" | "slower" | "unknown";
+export type ResearchDeliveryFilter = "similar" | "faster" | "slower" | "all";
+
+export interface ResearchDelivery {
+  // Which listings the figures are worked out from.
+  filter: ResearchDeliveryFilter;
+  counts: Record<ResearchDeliveryGroup | "all", number>;
+  // The account's delivery from its postage policy, in working days; null
+  // when the policy couldn't be read (then every listing is compared).
+  account: { min: number; max: number; handling: number | null; service: string | null; serviceName: string | null; policyName: string | null } | null;
 }
 
 export interface ResearchSummary {
@@ -230,6 +245,7 @@ export interface ResearchResult {
   // The AI's reading, when one was written for this search today.
   advice: ResearchAdvice | null;
   items: ResearchItem[];
+  delivery: ResearchDelivery;
   soldLimited: boolean;
   budget: ResearchBudget;
 }
@@ -1642,18 +1658,20 @@ export const api = {
   checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
     request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
 
-  researchSearch: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+  researchSearch: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string; delivery?: ResearchDeliveryFilter }) => {
     const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
     if (params.minPrice) query.set("minPrice", params.minPrice);
     if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    if (params.delivery) query.set("delivery", params.delivery);
     return request<ResearchResult>(`/api/connections/${id}/research?${query.toString()}`);
   },
   // The AI's reading of a search (title, keywords, brand and safety risk) and
   // the analysis redone with it; reuses the search's kept eBay reads.
-  researchAdvice: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+  researchAdvice: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string; delivery?: ResearchDeliveryFilter }) => {
     const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
     if (params.minPrice) query.set("minPrice", params.minPrice);
     if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    if (params.delivery) query.set("delivery", params.delivery);
     return request<{ advice: ResearchAdvice | null; analysis: ResearchAnalysis; budget: ResearchBudget }>(`/api/connections/${id}/research/advice?${query.toString()}`);
   },
   // Sold counts for more listings of a search (up to 20 at a time).
