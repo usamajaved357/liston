@@ -246,3 +246,50 @@ test("normalizeProduct keeps the supplier's parcel: gross weight in kg and the b
   assert.strictEqual(dsApi.normalizeProduct(raw({ gross_weight: '0' }), '1', 'url').package, null, 'no usable weight, no parcel');
   assert.strictEqual(dsApi.normalizeProduct(raw(null), '1', 'url').package, null);
 });
+
+test('normalizeProduct keeps each SKU id and stock, and the product and store record', () => {
+  const raw = {
+    aliexpress_ds_product_get_response: {
+      rsp_code: 200,
+      result: {
+        ae_item_base_info_dto: { subject: 'Earbuds', sales_count: '1000+', avg_evaluation_rating: '4.9', evaluation_count: '336', product_status_type: 'onSelling' },
+        ae_store_info: { store_name: "Stone's Store", store_country_code: 'CN', item_as_described_rating: '5.0', communication_rating: '4.8', shipping_speed_rating: '4.8' },
+        logistics_info_dto: { delivery_time: 7, ship_to_country: 'GB' },
+        ae_item_sku_info_dtos: {
+          ae_item_sku_info_d_t_o: [
+            { sku_id: '12000040177060882', sku_available_stock: 15, offer_sale_price: '3.36', currency_code: 'GBP', ae_sku_property_dtos: { ae_sku_property_d_t_o: [{ sku_property_name: 'Color', property_value_definition_name: 'Black' }] } },
+            { sku_id: '12000040177060883', sku_available_stock: 0, offer_sale_price: '3.36', currency_code: 'GBP', ae_sku_property_dtos: { ae_sku_property_d_t_o: [{ sku_property_name: 'Color', property_value_definition_name: 'White' }] } },
+          ],
+        },
+      },
+    },
+  };
+  const result = dsApi.normalizeProduct(raw, '1', 'https://aliexpress.com/item/1.html');
+  assert.deepStrictEqual(result.variants.map((v) => [v.skuId, v.stock]), [['12000040177060882', 15], ['12000040177060883', 0]]);
+  assert.deepStrictEqual(result.supplier, {
+    orders: '1000+',
+    rating: 4.9,
+    reviews: 336,
+    onSale: true,
+    store: { name: "Stone's Store", country: 'CN', described: 5, communication: 4.8, shipping: 4.8 },
+    deliveryDays: 7,
+  });
+});
+
+test('deliveryOption reads the fee in whole units, the free-postage threshold and the delivery days (live freight.query shape)', () => {
+  const option = dsApi.deliveryOption({
+    code: 'CAINIAO_FULFILLMENT_PRE',
+    shipping_fee_currency: 'GBP',
+    free_shipping: false,
+    max_delivery_days: 8,
+    min_delivery_days: 5,
+    tracking: true,
+    shipping_fee_format: '￡1.99',
+    free_shipping_threshold: '￡8.00',
+    company: 'AliExpress Selection Premium shipping',
+    ship_from_country: 'CN',
+    shipping_fee_cent: '1.99',
+  });
+  assert.deepStrictEqual(option, { code: 'CAINIAO_FULFILLMENT_PRE', company: 'AliExpress Selection Premium shipping', cost: 1.99, currency: 'GBP', freeOver: 8, minDays: 5, maxDays: 8, tracking: true, shipFrom: 'CN' });
+  assert.strictEqual(dsApi.deliveryOption({ free_shipping: true, shipping_fee_cent: '2.50' }).cost, 0);
+});

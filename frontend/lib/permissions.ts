@@ -11,8 +11,10 @@ const FEATURE_PATHS: Record<string, string> = {
   analytics: "/analytics",
   inbox: "/inbox",
   campaigns: "/campaigns",
+  hunting: "/hunting",
+  hunting_review: "/hunting",
 };
-const FEATURE_PRIORITY = ["orders", "listings", "analytics", "inbox", "campaigns"];
+const FEATURE_PRIORITY = ["orders", "listings", "hunting_review", "hunting", "analytics", "inbox", "campaigns"];
 
 export function landingPathForConnection(connection: Connection): string {
   const base = `/accounts/${connection.id}`;

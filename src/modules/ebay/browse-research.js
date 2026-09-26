@@ -134,4 +134,4 @@ function forget() {
   soldCounts.clear();
 }
 
-module.exports = { search, soldCount, keptSold, mapSummary, breakdownOf, forget, SEARCH_LIMIT };
+module.exports = { search, soldCount, keptSold, mapSummary, breakdownOf, forget, SEARCH_LIMIT, NO_BRAND };

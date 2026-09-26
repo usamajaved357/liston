@@ -59,5 +59,15 @@ router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingControl
 // variations to list, before anything is generated or paid for.
 router.post('/:id/listings/drafts/preview', requireAuth, requireFeature('listings'), listingController.previewDraft);
 router.post('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.generateDraft);
+// Product hunting (modules/hunting): hunters check and add products,
+// reviewers decide, listers draft the approved ones. The service decides
+// what each person may do; the badge answers everyone (zeros without access).
+const huntingController = require('../hunting/hunting.controller');
+const { HUNTING_ACCESS } = require('../hunting/hunting.routes');
+router.get('/:id/hunting', requireAuth, requireAnyFeature(HUNTING_ACCESS), huntingController.list);
+router.get('/:id/hunting/badge', requireAuth, requireAnyFeature(KNOWN_FEATURES), huntingController.badge);
+router.get('/:id/hunting/team', requireAuth, requireAnyFeature(['hunting_review']), huntingController.team);
+router.post('/:id/hunting/check', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.check);
+router.post('/:id/hunting', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.add);
 
 module.exports = router;

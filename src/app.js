@@ -71,6 +71,7 @@ function createApp() {
   app.use('/api/connections', requireAuth, requireAccess, connectionRoutes);
   app.use('/api/ebay', ebayRoutes);
   app.use('/api/listings', requireAuth, requireAccess, listingRoutes);
+  app.use('/api/hunting', requireAuth, requireAccess, require('./modules/hunting/hunting.routes'));
   app.use('/api/team', requireAuth, requireAccess, teamRoutes);
   app.use('/api/source-accounts', requireAuth, requireAccess, require('./modules/orders/source-account.routes'));
   app.use('/api/overview', overviewRoutes);

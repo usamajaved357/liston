@@ -177,7 +177,62 @@ async function saveItemSummary(itemId, summary) {
   );
 }
 
+// ---- product hunting --------------------------------------------------------
+
+/**
+ * What eBay took from an account's orders since a time, for judging a
+ * hunted product at the account's real fee rates: { orders, gross, fees,
+ * adFees } over the orders the Finances API has settled figures for.
+ */
+async function financeTotals(connectionId, since) {
+  const { rows } = await query(
+    `SELECT count(*)::int AS orders, COALESCE(sum(gross), 0) AS gross, COALESCE(sum(fees), 0) AS fees, COALESCE(sum(ad_fees), 0) AS ad_fees
+       FROM ebay_order_finances WHERE connection_id = $1 AND sale_date >= $2 AND gross > 0`,
+    [connectionId, since]
+  );
+  const r = rows[0] || {};
+  return { orders: Number(r.orders) || 0, gross: Number(r.gross) || 0, fees: Number(r.fees) || 0, adFees: Number(r.ad_fees) || 0 };
+}
+
+/** The orders (their data) on these accounts, placed in [start, end), with a line for any of these eBay items. */
+async function ordersForItems(connectionIds, itemIds, start, end) {
+  if (!connectionIds.length || !itemIds.length) return [];
+  const { rows } = await query(
+    `SELECT o.connection_id, o.data FROM ebay_orders o
+      WHERE o.connection_id = ANY($1) AND o.created_at >= $3 AND o.created_at < $4
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(o.data->'lineItems', '[]'::jsonb)) line WHERE line->>'itemId' = ANY($2))`,
+    [connectionIds, itemIds.map(String), start, end]
+  );
+  return rows.map((r) => ({ ...r.data, connectionId: r.connection_id }));
+}
+
+/**
+ * The owner's live listings on every account, from the mirror: [{
+ * connectionId, account, itemId, title, sku, imageUrl }]. `match` narrows
+ * them to a supplier product id in the custom label or one eBay item.
+ */
+async function ownerLiveListings(ownerId, match = null) {
+  const params = [ownerId];
+  let where = '';
+  if (match) {
+    params.push(match.productId || '', match.itemId || '');
+    where = `AND ((length($2) > 5 AND position($2 in COALESCE(item->>'sku', '')) > 0) OR (length($3) > 0 AND item->>'itemId' = $3))`;
+  }
+  const { rows } = await query(
+    `SELECT c.id AS connection_id, c.label AS account, item->>'itemId' AS item_id, item->>'title' AS title, item->>'sku' AS sku, item->>'imageUrl' AS image_url
+       FROM ebay_snapshots s
+       JOIN connections c ON c.id = s.connection_id
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.data->'items', '[]'::jsonb)) item
+      WHERE c.user_id = $1 AND s.kind = 'listings:active' ${where}`,
+    params
+  );
+  return rows.map((r) => ({ connectionId: r.connection_id, account: r.account, itemId: r.item_id, title: r.title, sku: r.sku, imageUrl: r.image_url }));
+}
+
 module.exports = {
+  financeTotals,
+  ordersForItems,
+  ownerLiveListings,
   loadSnapshot,
   saveSnapshot,
   loadOrders,

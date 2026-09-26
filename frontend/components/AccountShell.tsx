@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Marketplace, User } from "@/lib/api";
@@ -48,6 +49,30 @@ interface AccountShellProps {
   user: User;
 }
 
+// How many hunted products wait on this person: to review (reviewers and
+// the owner), sent back to them (hunters), or, for someone who only drafts,
+// approved and ready. Counted again whenever hunting changes on the page.
+function useHuntBadge(connectionId: string, enabled: boolean, permissions?: Record<string, boolean>) {
+  const [badge, setBadge] = useState(0);
+  const listerOnly = Boolean(permissions && !permissions.hunting && !permissions.hunting_review);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const load = () =>
+      api
+        .huntBadge(connectionId)
+        .then((b) => !cancelled && setBadge(listerOnly ? b.approved : b.review + b.sentBack))
+        .catch(() => {});
+    load();
+    window.addEventListener("liston:hunting", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("liston:hunting", load);
+    };
+  }, [connectionId, enabled, listerOnly]);
+  return enabled ? badge : 0;
+}
+
 export function AccountShell({
   children,
   header,
@@ -69,6 +94,8 @@ export function AccountShell({
   const pathname = usePathname();
   const base = `/accounts/${connectionId}`;
   const [confirmLogout, setConfirmLogout] = useState(false);
+  const huntingAccess = canShow("hunting") || canShow("hunting_review") || canShow("listings");
+  const huntBadge = useHuntBadge(connectionId, huntingAccess, permissions);
 
   function handleLogout() {
     localStorage.removeItem("token");
@@ -131,6 +158,21 @@ export function AccountShell({
                   <circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.8" />
                   <path d="M15.5 15.5L20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   <path d="M7.5 12l2-2.5 2 1.5 2-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+          )}
+          {huntingAccess && (
+            <NavItem
+              href={`${base}/hunting`}
+              active={pathname.startsWith(`${base}/hunting`)}
+              label="Hunting"
+              badge={huntBadge}
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                 </svg>
               }
             />

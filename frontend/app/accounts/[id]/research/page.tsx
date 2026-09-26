@@ -311,7 +311,13 @@ export default function ResearchPage() {
             {view === "sold" ? (
               <SoldListings sales={result.sales ?? { available: false }} currency={currency} />
             ) : (
-              <ResearchListings items={ordered.slice(0, shown)} currency={currency} connectionId={connection.id} maxSold={maxSold} />
+              <ResearchListings
+                items={ordered.slice(0, shown)}
+                currency={currency}
+                connectionId={connection.id}
+                maxSold={maxSold}
+                canHunt={!connection.permissions || Boolean(connection.permissions.hunting || connection.permissions.hunting_review)}
+              />
             )}
             {view === "active" && shown < ordered.length && (
               <div className="border-t border-[var(--color-line)] px-4 py-3 text-center">

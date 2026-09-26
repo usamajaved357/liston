@@ -21,6 +21,7 @@ const listingSort = require('./listing-sort');
 const { alignVariantPhotos } = require('./variant-photos');
 const imagePipeline = require('../ai-generation/image-pipeline');
 const aliexpressSource = require('../sourcing/aliexpress');
+const huntingRepository = require('../hunting/hunting.repository');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -189,7 +190,9 @@ function prunePreviews() {
 
 // STEP ONE: read both listings, cost nothing, return what the seller needs to
 // choose from — the supplier's variation axes with their options and photos.
-async function previewDraftSources(connectionId, userId, { competitorUrl, sourceUrl }) {
+// `withSource` (for drafting a hunted product) also hands back the supplier
+// read as `readSource`, so the hunt can say what its prices did since.
+async function previewDraftSources(connectionId, userId, { competitorUrl, sourceUrl }, { withSource = false } = {}) {
   prunePreviews();
   const connection = await connectionService.getConnectionSummary(connectionId, userId);
   if (connection.platform_key !== 'ebay') {
@@ -247,6 +250,7 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
       warnings: plan.warnings,
       totalCombinations: (source.variants || []).length,
     },
+    ...(withSource ? { readSource: source } : {}),
   };
 }
 
@@ -275,8 +279,14 @@ function keptPhotos(source, imageUrls) {
 async function generateEbayDraftFromUrlsNow(
   connectionId,
   userId,
-  { competitorUrl, sourceUrl, previewId, variantSelection, imageUrls }
+  { competitorUrl, sourceUrl, previewId, variantSelection, imageUrls, huntId, actorUserId }
 ) {
+  // A hunted product is drafted only once it's approved, on its own account.
+  if (huntId) {
+    const hunt = await huntingRepository.findForOwner(huntId, userId);
+    if (!hunt || String(hunt.connection_id) !== String(connectionId)) throw new ListingError('That hunted product was not found on this account.', 404);
+    if (!['approved', 'drafted', 'listed'].includes(hunt.stage)) throw new ListingError('That hunted product has not been approved yet.', 400);
+  }
   // STEP TWO picks up the listings read in step one. A preview belongs to the
   // user and connection that made it; anything else is treated as expired.
   let preRead = null;
@@ -346,13 +356,16 @@ async function generateEbayDraftFromUrlsNow(
   // weight when the account's postage policy works postage out from it.
   const finalDraftInput = { ...draftInput, skuBase, sku, ...(storeCategoryNames.length ? { storeCategoryNames } : {}), ...(source?.package ? { package: source.package } : {}) };
 
-  return createEbayDraft(connectionId, userId, finalDraftInput, {
-    sourceData: { competitor, source },
+  const listing = await createEbayDraft(connectionId, userId, finalDraftInput, {
+    sourceData: { competitor, source, ...(huntId ? { huntId } : {}) },
     // What the automated steps couldn't do (dropped aspects, variants with no
     // photo of their own). Persisted so the review page can show it rather
     // than the seller finding out from a live listing.
     warnings,
   });
+  // The hunt follows its draft (and, once published, the eBay listing).
+  if (huntId) await huntingRepository.linkDraft(huntId, listing.id, actorUserId || null);
+  return listing;
 }
 
 async function suggestStoreCategoriesFor(connectionId, userId, draft) {
@@ -1540,7 +1553,11 @@ async function finishRelist(listing, draft, own, revised) {
   if (own) {
     const { liveItemId, ...edited } = draft;
     await listingRepository.updateGeneratedData(own.id, { ...(own.generated_data || {}), ...edited }).catch(() => {});
-    if (newItemId !== String(listing.edit_of_item_id)) await listingRepository.setExternalProductId(own.id, newItemId).catch(() => {});
+    if (newItemId !== String(listing.edit_of_item_id)) {
+      await listingRepository.setExternalProductId(own.id, newItemId).catch(() => {});
+      // A hunted product's sales follow it to its new item number.
+      await huntingRepository.addItemForListing(own.id, newItemId).catch(() => {});
+    }
   }
   await listingRepository.deleteById(listing.id);
   logger.info('Ended listing relisted', { connectionId: listing.connection_id, from: listing.edit_of_item_id, to: newItemId });
@@ -1879,6 +1896,7 @@ async function publishNow(listing, id, userId) {
 
     resyncListings(listing.connection_id, userId);
     const row = await listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
+    await huntingRepository.addItemForListing(id, result.externalProductId).catch((err) => logger.warn('Hunted product not marked listed', { listingId: id, error: err.message }));
     const warnings = [...photos.warnings, ...skuWarnings, ...readied.warnings, ...tidied.warnings];
     return warnings.length ? { ...row, warnings } : row;
   } catch (err) {

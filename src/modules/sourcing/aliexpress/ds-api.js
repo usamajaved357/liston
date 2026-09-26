@@ -368,6 +368,31 @@ function packageOf(info) {
   };
 }
 
+// How the product and its store do on AliExpress: orders ("1000+"), the
+// rating and how many reviewed it, whether it's still on sale, the store
+// and its ratings, and the delivery days AliExpress quotes.
+function supplierOf(body) {
+  const base = body.ae_item_base_info_dto || {};
+  const store = body.ae_store_info || {};
+  const num = (v) => (v === undefined || v === null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+  return {
+    orders: base.sales_count ? String(base.sales_count) : null,
+    rating: num(base.avg_evaluation_rating),
+    reviews: num(base.evaluation_count),
+    onSale: base.product_status_type ? base.product_status_type === 'onSelling' : null,
+    store: store.store_name
+      ? {
+          name: String(store.store_name),
+          country: store.store_country_code || null,
+          described: num(store.item_as_described_rating),
+          communication: num(store.communication_rating),
+          shipping: num(store.shipping_speed_rating),
+        }
+      : null,
+    deliveryDays: num(body.logistics_info_dto?.delivery_time),
+  };
+}
+
 function normalizeProduct(raw, productId, sourceUrl) {
   raiseIfError(raw);
   const body = unwrapEnvelope(raw);
@@ -409,7 +434,16 @@ function normalizeProduct(raw, productId, sourceUrl) {
     const currency = sku.currency_code || '';
     const { attributes, imageUrl, rawValues } = decodeSkuOptions(sku);
 
-    decoded.push({ attributes, rawValues, imageUrl, priceText: amount ? `${currency} ${amount}`.trim() : null });
+    decoded.push({
+      attributes,
+      rawValues,
+      imageUrl,
+      priceText: amount ? `${currency} ${amount}`.trim() : null,
+      // Which SKU this is (the shipping read asks per SKU) and how many
+      // the supplier has left of it.
+      skuId: sku.sku_id ? String(sku.sku_id) : null,
+      stock: sku.sku_available_stock === undefined || sku.sku_available_stock === null || sku.sku_available_stock === '' ? null : Number(sku.sku_available_stock),
+    });
     if (!priceText && amount) priceText = `${currency} ${amount}`.trim();
   }
   const variants = separateColliding(decoded).map(({ rawValues, ...variant }) => variant);
@@ -431,6 +465,7 @@ function normalizeProduct(raw, productId, sourceUrl) {
     specifics,
     categoryBreadcrumb: [],
     package: packageOf(body.package_info_dto),
+    supplier: supplierOf(body),
     // A product with no options yields an empty array — common and expected,
     // not an error.
     variants,
@@ -487,4 +522,59 @@ async function fetchProduct(productId, sourceUrl, { shipTo, currency } = {}) {
   return normalizeProduct(raw, productId, sourceUrl);
 }
 
-module.exports = { fetchProduct, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };
+// "£8.00", "US $10.00", "8.00" -> 8; null when there's no number.
+function amountIn(text) {
+  const match = String(text || '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
+}
+
+// One way AliExpress can post it, from aliexpress.ds.freight.query.
+// `shipping_fee_cent` holds the amount in whole units ("1.99" with a format
+// of "£1.99"), whatever its name says. Confirmed live.
+function deliveryOption(option) {
+  const free = option.free_shipping === true || option.free_shipping === 'true';
+  const fee = free ? 0 : amountIn(option.shipping_fee_cent) ?? amountIn(option.shipping_fee_format);
+  return {
+    code: option.code || null,
+    company: option.company || null,
+    cost: fee,
+    currency: option.shipping_fee_currency || null,
+    // Orders at or over this price go free ("Choice" products).
+    freeOver: amountIn(option.free_shipping_threshold),
+    minDays: option.min_delivery_days === undefined ? null : Number(option.min_delivery_days),
+    maxDays: option.max_delivery_days === undefined ? null : Number(option.max_delivery_days),
+    tracking: option.tracking === true || option.tracking === 'true',
+    shipFrom: option.ship_from_country || null,
+  };
+}
+
+/**
+ * What it costs to send one of this SKU to the buyer's country, the way a
+ * seller would pick: the cheapest tracked option (else the cheapest), with
+ * the free-postage threshold and delivery days. Null when AliExpress has no
+ * delivery for it ("DELIVERY_INFO_EMPTY").
+ */
+async function fetchShipping(productId, skuId, { shipTo, currency } = {}) {
+  const raw = await call('aliexpress.ds.freight.query', {
+    queryDeliveryReq: JSON.stringify({
+      quantity: 1,
+      shipToCountry: shipTo || config.aliexpress.shipToCountry,
+      productId: String(productId),
+      selectedSkuId: String(skuId),
+      language: 'en_US',
+      locale: 'en_US',
+      currency: currency || config.aliexpress.targetCurrency,
+    }),
+  });
+  raiseIfError(raw);
+  const result = unwrapEnvelope(raw);
+  if (result.success === false || result.success === 'false') return null;
+  const options = asArray(result.delivery_options, 'delivery_option_d_t_o').filter((o) => o && typeof o === 'object').map(deliveryOption).filter((o) => o.cost !== null);
+  if (!options.length) return null;
+  const byCost = (a, b) => a.cost - b.cost || (a.maxDays ?? 99) - (b.maxDays ?? 99);
+  const tracked = options.filter((o) => o.tracking).sort(byCost);
+  const chosen = tracked[0] || [...options].sort(byCost)[0];
+  return { ...chosen, options: options.length };
+}
+
+module.exports = { fetchProduct, fetchShipping, deliveryOption, supplierOf, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };

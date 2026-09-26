@@ -72,4 +72,20 @@ async function fetchPackage(url, { shipTo, currency } = {}) {
   }
 }
 
-module.exports = { fetchProduct, fetchPackage, productIdFromUrl };
+/**
+ * What AliExpress charges to post one of this option to the buyer's country
+ * ({ cost, freeOver, minDays, maxDays, company, … }): one API read, or null
+ * when the API isn't in use or has no delivery for it. The caller then
+ * falls back to the flat shipping cost in the account's settings.
+ */
+async function fetchShipping(url, skuId, { shipTo, currency } = {}) {
+  if (config.aliexpress.source !== 'ds-api' || !skuId) return null;
+  try {
+    return await dsApi.fetchShipping(productIdFromUrl(url), skuId, { shipTo, currency });
+  } catch (err) {
+    logger.warn('AliExpress shipping not read', { error: err.message });
+    return null;
+  }
+}
+
+module.exports = { fetchProduct, fetchPackage, fetchShipping, productIdFromUrl };

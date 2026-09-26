@@ -15,6 +15,7 @@ import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, timeAgo } from "@/components/team/team-shared";
+import { HuntMemberCard, hasHunting } from "@/components/hunting/HuntMemberCard";
 
 // One team member's page: what they did (figures for any range against the
 // period before, day by day and per eBay account), the full activity log
@@ -42,6 +43,9 @@ const EXTRA_KINDS: { key: string; label: string }[] = [
   { key: "listing.draft_deleted", label: "Deleted drafts" },
   { key: "account.store_category_added", label: "Shop categories added" },
   { key: "account.source_account_saved", label: "Supplier accounts saved" },
+  { key: "hunt.resubmitted", label: "Hunted products resubmitted" },
+  { key: "hunt.updated", label: "Hunted products changed" },
+  { key: "hunt.withdrawn", label: "Hunted products withdrawn" },
   { key: "session.login", label: "Logins" },
 ];
 
@@ -147,7 +151,7 @@ function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (ki
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {data.metrics.map((m) => (
           <KpiTile
             key={m.key}
@@ -173,6 +177,8 @@ function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (ki
           <TrendChart points={points} format={(v) => (v == null ? "—" : fullNumber(v))} label={label} variant="bars" currentLabel={dayRangeLabel(data.range.from, data.range.to)} previousLabel={dayRangeLabel(data.range.previous.from, data.range.previous.to)} />
         </div>
       )}
+
+      {data.hunting && hasHunting(data.hunting) && <HuntMemberCard hunting={data.hunting} compared={compared} />}
 
       <div className="card overflow-hidden">
         <div className="flex items-baseline justify-between gap-2 px-4 py-3">
@@ -259,6 +265,7 @@ function subjectLink(item: MemberActivityItem): string | null {
   if (!item.connectionId) return null;
   if (item.subjectType === "order") return `/accounts/${item.connectionId}/orders/${encodeURIComponent(item.subjectId)}`;
   if (item.subjectType === "listing") return `/accounts/${item.connectionId}/listings?q=${encodeURIComponent(item.subjectId)}`;
+  if (item.subjectType === "hunt" && item.kind !== "hunt.withdrawn") return `/accounts/${item.connectionId}/hunting?open=${encodeURIComponent(item.subjectId)}`;
   return null;
 }
 

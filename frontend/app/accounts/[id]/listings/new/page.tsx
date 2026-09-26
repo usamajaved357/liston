@@ -5,8 +5,9 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { EditorHeader, Stepper } from "@/components/EditorHeader";
 import { Alert } from "@/components/Alert";
-import { api, ApiError, DraftPreview } from "@/lib/api";
+import { api, ApiError, DraftPreview, HuntDraftStart } from "@/lib/api";
 import { prettyPriceText } from "@/lib/format";
+import { money } from "@/components/research/format";
 
 // Drafting in two steps. Step one reads both listings and costs nothing;
 // step two generates the listing for ONLY the variations the seller ticked.
@@ -158,8 +159,11 @@ export default function DraftListingPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
 
-  // "Draft this" on the Research page arrives with the competitor listing.
+  // "Draft this" on the Research page arrives with the competitor listing;
+  // "Draft" on an approved hunted product with the hunt.
   const searchParams = useSearchParams();
+  const huntId = searchParams.get("hunt");
+  const [hunt, setHunt] = useState<HuntDraftStart["hunt"] | null>(null);
   const [competitorUrl, setCompetitorUrl] = useState(() => searchParams.get("competitor") || "");
   const [sourceUrl, setSourceUrl] = useState("");
   const [preview, setPreview] = useState<DraftPreview | null>(null);
@@ -167,7 +171,8 @@ export default function DraftListingPage() {
   const [selection, setSelection] = useState<Record<string, Set<string>>>({});
   // The supplier photos going into the draft, in order (first = main photo).
   const [keptPhotos, setKeptPhotos] = useState<string[]>([]);
-  const [busy, setBusy] = useState<"read" | "draft" | null>(null);
+  // A hunted product's listings are read as the page opens.
+  const [busy, setBusy] = useState<"read" | "draft" | null>(() => (huntId ? "read" : null));
   const [statusIndex, setStatusIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -190,21 +195,73 @@ export default function DraftListingPage() {
     intervalRef.current = null;
   }
 
+  // Everything ticked, or, from a hunt, only the options that earn at the
+  // competitor's price (the seller can still tick the rest).
+  function startWith(data: DraftPreview, suggested?: Record<string, string[]> | null) {
+    setPreview(data);
+    setKeptPhotos(data.source.imageUrls);
+    const all: Record<string, Set<string>> = {};
+    for (const axis of data.source.axes) {
+      const values = axis.values.map((v) => v.value);
+      const keep = suggested?.[axis.name]?.filter((v) => values.includes(v));
+      all[axis.name] = new Set(keep && keep.length ? keep : values);
+    }
+    setSelection(all);
+  }
+
+  function applyHunt(data: HuntDraftStart) {
+    setHunt(data.hunt);
+    setCompetitorUrl(data.hunt.competitorUrl);
+    setSourceUrl(data.hunt.sourceUrl);
+    startWith(data.preview, data.hunt.selection);
+  }
+  const huntError = (err: unknown) => setError(err instanceof ApiError ? err.message : "Couldn't open that hunted product. Try again.");
+
+  async function readHunt(id: string) {
+    setBusy("read");
+    setError(null);
+    startStatus(READ_MESSAGES, 4000);
+    try {
+      applyHunt(await api.huntDraftStart(id));
+    } catch (err) {
+      huntError(err);
+    } finally {
+      setBusy(null);
+      stopStatus();
+    }
+  }
+
+  useEffect(() => {
+    if (!huntId) return;
+    let cancelled = false;
+    const timer = setInterval(() => setStatusIndex((i) => Math.min(i + 1, READ_MESSAGES.length - 1)), 4000);
+    api
+      .huntDraftStart(huntId)
+      .then((data) => !cancelled && applyHunt(data))
+      .catch((err) => !cancelled && huntError(err))
+      .finally(() => {
+        clearInterval(timer);
+        if (!cancelled) setBusy(null);
+      });
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [huntId]);
+
   async function handleRead(e: React.FormEvent) {
     e.preventDefault();
+    if (hunt) return readHunt(hunt.id);
     setBusy("read");
     setError(null);
     setPreview(null);
     startStatus(READ_MESSAGES, 4000);
     try {
       const data = await api.previewDraftListing(params.id, { competitorUrl: competitorUrl.trim() || undefined, sourceUrl });
-      setPreview(data);
-      setKeptPhotos(data.source.imageUrls);
       // Everything ticked to start with — the seller unticks what they
       // don't want, which is the faster direction for most products.
-      const all: Record<string, Set<string>> = {};
-      for (const axis of data.source.axes) all[axis.name] = new Set(axis.values.map((v) => v.value));
-      setSelection(all);
+      startWith(data);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't read those listings. Try again.");
     } finally {
@@ -244,6 +301,7 @@ export default function DraftListingPage() {
         previewId: preview.previewId,
         variantSelection,
         imageUrls: preview.source.imageUrls.length ? keptPhotos : undefined,
+        ...(hunt ? { huntId: hunt.id } : {}),
       });
       router.push(`/accounts/${params.id}/listings/draft/${listing.id}`);
     } catch (err) {
@@ -259,9 +317,9 @@ export default function DraftListingPage() {
   return (
     <main className="flex h-[100dvh] flex-col bg-[var(--color-paper)]">
       <EditorHeader
-        backHref={`/accounts/${params.id}/listings?filter=draft`}
-        backLabel="Back to drafts"
-        title="Draft a listing"
+        backHref={huntId ? `/accounts/${params.id}/hunting?view=approved` : `/accounts/${params.id}/listings?filter=draft`}
+        backLabel={huntId ? "Back to hunting" : "Back to drafts"}
+        title={huntId ? "Draft a hunted product" : "Draft a listing"}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -269,6 +327,40 @@ export default function DraftListingPage() {
           {error && (
             <div className="mb-6">
               <Alert>{error}</Alert>
+            </div>
+          )}
+
+          {hunt && (
+            <div className="card mb-5 overflow-hidden">
+              <div className="flex flex-wrap items-start gap-3 bg-gradient-to-r from-emerald-50 to-transparent px-4 py-3.5 sm:px-5">
+                <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white">
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+                    <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">Approved hunted product</p>
+                  <p className="mt-0.5 line-clamp-2 text-[14px] font-semibold text-[var(--color-ink)]">{hunt.title}</p>
+                  <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">
+                    {hunt.hunter ? `Hunted by ${hunt.hunter.name}. ` : ""}
+                    {hunt.headline?.profit !== null && hunt.headline?.profit !== undefined ? `${money(hunt.headline.profit, hunt.currency)} profit per sale on the ${hunt.headline.basis === "best_seller" ? "best seller" : "best option"}. ` : ""}
+                    {hunt.selection ? "Only the options that earn at the competitor's price are ticked; tick any others you want." : "The draft is tied to the hunt, so its listing and sales count for the hunter."}
+                  </p>
+                </div>
+              </div>
+              {hunt.priceChanges.length > 0 && (
+                <div className="border-t border-amber-200 bg-amber-50/70 px-4 py-3 text-[12.5px] text-amber-900 sm:px-5">
+                  <p className="font-semibold">The supplier&apos;s prices changed since the hunt</p>
+                  <ul className="mt-1 space-y-0.5">
+                    {hunt.priceChanges.slice(0, 5).map((c, i) => (
+                      <li key={`${c.label}-${i}`}>
+                        {c.label || "The product"}: {money(c.before, hunt.currency)} → <b className="font-semibold">{money(c.after, hunt.currency)}</b>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1 text-amber-900/80">Prices are worked out from today&apos;s cost, so check the profit in the editor.</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -305,7 +397,7 @@ export default function DraftListingPage() {
                   placeholder="https://www.ebay.co.uk/itm/…"
                   value={competitorUrl}
                   onChange={(e) => setCompetitorUrl(e.target.value)}
-                  disabled={busy !== null}
+                  disabled={busy !== null || Boolean(hunt)}
                 />
                 <p className="mt-1.5 text-xs text-[var(--color-muted)]">
                   Sets the category, item specifics and the price to beat. Leave it empty and eBay suggests the category from the source.
@@ -319,7 +411,7 @@ export default function DraftListingPage() {
                   placeholder="https://www.aliexpress.com/item/…"
                   value={sourceUrl}
                   onChange={(e) => setSourceUrl(e.target.value)}
-                  disabled={busy !== null}
+                  disabled={busy !== null || Boolean(hunt)}
                   required
                 />
                 <p className="mt-1.5 text-xs text-[var(--color-muted)]">Supplies the photos, variations and cost price.</p>

@@ -7,9 +7,11 @@ interface NavItemProps {
   active: boolean;
   icon: React.ReactNode;
   label: string;
+  // Things waiting for this person here (products to review, say).
+  badge?: number;
 }
 
-export function SidebarNavItem({ href, active, icon, label }: NavItemProps) {
+export function SidebarNavItem({ href, active, icon, label, badge }: NavItemProps) {
   return (
     <Link
       href={href}
@@ -20,7 +22,12 @@ export function SidebarNavItem({ href, active, icon, label }: NavItemProps) {
       }`}
     >
       {icon}
-      {label}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badge ? (
+        <span className="min-w-[20px] rounded-full bg-[var(--color-primary)] px-1.5 text-center text-[11px] font-semibold leading-5 text-white tabular-nums" aria-label={`${badge} waiting`}>
+          {badge > 99 ? "99+" : badge}
+        </span>
+      ) : null}
     </Link>
   );
 }

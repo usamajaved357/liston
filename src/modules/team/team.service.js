@@ -4,6 +4,7 @@ const connectionRepository = require('../connections/connection.repository');
 const activityRepository = require('./activity.repository');
 const activity = require('./activity');
 const analyticsDays = require('../analytics/analytics-days');
+const huntingService = require('../hunting/hunting.service');
 
 const SALT_ROUNDS = 12;
 
@@ -58,12 +59,14 @@ async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone 
   if (!member) throw new TeamError('Team member not found', 404);
   const connections = await connectionRepository.findAllByUser(ownerId);
   const win = activity.rangeWindow(range, { from, to, timeZone: await zoneFor(ownerId, timeZone, connections) });
-  const [rows, prevRows, permissions, lastActive, recordingSince] = await Promise.all([
+  const [rows, prevRows, permissions, lastActive, recordingSince, hunting] = await Promise.all([
     activityRepository.rowsFor(ownerId, memberId, win.startsAt, win.endsAt),
     activityRepository.rowsFor(ownerId, memberId, win.previous.startsAt, win.previous.endsAt),
     teamRepository.getPermissions(memberId),
     activityRepository.lastActiveAt(ownerId, memberId),
     activityRepository.recordingSince(),
+    // Their hunted products' results and their reviews (hunting/hunting-stats.js).
+    huntingService.memberFigures(ownerId, memberId, win),
   ]);
 
   // Day by day, in the owner's time zone.
@@ -99,6 +102,7 @@ async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone 
     previousSeries,
     accounts,
     permissions,
+    hunting,
     connections: connections.filter((c) => c.platform_key === 'ebay').map((c) => ({ id: c.id, label: c.label })),
     knownFeatures: teamRepository.KNOWN_FEATURES,
   };

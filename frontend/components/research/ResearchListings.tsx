@@ -38,7 +38,18 @@ function DraftIcon() {
   );
 }
 
-export function ResearchListings({ items, currency, connectionId, maxSold }: { items: ResearchItem[]; currency: string; connectionId: string; maxSold: number }) {
+// "Hunt": check this listing's profit against a supplier and add it for review.
+function HuntGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
+      <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="2" />
+      <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  );
+}
+
+export function ResearchListings({ items, currency, connectionId, maxSold, canHunt = false }: { items: ResearchItem[]; currency: string; connectionId: string; maxSold: number; canHunt?: boolean }) {
+  const huntHref = (url: string) => `/accounts/${connectionId}/hunting?competitor=${encodeURIComponent(url)}`;
   return (
     <>
     {/* A phone: one card per listing, the same figures under its title. */}
@@ -79,6 +90,16 @@ export function ResearchListings({ items, currency, connectionId, maxSold }: { i
                 {item.daysLive !== null && item.daysLive !== undefined && ` · ${age(item.daysLive)} live`}
               </p>
             </div>
+            {item.url && canHunt && (
+              <Link
+                href={huntHref(item.url)}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border border-[var(--color-line)] px-3 text-[13px] font-semibold text-[var(--color-ink)]"
+              >
+                <HuntGlyph />
+                Hunt
+              </Link>
+            )}
             {item.url && (
               <Link
                 href={`/accounts/${connectionId}/listings/new?competitor=${encodeURIComponent(item.url)}`}
@@ -189,6 +210,17 @@ export function ResearchListings({ items, currency, connectionId, maxSold }: { i
               </td>
               <td className="px-4 py-2.5">
                 <div className="flex items-center justify-end gap-1.5">
+                  {item.url && canHunt && (
+                    <Link
+                      href={huntHref(item.url)}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Check this listing's profit against a supplier and add it for review"
+                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-line)] px-2.5 text-[12.5px] font-semibold text-[var(--color-ink)] hover:border-[var(--color-line-strong)]"
+                    >
+                      <HuntGlyph />
+                      Hunt
+                    </Link>
+                  )}
                   {item.url && (
                     <Link
                       href={`/accounts/${connectionId}/listings/new?competitor=${encodeURIComponent(item.url)}`}

@@ -281,6 +281,8 @@ export default function AccountListingsPage() {
   // Bumped after a manual refresh so the load effect runs again.
   const [reloadKey, setReloadKey] = useState(0);
   const [drafts, setDrafts] = useState<DraftListing[]>([]);
+  // Approved hunted products nobody has drafted yet, pointed to from Drafts.
+  const [readyHunts, setReadyHunts] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [totalEntries, setTotalEntries] = useState(0);
   const [counts, setCounts] = useState<{ active?: number; inactive?: number; draft?: number }>({});
@@ -307,6 +309,10 @@ export default function AccountListingsPage() {
       if (!cancelled) fn();
     };
     if (filter === "draft") {
+      api
+        .huntBadge(connection.id)
+        .then((b) => done(() => setReadyHunts(b.approved)))
+        .catch(() => {});
       api
         .listDraftListings(connection.id)
         .then((data) =>
@@ -577,6 +583,27 @@ export default function AccountListingsPage() {
             Listing #{updatedItemId} was updated, but eBay didn&apos;t apply everything: {updateWarning}
           </span>
         </div>
+      )}
+
+      {filter === "draft" && readyHunts > 0 && (
+        <Link
+          href={`/accounts/${connection.id}/hunting?view=approved`}
+          className="mb-4 flex items-center gap-3 rounded-[var(--radius-card)] border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-[13px] text-[var(--color-ink)] transition-colors hover:border-emerald-300"
+        >
+          <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white">
+            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+              <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="2" />
+              <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="2" />
+            </svg>
+          </span>
+          <span className="min-w-0 flex-1">
+            <b className="font-semibold">
+              {readyHunts} approved hunted product{readyHunts === 1 ? "" : "s"}
+            </b>{" "}
+            {readyHunts === 1 ? "is" : "are"} ready to draft.
+          </span>
+          <span className="flex-shrink-0 font-semibold text-emerald-700">Open Hunting</span>
+        </Link>
       )}
 
       <div className="card overflow-hidden">

@@ -166,3 +166,33 @@ test('fetchListing rejects an empty item group rather than drafting from nothing
 
   await assert.rejects(source.fetchListing('https://www.ebay.co.uk/itm/167039151658'), ScrapingError);
 });
+
+test('fetchListing keeps what sells: sold and stock per variation, postage, seller and age, without the seller legal details', async () => {
+  const withSales = {
+    ...GROUP,
+    items: GROUP.items.map((item, i) => ({
+      ...item,
+      legacyItemId: '167039151658',
+      itemWebUrl: 'https://www.ebay.co.uk/itm/167039151658?var=1',
+      itemCreationDate: i ? '2026-07-01T00:00:00Z' : '2026-06-01T00:00:00Z',
+      estimatedAvailabilities: [{ estimatedSoldQuantity: i ? 3 : 7, estimatedAvailableQuantity: 10 }],
+      shippingOptions: [{ type: 'Economy Delivery', shippingCost: { value: i ? '1.50' : '0.00', currency: 'GBP' }, minEstimatedDeliveryDate: '2026-10-01T10:00:00Z', maxEstimatedDeliveryDate: '2026-10-03T10:00:00Z' }],
+      seller: { username: 'shop', feedbackScore: 900, feedbackPercentage: '99.5', sellerAccountType: 'BUSINESS', sellerLegalInfo: { email: 'x@example.com' } },
+      itemLocation: { country: 'GB' },
+    })),
+  };
+  mock.method(browse, 'getItemByLegacyId', async () => {
+    const err = new Error('group');
+    err.details = { errorId: 11006 };
+    throw err;
+  });
+  mock.method(browse, 'getItemsByItemGroup', async () => withSales);
+  const result = await source.fetchListing('https://www.ebay.co.uk/itm/167039151658');
+  assert.strictEqual(result.sold, 10);
+  assert.strictEqual(result.available, 20);
+  assert.strictEqual(result.createdAt, '2026-06-01T00:00:00Z');
+  assert.strictEqual(result.url, 'https://www.ebay.co.uk/itm/167039151658');
+  assert.deepStrictEqual(result.seller, { username: 'shop', feedbackScore: 900, feedbackPercentage: 99.5, business: true });
+  assert.deepStrictEqual(result.variants.map((v) => [v.sold, v.postageCost]), [[7, 0], [3, 1.5]]);
+  assert.strictEqual(JSON.stringify(result).includes('x@example.com'), false);
+});

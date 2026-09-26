@@ -138,6 +138,12 @@ const config = {
     // may spend.
     dailyCalls: parseInt(process.env.RESEARCH_DAILY_CALLS || '3000', 10),
   },
+  // Product hunting reads each competitor listing through the same Browse
+  // allowance: at most this many of its 5,000 a day, so drafting and
+  // research always have calls left.
+  hunting: {
+    dailyCalls: parseInt(process.env.HUNTING_DAILY_CALLS || '1000', 10),
+  },
   analytics: {
     dailyLimit: parseInt(process.env.EBAY_ANALYTICS_DAILY_LIMIT || '100', 10),
     schedulerEnabled: process.env.ANALYTICS_SCHEDULER !== 'off',

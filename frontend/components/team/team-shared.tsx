@@ -13,6 +13,8 @@ export const FEATURE_LABELS: Record<string, string> = {
   analytics: "Analytics",
   inbox: "Inbox",
   campaigns: "Campaigns",
+  hunting: "Hunting",
+  hunting_review: "Review hunts",
 };
 
 export function featureLabel(feature: string) {

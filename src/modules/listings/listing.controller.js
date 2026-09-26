@@ -37,6 +37,8 @@ const generateDraftSchema = z.union([
     // The supplier photos the seller kept in step two, in their order (the
     // first is the main photo). Only photos from the same preview count.
     imageUrls: z.array(z.string().min(1)).min(1, 'Keep at least one photo.').max(100).optional(),
+    // Drafting a hunted product: the draft is tied to the hunt.
+    huntId: z.string().uuid().optional(),
   }),
 ]);
 
@@ -60,7 +62,7 @@ async function generateDraft(req, res, next) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
 
-    const listing = await listingService.generateEbayDraftFromUrls(req.params.id, req.ownerId, parsed.data);
+    const listing = await listingService.generateEbayDraftFromUrls(req.params.id, req.ownerId, { ...parsed.data, actorUserId: req.userId });
     await activityRepository.record({ actorUserId: req.userId, connectionId: listing.connection_id, kind: 'listing.drafted', subjectType: 'draft', subjectId: listing.id, ...listingFacts(listing.generated_data) });
     res.status(201).json({ listing });
   } catch (err) {

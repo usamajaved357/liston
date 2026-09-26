@@ -146,6 +146,7 @@ const BROWSE_USE: Record<string, { label: string; sub: string }> = {
   drafting: { label: "Drafting", sub: "reading the competitor listing a draft is made from" },
   research: { label: "Product research", sub: "searches and sold counts" },
   health: { label: "Listing health", sub: "similar listings for a health check" },
+  hunting: { label: "Product hunting", sub: "the competitor listing a hunted product is checked against (up to 1,000 a day)" },
 };
 const BROWSE_CALL: Record<string, string> = {
   search: "search results (item_summary/search)",
@@ -187,7 +188,7 @@ function BrowseUsageSection({ usage }: { usage: BrowseUsage }) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-5">
         <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="Browse calls until reset" />
         <div className="card px-5 py-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Product research</p>
@@ -202,6 +203,7 @@ function BrowseUsageSection({ usage }: { usage: BrowseUsage }) {
         </div>
         <Tile label="Drafting" value={count("drafting").toLocaleString()} sub={BROWSE_USE.drafting.sub} />
         <Tile label="Listing health" value={count("health").toLocaleString()} sub={BROWSE_USE.health.sub} />
+        <Tile label="Product hunting" value={count("hunting").toLocaleString()} sub="competitor listings checked" />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
