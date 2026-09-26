@@ -213,7 +213,7 @@ export default function ConnectionsPage() {
   // Cold start with nothing cached: a skeleton, never a blank page.
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <PageSkeleton />
       </main>
     );

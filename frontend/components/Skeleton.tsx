@@ -80,7 +80,7 @@ export function OrderDetailSkeleton() {
           <Bone className="h-3 w-40 bg-[var(--color-paper)]" />
         </div>
       </div>
-      <div className="mt-5 grid gap-4 lg:grid-cols-3">
+      <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           <div className={card}>
             <div className="flex items-start justify-between gap-4">
@@ -105,7 +105,7 @@ export function OrderDetailSkeleton() {
           <div className={card}>
             <Bone className="h-5 w-24" />
             <Block className="mt-4 h-40 w-full" />
-            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Bone className="h-3 w-16 bg-[var(--color-paper)]" />
                 <Bone className="h-3 w-32" />
@@ -173,7 +173,7 @@ export function EditorSkeleton() {
         <Bone className="h-5 w-32" />
         <Bone className="h-8 w-36 bg-[var(--color-paper)]" />
       </div>
-      <div className="grid gap-5 px-8 py-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,5fr)]">
+      <div className="grid grid-cols-1 gap-5 px-8 py-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,5fr)]">
         <div className="space-y-4">
           <div className={card}>
             <div className="flex items-center justify-between">
@@ -199,11 +199,11 @@ export function EditorSkeleton() {
             <Bone className="h-3 w-12 bg-[var(--color-paper)]" />
             <Bone className="mt-2 h-10 w-full" />
             <Block className="mt-4 h-24 w-full" />
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Bone className="h-10 w-full" />
               <Bone className="h-10 w-full" />
             </div>
-            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Bone className="h-10 w-full" />
               <Bone className="h-10 w-full" />
               <Bone className="h-10 w-full" />
@@ -211,7 +211,7 @@ export function EditorSkeleton() {
           </div>
           <div className={card}>
             <Bone className="h-4 w-32" />
-            <div className="mt-4 grid gap-x-10 gap-y-3 sm:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-x-10 gap-y-3 sm:grid-cols-2">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="flex justify-between">
                   <Bone className="h-3 w-24 bg-[var(--color-paper)]" />

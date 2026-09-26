@@ -32,7 +32,7 @@ function ConnectPlatformForm({ platform, onCancel }: { platform: Platform; onCan
 
   return (
     <form onSubmit={handleSubmit} className="mt-5 border-t border-[var(--color-line)] pt-5">
-      <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div>
           <p className="label">Account name</p>
           <input

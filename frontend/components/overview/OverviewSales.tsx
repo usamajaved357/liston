@@ -73,7 +73,7 @@ export function SalesTrendCard({
           </div>
         </div>
         {list.length > 0 && !note && (
-          <p className="text-right text-[12.5px] text-[var(--color-muted)]">
+          <p className="text-[12.5px] text-[var(--color-muted)] sm:text-right">
             <b className="text-[15px] font-semibold tabular-nums text-[var(--color-ink)]">{hidden ? maskAmount(currency) : formatAmount(total, currency)}</b>
             {change !== null && (
               <span className={`mt-0.5 block text-[12px] font-medium tabular-nums ${change >= 0 ? "text-emerald-600" : "text-rose-600"}`}>

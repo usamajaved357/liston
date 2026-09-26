@@ -11,6 +11,7 @@ import { Logo } from "@/components/Logo";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ShellFrame } from "@/components/ShellFrame";
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -76,8 +77,10 @@ export function AccountShell({
 
   return (
     <AccountTimeZoneProvider value={timeZone}>
-    <div className="h-screen flex overflow-hidden">
-      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto overscroll-contain bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-6">
+    <ShellFrame
+      sidebarClassName="gap-6"
+      sidebar={
+      <>
         <div className="flex items-center gap-2.5 px-2">
           <Logo size={30} />
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
@@ -220,26 +223,27 @@ export function AccountShell({
             <p className="truncate px-2.5 pt-1 text-[11px] text-[var(--color-muted)]">{user.email}</p>
           </div>
         )}
-      </aside>
-
-      <div className="flex-1 min-w-0 h-screen flex flex-col">
+      </>
+      }
+    >
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         {header && (
           <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
           {/* Title and controls both sit on the sidebar's logo line (see
               .page-header); the subtitle hangs below the title. */}
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">{header}</div>
+          <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+            <div className="min-w-0 flex-1 basis-[220px]">{header}</div>
             <div className="page-header-controls">
               {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
               {/* Owners came from the main dashboard; members have no dashboard,
                   their way out is the sidebar footer. */}
               {permissions === undefined && (
-                <Link href="/dashboard" className="btn btn-sm flex-shrink-0 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
+                <Link href="/dashboard" aria-label="Dashboard" className="btn btn-sm flex-shrink-0 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
                   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                     <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
-                  Dashboard
+                  <span className="hidden sm:inline">Dashboard</span>
                 </Link>
               )}
             </div>
@@ -261,7 +265,7 @@ export function AccountShell({
         onCancel={() => setConfirmLogout(false)}
         onConfirm={handleLogout}
       />
-    </div>
+    </ShellFrame>
     </AccountTimeZoneProvider>
   );
 }

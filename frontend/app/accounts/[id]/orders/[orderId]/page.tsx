@@ -368,7 +368,7 @@ export default function OrderDetailPage() {
             )}
           </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+          <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
             {/* ---- left column ---- */}
             <div className="space-y-4 lg:col-span-2">
               {/* Dispatch */}
@@ -474,7 +474,7 @@ export default function OrderDetailPage() {
               <div className={cardClass}>
                 <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Postage</h2>
                 <div className="mt-3 print:hidden">{gsp ? <GlobalShippingInstructions /> : <PostageInstructions />}</div>
-                <div className="mt-4 grid gap-5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto]">
+                <div className="mt-4 grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto]">
                   <div className="text-[13px] leading-relaxed text-[var(--color-ink)]">
                     <p className="flex items-center text-[var(--color-muted)]">
                       Post to
@@ -547,7 +547,7 @@ export default function OrderDetailPage() {
                     const open = !!specificsOpen[li.sourcingKey];
                     return (
                       <div key={li.sourcingKey} className="py-4 first:pt-1 last:pb-0">
-                        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(80px,auto))]">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(80px,auto))]">
                           <div className="flex items-start gap-4">
                             {li.imageUrl ? (
                               // eslint-disable-next-line @next/next/no-img-element

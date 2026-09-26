@@ -915,7 +915,7 @@ function VariationsTable({
               </p>
             </div>
           </div>
-          <div className="grid gap-4 bg-[var(--color-panel)] px-4 py-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 bg-[var(--color-panel)] px-4 py-4 md:grid-cols-3">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Switch category</p>
               {fixes === null ? (
@@ -1019,7 +1019,7 @@ function VariationsTable({
       )}
 
       {/* Attribute values — rename in place, remove a whole colour or size at once */}
-      <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+      <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {specifications.map((spec) => (
           <div key={spec.name} className="rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]/70 px-3 py-2">
             <div className={`${labelClass} flex items-center justify-between`}>
@@ -2586,7 +2586,7 @@ export default function DraftEditorPage() {
 
   if (!listing || !content) {
     return (
-      <main className="flex h-screen items-center justify-center px-6">
+      <main className="flex h-[100dvh] items-center justify-center px-6">
         <Alert>{error || "This draft doesn't exist, or isn't yours."}</Alert>
       </main>
     );
@@ -2598,7 +2598,7 @@ export default function DraftEditorPage() {
   const notes = content.warnings || [];
 
   return (
-    <main className="flex h-screen flex-col bg-[var(--color-paper)]">
+    <main className="flex h-[100dvh] flex-col bg-[var(--color-paper)]">
       <EditorHeader
         backHref={`/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`}
         backLabel={isLiveEdit ? "Back to listings" : "Back to drafts"}
@@ -2672,7 +2672,7 @@ export default function DraftEditorPage() {
                 )}
               </div>
               {!appliedNote.working && (appliedNote.rows.length > 0 || appliedNote.todo.length > 0) && (
-                <div className="grid gap-4 px-4 py-3 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 px-4 py-3 md:grid-cols-2">
                   {appliedNote.rows.length > 0 && (
                     <ul className="space-y-1.5">
                       {appliedNote.rows.map((row, i) => (
@@ -2774,7 +2774,7 @@ export default function DraftEditorPage() {
 
           {/* Photos and the AI box stay in view on the left while the details
               scroll on the right, so there is never a blank column. */}
-          <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
             <div className="space-y-4 lg:sticky lg:top-0 lg:max-h-[calc(100vh-7.5rem)] lg:self-start lg:overflow-y-auto lg:pb-1 lg:pr-0.5">
               <GalleryGrid
                 images={images}
@@ -2902,8 +2902,8 @@ export default function DraftEditorPage() {
                   )}
                 </div>
 
-                <div className={`mt-3 grid gap-3 ${single ? "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)]" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]"}`}>
-                  <div>
+                <div className={`mt-3 grid grid-cols-2 gap-3 ${single ? "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)]" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]"}`}>
+                  <div className="col-span-2 sm:col-span-1">
                     <label className={labelClass}>SKU (custom label)</label>
                     <div className="relative mt-1">
                       <input className={`${inputClass} font-mono text-[12.5px] ${editable ? "pr-10" : ""}`} value={sku} maxLength={50} placeholder="e.g. Liston-1005006" onChange={(e) => setSku(e.target.value)} disabled={!editable || busy} />
@@ -2925,7 +2925,7 @@ export default function DraftEditorPage() {
                       Kept unique across the account; a label already in use is replaced at publish.
                     </p>
                   </div>
-                  <div>
+                  <div className="col-span-2 sm:col-span-1">
                     <label className={labelClass}>Condition</label>
                     {editable ? (
                       <select className={`${inputClass} mt-1`} value={condition} onChange={(e) => setCondition(e.target.value)} disabled={busy}>
@@ -2965,7 +2965,7 @@ export default function DraftEditorPage() {
                 )}
 
                 {content.listingPolicies && (
-                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {(
                       [
                         ["fulfillmentPolicyId", "Postage policy", policies?.fulfillmentPolicies || []],
@@ -3054,7 +3054,7 @@ export default function DraftEditorPage() {
                 {specifics.length === 0 ? (
                   <p className="mt-2 text-[13px] text-[var(--color-muted)]">No item specifics yet.</p>
                 ) : (
-                  <div className="mt-2 grid gap-x-5 md:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-1 gap-x-5 md:grid-cols-2">
                     {specifics.map((row, i) => {
                       const entry = schemaByName.get(row.name.trim().toLowerCase());
                       const unfilled = !row.value.trim();
@@ -3236,7 +3236,7 @@ export default function DraftEditorPage() {
 
       {editable && (
         <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
-          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
                 {Icon.trash}

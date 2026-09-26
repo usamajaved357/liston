@@ -149,10 +149,10 @@ export default function DashboardPage() {
   // until /me answers, never a blank page.
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <div className="mx-auto max-w-5xl space-y-4">
           <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="card h-28 animate-pulse" />
             ))}
@@ -317,7 +317,7 @@ export default function DashboardPage() {
                 Sales figures for <span className="font-medium text-[var(--color-ink)]">{rangePhrase.replace(/^in /, "")}</span>
               </p>
             )}
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 max-w-full items-center gap-3">
               {refreshing && <span className="text-[12px] text-[var(--color-muted)]">Updating…</span>}
               <div role="radiogroup" aria-label="Dates" className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
                 {RANGES.map((r) => (
@@ -373,7 +373,7 @@ export default function DashboardPage() {
 
           {/* How sales moved, and what sold most. */}
           {metric === "sales" && (
-            <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
               <div className="min-w-0 lg:col-span-2">
                 <SalesTrendCard points={trendInView} currency={trendCurrency} hidden={amounts.hidden} caption={trendCaption} note={trendNote} />
               </div>

@@ -18,7 +18,7 @@ import { formatDate } from "@/lib/format";
 // address access approval was granted to.
 function SettingRow({ title, description, children, last }: { title: string; description: string; children: React.ReactNode; last?: boolean }) {
   return (
-    <div className={`grid gap-4 px-6 py-6 md:grid-cols-[260px_minmax(0,1fr)] ${last ? "" : "border-b border-[var(--color-line)]"}`}>
+    <div className={`grid grid-cols-1 gap-4 px-6 py-6 md:grid-cols-[260px_minmax(0,1fr)] ${last ? "" : "border-b border-[var(--color-line)]"}`}>
       <div>
         <h2 className="text-sm font-semibold text-[var(--color-ink)]">{title}</h2>
         <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">{description}</p>
@@ -146,7 +146,7 @@ export default function AccountPage() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <PageSkeleton />
       </main>
     );

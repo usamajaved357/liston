@@ -214,10 +214,10 @@ function AnalyticsPageInner() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <div className="mx-auto max-w-6xl space-y-4">
           <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
-          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-6">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="card h-24 animate-pulse" />
             ))}

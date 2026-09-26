@@ -119,7 +119,7 @@ export default function AccessRequestsPage() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <PageSkeleton />
       </main>
     );
@@ -184,7 +184,7 @@ export default function AccessRequestsPage() {
                 </div>
                 {requests.map((r) => (
                   <div key={r.id} className="px-5 py-4">
-                    <div className="grid items-center gap-4 sm:grid-cols-[minmax(0,1fr)_130px_140px_200px]">
+                    <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-[minmax(0,1fr)_130px_140px_200px]">
                       <Person r={r} />
                       <div>
                         <span className={`chip font-medium ${r.email_verified_at ? "chip-accent" : "chip-warning"}`}>

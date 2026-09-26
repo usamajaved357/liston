@@ -254,7 +254,7 @@ export function GlobalShippingInstructions() {
         <Chevron open={open} />
       </button>
       {open && (
-        <div className="mt-3 grid gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
           <div>
             <p className="font-bold">Pack it up</p>
             <p className="mt-1">Secure your item to make sure it arrives exactly as described.</p>
@@ -289,7 +289,7 @@ export function PostageInstructions() {
         <Chevron open={open} />
       </button>
       {open && (
-        <div className="mt-3 grid gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
           <div>
             <p className="font-bold">Pack your item with care</p>
             <p className="mt-1">Use a box or envelope that&apos;s slightly larger than your item and cushion it with protective materials like bubble wrap, packing peanuts, foam or tissue paper to keep it secure during transit. If you&apos;re reusing a box, cover any previous labels or branding and reinforce corners with packing tape to ensure your package looks professional.</p>

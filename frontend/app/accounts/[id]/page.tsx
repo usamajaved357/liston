@@ -285,7 +285,7 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
           <p className="text-[13px] text-[var(--color-muted)]">
             Figures for <span className="font-medium text-[var(--color-ink)]">{phrase.replace(/^in /, "")}</span>
           </p>
-          <div role="radiogroup" aria-label="Dates" className="inline-flex flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+          <div role="radiogroup" aria-label="Dates" className="inline-flex max-w-full flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
             {RANGES.map((r) => (
               <button
                 key={r.key}
@@ -418,10 +418,10 @@ function OtherSitesNotice({ connectionId, label, onAdded }: { connectionId: stri
 
 function ShellSkeleton() {
   return (
-    <main className="min-h-screen bg-[var(--color-paper)] p-10">
+    <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="card h-28 animate-pulse" />
           ))}

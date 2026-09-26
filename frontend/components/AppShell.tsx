@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
+import { ShellFrame } from "@/components/ShellFrame";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -26,8 +27,10 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
   const pathname = usePathname();
 
   return (
-    <div className="h-screen flex overflow-hidden">
-      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto overscroll-contain bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-7">
+    <ShellFrame
+      sidebarClassName="gap-7"
+      sidebar={
+      <>
         <div className="flex items-center gap-2.5 px-2">
           <Logo size={30} />
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
@@ -108,10 +111,10 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
             />
           )}
         </nav>
-
-      </aside>
-
-      <div className="flex-1 min-w-0 h-screen flex flex-col">
+      </>
+      }
+    >
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
         {header && (
           <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
             {header}
@@ -120,6 +123,6 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
         )}
         <div className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
       </div>
-    </div>
+    </ShellFrame>
   );
 }

@@ -499,7 +499,7 @@ function MemberPageBody() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <PageSkeleton />
       </main>
     );

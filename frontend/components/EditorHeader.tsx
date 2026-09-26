@@ -23,7 +23,7 @@ export function EditorHeader({
 }) {
   return (
     <header className="z-40 flex-shrink-0 border-b border-[var(--color-line)] bg-[var(--color-panel)]">
-      <div className="grid h-14 grid-cols-[1fr_auto_1fr] items-center gap-4 px-4 sm:px-6">
+      <div className="grid h-14 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 sm:gap-4 sm:px-6">
         <Link
           href={backHref}
           aria-label={backLabel}
@@ -34,9 +34,9 @@ export function EditorHeader({
             <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </Link>
-        <div className="flex min-w-0 max-w-[56vw] items-center justify-center gap-2.5">
+        <div className="flex min-w-0 max-w-[calc(100vw-6.5rem)] items-center justify-center gap-2.5 sm:max-w-[56vw]">
           <h1 className="truncate text-lg font-bold leading-none text-[var(--color-ink)]">{title}</h1>
-          {chips && <div className="flex flex-shrink-0 items-center gap-1.5">{chips}</div>}
+          {chips && <div className="flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap">{chips}</div>}
         </div>
         <div className="justify-self-end flex items-center gap-2">{actions}</div>
       </div>
@@ -48,13 +48,13 @@ export function EditorHeader({
 // the header, so it has room to breathe and reads as part of the task.
 export function Stepper({ steps, current }: { steps: string[]; current: number }) {
   return (
-    <ol className="flex items-center gap-3">
+    <ol className="flex items-center gap-2 sm:gap-3">
       {steps.map((label, i) => {
         const n = i + 1;
         const done = n < current;
         const active = n === current;
         return (
-          <li key={label} className="flex items-center gap-3">
+          <li key={label} className="flex min-w-0 items-center gap-2 sm:gap-3">
             <span className="inline-flex items-center gap-2">
               <span
                 className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold ${
@@ -67,9 +67,9 @@ export function Stepper({ steps, current }: { steps: string[]; current: number }
               >
                 {done ? "✓" : n}
               </span>
-              <span className={`text-sm ${active ? "font-semibold text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>{label}</span>
+              <span className={`whitespace-nowrap text-[13px] sm:text-sm ${active ? "font-semibold text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>{label}</span>
             </span>
-            {i < steps.length - 1 && <span className={`h-px w-10 ${done ? "bg-[var(--color-accent)]" : "bg-[var(--color-line)]"}`} />}
+            {i < steps.length - 1 && <span className={`h-px w-5 sm:w-10 ${done ? "bg-[var(--color-accent)]" : "bg-[var(--color-line)]"}`} />}
           </li>
         );
       })}

@@ -86,7 +86,7 @@ interface AuthLayoutProps {
 
 export function AuthLayout({ eyebrow, title, subtitle, children, footer }: AuthLayoutProps) {
   return (
-    <main className="grid h-screen bg-[var(--color-paper)] lg:grid-cols-2">
+    <main className="grid min-h-[100dvh] grid-cols-1 bg-[var(--color-paper)] lg:h-screen lg:grid-cols-2">
       <section className="relative hidden lg:flex flex-col justify-between overflow-hidden bg-[var(--color-primary)] px-12 py-10 text-white">
         {/* Backdrop: soft colour fields + a faint grid, so the panels below
             read as floating over a surface rather than flat on a fill. */}

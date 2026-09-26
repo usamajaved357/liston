@@ -237,12 +237,12 @@ export function SalesCards({
   // A hidden amount is plain ink: its colour would give away its sign.
   const inkFor = (tone: Tone | undefined, figure: Figure) => (hidden && figure.kind === "money" ? INK.plain : inkOf(tone, valueOf(figure)));
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-      {STEPS.map((step) => {
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
+      {STEPS.map((step, index) => {
         const blocked = Boolean(unavailable && step.fromEbay);
         const figure = step.figure;
         return (
-          <div key={step.label} className="card flex flex-col px-5 py-4" title={step.hint}>
+          <div key={step.label} className={`card flex min-w-0 flex-col px-3.5 py-3 sm:px-5 sm:py-4 ${index === STEPS.length - 1 ? "max-lg:col-span-2" : ""}`} title={step.hint}>
             <span className="flex items-center gap-2 text-[13px] font-medium text-[var(--color-muted)]">
               <span className={`h-2 w-2 rounded-full ${step.accent}`} aria-hidden />
               {step.label}
@@ -250,10 +250,10 @@ export function SalesCards({
             {loading || !main ? (
               <span className="mt-3 h-7 w-28 animate-pulse rounded-md bg-[var(--color-line)]" />
             ) : blocked ? (
-              <span className="mt-2.5 text-[24px] font-semibold leading-none text-[var(--color-line-strong)]">—</span>
+              <span className="mt-2.5 text-[20px] font-semibold leading-none text-[var(--color-line-strong)] sm:text-[24px]">—</span>
             ) : (
               <>
-                <span className={`mt-2.5 text-[24px] font-semibold leading-none tracking-tight tabular-nums ${inkFor(step.tone, figure)}`}>{show(figure)}</span>
+                <span className={`mt-2.5 truncate text-[20px] font-semibold leading-none tracking-tight tabular-nums sm:text-[24px] ${inkFor(step.tone, figure)}`}>{show(figure)}</span>
                 {figure.kind === "money" &&
                   // Only when no exchange rate could be had: each other currency
                   // apart. A market with nothing in these dates, or one eBay has
@@ -270,7 +270,7 @@ export function SalesCards({
             <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">
               {blocked && !loading ? "Needs the account reconnected" : typeof step.note === "function" ? (main && !loading ? step.note(main) : "\u00a0") : step.note}
             </span>
-            <dl className="mt-3.5 space-y-1 border-t border-[var(--color-line)] pt-3 text-[12.5px]">
+            <dl className="mt-3 space-y-1 border-t border-[var(--color-line)] pt-2.5 text-[12px] sm:mt-3.5 sm:pt-3 sm:text-[12.5px]">
               {step.details.filter((d) => !d.shown || (main && !loading && d.shown(main))).map((d) => {
                 const dBlocked = Boolean(unavailable && d.fromEbay);
                 const warn = main && !dBlocked ? d.warn?.(main) : false;
@@ -306,11 +306,11 @@ const STAGES: { label: string; note: string; of?: (w: ListingWork) => number }[]
 export function ListingCards({ work, loading }: { work: ListingWork | null; loading?: boolean }) {
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
         {STAGES.map((stage) => {
           const soon = !stage.of;
           return (
-            <div key={stage.label} className={`card flex min-h-[136px] flex-col p-5 ${soon ? "border-dashed bg-transparent shadow-none" : ""}`}>
+            <div key={stage.label} className={`card flex min-h-[120px] min-w-0 flex-col p-3.5 sm:min-h-[136px] sm:p-5 ${soon ? "border-dashed bg-transparent shadow-none" : ""}`}>
               <span className="flex items-center justify-between gap-2">
                 <span className="text-[13px] font-medium text-[var(--color-muted)]">{stage.label}</span>
                 {soon && (
@@ -322,7 +322,7 @@ export function ListingCards({ work, loading }: { work: ListingWork | null; load
               {loading || (!soon && !work) ? (
                 <span className="mt-3 h-8 w-20 animate-pulse rounded-md bg-[var(--color-line)]" />
               ) : (
-                <span className={`mt-2.5 text-[28px] font-semibold leading-none tracking-tight tabular-nums ${soon ? "text-[var(--color-line-strong)]" : "text-[var(--color-ink)]"}`}>
+                <span className={`mt-2.5 text-[24px] font-semibold leading-none sm:text-[28px] tracking-tight tabular-nums ${soon ? "text-[var(--color-line-strong)]" : "text-[var(--color-ink)]"}`}>
                   {soon ? "—" : count(stage.of!(work!))}
                 </span>
               )}

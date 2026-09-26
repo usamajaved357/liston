@@ -257,7 +257,7 @@ export default function DraftListingPage() {
   const step = preview ? 2 : 1;
 
   return (
-    <main className="flex h-screen flex-col bg-[var(--color-paper)]">
+    <main className="flex h-[100dvh] flex-col bg-[var(--color-paper)]">
       <EditorHeader
         backHref={`/accounts/${params.id}/listings?filter=draft`}
         backLabel="Back to drafts"
@@ -265,7 +265,7 @@ export default function DraftListingPage() {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-7xl px-6 py-8">
+        <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 sm:py-8">
           {error && (
             <div className="mb-6">
               <Alert>{error}</Alert>
@@ -286,7 +286,7 @@ export default function DraftListingPage() {
           {/* ---- Step 1 ------------------------------------------------ */}
           <form
             onSubmit={handleRead}
-            className="card p-6"
+            className="card p-4 sm:p-6"
           >
             <h2 className="text-base font-bold text-[var(--color-ink)]">Read the listings</h2>
             <p className="mt-1 text-sm text-[var(--color-muted)]">
@@ -294,7 +294,7 @@ export default function DraftListingPage() {
               choose exactly what to list before anything is generated.
             </p>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div>
                 <label className={labelClass}>
                   Competitor · eBay listing <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>
@@ -347,10 +347,10 @@ export default function DraftListingPage() {
 
           {/* ---- Step 2 ------------------------------------------------ */}
           {preview && (
-            <section className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+            <section className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
               {/* Left: what was read */}
               <div className="space-y-4">
-                <div className="card p-5">
+                <div className="card p-4 sm:p-5">
                   {preview.competitor ? (
                     <>
                       <p className={labelClass}>Competitor on eBay</p>
@@ -382,7 +382,7 @@ export default function DraftListingPage() {
                   )}
                 </div>
 
-                <div className="card p-5">
+                <div className="card p-4 sm:p-5">
                   <p className={labelClass}>Source on AliExpress</p>
                   <p className="mt-1.5 text-sm font-semibold leading-snug text-[var(--color-ink)]">{preview.source.title}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -406,7 +406,7 @@ export default function DraftListingPage() {
               </div>
 
               {/* Right: choose variations */}
-              <div className="card p-6">
+              <div className="card p-4 sm:p-6">
                 <h2 className="text-base font-bold text-[var(--color-ink)]">Choose what to list</h2>
                 <p className="mt-1 text-sm text-[var(--color-muted)]">Untick anything you don&apos;t want to sell. Everything ticked is drafted.</p>
 
@@ -527,7 +527,7 @@ export default function DraftListingPage() {
 
       {preview && (
         <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
-          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
             <Link href={`/accounts/${params.id}/listings?filter=draft`} className="btn btn-danger-ghost">
               Cancel
             </Link>

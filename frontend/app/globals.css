@@ -199,6 +199,19 @@ select:focus-visible {
   .page-header-controls .btn-sm {
     height: 30px;
   }
+  /* A phone: the header's controls wrap under the title instead of
+     squeezing it. */
+  @media (max-width: 639px) {
+    .page-header {
+      padding: 14px var(--page-gutter) 14px;
+    }
+    .page-header-controls {
+      height: auto;
+      min-height: 30px;
+      flex-wrap: wrap;
+      flex-shrink: 1;
+    }
+  }
 }
 
 @utility btn-sm {
@@ -358,5 +371,35 @@ select:focus-visible {
   .h-screen {
     height: auto !important;
     overflow: visible !important;
+  }
+}
+
+/* A phone in portrait. Unlayered, so it wins over the theme's :root. */
+@media (max-width: 639px) {
+  :root {
+    --page-gutter: 16px;
+  }
+  /* Capsules of options (date ranges, markets, tabs of a list) stay one
+     line and scroll sideways when there are more than fit, rather than
+     wrapping into a lump. */
+  .inline-flex.rounded-full.p-0\.5 {
+    flex-wrap: nowrap;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .inline-flex.rounded-full.p-0\.5::-webkit-scrollbar {
+    display: none;
+  }
+  .inline-flex.rounded-full.p-0\.5 > * {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  /* iPhone Safari zooms the page into any field under 16px when it's
+     tapped; at 16px it stays put. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea {
+    font-size: 16px !important;
   }
 }
