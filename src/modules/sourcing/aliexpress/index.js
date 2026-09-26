@@ -56,4 +56,20 @@ async function fetchProduct(url, { shipTo, currency } = {}) {
   }
 }
 
-module.exports = { fetchProduct, productIdFromUrl };
+/**
+ * Just the supplier's parcel ({ weightKg, lengthCm, widthCm, heightCm }),
+ * for a draft made before Liston kept it: one API read, or null when the
+ * API isn't in use or can't say. Never the browser scraper, which doesn't
+ * read the parcel and takes half a minute.
+ */
+async function fetchPackage(url, { shipTo, currency } = {}) {
+  if (config.aliexpress.source !== 'ds-api') return null;
+  try {
+    return (await dsApi.fetchProduct(productIdFromUrl(url), url, { shipTo, currency })).package || null;
+  } catch (err) {
+    logger.warn('AliExpress package details not read', { error: err.message });
+    return null;
+  }
+}
+
+module.exports = { fetchProduct, fetchPackage, productIdFromUrl };

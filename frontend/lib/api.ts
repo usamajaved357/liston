@@ -1003,6 +1003,16 @@ export interface StoreCategoriesResponse {
   warnings?: string[];
 }
 
+// The parcel the item ships in, from the supplier (AliExpress) or typed in
+// the editor. eBay needs the weight when the postage policy works postage
+// out from it; the box size helps it quote. kg and cm.
+export interface DraftPackage {
+  weightKg: number;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+}
+
 export interface SingleDraftContent {
   title: string;
   description: string;
@@ -1021,6 +1031,7 @@ export interface SingleDraftContent {
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
+  package?: DraftPackage | null;
   // Things the automated drafting steps couldn't do — dropped item specifics,
   // supplier photos that were marketing graphics, variations with no photo of
   // their own. Shown on the review page rather than failing the draft.
@@ -1059,6 +1070,7 @@ export interface VariationDraftContent {
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
+  package?: DraftPackage | null;
   warnings?: string[];
 }
 
@@ -1215,6 +1227,8 @@ export interface DraftPatch {
   categoryId?: string;
   secondaryCategoryId?: string | null;
   storeCategoryNames?: string[];
+  // Null clears it.
+  package?: DraftPackage | null;
 }
 
 export interface ImageCheck {

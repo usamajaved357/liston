@@ -189,13 +189,41 @@ function splitProductIdentifiers(aspects, identifiers = {}) {
   return { product, aspects: rest };
 }
 
-function buildInventoryItem({ title, description, imageUrls, aspects, condition, quantity, identifiers }) {
+// The parcel on the inventory item. eBay refuses to publish without a
+// weight when the postage policy works postage out from it ("The package
+// weight is not valid or is missing", seen live). A draft keeps it in kg and
+// cm (the supplier's units); US listings get pounds and inches, as Seller
+// Hub shows them there. Nothing when the draft has no weight.
+const IMPERIAL_MARKETPLACES = new Set(['EBAY_US', 'EBAY_MOTORS_US']);
+
+function packageWeightAndSize(pkg, marketplaceId) {
+  const kg = Number(pkg?.weightKg);
+  if (!(kg > 0)) return null;
+  const imperial = IMPERIAL_MARKETPLACES.has(marketplaceId);
+  const round = (n) => Math.round(n * 100) / 100;
+  const sides = [pkg.lengthCm, pkg.widthCm, pkg.heightCm].map(Number);
+  const sized = sides.every((n) => n > 0);
+  return {
+    weight: imperial ? { value: round(kg * 2.20462), unit: 'POUND' } : { value: Math.round(kg * 1000) / 1000, unit: 'KILOGRAM' },
+    ...(sized
+      ? {
+          dimensions: imperial
+            ? { length: round(sides[0] / 2.54), width: round(sides[1] / 2.54), height: round(sides[2] / 2.54), unit: 'INCH' }
+            : { length: sides[0], width: sides[1], height: sides[2], unit: 'CENTIMETER' },
+        }
+      : {}),
+  };
+}
+
+function buildInventoryItem({ title, description, imageUrls, aspects, condition, quantity, identifiers, package: pkg, marketplaceId }) {
   const split = splitProductIdentifiers(aspects, identifiers);
+  const parcel = packageWeightAndSize(pkg, marketplaceId);
   return {
     availability: {
       shipToLocationAvailability: { quantity },
     },
     condition: condition || 'NEW',
+    ...(parcel ? { packageWeightAndSize: parcel } : {}),
     product: {
       title,
       description: plainDescription(description),
@@ -431,7 +459,7 @@ async function clearStaleGroup(accessToken, groupKey, variants, marketplaceId) {
   await ebayClient.deleteInventoryItemGroup(accessToken, groupKey);
 }
 
-async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, merchantLocationKey, locationInput, listingPolicies, identifiers }) {
+async function draftVariationListing(credentials, { groupKey, commonTitle, commonDescription, commonListingDescription, imageUrls, variesBy, variants, marketplaceId, categoryId, secondaryCategoryId, storeCategoryNames, merchantLocationKey, locationInput, listingPolicies, identifiers, package: pkg }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
 
   ensureListingPolicies(listingPolicies);
@@ -456,6 +484,8 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
         condition: variant.condition,
         quantity: variant.quantity,
         identifiers,
+        package: pkg,
+        marketplaceId,
       }),
       marketplaceId
     );
@@ -938,7 +968,7 @@ async function reviseInventoryListing(credentials, { groupKey, offerId, draft, l
     await ebayClient.createOrReplaceInventoryItem(
       accessToken,
       existing.sku,
-      buildInventoryItem({ title: draft.title, description: draft.description, imageUrls: draft.imageUrls, aspects: draft.aspects, condition: draft.condition, quantity: draft.quantity, identifiers: draft.identifiers }),
+      buildInventoryItem({ title: draft.title, description: draft.description, imageUrls: draft.imageUrls, aspects: draft.aspects, condition: draft.condition, quantity: draft.quantity, identifiers: draft.identifiers, package: draft.package, marketplaceId: mp }),
       mp
     );
     await ebayClient.updateOffer(accessToken, existing.offerId, offerBody(existing, { price: draft.price, quantity: draft.quantity }));
@@ -966,6 +996,8 @@ async function reviseInventoryListing(credentials, { groupKey, offerId, draft, l
         condition: variant.condition,
         quantity: variant.quantity,
         identifiers: draft.identifiers,
+        package: draft.package,
+        marketplaceId: mp,
       }),
       mp
     );
@@ -2558,6 +2590,7 @@ module.exports = {
   analyticsInputs,
   createOfferWithRetry,
   buildInventoryItem,
+  packageWeightAndSize,
   splitProductIdentifiers,
   notApplicableText,
   buildOffer,

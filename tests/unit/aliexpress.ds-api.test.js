@@ -227,3 +227,22 @@ test('normalizeProduct keeps two SKUs shown under the same label apart by their 
     ['Camo Brown 25LB', 'Camo Brown 35LB', 'Green']
   );
 });
+
+test("normalizeProduct keeps the supplier's parcel: gross weight in kg and the box in cm, as AliExpress documents package_info_dto", () => {
+  const raw = (info) => ({
+    aliexpress_ds_product_get_response: {
+      rsp_code: 200,
+      result: { ae_item_base_info_dto: { subject: 'Phone Holder' }, ae_multimedia_info_dto: { image_urls: '' }, ...(info ? { package_info_dto: info } : {}) },
+    },
+  });
+  // AliExpress's own example: gross_weight "0.050", 18 × 8 × 6.
+  assert.deepStrictEqual(dsApi.normalizeProduct(raw({ gross_weight: '0.050', package_length: 18, package_width: 8, package_height: 6, package_type: false }), '1', 'url').package, {
+    weightKg: 0.05,
+    lengthCm: 18,
+    widthCm: 8,
+    heightCm: 6,
+  });
+  assert.deepStrictEqual(dsApi.normalizeProduct(raw({ gross_weight: '1.2', package_length: 0 }), '1', 'url').package, { weightKg: 1.2, lengthCm: null, widthCm: null, heightCm: null }, 'a box without all three sides is left out');
+  assert.strictEqual(dsApi.normalizeProduct(raw({ gross_weight: '0' }), '1', 'url').package, null, 'no usable weight, no parcel');
+  assert.strictEqual(dsApi.normalizeProduct(raw(null), '1', 'url').package, null);
+});

@@ -20,6 +20,7 @@ const analyticsService = require('../analytics/analytics.service');
 const listingSort = require('./listing-sort');
 const { alignVariantPhotos } = require('./variant-photos');
 const imagePipeline = require('../ai-generation/image-pipeline');
+const aliexpressSource = require('../sourcing/aliexpress');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -341,7 +342,9 @@ async function generateEbayDraftFromUrlsNow(
   // Drafting the same supplier product twice must not hand both drafts the
   // same label; eBay itself is consulted at publish (see publishNow).
   const sku = await uniqueSku(connectionId, `Liston-${skuBase.replace(/^AE/, '')}`);
-  const finalDraftInput = { ...draftInput, skuBase, sku, ...(storeCategoryNames.length ? { storeCategoryNames } : {}) };
+  // The supplier's parcel (weight, box size) goes with it: eBay needs the
+  // weight when the account's postage policy works postage out from it.
+  const finalDraftInput = { ...draftInput, skuBase, sku, ...(storeCategoryNames.length ? { storeCategoryNames } : {}), ...(source?.package ? { package: source.package } : {}) };
 
   return createEbayDraft(connectionId, userId, finalDraftInput, {
     sourceData: { competitor, source },
@@ -694,6 +697,7 @@ async function updateDraft(id, userId, patch) {
 
   if (patch.price !== undefined) draft.price = patch.price;
   if (patch.quantity !== undefined) draft.quantity = patch.quantity;
+  if (patch.package !== undefined) draft.package = patch.package;
   if (patch.listingPolicies !== undefined) {
     // Only IDs the account really has — a typo'd or stale ID would fail at
     // publish with an opaque eBay error instead of here.
@@ -1719,6 +1723,16 @@ async function publishNow(listing, id, userId) {
   const alreadyBuilt = Boolean(listing.platform_offer_id || listing.platform_group_key);
   const photos = alreadyBuilt ? { draft, warnings: [] } : await readyPhotosForPublish(listing, draft, userId);
   draft = photos.draft;
+  // A draft made before Liston kept the supplier's parcel gets it now (one
+  // AliExpress read), so a postage policy that works postage out from the
+  // weight doesn't refuse it. Saved, so it's read once.
+  if (!alreadyBuilt && !(Number(draft.package?.weightKg) > 0)) {
+    const pkg = await supplierPackage(listing, marketplaceId);
+    if (pkg) {
+      draft = { ...draft, package: pkg };
+      await listingRepository.updateGeneratedData(id, draft);
+    }
+  }
   // The item specifics eBay will actually accept: no variation attribute
   // repeated in the shared set, identifiers the product lacks marked "Does
   // Not Apply", and anything still required but empty named here rather
@@ -1908,6 +1922,12 @@ async function publishNow(listing, id, userId) {
       err.message = explainPolicyBlock(err, readyDraft, { cleared, freshSku });
       err.statusCode = 400;
     }
+    // eBay wants the parcel's weight (the postage policy works postage out
+    // from it): said in the editor's terms, with where to put it.
+    if (isPackageWeightRefused(err)) {
+      err.message = explainPackageWeight(readyDraft.package);
+      err.statusCode = 400;
+    }
     // An option value eBay refused even though its schema called the axis
     // free text: named with the values it does take, since eBay's own
     // message points at an API call the seller can't make.
@@ -2035,6 +2055,28 @@ function dedupeVariationGroup(draft) {
 function isPolicyBlock(err) {
   const text = `${err.message || ''} ${JSON.stringify(err.details || '')}`;
   return /Hazardous Materials|PI_HAZ|improper words|violation of eBay policy/i.test(text);
+}
+
+// eBay 25020-style "…invalid shipping package details. The package weight
+// is not valid or is missing." — refused for want of the parcel's weight.
+function isPackageWeightRefused(err) {
+  const text = `${err?.message || ''} ${JSON.stringify(err?.details || '')}`;
+  return /package weight is not valid or is missing|invalid shipping package details/i.test(text);
+}
+
+function explainPackageWeight(pkg) {
+  const kg = Number(pkg?.weightKg);
+  return kg > 0
+    ? `eBay didn't accept the package weight (${kg} kg). Check the weight under Package in the draft, then publish again.`
+    : "eBay needs this listing's package weight: its postage policy works the postage out from the weight. Enter the weight under Package in the draft, then publish again.";
+}
+
+// The supplier's parcel for a draft that has none: AliExpress products only.
+async function supplierPackage(listing, marketplaceId) {
+  const url = listing.source_data?.source?.sourceUrl;
+  if (!url || !/aliexpress\./i.test(url)) return null;
+  const market = marketplaces.byId(marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
+  return aliexpressSource.fetchPackage(url, { shipTo: market.country, currency: market.currency });
 }
 
 // eBay's "A mixture of Self Hosted and EPS pictures are not allowed".

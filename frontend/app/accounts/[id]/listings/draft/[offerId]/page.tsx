@@ -11,6 +11,7 @@ import {
   DraftCategoryInfo,
   DraftContent,
   DraftListing,
+  DraftPackage,
   DraftPatch,
   ImageCheck,
   ImageProposal,
@@ -47,6 +48,31 @@ const cardClass = "card p-4";
 const cardTitleClass = "text-[14px] font-bold text-[var(--color-ink)]";
 const smallButton = "btn btn-secondary btn-sm";
 const TITLE_MAX = 80;
+
+// The parcel as typed: kg and cm, kept as text while editing.
+type PackageFields = { weightKg: string; lengthCm: string; widthCm: string; heightCm: string };
+const PACKAGE_FIELDS: [keyof PackageFields, string][] = [
+  ["weightKg", "Weight (kg)"],
+  ["lengthCm", "Length (cm)"],
+  ["widthCm", "Width (cm)"],
+  ["heightCm", "Height (cm)"],
+];
+
+function packageFields(p?: DraftPackage | null): PackageFields {
+  const text = (n?: number | null) => (n != null && n > 0 ? String(n) : "");
+  return { weightKg: text(p?.weightKg), lengthCm: text(p?.lengthCm), widthCm: text(p?.widthCm), heightCm: text(p?.heightCm) };
+}
+
+// What the fields save as: nothing without a weight (a size alone isn't kept).
+function packageFromFields(f: PackageFields): DraftPackage | null {
+  const num = (v: string) => {
+    const n = parseFloat(v);
+    return n > 0 ? n : null;
+  };
+  const weightKg = num(f.weightKg);
+  if (!weightKg) return null;
+  return { weightKg, lengthCm: num(f.lengthCm), widthCm: num(f.widthCm), heightCm: num(f.heightCm) };
+}
 
 // Small inline icons for the compact action rows.
 const Icon = {
@@ -1642,6 +1668,7 @@ export default function DraftEditorPage() {
   const [secondaryCategoryId, setSecondaryCategoryId] = useState<string | null>(null);
   const [secondaryCategoryPath, setSecondaryCategoryPath] = useState<string[]>([]);
   const [storeCategoryNames, setStoreCategoryNames] = useState<string[]>([]);
+  const [pkg, setPkg] = useState<PackageFields>(packageFields(null));
   const [categoryInfo, setCategoryInfo] = useState<DraftCategoryInfo | null>(null);
   // Words eBay's hazardous-materials filter refuses (from the server), so
   // the seller sees a "lead clip" problem while typing, not at publish.
@@ -1740,6 +1767,7 @@ export default function DraftEditorPage() {
     setSku(c.sku || "");
     setSecondaryCategoryId(c.secondaryCategoryId || null);
     setStoreCategoryNames(c.storeCategoryNames || []);
+    setPkg(packageFields(c.package));
   }, []);
 
   // The branded eBay render of the description. Rebuilt whenever the stored
@@ -1930,6 +1958,8 @@ export default function DraftEditorPage() {
     if (content && sku.trim() && sku.trim() !== (content.sku || "")) patch.sku = sku.trim();
     if (content && (secondaryCategoryId || null) !== (content.secondaryCategoryId || null)) patch.secondaryCategoryId = secondaryCategoryId;
     if (content && JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])) patch.storeCategoryNames = storeCategoryNames;
+    const typedPackage = packageFromFields(pkg);
+    if (content && JSON.stringify(typedPackage) !== JSON.stringify(packageFromFields(packageFields(content.package)))) patch.package = typedPackage;
     return patch;
   }
   // Unsaved means the save would carry something. Judged on the patch
@@ -2974,6 +3004,37 @@ export default function DraftEditorPage() {
                         {editable && list.length > 0 && !policyIds[key] && <p className="mt-1 text-[11.5px] text-[var(--color-danger)]">Not set on this draft. Choose one to publish.</p>}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* The parcel: eBay needs the weight when the postage policy works postage out from it. */}
+                {content.listingPolicies && (
+                  <div className="mt-3">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {PACKAGE_FIELDS.map(([key, label]) => (
+                        <div key={key}>
+                          <label className={labelClass}>{label}</label>
+                          {editable ? (
+                            <input
+                              type="number"
+                              step={key === "weightKg" ? "0.001" : "0.1"}
+                              min="0"
+                              inputMode="decimal"
+                              className="input input-sm mt-1"
+                              value={pkg[key]}
+                              placeholder={key === "weightKg" ? "e.g. 0.25" : "—"}
+                              onChange={(e) => setPkg((p) => ({ ...p, [key]: e.target.value }))}
+                              disabled={busy}
+                            />
+                          ) : (
+                            <p className="mt-1 text-[13px] text-[var(--color-ink)]">{pkg[key] || "—"}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+                      The parcel as shipped, from the supplier when it gives one. eBay needs the weight when your postage policy works the postage out from it.
+                    </p>
                   </div>
                 )}
               </div>

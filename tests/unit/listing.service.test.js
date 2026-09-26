@@ -8,6 +8,7 @@ const ebayService = require('../../src/modules/ebay/ebay.service');
 const listingRepository = require('../../src/modules/listings/listing.repository');
 const orchestrator = require('../../src/modules/ai-generation/generation.orchestrator');
 const listingService = require('../../src/modules/listings/listing.service');
+const aliexpressSource = require('../../src/modules/sourcing/aliexpress');
 
 const CONNECTION_ID = 'conn-1';
 const USER_ID = 'user-1';
@@ -203,7 +204,7 @@ test('generateEbayDraftFromUrls creates a variation draft with no eBay objects y
       merchantLocationKey: 'main',
     },
     competitor: { title: 'Competitor' },
-    source: { title: 'Source' },
+    source: { title: 'Source', package: { weightKg: 0.05, lengthCm: 18, widthCm: 8, heightCm: 6 } },
   }));
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
   mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
@@ -226,6 +227,7 @@ test('generateEbayDraftFromUrls creates a variation draft with no eBay objects y
   assert.strictEqual(call.platformGroupKey, null);
   assert.strictEqual(call.generatedData.skuBase, 'AE1234567890');
   assert.strictEqual(call.generatedData.variants.length, 2);
+  assert.deepStrictEqual(call.generatedData.package, { weightKg: 0.05, lengthCm: 18, widthCm: 8, heightCm: 6 }, "the supplier's parcel goes on the draft");
 });
 
 test('generateEbayDraftFromUrls refuses to draft when the shipping location is not configured', async () => {
@@ -1897,4 +1899,51 @@ test("\"Visit our eBay store\" goes to the seller's eBay Store, else to every it
   assert.strictEqual(listingService.storeLinkFor({ username: 'minsu-ltd' }, null, 'EBAY_AU'), 'https://www.ebay.com.au/sch/i.html?_ssn=minsu-ltd', "the username from eBay's profile when the account has none saved");
   assert.strictEqual(listingService.storeLinkFor({ storeUrl: 'javascript:alert(1)' }, null, 'EBAY_GB'), null, 'only an eBay address is used');
   assert.strictEqual(listingService.storeLinkFor(null, null, 'EBAY_GB'), null);
+});
+
+test("publish sends the draft's parcel, reading it from AliExpress once for a draft made before Liston kept it", async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft(
+      { marketplaceId: 'EBAY_US', skuBase: 'AE7', title: 'Phone Holder', imageUrls: ['https://i.ebayimg.com/a.jpg'] },
+      { source_data: { source: { sourceUrl: 'https://www.aliexpress.com/item/1005006.html' } } }
+    )
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  const fetchPackage = mock.method(aliexpressSource, 'fetchPackage', async () => ({ weightKg: 0.05, lengthCm: 18, widthCm: 8, heightCm: 6 }));
+  const draftMock = mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1', status: 'drafted' }));
+  mock.method(ebayService, 'publishDraft', async () => ({ externalProductId: 'ebay-1', status: 'published' }));
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await listingService.publish('listing-1', USER_ID);
+
+  assert.deepStrictEqual(fetchPackage.mock.calls[0].arguments, ['https://www.aliexpress.com/item/1005006.html', { shipTo: 'US', currency: 'USD' }]);
+  assert.deepStrictEqual(draftMock.mock.calls[0].arguments[1].package, { weightKg: 0.05, lengthCm: 18, widthCm: 8, heightCm: 6 });
+  assert.deepStrictEqual(saved.mock.calls.at(-1).arguments[1].package.weightKg, 0.05, 'kept on the draft, so it is read once');
+});
+
+test('publish leaves a draft with a weight alone, and turns eBay\'s missing-weight refusal into where to enter it', async () => {
+  const withWeight = { marketplaceId: 'EBAY_GB', skuBase: 'AE8', title: 'Lamp', imageUrls: ['https://i.ebayimg.com/a.jpg'], package: { weightKg: 0.3 } };
+  let draft = withWeight;
+  mock.method(listingRepository, 'findByIdForUser', async () => pendingDraft(draft, { source_data: { source: { sourceUrl: 'https://www.aliexpress.com/item/1005007.html' } } }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  const fetchPackage = mock.method(aliexpressSource, 'fetchPackage', async () => null);
+  mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1', status: 'drafted' }));
+  mock.method(ebayService, 'publishDraft', async () => {
+    const err = new Error('The eBay listing associated with the inventory item, or the unpublished offer has invalid shipping package details. The package weight is not valid or is missing. Provide a valid number for the weight.');
+    err.statusCode = 400;
+    err.ebayStatus = 400;
+    throw err;
+  });
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  const status = mock.method(listingRepository, 'updateStatus', async (id, s, extra) => ({ id, status: s, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), /didn't accept the package weight \(0.3 kg\)/);
+  assert.strictEqual(fetchPackage.mock.calls.length, 0, 'a draft with a weight is not read again');
+
+  // No weight anywhere (the supplier had none): the seller is told where to enter it.
+  draft = { ...withWeight, package: undefined };
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), (err) => err.statusCode === 400 && /Enter the weight under Package in the draft/.test(err.message));
+  assert.match(status.mock.calls.at(-1).arguments[2].errorMessage, /^eBay needs this listing's package weight/);
 });

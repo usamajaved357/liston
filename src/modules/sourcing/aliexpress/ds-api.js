@@ -351,6 +351,23 @@ function separateColliding(entries) {
   });
 }
 
+// The parcel the supplier ships: package_info_dto's gross weight (kg, a
+// string like "0.050") and box size (whole cm). eBay needs the weight when
+// the seller's postage policy works postage out from it. Null without a
+// usable weight; the size only when all three sides are given.
+function packageOf(info) {
+  const weightKg = Number(info?.gross_weight);
+  if (!(weightKg > 0)) return null;
+  const sides = [info.package_length, info.package_width, info.package_height].map(Number);
+  const sized = sides.every((n) => n > 0);
+  return {
+    weightKg: Math.round(weightKg * 1000) / 1000,
+    lengthCm: sized ? sides[0] : null,
+    widthCm: sized ? sides[1] : null,
+    heightCm: sized ? sides[2] : null,
+  };
+}
+
 function normalizeProduct(raw, productId, sourceUrl) {
   raiseIfError(raw);
   const body = unwrapEnvelope(raw);
@@ -413,6 +430,7 @@ function normalizeProduct(raw, productId, sourceUrl) {
     priceText,
     specifics,
     categoryBreadcrumb: [],
+    package: packageOf(body.package_info_dto),
     // A product with no options yields an empty array — common and expected,
     // not an error.
     variants,
@@ -469,4 +487,4 @@ async function fetchProduct(productId, sourceUrl, { shipTo, currency } = {}) {
   return normalizeProduct(raw, productId, sourceUrl);
 }
 
-module.exports = { fetchProduct, sign, raiseIfError, unwrapEnvelope, normalizeProduct, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };
+module.exports = { fetchProduct, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };
