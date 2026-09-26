@@ -162,11 +162,18 @@ export default function ResearchPage() {
       actions={
         budget ? (
           <span
-            className="inline-flex h-[30px] items-center gap-1.5 rounded-full bg-[var(--color-panel)] px-3 text-[12px] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]"
+            className="mr-2 flex flex-col items-end justify-center gap-1 leading-none"
             title="eBay reads research can use today. Each search reads up to 200 fixed-price listings and the sold counts of the top 20. Resets when eBay's allowance does."
           >
-            <span className={`h-1.5 w-1.5 rounded-full ${budget.remaining / budget.limit > 0.2 ? "bg-emerald-500" : budget.remaining > 0 ? "bg-amber-500" : "bg-rose-500"}`} aria-hidden />
-            <b className="font-semibold tabular-nums text-[var(--color-ink)]">{count(budget.remaining)}</b>/{count(budget.limit)} reads left today
+            <span className="text-[12px] text-[var(--color-muted)]">
+              <b className="font-semibold tabular-nums text-[var(--color-ink)]">{count(budget.remaining)}</b> of {count(budget.limit)} reads left
+            </span>
+            <span className="h-[3px] w-full overflow-hidden rounded-full bg-[var(--color-line)]" aria-hidden>
+              <span
+                className={`block h-full rounded-full ${budget.remaining / budget.limit > 0.2 ? "bg-emerald-500/80" : budget.remaining > 0 ? "bg-amber-500" : "bg-rose-500"}`}
+                style={{ width: `${Math.max(2, (budget.remaining / budget.limit) * 100)}%` }}
+              />
+            </span>
           </span>
         ) : undefined
       }
