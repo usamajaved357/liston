@@ -4,8 +4,10 @@
 // money is never added across currencies.
 //
 // Everything is read from Liston's own copies: orders from the order mirror,
-// each order's fees and earnings from ebay_order_finances (read from eBay's
-// Finances API in bulk, in the background, at most every half hour), supplier
+// each order's fees and earnings from ebay_order_finances and the account's
+// own charges (listing fees, subscriptions) from ebay_account_charges (both
+// read from eBay's Finances API in bulk, in the background, at most every
+// half hour), supplier
 // costs from order_sourcing. One account failing (expired token, eBay hiccup)
 // degrades to a partial total with the account named, rather than blanking
 // the page.
@@ -57,16 +59,17 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
   const [start, end] = ebayService.resolveRangeWindow(range, null, null, timeZone || marketplaces.timeZoneOf(connection.marketplace?.id || marketplaces.DEFAULT_ID));
   const work = await listingRepository.countListingWork(connection.id, start, end);
   const orderIds = orders.map((o) => o.orderId);
-  const [moneyByOrder, costs, archived] = await Promise.all([
+  const [moneyByOrder, costs, archived, charges] = await Promise.all([
     mirror.loadOrderFinances(connection.id, orderIds),
     orderRepository.sourceCostsByOrder(connection.id, orderIds),
     orderRepository.listArchivedOrderIds(connection.id).catch(() => []),
+    mirror.loadAccountCharges(connection.id, currency, start, end),
   ]);
   return {
     activeListings: listings,
     listings: { live: listings, drafted: work.drafted, published: work.published, waiting: work.waiting },
     ...(extras ? await salesExtras(connection, { range, timeZone, orders, recent }) : {}),
-    money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled }),
+    money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled, charges }),
     // The same dates' orders by state, for the account Overview's queue.
     queue: countQueue(orders, ebayService.classifyOrderStatus, archived),
     financesPending: !settled,

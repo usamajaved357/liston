@@ -109,6 +109,58 @@ async function loadOrderFinances(connectionId, orderIds) {
   );
 }
 
+// ---- account charges (Finances API), fees billed apart from orders ---------
+
+async function upsertAccountCharges(connectionId, rows) {
+  const BATCH = 200;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const values = [];
+    const params = [connectionId];
+    for (const r of batch) {
+      params.push(r.transactionId, r.kind, r.feeType, r.amount, r.currency, r.itemId, r.memo, r.chargedAt);
+      const n = params.length;
+      values.push(`($1, ${Array.from({ length: 8 }, (_, k) => `$${n - 7 + k}`).join(', ')}, now())`);
+    }
+    await query(
+      `INSERT INTO ebay_account_charges (connection_id, transaction_id, kind, fee_type, amount, currency, item_id, memo, charged_at, synced_at)
+       VALUES ${values.join(', ')}
+       ON CONFLICT (connection_id, transaction_id) DO UPDATE SET
+         kind = EXCLUDED.kind, fee_type = EXCLUDED.fee_type, amount = EXCLUDED.amount, currency = EXCLUDED.currency,
+         item_id = EXCLUDED.item_id, memo = EXCLUDED.memo, charged_at = EXCLUDED.charged_at, synced_at = now()`,
+      params
+    );
+  }
+}
+
+/**
+ * An account's charges from start to end (both included) in its own
+ * currency: [{ kind, feeType, amount }]. eBay bills the eBay account, not
+ * the site, so every connection
+ * of one account (its UK and Australian sites, say) reads the same charges:
+ * each counts only those in its own currency, and one also seen by an older
+ * connection of the same owner and currency counts there instead, so the
+ * business Overview never adds a shop subscription twice.
+ */
+async function loadAccountCharges(connectionId, currency, start, end) {
+  const result = await query(
+    `SELECT c.kind, c.fee_type, c.amount FROM ebay_account_charges c
+     JOIN connections me ON me.id = c.connection_id
+     WHERE c.connection_id = $1 AND c.currency = $2 AND c.charged_at >= $3 AND c.charged_at <= $4
+       AND NOT EXISTS (
+         SELECT 1 FROM ebay_account_charges o JOIN connections oc ON oc.id = o.connection_id
+         WHERE o.transaction_id = c.transaction_id AND o.connection_id <> c.connection_id AND o.currency = c.currency
+           AND oc.user_id = me.user_id AND (oc.created_at, oc.id) < (me.created_at, me.id)
+       )`,
+    [connectionId, currency, start, end]
+  );
+  return result.rows.map((r) => ({ kind: r.kind, feeType: r.fee_type, amount: Number(r.amount) }));
+}
+
+async function pruneAccountChargesBefore(connectionId, before) {
+  await query(`DELETE FROM ebay_account_charges WHERE connection_id = $1 AND charged_at < $2`, [connectionId, before]);
+}
+
 // ---- item summaries --------------------------------------------------------
 
 async function loadItemSummaries(itemIds) {
@@ -136,4 +188,7 @@ module.exports = {
   saveItemSummary,
   upsertOrderFinances,
   loadOrderFinances,
+  upsertAccountCharges,
+  loadAccountCharges,
+  pruneAccountChargesBefore,
 };

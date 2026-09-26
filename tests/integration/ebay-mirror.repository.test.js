@@ -89,6 +89,35 @@ test('order money rows are stored per order, updated in place, and read back wit
   assert.strictEqual(costs.has('O-2'), false);
 });
 
+test("an account's charges are read back by currency and dates, a charge its older sibling connection also saw counts there only, and old ones are let go", async () => {
+  const email = `test-${crypto.randomUUID()}@example.com`;
+  const { user } = await authService.signup({ email, password: 'testpassword123' });
+  const link = (label) => connectionService.createConnection(user.id, { platformKey: 'ebay', label, credentials: { accessToken: 'a', refreshToken: 'r' } });
+  const uk = (await link('Charges UK')).id;
+  const au = (await link('Charges AU')).id;
+  const otherOwner = await fixtureConnection();
+  const row = (transactionId, kind, amount, currency, chargedAt) => ({ transactionId, kind, feeType: null, amount, currency, itemId: null, memo: null, chargedAt });
+  const subscription = row('T-SUB', 'store', 27.99, 'GBP', '2026-09-20T09:00:00Z');
+  await mirror.upsertAccountCharges(uk, [subscription, row('T-INS', 'listing', 0.35, 'GBP', '2026-09-21T09:00:00Z'), row('T-OLD', 'listing', 1, 'GBP', '2026-05-01T09:00:00Z')]);
+  // eBay bills the account, so its Australian connection reads the same charges.
+  await mirror.upsertAccountCharges(au, [subscription, row('T-AUD', 'listing', 0.5, 'AUD', '2026-09-21T09:00:00Z')]);
+  await mirror.upsertAccountCharges(otherOwner, [subscription]);
+  // Read again with a credit back: updated in place.
+  await mirror.upsertAccountCharges(uk, [{ ...row('T-INS', 'listing', -0.35, 'GBP', '2026-09-21T09:00:00Z'), feeType: 'INSERTION_FEE' }]);
+
+  const window = [new Date('2026-09-01T00:00:00Z'), new Date('2026-09-30T23:59:59.999Z')];
+  const ofUk = await mirror.loadAccountCharges(uk, 'GBP', ...window);
+  assert.deepStrictEqual(ofUk.map((c) => [c.kind, c.amount]).sort(), [['listing', -0.35], ['store', 27.99]]);
+  assert.deepStrictEqual(await mirror.loadAccountCharges(au, 'GBP', ...window), [], 'the shop subscription counts on the older UK connection only');
+  assert.deepStrictEqual((await mirror.loadAccountCharges(au, 'AUD', ...window)).map((c) => c.amount), [0.5]);
+  assert.strictEqual((await mirror.loadAccountCharges(otherOwner, 'GBP', ...window)).length, 1, "another owner's connection keeps its own");
+  assert.deepStrictEqual(await mirror.loadAccountCharges(uk, 'GBP', new Date('2026-09-20T09:00:01Z'), new Date('2026-09-20T23:00:00Z')), [], 'outside the dates');
+
+  await mirror.pruneAccountChargesBefore(uk, new Date('2026-06-01T00:00:00Z'));
+  const left = await pool.query('SELECT transaction_id FROM ebay_account_charges WHERE connection_id = $1 ORDER BY transaction_id', [uk]);
+  assert.deepStrictEqual(left.rows.map((r) => r.transaction_id), ['T-INS', 'T-SUB']);
+});
+
 test('an account\'s listing work counts drafts made and listings published in the dates, and drafts waiting now', async () => {
   const connectionId = await fixtureConnection();
   const listingRepository = require('../../src/modules/listings/listing.repository');

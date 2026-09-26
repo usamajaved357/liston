@@ -91,6 +91,99 @@ test('an account\'s money: sales from order totals, fees and earnings from eBay,
   assert.strictEqual(moneySummary.summarise([order('A', 20)], finances, new Map(), { currency: 'GBP' }).roi, null, 'no costs, no ROI');
 });
 
+// Charges eBay bills the account apart from its orders, as getTransactions
+// books them (NON_SALE_CHARGE, no order among the references).
+const charge = (feeType, value, extra = {}) => ({
+  transactionId: `T-${feeType}-${value}`,
+  transactionType: 'NON_SALE_CHARGE',
+  feeType,
+  bookingEntry: 'DEBIT',
+  transactionDate: '2026-09-21T08:00:00.000Z',
+  amount: gbp(value),
+  ...extra,
+});
+
+test("the account's own charges are kept by kind: listing fees, the eBay Store subscription, ads billed per click and the rest; credits back count against them", () => {
+  const rows = ebayFinances.accountChargesFrom([
+    charge('INSERTION_FEE', 0.35, { references: [{ referenceId: '198617135072', referenceType: 'ITEM_ID' }] }),
+    charge('SUBTITLE_FEE', 0.4),
+    charge('EBAY_STORE_SUBSCRIPTION_FEE', 27.99, { transactionMemo: 'Basic Store' }),
+    // eBay UK's shop subscription, as it came live: OTHER_FEES, its memo the period paid for.
+    charge('OTHER_FEES', 32.4, { transactionMemo: '2026-08-31 - 2026-09-29' }),
+    charge('AD_FEE', 3.1),
+    charge('BELOW_STANDARD_FEE', 1.2),
+    charge('INSERTION_FEE', 0.35, { transactionId: 'T-back', bookingEntry: 'CREDIT' }),
+    { transactionId: 'T-credit', transactionType: 'CREDIT', feeType: 'PROMOTIONAL_CREDIT', bookingEntry: 'CREDIT', transactionDate: '2026-09-22T08:00:00.000Z', amount: gbp(5) },
+    // Not the account's: an ad fee on an order belongs to that order; tax isn't a fee; a sale isn't a charge.
+    adFee('27-1', 1.28),
+    charge('VAT_WITHHOLDING', 2),
+    sale('27-2', { basis: 5, fees: 1, net: 4 }),
+  ]);
+  assert.deepStrictEqual(
+    rows.map((r) => [r.kind, r.feeType, r.amount]),
+    [
+      ['listing', 'INSERTION_FEE', 0.35],
+      ['listing', 'SUBTITLE_FEE', 0.4],
+      ['store', 'EBAY_STORE_SUBSCRIPTION_FEE', 27.99],
+      ['store', 'OTHER_FEES', 32.4],
+      ['ads', 'AD_FEE', 3.1],
+      ['other', 'BELOW_STANDARD_FEE', 1.2],
+      ['listing', 'INSERTION_FEE', -0.35],
+      ['other', 'PROMOTIONAL_CREDIT', -5],
+    ]
+  );
+  assert.deepStrictEqual(rows[0], {
+    transactionId: 'T-INSERTION_FEE-0.35',
+    kind: 'listing',
+    feeType: 'INSERTION_FEE',
+    amount: 0.35,
+    currency: 'GBP',
+    itemId: '198617135072',
+    memo: null,
+    chargedAt: '2026-09-21T08:00:00.000Z',
+  });
+  assert.strictEqual(rows[2].memo, 'Basic Store');
+  assert.strictEqual(ebayFinances.chargeKind('MARKETPLACE_RESEARCH_PRO_SUBSCRIPTION_FEE'), 'other', 'Terapeak Pro is a subscription, not the shop');
+  assert.strictEqual(ebayFinances.chargeKind('AD_FEE_PROMOTED_LISTINGS_ADVANCED'), 'ads');
+  assert.strictEqual(ebayFinances.chargeKind('CHARITY_DONATION'), null);
+  assert.strictEqual(ebayFinances.chargeKind('OTHER_FEES', { memo: 'Seller fee adjustment' }), 'other');
+  assert.strictEqual(ebayFinances.chargeKind('OTHER_FEES', { memo: '2026-08-31 - 2026-09-29', itemId: '1986' }), 'other', 'a charge on a listing is not the shop subscription');
+});
+
+test("the account's charges are fees: they add to the fees, come off the earnings and profit, and ROI's orders carry their share by sales", () => {
+  const orders = [order('A', 30), order('B', 10)];
+  const finances = new Map([
+    ['A', { fees: 4, adFees: 1, refunds: 0, earnings: 26 }],
+    ['B', { fees: 2, adFees: 0, refunds: 0, earnings: 8 }],
+  ]);
+  const costs = new Map([['A', { value: 10, currency: 'GBP' }]]);
+  const charges = [
+    { kind: 'store', amount: 27.99 },
+    { kind: 'listing', amount: 0.75 },
+    { kind: 'listing', amount: -0.35 },
+    { kind: 'ads', amount: 3.1 },
+    { kind: 'other', amount: 0.51 },
+  ];
+  const m = moneySummary.summarise(orders, finances, costs, { currency: 'GBP', charges });
+  assert.strictEqual(m.fees, 38, '6 on the orders + 32 charged to the account');
+  assert.strictEqual(m.adFees, 4.1, "the order's ad fee and the ones billed per click");
+  assert.deepStrictEqual([m.accountFees, m.listingFees, m.storeFees, m.otherFees], [28.9, 0.4, 27.99, 0.51]);
+  assert.strictEqual(m.earnings, 2, '34 on the orders less the 32 charged');
+  assert.strictEqual(m.profit, -8, 'earnings less the 10 paid to the supplier');
+  // A sold 30 of the 40: it carries 24 of the 32. (26 − 10 − 24) ÷ 10.
+  assert.strictEqual(m.roi, -80);
+  assert.strictEqual(m.sales, 40, 'sales are what buyers paid, charges or not');
+
+  const both = moneySummary.addUp([m, m], 'GBP');
+  assert.deepStrictEqual([both.fees, both.accountFees, both.storeFees, both.roi], [76, 57.8, 55.98, -80]);
+  const inUsd = moneySummary.convert(m, 2, 'USD');
+  assert.deepStrictEqual([inUsd.storeFees, inUsd.accountFees, inUsd.currency], [14, 14.45, 'USD']);
+
+  // A day with no orders still shows what eBay charged that day.
+  const quiet = moneySummary.summarise([], new Map(), new Map(), { currency: 'GBP', charges: [{ kind: 'store', amount: 27.99 }] });
+  assert.deepStrictEqual([quiet.fees, quiet.earnings, quiet.profit, quiet.roi], [27.99, -27.99, -27.99, null]);
+});
+
 test('an account with no finances permission is skipped, not read', async () => {
   const reads = mock.method(ebayFinances, 'getTransactions', async () => ({ transactions: [] }));
   mock.method(ebayOauth, 'hasScope', () => false);
@@ -109,6 +202,8 @@ test('the first finance read covers 90 days in parallel pages; the next only wha
     snapshot = { value, meta, syncedAt: 0 }; // stale at once, so the next call reads again
   });
   mock.method(mirror, 'upsertOrderFinances', async (id, rows) => stored.push(...rows));
+  mock.method(mirror, 'upsertAccountCharges', async () => {});
+  mock.method(mirror, 'pruneAccountChargesBefore', async () => {});
 
   const windows = [];
   mock.method(ebayFinances, 'getTransactions', async (token, { from, offset }) => {
@@ -137,4 +232,39 @@ test('the first finance read covers 90 days in parallel pages; the next only wha
   assert.strictEqual(history.mock.calls[0].arguments[1], 'OLD');
   assert.strictEqual(next.orders, 1);
   assert.deepStrictEqual(stored.at(-1), { orderId: 'OLD', currency: 'GBP', gross: 12, fees: 2, adFees: 0, refunds: 3, earnings: 7, fundsStatus: 'Available', saleDate: '2026-09-20T10:00:00.000Z' });
+});
+
+test("the finance read keeps the account's charges, and an account read before charges were kept is read in full once more", async () => {
+  mock.method(ebayOauth, 'hasScope', () => true);
+  const credentials = { accessToken: 't', accessTokenExpiresAt: Date.now() + 3600e3, marketplaceId: 'EBAY_GB', signingKey: { jwe: 'j', privateKey: 'k' } };
+  // Read ten minutes ago, when charges were sorted the older way: not fresh enough to skip.
+  let snapshot = { value: { count: 3 }, meta: { lastSyncAt: new Date(Date.now() - 10 * 60e3).toISOString(), charges: 2 }, syncedAt: new Date(Date.now() - 10 * 60e3) };
+  mock.method(mirror, 'loadSnapshot', async () => snapshot);
+  mock.method(mirror, 'saveSnapshot', async (id, kind, value, meta) => {
+    snapshot = { value, meta, syncedAt: new Date() };
+  });
+  mock.method(mirror, 'upsertOrderFinances', async () => {});
+  const kept = [];
+  mock.method(mirror, 'upsertAccountCharges', async (id, rows) => kept.push(...rows));
+  const pruned = mock.method(mirror, 'pruneAccountChargesBefore', async () => {});
+  const windows = [];
+  mock.method(ebayFinances, 'getTransactions', async (token, { from }) => {
+    windows.push(from);
+    return { total: 3, transactions: [sale('P1', { basis: 10, fees: 1, net: 9 }), charge('EBAY_STORE_SUBSCRIPTION_FEE', 27.99), charge('INSERTION_FEE', 0.35)] };
+  });
+  const history = mock.method(ebayFinances, 'getOrderTransactions', async () => ({ transactions: [] }));
+
+  const result = await ebayService.syncOrderFinances(credentials, 'fin-charges');
+  const days = (Date.now() - new Date(windows[0]).getTime()) / 864e5;
+  assert.ok(days > 89 && days < 91, `read in full again (${days})`);
+  assert.strictEqual(history.mock.calls.length, 0, 'a full read fetches no late orders');
+  assert.deepStrictEqual([result.orders, result.charges], [1, 2]);
+  assert.deepStrictEqual(kept.map((c) => [c.kind, c.amount]), [['store', 27.99], ['listing', 0.35]]);
+  assert.strictEqual(snapshot.meta.charges, 3);
+  const keptDays = (Date.now() - pruned.mock.calls[0].arguments[1].getTime()) / 864e5;
+  assert.ok(keptDays > 99 && keptDays < 101, 'charges older than 100 days are let go');
+
+  // Now fresh, with charges kept: skipped.
+  const again = await ebayService.syncOrderFinances(credentials, 'fin-charges');
+  assert.strictEqual(again.skipped, 'fresh');
 });

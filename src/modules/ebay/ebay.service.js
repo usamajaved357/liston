@@ -2405,15 +2405,25 @@ async function ordersInRange(credentials, { connectionId, range, from, to, timeZ
 
 // Each order's money as eBay's Finances API has it (fees, ad fees, what
 // reached the seller, refunds), kept in ebay_order_finances for the
-// Overview. Read in bulk: every transaction in a date window, 1,000 to a
-// call. The first read covers eBay's 90 days; after that the window since
-// the last read (with a few days' overlap for fees and refunds eBay books
-// late), at most every FINANCES_FRESH_MS. An order whose sale fell before
-// the window but got a refund or an ad fee inside it is read on its own.
+// Overview, and what eBay charged the account apart from its orders
+// (listing fees, the eBay Store subscription, ads billed per click) in
+// ebay_account_charges. Read in bulk: every transaction in a date window,
+// 1,000 to a call. The first read covers eBay's 90 days; after that the
+// window since the last read (with a few days' overlap for fees and refunds
+// eBay books late), at most every FINANCES_FRESH_MS. An order whose sale
+// fell before the window but got a refund or an ad fee inside it is read on
+// its own. Accounts read before charges were kept as they are now
+// (meta.charges below CHARGES_VERSION) get one full read again, so their
+// last 90 days of charges are there, sorted the current way.
 const FINANCES_FRESH_MS = 30 * 60 * 1000;
 const FINANCES_OVERLAP_MS = 3 * DAY_MS;
 const FINANCES_MAX_PAGES = 20;
 const FINANCES_LATE_ORDERS = 50;
+// Charges kept a little past the 90 days the Overview can show.
+const CHARGES_KEPT_MS = 100 * DAY_MS;
+// 2: a subscription eBay files as OTHER_FEES is told by its billing period.
+// 3: the eBay Store subscription apart from other subscriptions.
+const CHARGES_VERSION = 3;
 const financesRunning = new Map();
 
 function syncOrderFinances(credentials, connectionId, { force = false } = {}) {
@@ -2428,12 +2438,13 @@ async function syncOrderFinancesNow(credentials, id, { force }) {
   if (!ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES)) return { skipped: 'scope', credentialsChanged: false, credentials };
   const state = await mirror.loadSnapshot(id, 'finances').catch(() => null);
   const now = new Date();
-  if (!force && state && now - state.syncedAt < FINANCES_FRESH_MS) return { skipped: 'fresh', credentialsChanged: false, credentials };
+  const chargesKept = Number(state?.meta?.charges) >= CHARGES_VERSION;
+  if (!force && state && chargesKept && now - state.syncedAt < FINANCES_FRESH_MS) return { skipped: 'fresh', credentialsChanged: false, credentials };
 
   const { accessToken, credentials: refreshed, credentialsChanged } = await ensureValidAccessToken(credentials);
   const marketplaceId = credentials.marketplaceId || marketplaces.DEFAULT_ID;
   const signed = await ensureSigningKey({ ...refreshed, marketplaceId }, accessToken);
-  const lastSyncAt = state?.meta?.lastSyncAt ? new Date(state.meta.lastSyncAt) : null;
+  const lastSyncAt = state?.meta?.lastSyncAt && chargesKept ? new Date(state.meta.lastSyncAt) : null;
   const from = lastSyncAt ? new Date(lastSyncAt.getTime() - FINANCES_OVERLAP_MS) : ordersHorizon(now);
 
   // The first page says how many there are; the rest are read together
@@ -2460,10 +2471,13 @@ async function syncOrderFinancesNow(credentials, id, { force }) {
     );
     for (const res of histories) rows.push(...ebayFinances.orderFinancesFrom(res?.transactions || []));
   }
+  const charges = ebayFinances.accountChargesFrom(transactions);
   await mirror.upsertOrderFinances(id, rows);
-  await mirror.saveSnapshot(id, 'finances', { count: rows.length }, { lastSyncAt: now.toISOString() });
+  await mirror.upsertAccountCharges(id, charges);
+  await mirror.pruneAccountChargesBefore(id, new Date(now.getTime() - CHARGES_KEPT_MS));
+  await mirror.saveSnapshot(id, 'finances', { count: rows.length }, { lastSyncAt: now.toISOString(), charges: CHARGES_VERSION });
   const changed = credentialsChanged || signed.credentialsChanged;
-  return { orders: rows.length, credentialsChanged: changed, credentials: signed.credentialsChanged ? signed.credentials : refreshed };
+  return { orders: rows.length, charges: charges.length, credentialsChanged: changed, credentials: signed.credentialsChanged ? signed.credentials : refreshed };
 }
 
 async function getEarningsSummary(credentials, { connectionId, range, from, to, timeZone = null, push = false }) {

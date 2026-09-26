@@ -60,6 +60,8 @@ interface Detail {
   fromEbay?: boolean;
   // Shown in amber: something the total leaves out.
   warn?: (m: MoneySummary) => boolean;
+  // Only when this says so (a line that's usually nothing).
+  shown?: (m: MoneySummary) => boolean;
 }
 
 interface Step {
@@ -68,7 +70,7 @@ interface Step {
   tone: Tone;
   // The small marker beside the card's name.
   accent: string;
-  note: string;
+  note: string | ((m: MoneySummary) => string);
   // The longer explanation, on hover.
   hint: string;
   fromEbay?: boolean;
@@ -94,13 +96,16 @@ const STEPS: Step[] = [
     figure: { kind: "money", of: (m) => m.fees },
     tone: "out",
     accent: "bg-rose-400",
-    note: "Taken by eBay",
-    hint: "Everything eBay took: final value, other selling fees and ads",
+    note: (m) => (m.settledSales > 0 ? `${percent(m.fees, m.settledSales)} of sales` : "Taken by eBay"),
+    hint: "Everything eBay took: the fees on each order, ads, listing fees and the eBay Store subscription",
     fromEbay: true,
     details: [
-      { label: "eBay fees", figure: { kind: "money", of: (m) => m.fees - m.adFees }, fromEbay: true, tone: "out" },
+      { label: "Order fees", figure: { kind: "money", of: (m) => m.fees - m.adFees - (m.accountFees ?? 0) }, fromEbay: true, tone: "out" },
       { label: "Ad fees", figure: { kind: "money", of: (m) => m.adFees }, fromEbay: true, tone: "out" },
-      { label: "Of sales", figure: { kind: "text", of: (m) => percent(m.fees, m.settledSales) }, fromEbay: true },
+      { label: "Listing fees", figure: { kind: "money", of: (m) => m.listingFees ?? 0 }, fromEbay: true, tone: "out" },
+      { label: "Store fee", figure: { kind: "money", of: (m) => m.storeFees ?? 0 }, fromEbay: true, tone: "out" },
+      // Other subscriptions (Terapeak Pro…), payout fees and the like: rare.
+      { label: "Other fees", figure: { kind: "money", of: (m) => m.otherFees ?? 0 }, fromEbay: true, tone: "out", shown: (m) => (m.otherFees ?? 0) !== 0 },
     ],
   },
   {
@@ -262,9 +267,11 @@ export function SalesCards({
                     ))}
               </>
             )}
-            <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">{blocked && !loading ? "Needs the account reconnected" : step.note}</span>
-            <dl className="mt-3.5 space-y-1.5 border-t border-[var(--color-line)] pt-3 text-[12.5px]">
-              {step.details.map((d) => {
+            <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">
+              {blocked && !loading ? "Needs the account reconnected" : typeof step.note === "function" ? (main && !loading ? step.note(main) : "\u00a0") : step.note}
+            </span>
+            <dl className="mt-3.5 space-y-1 border-t border-[var(--color-line)] pt-3 text-[12.5px]">
+              {step.details.filter((d) => !d.shown || (main && !loading && d.shown(main))).map((d) => {
                 const dBlocked = Boolean(unavailable && d.fromEbay);
                 const warn = main && !dBlocked ? d.warn?.(main) : false;
                 return (

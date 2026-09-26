@@ -11,7 +11,7 @@ import { formatAmount, maskAmount } from "./OverviewMoney";
 // scrolling. Amounts follow the show/hide choice (lib/useAmounts); units and
 // orders always show.
 
-const CHART_HEIGHT = 196;
+const CHART_HEIGHT = 164;
 export const BEST_SELLERS_SHOWN = 5;
 
 // Which line is which, on one line: the chosen dates (solid), the stretch
@@ -119,7 +119,7 @@ export function BestSellersCard({ items, hidden, showMarket, flagOf }: { items: 
         <ol className="mt-1.5 divide-y divide-[var(--color-line)]">
           {shown.map((item, i) => (
             <li key={`${item.marketplaceId}-${item.itemId}`}>
-              <a href={item.url} target="_blank" rel="noreferrer" className="group flex items-center gap-2.5 px-4 py-1.5 transition-colors hover:bg-[var(--color-paper)]/70" title={item.title ?? undefined}>
+              <a href={item.url} target="_blank" rel="noreferrer" className="group flex items-center gap-2.5 px-4 py-[5px] transition-colors hover:bg-[var(--color-paper)]/70" title={item.title ?? undefined}>
                 <span className="w-3 shrink-0 text-center text-[11.5px] font-semibold tabular-nums text-[var(--color-muted)]">{i + 1}</span>
                 {item.image ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -127,9 +127,9 @@ export function BestSellersCard({ items, hidden, showMarket, flagOf }: { items: 
                 ) : (
                   <span className="h-7 w-7 shrink-0 rounded-md border border-dashed border-[var(--color-line)] bg-[var(--color-paper)]" />
                 )}
-                <span className="min-w-0 flex-1">
+                <span className="min-w-0 flex-1 leading-tight">
                   <span className="block truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{item.title ?? `Item ${item.itemId}`}</span>
-                  <span className="block truncate text-[11px] text-[var(--color-muted)]">
+                  <span className="mt-0.5 block truncate text-[11px] text-[var(--color-muted)]">
                     {showMarket && `${flagOf(item.marketplaceId)} `}
                     {item.account}
                     {!item.live && " · ended"}

@@ -46,6 +46,7 @@ test("the business Overview shows each market's sales by day and best sellers, w
   }));
   mock.method(listingRepository, 'countListingWork', async () => ({ drafted: 0, published: 0, waiting: 0 }));
   mock.method(mirror, 'loadOrderFinances', async () => new Map());
+  mock.method(mirror, 'loadAccountCharges', async () => []);
   mock.method(mirror, 'loadItemSummaries', async (ids) => new Map(ids.includes('222') ? [['222', { summary: { imageUrl: 'https://i.ebayimg.com/222.jpg' } }]] : []));
   mock.method(orderRepository, 'sourceCostsByOrder', async () => new Map());
   mock.method(orderRepository, 'listArchivedOrderIds', async () => []);

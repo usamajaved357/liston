@@ -60,8 +60,17 @@ async function request<T>(
 export interface MoneySummary {
   currency: string;
   sales: number;
+  // Everything eBay took: each order's fees and the account's own charges.
   fees: number;
+  // Promoted-listing fees, on orders or billed per click.
   adFees: number;
+  // What eBay charged the account apart from its orders, ads aside:
+  // listing and upgrade fees, the eBay Store (shop) subscription, and the
+  // rest (other subscriptions, payout fees…).
+  accountFees?: number;
+  listingFees?: number;
+  storeFees?: number;
+  otherFees?: number;
   refunds: number;
   earnings: number;
   sourceCost: number;
