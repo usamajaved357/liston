@@ -6,6 +6,7 @@ import { api, ApiError, AccountAnalytics, AnalyticsRange } from "@/lib/api";
 import { cacheResponse, cachedResponse, readView, writeView } from "@/lib/viewState";
 import { slug } from "@/lib/csv";
 import { useConnection } from "@/lib/useConnection";
+import { pageScroller } from "@/lib/pageScroll";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
@@ -127,7 +128,7 @@ function AnalyticsPageInner() {
   const scrollRestored = useRef(false);
   useEffect(() => {
     if (!scrollReady) return;
-    const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+    const scroller = pageScroller();
     if (!scroller) return;
     if (!scrollRestored.current) {
       scrollRestored.current = true;

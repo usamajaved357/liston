@@ -54,7 +54,7 @@ function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
     { key: "access", label: "Access" },
   ];
   return (
-    <div role="tablist" className="flex gap-1 border-b border-[var(--color-line)]">
+    <div role="tablist" className="flex w-full gap-1 border-b border-[var(--color-line)] sm:w-auto">
       {tabs.map((t) => (
         <button
           key={t.key}
@@ -62,7 +62,7 @@ function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
           role="tab"
           aria-selected={value === t.key}
           onClick={() => onChange(t.key)}
-          className={`-mb-px border-b-2 px-3.5 py-2 text-[13px] font-medium transition-colors ${
+          className={`-mb-px flex-1 border-b-2 px-3.5 py-2.5 text-[14px] font-medium transition-colors sm:flex-none sm:py-2 sm:text-[13px] ${
             value === t.key ? "border-[var(--color-primary)] text-[var(--color-primary)]" : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]"
           }`}
         >
@@ -84,7 +84,7 @@ function RangePicker({ range, custom, onChange }: { range: TeamRange; custom: { 
   }, [custom.from, custom.to]);
   const today = new Date().toISOString().slice(0, 10);
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
       <SegmentedControl
         label="Period"
         value={open ? "custom" : range}
@@ -99,15 +99,15 @@ function RangePicker({ range, custom, onChange }: { range: TeamRange; custom: { 
       />
       {open && (
         <form
-          className="flex items-center gap-1.5"
+          className="flex w-full items-center gap-1.5 sm:w-auto"
           onSubmit={(e) => {
             e.preventDefault();
             if (from && to) onChange("custom", { from, to });
           }}
         >
-          <input type="date" value={from} max={to || today} onChange={(e) => setFrom(e.target.value)} className="input input-sm w-auto" aria-label="From" />
+          <input type="date" value={from} max={to || today} onChange={(e) => setFrom(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="From" />
           <span className="text-[12px] text-[var(--color-muted)]">to</span>
-          <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="input input-sm w-auto" aria-label="To" />
+          <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="To" />
           <button type="submit" disabled={!from || !to || from > to} className="btn btn-secondary btn-sm">
             Apply
           </button>
@@ -184,7 +184,26 @@ function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (ki
         {data.accounts.length === 0 ? (
           <p className="border-t border-[var(--color-line)] px-4 py-4 text-[12.5px] text-[var(--color-muted)]">Nothing in this period.</p>
         ) : (
-          <div className="overflow-x-auto border-t border-[var(--color-line)]">
+          <>
+          <ul className="divide-y divide-[var(--color-line)] border-t border-[var(--color-line)] md:hidden">
+            {data.accounts.map((a) => (
+              <li key={a.connectionId || a.label} className="px-4 py-3">
+                <p className="text-[13.5px] font-medium text-[var(--color-ink)]">
+                  {a.label}
+                  {!a.connectionId && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">(disconnected)</span>}
+                </p>
+                <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[12.5px]">
+                  {columns.map((m) => (
+                    <div key={m.key} className="flex items-baseline justify-between gap-2">
+                      <dt className="truncate text-[var(--color-muted)]">{m.label}</dt>
+                      <dd className={`tabular-nums ${a[m.key] ? "font-medium text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>{fullNumber(a[m.key])}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </li>
+            ))}
+          </ul>
+          <div className="hidden overflow-x-auto border-t border-[var(--color-line)] md:block">
             <table className="w-full min-w-[520px] text-[12.5px]">
               <thead>
                 <tr className="bg-[var(--color-paper)] text-[10.5px] uppercase tracking-wide text-[var(--color-muted)]">
@@ -213,6 +232,7 @@ function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (ki
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
       <p className="text-[11.5px] leading-relaxed text-[var(--color-muted)]">
@@ -324,7 +344,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
   return (
     <div className="card overflow-hidden">
       <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-        <select value={kind} onChange={(e) => onKind(e.target.value)} className="input input-sm w-auto" aria-label="What">
+        <select value={kind} onChange={(e) => onKind(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="What">
           <option value="">All work</option>
           {metrics.map((m) => (
             <option key={m.key} value={m.key}>
@@ -338,7 +358,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
           ))}
         </select>
         {connections.length > 1 && (
-          <select value={connectionId} onChange={(e) => setConnectionId(e.target.value)} className="input input-sm w-auto" aria-label="eBay account">
+          <select value={connectionId} onChange={(e) => setConnectionId(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="eBay account">
             <option value="">All accounts</option>
             {connections.map((c) => (
               <option key={c.id} value={c.id}>
@@ -347,7 +367,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
             ))}
           </select>
         )}
-        <button type="button" onClick={exportCsv} disabled={exporting || items.length === 0} className="btn btn-secondary btn-sm ml-auto">
+        <button type="button" onClick={exportCsv} disabled={exporting || items.length === 0} className="btn btn-secondary btn-sm flex-shrink-0 sm:ml-auto">
           <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
             <path d="M12 4v11M7 10l5 5 5-5M5 20h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -374,7 +394,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
               i.subjectType === "order" ? `Order ${i.subjectId}` : i.subjectType === "listing" ? `#${i.subjectId}` : i.subjectType === "draft" ? "Draft" : null;
             return (
               <li key={i.id} className="flex items-start gap-3 px-4 py-2.5">
-                <span className="w-24 flex-shrink-0 pt-px text-[11.5px] tabular-nums text-[var(--color-muted)]" title={timeZone ? `${timeZone} time` : undefined}>
+                <span className="hidden w-24 flex-shrink-0 pt-px text-[11.5px] tabular-nums text-[var(--color-muted)] sm:block" title={timeZone ? `${timeZone} time` : undefined}>
                   {inZone(i.at, timeZone).label}
                 </span>
                 <div className="min-w-0 flex-1">
@@ -392,8 +412,11 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
                   {(i.title || (i.kind === "order.note" && typeof i.detail.text === "string")) && (
                     <p className="mt-0.5 truncate text-[11.5px] text-[var(--color-muted)]">{i.kind === "order.note" && typeof i.detail.text === "string" ? `“${i.detail.text}”` : i.title}</p>
                   )}
+                  <p className="mt-0.5 text-[11.5px] tabular-nums text-[var(--color-muted)] sm:hidden">
+                    {[inZone(i.at, timeZone).label, i.connectionLabel, i.amount != null ? formatMoney({ amount: i.amount, currency: i.currency || undefined }) : null].filter(Boolean).join(" · ")}
+                  </p>
                 </div>
-                <div className="flex-shrink-0 text-right">
+                <div className="hidden flex-shrink-0 text-right sm:block">
                   {i.amount != null && <p className="text-[12px] tabular-nums text-[var(--color-ink)]">{formatMoney({ amount: i.amount, currency: i.currency || undefined })}</p>}
                   <p className="text-[11px] text-[var(--color-muted)]">{i.connectionLabel}</p>
                 </div>
@@ -519,8 +542,13 @@ function MemberPageBody() {
       isAdmin={user.is_admin}
       header={
         <div className="flex min-w-0 items-center gap-3">
-          <Link href="/team" className="btn btn-ghost btn-icon flex-shrink-0" aria-label="Back to Team" title="Back to Team">
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+          <Link
+            href="/team"
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"
+            aria-label="Back to Team"
+            title="Back to Team"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
               <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </Link>
@@ -531,7 +559,7 @@ function MemberPageBody() {
               {removed && <span className="chip text-[11px] font-medium text-[var(--color-muted)]">Removed {formatShortDate(member!.deactivated_at!)}</span>}
             </h1>
             {member && (
-              <p className="truncate text-[12.5px] text-[var(--color-muted)]">
+              <p className="line-clamp-2 text-[12.5px] text-[var(--color-muted)] sm:line-clamp-none sm:truncate">
                 {member.name ? `${member.email} · ` : ""}added {formatShortDate(member.created_at)} · last login {timeAgo(member.last_login_at)} · last active {timeAgo(member.lastActiveAt)}
               </p>
             )}
@@ -557,18 +585,18 @@ function MemberPageBody() {
           <>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <Tabs value={tab} onChange={(t) => setQuery({ tab: t === "performance" ? null : t })} />
-              <div className="flex items-center gap-2">
+              <div className="flex w-full items-center gap-2 sm:w-auto">
                 {!removed && (
-                  <button type="button" onClick={() => setResetOpen(true)} className="btn btn-secondary btn-sm">
+                  <button type="button" onClick={() => setResetOpen(true)} className="btn btn-secondary btn-sm max-sm:flex-1">
                     Change password
                   </button>
                 )}
                 {removed ? (
-                  <button type="button" onClick={() => setRemoved(false)} disabled={busy} className="btn btn-primary btn-sm">
+                  <button type="button" onClick={() => setRemoved(false)} disabled={busy} className="btn btn-primary btn-sm max-sm:flex-1">
                     {busy ? "Restoring…" : "Restore access"}
                   </button>
                 ) : (
-                  <button type="button" onClick={() => setConfirmRemove(true)} className="btn btn-danger-ghost btn-sm">
+                  <button type="button" onClick={() => setConfirmRemove(true)} className="btn btn-danger-ghost btn-sm max-sm:flex-1">
                     Remove access
                   </button>
                 )}

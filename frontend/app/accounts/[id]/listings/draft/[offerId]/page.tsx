@@ -693,7 +693,7 @@ function ImagePickerDialog({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-[var(--color-ink)]">{title}</h2>
@@ -1130,7 +1130,86 @@ function VariationsTable({
         ))}
       </div>
 
-      <div className="mt-2.5 overflow-x-auto rounded-xl border border-[var(--color-line)]">
+      {/* A phone: one card per variation, the same controls as the table's row. */}
+      <ul className="mt-2.5 divide-y divide-[var(--color-line)] rounded-xl border border-[var(--color-line)] md:hidden">
+        {variants.map((v, i) => {
+          const gone = isRowGone(v, i);
+          const rowRemovedDirectly = removedIndexes.has(i);
+          const image = imageOverrides[i] ?? v.imageUrls[0];
+          const roi = v.priceBreakdown ? repriceBreakdown(v.priceBreakdown, priceOverrides[i] ?? v.price.value) : undefined;
+          const name = axes.map((axis) => (v.aspects[axis]?.[0] !== undefined ? showValue(axis, v.aspects[axis][0]) : "—")).join(" · ");
+          return (
+            <li key={v.sku || i} className={`px-3 py-3 ${gone ? "bg-[var(--color-paper)]/60 text-[var(--color-muted)]" : ""}`}>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={disabled || gone}
+                  onClick={() => setPickerFor(i)}
+                  aria-label="Change this variation's photo"
+                  className="relative block h-11 w-11 flex-shrink-0 rounded-lg disabled:cursor-default"
+                >
+                  {image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={image} alt="" className={`h-11 w-11 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
+                  ) : (
+                    <span className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">none</span>
+                  )}
+                </button>
+                <p className={`min-w-0 flex-1 text-[14px] font-medium leading-snug ${gone ? "line-through" : "text-[var(--color-ink)]"}`}>{name}</p>
+                {!disabled &&
+                  (rowRemovedDirectly ? (
+                    <button type="button" onClick={() => onRestoreRow(i)} aria-label="Restore this variation" className="btn btn-secondary btn-icon flex-shrink-0 text-[var(--color-accent)]">
+                      {Icon.restore}
+                    </button>
+                  ) : gone ? null : (
+                    <button type="button" onClick={() => onRemoveRow(i)} aria-label="Remove this variation" className="btn btn-danger-ghost btn-icon flex-shrink-0">
+                      {Icon.trash}
+                    </button>
+                  ))}
+              </div>
+              <div className="mt-2.5 flex items-end gap-2">
+                <label className="min-w-0 flex-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Price ({currencySymbol(currency)})</span>
+                  <input type="number" step="0.01" min="0" value={priceOverrides[i] ?? v.price.value} disabled={disabled || gone} onChange={(e) => onPriceChange(i, e.target.value)} className="input input-sm mt-1" />
+                </label>
+                <label className="w-24 flex-shrink-0">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Qty</span>
+                  <input type="number" step="1" min="0" value={quantityOverrides[i] ?? String(v.quantity)} disabled={disabled || gone} onChange={(e) => onQuantityChange(i, e.target.value)} className="input input-sm mt-1" />
+                </label>
+                {roi && !gone && (
+                  <button
+                    type="button"
+                    onClick={() => setOpenBreakdown(openBreakdown?.index === i ? null : { index: i, right: 0 })}
+                    aria-expanded={openBreakdown?.index === i}
+                    className={`mb-0.5 inline-flex h-9 flex-shrink-0 items-center gap-1 rounded-full border px-3 text-[12.5px] font-semibold ${
+                      roi.roiPercent >= roi.targetRoiPercent ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-[#fecdd3] bg-[var(--color-danger-soft)] text-[var(--color-danger)]"
+                    }`}
+                  >
+                    {roi.roiPercent.toFixed(0)}% ROI
+                  </button>
+                )}
+              </div>
+              {roi && !gone && openBreakdown?.index === i && (
+                <div className="mt-2.5 rounded-xl border border-[var(--color-line)] p-2">
+                  <PriceBreakdownPanel breakdown={roi} />
+                </div>
+              )}
+              {!disabled && splitOffered && onSplit && !gone && (
+                <button
+                  type="button"
+                  onClick={() => onSplit(i)}
+                  disabled={splitting !== null}
+                  className={`btn btn-sm mt-2.5 w-full ${variationsSupported === false ? "btn-accent" : "btn-secondary"}`}
+                >
+                  {splitting === i ? "Creating…" : "List separately"}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-2.5 hidden overflow-x-auto rounded-xl border border-[var(--color-line)] md:block">
         <table className="w-full min-w-[640px] border-collapse text-[12.5px]">
           <thead className="bg-[var(--color-paper)] text-left">
             <tr className="text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-muted)]">
@@ -1540,7 +1619,7 @@ function PublishedDialog({ listing, onClose }: { listing: DraftListing; onClose:
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(15,23,42,0.45)] p-4" role="dialog" aria-modal="true">
-      <div className="card w-full max-w-md p-6" style={{ boxShadow: "var(--shadow-pop)" }}>
+      <div className="card w-full max-w-md p-5 sm:p-6 max-h-[calc(100dvh-2rem)] overflow-y-auto" style={{ boxShadow: "var(--shadow-pop)" }}>
         <div className="flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
             <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
@@ -3235,7 +3314,7 @@ export default function DraftEditorPage() {
       </div>
 
       {editable && (
-        <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
+        <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] pb-[env(safe-area-inset-bottom)]">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
@@ -3243,19 +3322,19 @@ export default function DraftEditorPage() {
                 <span>{isRelist ? "Cancel" : isLiveEdit ? "Discard changes" : "Delete draft"}</span>
               </button>
               {isLiveEdit && !isRelist && (
-                <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now">
+                <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now" aria-label="End listing">
                   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                     <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
                     <path d="M8 12h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                   </svg>
-                  <span>{ending ? "Ending…" : "End listing"}</span>
+                  <span className="max-sm:hidden">{ending ? "Ending…" : "End listing"}</span>
                 </button>
               )}
             </div>
             <div className="flex items-center gap-3">
               {isRelist ? (
                 <>
-                  <span className="text-xs text-[var(--color-muted)]">{dirty ? "Relisted with your changes" : "Change anything first, or relist it as it was"}</span>
+                  <span className="text-xs text-[var(--color-muted)] max-sm:hidden">{dirty ? "Relisted with your changes" : "Change anything first, or relist it as it was"}</span>
                   <button
                     type="button"
                     onClick={() => setConfirmPublish(true)}
@@ -3268,7 +3347,7 @@ export default function DraftEditorPage() {
                 </>
               ) : isLiveEdit ? (
                 <>
-                  {dirty && <span className="text-xs text-[var(--color-muted)]">Changes go live on eBay when you publish</span>}
+                  {dirty && <span className="text-xs text-[var(--color-muted)] max-sm:hidden">Changes go live on eBay when you publish</span>}
                   <button
                     type="button"
                     onClick={() => setConfirmPublish(true)}

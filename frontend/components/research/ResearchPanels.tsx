@@ -146,7 +146,7 @@ export function ResearchOverview({ result, checking, onRecheck, children }: { re
   return (
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3.5">
-        <div className="flex min-w-0 flex-1 items-center gap-4">
+        <div className="flex min-w-0 flex-1 basis-full items-center gap-4 sm:basis-auto">
           <HealthGauge status={pending ? null : status} />
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Listing health</p>
@@ -172,7 +172,7 @@ export function ResearchOverview({ result, checking, onRecheck, children }: { re
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-4">
+        <div className="flex shrink-0 items-center gap-4 max-sm:w-full max-sm:justify-between max-sm:border-t max-sm:border-[var(--color-line)] max-sm:pt-3">
           <span className="flex items-center gap-2 text-[12px] text-[var(--color-muted)]" title="Demand, how many listings sell, competition, price room and where rivals ship from. A takedown risk makes it Don't list whatever the score.">
             Market score
             <span className="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--color-paper)]">

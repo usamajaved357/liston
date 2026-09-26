@@ -7,6 +7,7 @@ import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingSort, Li
 import { readView, writeView } from "@/lib/viewState";
 import { ViewMenu } from "@/components/ViewMenu";
 import { useConnection } from "@/lib/useConnection";
+import { scrollPageToTop } from "@/lib/pageScroll";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { ListFooter } from "@/components/ListFooter";
@@ -536,7 +537,7 @@ export default function AccountListingsPage() {
             sizes={[25, 50, 100, "all"]}
             onPage={(p) => {
               setPage(p);
-              document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
+              scrollPageToTop();
             }}
             onPerPage={(n) => {
               setPerPage(n);

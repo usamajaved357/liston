@@ -192,7 +192,7 @@ export function ResetPasswordDialog({ member, onClose, onDone }: { member: TeamM
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.45)] p-4" onClick={onClose}>
-      <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="card w-full max-w-md p-6">
+      <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="card w-full max-w-md p-5 sm:p-6 max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Change password for {member.name || member.email}</h2>
         <p className="mt-1 text-[13px] text-[var(--color-muted)]">
           Passwords are stored scrambled, so the current one can&apos;t be shown. Set a new one here. It replaces the old one straight away and you&apos;ll see it once, to pass on.
@@ -301,8 +301,69 @@ export function AccessGrid({
   const cols = "grid items-center gap-3 px-5";
   const colStyle = { gridTemplateColumns: `minmax(0,1fr) repeat(${knownFeatures.length}, 92px)` };
 
+  // A phone: one section per account, each area a row with its switch.
+  // The default is always open; accounts fold, their line saying whether
+  // they follow it.
+  const featureRows = (row: (typeof rows)[number]) =>
+    knownFeatures.map((f) => {
+      const isDefault = row.connectionId === null;
+      const override = row.values[f];
+      const effective = isDefault ? row.values[f] ?? false : override === undefined ? globalValues[f] ?? false : override;
+      const inherited = !isDefault && override === undefined;
+      return (
+        <div key={f} className="flex items-center justify-between gap-3 py-2">
+          <span className="text-[14px] text-[var(--color-ink)]">
+            {featureLabel(f)}
+            {inherited && <span className="ml-1.5 text-[11.5px] text-[var(--color-muted)]">default</span>}
+          </span>
+          <Switch
+            on={effective}
+            inherited={inherited}
+            disabled={saving}
+            onChange={() => setValue(row.connectionId, f, !effective)}
+            label={isDefault ? `${featureLabel(f)} on all accounts` : `${featureLabel(f)} on ${row.rowLabel}`}
+          />
+        </div>
+      );
+    });
+  const phone = (
+    <div className="divide-y divide-[var(--color-line)] md:hidden">
+      {rows.map((row) => {
+        if (row.connectionId === null) {
+          return (
+            <div key="global" className="px-4 py-3">
+              <p className="text-[14px] font-semibold text-[var(--color-ink)]">All accounts</p>
+              <p className="text-[12px] text-[var(--color-muted)]">Default for every account</p>
+              <div className="mt-1">{featureRows(row)}</div>
+            </div>
+          );
+        }
+        const own = knownFeatures.some((f) => row.values[f] !== undefined);
+        const on = knownFeatures.filter((f) => (row.values[f] === undefined ? globalValues[f] : row.values[f])).length;
+        return (
+          <details key={row.connectionId} className="group px-4 py-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+              <span className="min-w-0">
+                <span className="block truncate text-[14px] font-medium text-[var(--color-ink)]">{row.rowLabel}</span>
+                <span className="block text-[12px] text-[var(--color-muted)]">
+                  {own ? "Set for this account" : "Follows the default"} · {on} of {knownFeatures.length} on
+                </span>
+              </span>
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-open:rotate-180" aria-hidden>
+                <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </summary>
+            <div className="mt-1">{featureRows(row)}</div>
+          </details>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div className="overflow-x-auto">
+    <>
+    {phone}
+    <div className="hidden overflow-x-auto md:block">
       <div className="min-w-[640px]">
         <div className={`${cols} border-b border-[var(--color-line)] bg-[var(--color-paper)] py-2`} style={colStyle}>
           <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Access to</span>
@@ -345,6 +406,7 @@ export function AccessGrid({
         </div>
       </div>
     </div>
+    </>
   );
 }
 

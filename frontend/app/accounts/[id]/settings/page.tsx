@@ -138,7 +138,7 @@ function Row({ title, hint, children, last }: { title: string; hint?: string; ch
 function FontPickerDialog({ value, onPick, onClose }: { value: string; onPick: (id: string) => void; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 sm:p-6 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-[var(--color-ink)]">Choose a font</h2>
@@ -795,14 +795,15 @@ export default function AccountSettingsPage() {
                 <Unit value={pricing.targetRoiPercent} unit="%" onChange={(v) => setP({ targetRoiPercent: v })} />
               </Row>
               <Row title="eBay fees" hint="Promoted Listings rate, final value fee, and the flat per-order charge.">
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-                  <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
+                {/* A phone: the three fees one under another, their boxes lined up. */}
+                <div className="grid grid-cols-[5.5rem_auto] items-center justify-start gap-x-2 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-5">
+                  <label className="contents items-center gap-2 text-[12.5px] text-[var(--color-muted)] sm:flex">
                     Ads <Unit value={pricing.adsFeePercent} unit="%" onChange={(v) => setP({ adsFeePercent: v })} width="w-24" />
                   </label>
-                  <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
+                  <label className="contents items-center gap-2 text-[12.5px] text-[var(--color-muted)] sm:flex">
                     Final value <Unit value={pricing.processingFeePercent} unit="%" onChange={(v) => setP({ processingFeePercent: v })} width="w-24" />
                   </label>
-                  <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
+                  <label className="contents items-center gap-2 text-[12.5px] text-[var(--color-muted)] sm:flex">
                     Per order <Unit value={pricing.fixedFeePerOrder} unit={pricing.currency} step="0.01" onChange={(v) => setP({ fixedFeePerOrder: v })} />
                   </label>
                 </div>
@@ -1126,7 +1127,7 @@ export default function AccountSettingsPage() {
 
       {editingCode && codeDraft !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setEditingCode(false)}>
-          <div role="dialog" aria-modal="true" className="flex h-[85vh] w-full max-w-5xl flex-col rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" className="flex h-[85dvh] w-full max-w-5xl flex-col rounded-2xl bg-[var(--color-panel)] p-4 sm:p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-bold text-[var(--color-ink)]">Template code</h2>

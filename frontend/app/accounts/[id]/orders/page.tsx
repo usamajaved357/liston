@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter, SupplierFilter } from "@/lib/api";
 import { readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
+import { scrollPageToTop } from "@/lib/pageScroll";
 import { formatMoney, formatShortDate, formatTime, internationalPhone } from "@/lib/format";
 import { useAccountTimeZone } from "@/lib/timezone";
 import { AccountShell } from "@/components/AccountShell";
@@ -603,7 +604,7 @@ function AccountOrdersContent() {
             sizes={[25, 50, 100, 200]}
             onPage={(p) => {
               setPage(p);
-              document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
+              scrollPageToTop();
             }}
             onPerPage={(next) => {
               setPerPage(next);

@@ -226,24 +226,35 @@ export function AccountShell({
       </>
       }
     >
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+      <div data-page-column className="flex-1 min-w-0 min-h-0 flex flex-col">
         {header && (
           <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
           {/* Title and controls both sit on the sidebar's logo line (see
               .page-header); the subtitle hangs below the title. */}
           <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1 basis-[220px]">{header}</div>
-            <div className="page-header-controls">
+            {/* On a phone the controls take their own row under the title:
+                the way to the Dashboard on the left, the data's freshness and
+                the page's own actions on the right. */}
+            <div className="page-header-controls max-sm:w-full max-sm:justify-end">
               {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
               {/* Owners came from the main dashboard; members have no dashboard,
-                  their way out is the sidebar footer. */}
+                  their way out is the sidebar footer. A dashboard mark, not an
+                  arrow, so it never reads as a page's own Back button. */}
               {permissions === undefined && (
-                <Link href="/dashboard" aria-label="Dashboard" className="btn btn-sm flex-shrink-0 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                    <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                <Link
+                  href="/dashboard"
+                  title="All accounts' Dashboard"
+                  className="btn btn-sm flex-shrink-0 gap-1.5 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white max-sm:order-first max-sm:mr-auto"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+                    <rect x="3.5" y="3.5" width="7" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+                    <rect x="13.5" y="3.5" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+                    <rect x="13.5" y="11.5" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+                    <rect x="3.5" y="14.5" width="7" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
                   </svg>
-                  <span className="hidden sm:inline">Dashboard</span>
+                  Dashboard
                 </Link>
               )}
             </div>

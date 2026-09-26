@@ -87,7 +87,7 @@ function AnalyticsUsageSection({ usage }: { usage: AnalyticsUsage }) {
         {usage.exhausted && <p className="mt-3 text-sm font-semibold text-[var(--color-danger)]">eBay has refused further traffic calls today. Analytics pages keep showing their stored history.</p>}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="traffic calls until reset" />
         <Tile label="Nightly update" value={usage.byKind.sync.toLocaleString()} sub="each account's day just ended" />
         <Tile label="History fill" value={(usage.byKind.history ?? 0).toLocaleString()} sub="leftover allowance, once per account" />
@@ -187,7 +187,7 @@ function BrowseUsageSection({ usage }: { usage: BrowseUsage }) {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="Browse calls until reset" />
         <div className="card px-5 py-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Product research</p>
@@ -277,7 +277,7 @@ function ClaudeUsageSection({ usage }: { usage: ClaudeUsage }) {
         What each Claude call cost, by the feature that made it, from the token counts Claude returns ({usage.model}; list prices). Counted from when
         this was switched on; days are UTC, as in the Claude Console.
       </p>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <Tile label="Today" value={usd(today?.total ?? 0)} sub={`${(today?.calls ?? 0).toLocaleString()} calls`} />
         <Tile label="Last 7 days" value={usd(weekTotal)} sub={`about ${usd(weekTotal / 7)} a day`} />
         <Tile label="Biggest cost (7 days)" value={features[0] ? usd(features[0][1].cost) : "—"} sub={features[0]?.[1].label ?? "no calls yet"} />
@@ -515,7 +515,7 @@ function EbayUsageInner() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
             <Tile label="Remaining" value={usage.remaining.toLocaleString()} sub="calls until reset" />
             <Tile label="Held back" value={(usage.deferred.background + usage.deferred.push).toLocaleString()} sub="re-reads skipped to protect the allowance" />
             <Tile label="In flight" value={String(usage.inFlight)} sub={`${usage.waiting} waiting for a slot`} />

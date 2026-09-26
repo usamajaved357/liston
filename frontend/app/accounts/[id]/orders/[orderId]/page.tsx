@@ -278,7 +278,7 @@ export default function OrderDetailPage() {
                 <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </Link>
-            <h1 className="mt-1 text-[24px] font-extrabold tracking-tight text-[var(--color-ink)]">Order details</h1>
+            <h1 className="mt-1 text-[20px] font-extrabold tracking-tight text-[var(--color-ink)] sm:text-[24px]">Order details</h1>
           </div>
           <button type="button" onClick={() => window.print()} className="btn btn-secondary btn-sm print:hidden">
             <svg viewBox="0 0 20 20" className="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round">

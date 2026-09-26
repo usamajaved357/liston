@@ -395,6 +395,18 @@ select:focus-visible {
     flex-shrink: 0;
     white-space: nowrap;
   }
+  /* The page header (title, Dashboard, dates) scrolls away with the page
+     instead of staying pinned over half the screen: the page column scrolls
+     as a whole. A footer (a list's pages) follows the content. */
+  [data-page-column] {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  [data-page-column] > [data-scroller] {
+    flex: none;
+    min-height: auto;
+    overflow: visible;
+  }
   /* iPhone Safari zooms the page into any field under 16px when it's
      tapped; at 16px it stays put. */
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),

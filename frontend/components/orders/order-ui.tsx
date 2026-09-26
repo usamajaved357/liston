@@ -314,7 +314,7 @@ export function PostageInstructions() {
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-md rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-md rounded-2xl bg-[var(--color-panel)] p-5 sm:p-6 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold text-[var(--color-ink)]">{title}</h2>
           <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">

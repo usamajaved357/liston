@@ -40,7 +40,60 @@ function DraftIcon() {
 
 export function ResearchListings({ items, currency, connectionId, maxSold }: { items: ResearchItem[]; currency: string; connectionId: string; maxSold: number }) {
   return (
-    <div className="relative overflow-x-auto">
+    <>
+    {/* A phone: one card per listing, the same figures under its title. */}
+    <ul className="divide-y divide-[var(--color-line)] md:hidden">
+      {items.map((item) => (
+        <li key={item.itemId} onClick={() => item.url && window.open(item.url, "_blank", "noopener,noreferrer")} className={`px-4 py-3 active:bg-[var(--color-paper)]/60 ${item.url ? "cursor-pointer" : ""}`}>
+          <div className="flex items-start gap-3">
+            {item.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={item.image} alt="" loading="lazy" className="h-14 w-14 shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-contain" />
+            ) : (
+              <span className="h-14 w-14 shrink-0 rounded-lg border border-dashed border-[var(--color-line)]" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-2 text-[13.5px] font-medium leading-snug text-[var(--color-ink)]">{item.title}</p>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[12px] text-[var(--color-muted)]">
+                <span className="truncate">{item.seller?.username}</span>
+                {item.seller?.feedbackPercentage !== null && item.seller?.feedbackPercentage !== undefined && <span>· {item.seller.feedbackPercentage}%</span>}
+                {item.location?.country && (
+                  <span>
+                    · {flag(item.location.country)} {item.location.country}
+                  </span>
+                )}
+                {item.topRated && <span className="rounded bg-emerald-50 px-1.5 text-[11px] text-emerald-700">Top rated</span>}
+              </p>
+            </div>
+          </div>
+          <div className="mt-2 flex items-end gap-3 pl-[4.25rem]">
+            <div className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--color-muted)]">
+              <p>
+                <span className="text-[14px] font-semibold tabular-nums text-[var(--color-ink)]">{money(item.price?.value, item.price?.currency ?? currency)}</span>
+                {item.shipping?.free ? " · free postage" : item.shipping ? ` + ${money(item.shipping.cost, currency)}` : ""}
+              </p>
+              <p className="tabular-nums">
+                {item.sold === null ? "Sold —" : <span className="font-medium text-[var(--color-ink)]">{count(item.sold)} sold</span>}
+                {item.sold !== null && item.sold > 0 && item.soldPerMonth !== null && ` · ${item.soldPerMonth}/mo`}
+                {item.revenue !== null && ` · ${bigMoney(item.revenue, currency)}`}
+                {item.daysLive !== null && item.daysLive !== undefined && ` · ${age(item.daysLive)} live`}
+              </p>
+            </div>
+            {item.url && (
+              <Link
+                href={`/accounts/${connectionId}/listings/new?competitor=${encodeURIComponent(item.url)}`}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg bg-[var(--color-primary-soft)] px-3 text-[13px] font-semibold text-[var(--color-primary)]"
+              >
+                <DraftIcon />
+                Draft
+              </Link>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
+    <div className="relative hidden overflow-x-auto md:block">
       <table className="w-full min-w-[860px] text-[13px]">
         <thead className="bg-[var(--color-paper)] text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
           <tr>
@@ -154,5 +207,6 @@ export function ResearchListings({ items, currency, connectionId, maxSold }: { i
         </tbody>
       </table>
     </div>
+    </>
   );
 }

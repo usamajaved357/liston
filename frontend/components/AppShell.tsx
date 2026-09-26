@@ -114,14 +114,14 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
       </>
       }
     >
-      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+      <div data-page-column className="flex-1 min-w-0 min-h-0 flex flex-col">
         {header && (
           <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
             {header}
             {subheader && <div className="mt-5">{subheader}</div>}
           </div>
         )}
-        <div className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
+        <div data-scroller className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
       </div>
     </ShellFrame>
   );

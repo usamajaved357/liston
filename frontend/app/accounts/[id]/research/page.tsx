@@ -289,7 +289,7 @@ export default function ResearchPage() {
                 })}
               </div>
               {view === "active" && (
-                <div className="flex flex-wrap items-center gap-2 py-2">
+                <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 py-2">
                   <SegmentedControl size="sm" label="Sort" value={sort} onChange={setSort} options={RESEARCH_SORTS} />
                   {unread.length > 0 && (
                     <button

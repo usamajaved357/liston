@@ -128,6 +128,13 @@ function lineOpen(line: string) {
   return `<div data-list style="padding-left:${em}em;text-indent:-${em}em">`;
 }
 
+// A toolbar menu opening near the bottom of a phone's screen would sit under
+// the editor's fixed action bar: brought into view as it opens. Scrolling
+// doesn't move the text selection the menu is about to format.
+function revealMenu(el: HTMLDivElement | null) {
+  el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
 export function markersToHtml(text: string): string {
   // One block per line, so a list item can hang its wrapped lines under its
   // text. Markers never span lines, so each line renders on its own.
@@ -580,7 +587,9 @@ export function RichTextEditor({
   return (
     <div>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <div className="relative inline-flex items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+        {/* On a phone the tools wrap onto a second row rather than scroll,
+            so the colour and list menus below them aren't clipped. */}
+        <div className="relative inline-flex items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-[2px] max-sm:w-full max-sm:flex-wrap max-sm:rounded-2xl">
           <button type="button" disabled={disabled} title="Bold" aria-label="Bold" aria-pressed={active.bold} onMouseDown={(e) => e.preventDefault()} onClick={toggleBold} className={`${tool(active.bold)} font-extrabold`}>
             B
           </button>
@@ -602,7 +611,9 @@ export function RichTextEditor({
             T
           </button>
           {divider}
-          <div className="relative">
+          {/* A phone: the colour menu hangs from the toolbar's edge, not the
+              button's, so it stays on screen. */}
+          <div className="sm:relative">
             <button type="button" disabled={disabled} title="Text colour" aria-label="Text colour" onMouseDown={(e) => e.preventDefault()} onClick={() => setMenu((m) => (m === "colour" ? null : "colour"))} className={`${tool(false)} gap-1`}>
               <span className="flex flex-col items-center leading-none">
                 <span className="text-[13px] font-bold" style={{ color: active.color || undefined }}>
@@ -617,7 +628,7 @@ export function RichTextEditor({
             {menu === "colour" && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} aria-hidden />
-                <div className="absolute left-0 top-full z-50 mt-2 flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5" style={{ boxShadow: "var(--shadow-pop)" }}>
+                <div ref={revealMenu} className="absolute left-0 top-full z-50 mt-2 flex max-w-full flex-wrap items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-1.5 max-sm:rounded-2xl" style={{ boxShadow: "var(--shadow-pop)" }}>
                   {TEXT_COLOURS.map((hex) => (
                     <button
                       key={hex}
@@ -789,6 +800,7 @@ function ListLibrary({
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
       <div
+        ref={revealMenu}
         role="menu"
         aria-label={kind === "bullets" ? "Bullet library" : "Numbering library"}
         className="absolute right-0 top-full z-50 mt-2 w-[252px] rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3"
