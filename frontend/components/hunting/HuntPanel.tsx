@@ -200,6 +200,26 @@ function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetai
   );
 }
 
+// The action that moves a product on: solid, full width on phones.
+const primaryAction =
+  "inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-full bg-[var(--color-primary)] px-5 text-[13.5px] font-semibold text-white shadow-[0_6px_16px_-8px_rgba(79,70,229,0.7)] transition-colors hover:bg-[var(--color-primary-hover)] disabled:opacity-60 sm:w-auto";
+
+function ActionIcon({ kind }: { kind: "remove" | "approve" | "reject" | "send_back" | "resubmit" | "draft" }) {
+  const paths: Record<typeof kind, React.ReactNode> = {
+    remove: <path d="M4.5 6h11M8 6V4.5h4V6M6 6l.7 9.2a1 1 0 001 .8h4.6a1 1 0 001-.8L14 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />,
+    approve: <path d="M5 10.5l3.2 3.2L15 6.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
+    reject: <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />,
+    send_back: <path d="M8 5.5L4.5 9 8 12.5M5 9h6.5a3.5 3.5 0 010 7H10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
+    resubmit: <path d="M15 8.5A5.5 5.5 0 105.5 13M15 4.5v4h-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
+    draft: <path d="M5 15l.6-2.8 6.9-6.9 2.2 2.2-6.9 6.9L5 15z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />,
+  };
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 flex-shrink-0" aria-hidden>
+      {paths[kind]}
+    </svg>
+  );
+}
+
 export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string; you: string; onClose: () => void; onChanged: (hunt: HuntDetail | null) => void }) {
   const router = useRouter();
   const [hunt, setHunt] = useState<HuntDetail | null>(null);
@@ -309,7 +329,16 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
                 </div>
               )}
             </div>
-            <button ref={closeRef} type="button" onClick={onClose} className="btn btn-ghost btn-icon flex-shrink-0" aria-label="Close">
+            {/* Always a ring, not only when the browser shows focus: the same look every time. */}
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={onClose}
+              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border-2 border-[var(--color-primary)]/70 bg-white text-[var(--color-ink)] outline-none transition-colors hover:border-[var(--color-primary)] hover:bg-[var(--color-primary-soft)] hover:text-[var(--color-primary)] focus-visible:border-[var(--color-primary)] focus-visible:bg-[var(--color-primary-soft)]"
+              // It draws its own ring, so the app's global focus outline would make a second one.
+              style={{ outline: "none" }}
+              aria-label="Close"
+            >
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
                 <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               </svg>
@@ -344,51 +373,90 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
                 {p?.canEdit && <EditLinks key={hunt.checkedAt} hunt={hunt} onSaved={update} />}
                 {moved && <span className="text-[12px] font-medium text-[var(--color-ink)]">{moved}</span>}
               </div>
-              <HuntResult result={hunt.result} />
+              <HuntResult
+                result={hunt.result}
+                connectionId={hunt.connectionId}
+                onSalesImported={() => api.huntDetail(huntId).then(update).catch(() => {})}
+              />
               <Timeline events={hunt.timeline} you={you} />
             </>
           )}
         </div>
 
         {hunt && hasActions && (
-          <footer className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))] sm:px-6">
-            <div className="max-sm:order-last max-sm:flex max-sm:w-full max-sm:justify-center">
-              {p?.canWithdraw && (
-                <button type="button" onClick={() => setConfirmWithdraw(true)} disabled={busy !== null} className="btn btn-danger-ghost btn-sm">
-                  {hunt.hunter?.id === you ? "Withdraw" : "Remove"}
-                </button>
-              )}
-            </div>
-            <div className="flex flex-1 flex-wrap items-center justify-end gap-2 max-sm:w-full">
-              {decisionsOffered.map((d) => (
-                <button
-                  key={d}
-                  type="button"
-                  onClick={() => setDecision(d)}
-                  disabled={busy !== null}
-                  className={`btn max-sm:flex-1 ${d === "approve" ? "btn-primary" : d === "reject" ? "btn-danger-ghost" : "btn-secondary"}`}
-                >
-                  {d === "approve" ? "Approve" : d === "reject" ? "Reject" : "Send back"}
-                </button>
-              ))}
-              {p?.canResubmit && (
-                <button type="button" onClick={() => run("resubmit", () => api.huntResubmit(huntId))} disabled={busy !== null} className="btn btn-primary max-sm:flex-1">
-                  {busy === "resubmit" ? "Resubmitting…" : "Resubmit for review"}
-                </button>
-              )}
-              {p?.canDraft && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBusy("draft");
-                    router.push(`/accounts/${hunt.connectionId}/listings/new?hunt=${hunt.id}`);
-                  }}
-                  disabled={busy !== null}
-                  className="btn btn-primary max-sm:flex-1"
-                >
-                  {busy === "draft" ? "Opening…" : hunt.stage === "approved" ? "Draft this product" : "Draft it again"}
-                </button>
-              )}
+          <footer className="flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-18px_rgba(15,23,42,0.3)] sm:px-6">
+            <div className="flex flex-col-reverse gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+              {/* Taking it off the list: quiet until pointed at. */}
+              <div className="flex justify-center sm:justify-start">
+                {p?.canWithdraw && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmWithdraw(true)}
+                    disabled={busy !== null}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-[var(--color-muted)] transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                  >
+                    <ActionIcon kind="remove" />
+                    {hunt.hunter?.id === you ? "Withdraw" : "Remove"}
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                {/* The reviewer's other answers, side by side, then the one that moves it on. */}
+                {decisionsOffered.filter((d) => d !== "approve").length > 0 && (
+                  <div className="flex flex-1 gap-2 sm:flex-none">
+                    {decisionsOffered
+                      .filter((d) => d !== "approve")
+                      .map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setDecision(d)}
+                          disabled={busy !== null}
+                          className={`inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-full border px-4 text-[13.5px] font-semibold transition-colors disabled:opacity-50 sm:flex-none ${
+                            d === "reject"
+                              ? "border-rose-200 bg-white text-rose-600 hover:border-rose-300 hover:bg-rose-50"
+                              : "border-[var(--color-line)] bg-white text-[var(--color-ink)] hover:border-[var(--color-line-strong)] hover:bg-[var(--color-paper)]"
+                          }`}
+                        >
+                          <ActionIcon kind={d} />
+                          {d === "reject" ? "Reject" : "Send back"}
+                        </button>
+                      ))}
+                  </div>
+                )}
+                {(decisionsOffered.includes("approve") || p?.canResubmit || p?.canDraft) && decisionsOffered.some((d) => d !== "approve") && (
+                  <span className="mx-1 hidden h-6 w-px bg-[var(--color-line)] sm:block" aria-hidden />
+                )}
+                {decisionsOffered.includes("approve") && (
+                  <button type="button" onClick={() => setDecision("approve")} disabled={busy !== null} className={primaryAction}>
+                    <ActionIcon kind="approve" />
+                    Approve
+                  </button>
+                )}
+                {p?.canResubmit && (
+                  <button type="button" onClick={() => run("resubmit", () => api.huntResubmit(huntId))} disabled={busy !== null} className={primaryAction}>
+                    <ActionIcon kind="resubmit" />
+                    {busy === "resubmit" ? "Resubmitting…" : "Resubmit for review"}
+                  </button>
+                )}
+                {p?.canDraft && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBusy("draft");
+                      router.push(`/accounts/${hunt.connectionId}/listings/new?hunt=${hunt.id}`);
+                    }}
+                    disabled={busy !== null}
+                    className={primaryAction}
+                  >
+                    <ActionIcon kind="draft" />
+                    {busy === "draft" ? "Opening…" : hunt.stage === "approved" ? "Draft this product" : "Draft it again"}
+                    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 opacity-80" aria-hidden>
+                      <path d="M7.5 5l5 5-5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             </div>
           </footer>
         )}

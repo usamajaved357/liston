@@ -320,3 +320,148 @@ test('without a competitor each option is priced as a draft would be, and the ch
   assert.strictEqual(check('margin'), undefined);
   assert.deepStrictEqual(result.warnings, []);
 });
+
+test('a live listing of the same product under different words is named as similar (word forms count as one word)', () => {
+  assert.strictEqual(duplicates.stem('Curlers'), 'curl');
+  assert.strictEqual(duplicates.stem('curling'), 'curl');
+  assert.strictEqual(duplicates.stem('glass'), 'glass');
+  const found = duplicates.describe(
+    {
+      allLive: [
+        { connectionId: 'a', account: 'Walexo', itemId: '407245015055', title: 'Heatless Curling Rod Headband Soft Hair Curler Overnight Polyester Foam UK' },
+        { connectionId: 'a', account: 'Walexo', itemId: '406937377702', title: 'Universal Hair Diffuser Silicone Dryer Attachment Curl Styling Tool UK' },
+      ],
+    },
+    {
+      productId: '1005008682747289',
+      itemId: '800514348405',
+      titles: ['Heatless Hair Curlers Satin Curling Rod Headband No Heat Overnight Curls', 'Heatless Curling Rod Headband Soft Hair Curler No Heat Hair Rollers Curlers Lazy Sleeping Curls Curling Hairband Styling Tools'],
+      connectionId: 'a',
+    }
+  );
+  assert.deepStrictEqual(found.map((d) => [d.type, d.itemId, d.sameAccount]), [['similar', '407245015055', true]]);
+  assert.strictEqual(found[0].similarity, 67);
+});
+
+test('baseSkuFromSourceUrl-style labels: a few shared generic words are not a similar title', () => {
+  assert.strictEqual(duplicates.titleSimilarity('Red Cotton T-Shirt for Men UK', 'Red Wine Glass Set for Men'), 0);
+});
+
+// ---- sales history and score ---------------------------------------------------------------
+
+const huntSales = require('../../src/modules/hunting/hunt-sales');
+
+test('salesByVariation splits the competitor sales by variation, with the supplier options matched to each', () => {
+  const result = huntProfit.analyse({ competitor: competitor(), source: source(), pricing: PRICING, site: SITE, now: NOW });
+  assert.deepStrictEqual(
+    result.sales.variations.map((v) => [v.label, v.sold, v.share, v.supplier]),
+    [
+      ['Black', 100, 76.9, ['black']],
+      ['White', 30, 23.1, ['white']],
+    ]
+  );
+  assert.strictEqual(huntProfit.analyse({ competitor: null, source: source(), pricing: PRICING, site: SITE, now: NOW }).sales.variations.length, 0);
+});
+
+test('history turns daily readings of the sold count into sales per day, last 7 days and a trend', () => {
+  const day = (d, h = 9) => new Date(Date.UTC(2026, 8, d, h)).toISOString();
+  const readings = [
+    { taken_at: day(20), sold: 100, variations: [{ label: 'Black', sold: 80 }, { label: 'White', sold: 20 }] },
+    { taken_at: day(21), sold: 104, variations: [] },
+    { taken_at: day(23), sold: 110, variations: [] },
+    { taken_at: day(27), sold: 122, variations: [{ label: 'Black', sold: 95 }, { label: 'White', sold: 27 }] },
+  ];
+  const h = huntSales.history(readings, { now: Date.parse(day(27, 12)), lifetimePerDay: 1 });
+  assert.strictEqual(h.readings, 4);
+  assert.strictEqual(h.coveredDays, 7);
+  assert.deepStrictEqual(h.days.map((d) => d.sold), [0, 4, 0, 6, 0, 0, 0, 12]);
+  assert.strictEqual(h.soldLast7, 22);
+  assert.strictEqual(h.perDay, 3.1);
+  assert.strictEqual(h.trend, 'up'); // 3.1 a day against its usual 1
+  assert.deepStrictEqual(h.byVariation, [{ label: 'Black', sold: 15 }, { label: 'White', sold: 7 }]);
+  assert.strictEqual(huntSales.history(readings.slice(0, 1)).days.length, 0);
+});
+
+test('salesScore weighs sales a month, sold in all, the trend and options selling; half marks for trend until tracked', () => {
+  const untracked = huntSales.salesScore({ demand: { sold: 130, soldPerMonth: 42.4 }, variations: [{ label: 'Black', sold: 100 }, { label: 'White', sold: 30 }] });
+  assert.deepStrictEqual(untracked.parts.map((p) => p.points), [41, 16, 10, 15]);
+  assert.strictEqual(untracked.score, 82);
+  assert.strictEqual(untracked.label, 'Hot');
+  assert.strictEqual(untracked.estimate, true);
+  const cooling = huntSales.salesScore({ demand: { sold: 130, soldPerMonth: 42.4 }, variations: [], history: { coveredDays: 8, soldLast7: 0, trend: 'down' } });
+  assert.strictEqual(cooling.parts.find((p) => p.key === 'trend').points, 0);
+  assert.strictEqual(huntSales.salesScore({ demand: { sold: 0, soldPerMonth: 0 }, variations: [] }).label, 'Cold');
+  assert.strictEqual(huntSales.salesScore({ demand: { sold: null } }), null);
+});
+
+test("a dip in eBay's sold count doesn't cancel the sales read before it", () => {
+  const at = (d) => new Date(Date.UTC(2026, 8, d, 9)).toISOString();
+  const h = huntSales.history(
+    [
+      { taken_at: at(24), sold: 50 },
+      { taken_at: at(25), sold: 55 },
+      { taken_at: at(26), sold: 53 },
+      { taken_at: at(27), sold: 56 },
+    ],
+    { now: Date.parse(at(27)) + 3600000 }
+  );
+  assert.strictEqual(h.soldLast7, 8);
+});
+
+// ---- sold history pasted from eBay --------------------------------------------------------
+
+const soldHistory = require('../../src/modules/hunting/sold-history');
+
+// eBay's purchase history page as Chrome copies it (tab-separated rows) and
+// as Safari does (one cell a line), both around the page's own text.
+const CHROME_PASTE = [
+  'Skip to main content', 'Purchase history', 'Heatless Hair Curlers Satin Curling Rod Headband No Heat Overnight Curls', 'Recent purchases',
+  'User ID\tVariation\tBuy It Now price\tQuantity\tDate of purchase',
+  'b***e\tcolor: Pink\t£7.99\t1\t25 Sep 2026 at 3:01:06pm BST',
+  '4***e\tcolor: Brown\t£7.99\t1\t23 Sep 2026 at 9:40:39pm BST',
+  '9***5\tcolor: Pink\t£7.99\t2\t22 Sep 2026 at 8:57:47am BST',
+  '8***5\tcolor: Brown\t£7.99\t1\t7 Sep 2026 at 9:55:09am BST',
+  '3***7\tcolor: Pink\t£7.99\t1\t4 Sep 2026 at 6:44:41pm BST',
+  'About eBay\tAnnouncements\tCopyright © 1995-2026 eBay Inc.',
+].join('\n');
+
+test('parse reads each sale from a pasted purchase history page, ignoring the page around it', () => {
+  const rows = soldHistory.parse(CHROME_PASTE);
+  assert.strictEqual(rows.length, 5);
+  assert.deepStrictEqual(rows[0], { soldAt: '2026-09-25T14:01:06.000Z', variation: 'Color: Pink', price: 7.99, currency: 'GBP', quantity: 1 });
+  assert.strictEqual(rows[2].quantity, 2);
+  // Safari puts each cell on its own line; US pages write dates month first, in dollars.
+  const safari = soldHistory.parse('Recent purchases\n0***c\ncolor: Brown\n£7.99\n1\n22 Sep 2026 at 5:26:40am BST\n1***b\ncolor: Brown\n£7.99\n1\n18 Sep 2026 at 7:44:19pm BST');
+  assert.deepStrictEqual(safari.map((r) => r.soldAt), ['2026-09-22T04:26:40.000Z', '2026-09-18T18:44:19.000Z']);
+  const us = soldHistory.parse('a***b\tColor: Black, Size: M\tUS $12.50\t1\tSep 25, 2026 at 3:01:06pm PDT');
+  assert.deepStrictEqual(us[0], { soldAt: '2026-09-25T22:01:06.000Z', variation: 'Color: Black, Size: M', price: 12.5, currency: 'USD', quantity: 1 });
+  assert.deepStrictEqual(soldHistory.parse('nothing useful here'), []);
+});
+
+test('insights work out exact sales by period, pace, price and variation from the dated sales', () => {
+  const figures = soldHistory.insights(soldHistory.parse(CHROME_PASTE), { now: Date.parse('2026-09-27T12:00:00Z') });
+  assert.deepStrictEqual(figures.windows.d3, { units: 1, orders: 1 });
+  assert.deepStrictEqual(figures.windows.d7, { units: 4, orders: 3 });
+  assert.deepStrictEqual(figures.windows.d30, { units: 6, orders: 5 });
+  assert.strictEqual(figures.daysSinceLast, 1);
+  // 6 units since 4 Sep (22.7 days): 0.26 a day.
+  assert.strictEqual(figures.perDay, 0.26);
+  assert.strictEqual(figures.perMonth, 7.8);
+  assert.deepStrictEqual(figures.price, { average: 7.99, median: 7.99, low: 7.99, high: 7.99, volatility: 0 });
+  assert.deepStrictEqual(figures.byVariation.map((v) => [v.variation, v.units, v.share]), [['Color: Pink', 4, 66.7], ['Color: Brown', 2, 33.3]]);
+  assert.strictEqual(figures.daily.length, 30);
+  assert.strictEqual(figures.trend, 'up'); // 4 in the last 15 days against 2 before
+  assert.strictEqual(soldHistory.insights([]), null);
+  assert.strictEqual(soldHistory.purchaseHistoryUrl('https://www.ebay.co.uk/itm/800514348405', '800514348405'), 'https://www.ebay.co.uk/bin/purchaseHistory?item=800514348405');
+});
+
+test('with eBay sold history pasted, the score uses its real pace and recency', () => {
+  const exact = { perMonth: 17.1, daysSinceLast: 2, trend: 'up' };
+  const score = huntSales.salesScore({ demand: { sold: 12, soldPerMonth: 8.6 }, variations: [], exact });
+  assert.strictEqual(score.exact, true);
+  assert.strictEqual(score.estimate, false);
+  assert.strictEqual(score.parts.find((p) => p.key === 'trend').points, 20);
+  assert.match(score.parts[0].detail, /17.1 a month/);
+  const stale = huntSales.salesScore({ demand: { sold: 12, soldPerMonth: 8.6 }, variations: [], exact: { perMonth: 2, daysSinceLast: 20, trend: null } });
+  assert.strictEqual(stale.parts.find((p) => p.key === 'trend').points, 0);
+});

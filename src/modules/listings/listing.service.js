@@ -41,8 +41,14 @@ class ListingError extends Error {
 // if the URL shape ever differs (AliExpress item URLs aren't guaranteed
 // stable across their own site redesigns).
 function baseSkuFromSourceUrl(sourceUrl) {
-  const match = sourceUrl.match(/\/item\/(\d+)\.html/);
-  return match ? `AE${match[1]}` : `SRC${Date.now()}`;
+  // Any AliExpress link shape (/item/123.html, /item/123, slugged): the
+  // number in the label lets Liston recognise the product later (hunting's
+  // duplicate warning reads it).
+  try {
+    return `AE${aliexpressSource.productIdFromUrl(sourceUrl)}`;
+  } catch {
+    return `SRC${Date.now()}`;
+  }
 }
 
 function shortRandomSuffix() {

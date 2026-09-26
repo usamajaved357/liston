@@ -8,21 +8,120 @@ import { initials } from "@/components/team/team-shared";
 // The small pieces every hunting view shares: where a product stands, how
 // good its profit is, who hunted it.
 
-export const STAGE: Record<HuntStage, { label: string; chip: string; dot: string }> = {
-  pending: { label: "Waiting for review", chip: "bg-indigo-50 text-indigo-700 ring-indigo-200", dot: "bg-indigo-500" },
-  sent_back: { label: "Sent back", chip: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500" },
-  approved: { label: "Approved", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500" },
-  drafted: { label: "Drafted", chip: "bg-sky-50 text-sky-700 ring-sky-200", dot: "bg-sky-500" },
-  listed: { label: "Listed", chip: "bg-teal-50 text-teal-700 ring-teal-200", dot: "bg-teal-500" },
-  rejected: { label: "Rejected", chip: "bg-rose-50 text-rose-700 ring-rose-200", dot: "bg-rose-500" },
+const ICON: Record<HuntStage, React.ReactNode> = {
+  pending: <path d="M10 6v4.2l2.6 1.6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />,
+  sent_back: <path d="M8 6.5L5 9.5l3 3M5.5 9.5h6a3 3 0 010 6H10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
+  approved: <path d="M6.5 10.3l2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
+  drafted: <path d="M6.5 13.5l.5-2.3 5.2-5.2 1.8 1.8-5.2 5.2-2.3.5z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />,
+  listed: <path d="M6 9.5V6.5A.5.5 0 016.5 6h3l4.5 4.5-3.5 3.5L6 9.5z M8.3 8.3h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />,
+  rejected: <path d="M7.3 7.3l5.4 5.4M12.7 7.3l-5.4 5.4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />,
 };
 
+export const STAGE: Record<HuntStage, { label: string; chip: string; dot: string; icon: string }> = {
+  pending: { label: "Waiting for review", chip: "bg-indigo-50 text-indigo-700 ring-indigo-200", dot: "bg-indigo-500", icon: "bg-indigo-600" },
+  sent_back: { label: "Sent back", chip: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500", icon: "bg-amber-500" },
+  approved: { label: "Approved", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500", icon: "bg-emerald-600" },
+  drafted: { label: "Drafted", chip: "bg-sky-50 text-sky-700 ring-sky-200", dot: "bg-sky-500", icon: "bg-sky-600" },
+  listed: { label: "Listed", chip: "bg-teal-50 text-teal-700 ring-teal-200", dot: "bg-teal-500", icon: "bg-teal-600" },
+  rejected: { label: "Rejected", chip: "bg-rose-50 text-rose-700 ring-rose-200", dot: "bg-rose-500", icon: "bg-rose-600" },
+};
+
+/** Where a product stands: its colour, a small mark for the stage, and the words. */
 export function StageChip({ stage, className = "" }: { stage: HuntStage; className?: string }) {
   const s = STAGE[stage];
   return (
-    <span className={`inline-flex h-6 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-semibold ring-1 ring-inset ${s.chip} ${className}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} aria-hidden />
+    <span className={`inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full py-0.5 pl-1 pr-3 text-[12px] font-semibold ring-1 ring-inset ${s.chip} ${className}`}>
+      <span className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-white ${s.icon}`} aria-hidden>
+        <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
+          {ICON[stage]}
+        </svg>
+      </span>
       {s.label}
+    </span>
+  );
+}
+
+// ---- ratings: coloured by how good they are, so they read at a glance ----------------
+
+type Band = "great" | "good" | "fair" | "poor";
+const BAND: Record<Band, string> = {
+  great: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  good: "bg-lime-50 text-lime-800 ring-lime-200",
+  fair: "bg-amber-50 text-amber-800 ring-amber-200",
+  poor: "bg-rose-50 text-rose-700 ring-rose-200",
+};
+const STAR: Record<Band, string> = { great: "text-emerald-500", good: "text-lime-600", fair: "text-amber-500", poor: "text-rose-500" };
+
+/** A 5-point rating's band: 4.7+ great, 4.5+ good, 4.2+ fair, under that poor. */
+export const ratingBand = (r: number): Band => (r >= 4.7 ? "great" : r >= 4.5 ? "good" : r >= 4.2 ? "fair" : "poor");
+/** An eBay feedback percentage's band: 99+ great, 98+ good, 96+ fair. */
+export const feedbackBand = (p: number): Band => (p >= 99 ? "great" : p >= 98 ? "good" : p >= 96 ? "fair" : "poor");
+
+function Star({ className }: { className: string }) {
+  return (
+    <svg viewBox="0 0 20 20" className={`h-3.5 w-3.5 flex-shrink-0 ${className}`} fill="currentColor" aria-hidden>
+      <path d="M10 2.2l2.4 4.9 5.4.8-3.9 3.8.9 5.4L10 14.6l-4.8 2.5.9-5.4L2.2 7.9l5.4-.8L10 2.2z" />
+    </svg>
+  );
+}
+
+const pill = "inline-flex h-6 items-center gap-1 whitespace-nowrap rounded-full px-2 text-[11.5px] font-semibold ring-1 ring-inset tabular-nums";
+
+/** "★ 4.8 · 256 reviews", coloured by the rating. */
+export function RatingPill({ rating, reviews, small = false }: { rating: number | null | undefined; reviews?: number | null; small?: boolean }) {
+  if (rating === null || rating === undefined) return null;
+  const band = ratingBand(rating);
+  return (
+    <span className={`${pill} ${BAND[band]} ${small ? "!h-5 !px-1.5 !text-[11px]" : ""}`} title={`Rated ${rating} out of 5${reviews ? ` from ${reviews.toLocaleString("en-GB")} reviews` : ""}`}>
+      <Star className={STAR[band]} />
+      {rating.toFixed(1)}
+      {reviews !== null && reviews !== undefined && !small && <span className="font-medium opacity-75">· {reviews.toLocaleString("en-GB")} reviews</span>}
+    </span>
+  );
+}
+
+/** An eBay seller's feedback: "99.5% positive", coloured by it. */
+export function FeedbackPill({ percent, score }: { percent: number | null | undefined; score?: number | null }) {
+  if (percent === null || percent === undefined) return null;
+  const band = feedbackBand(percent);
+  return (
+    <span className={`${pill} ${BAND[band]}`} title={`${percent}% positive feedback${score ? ` from ${score.toLocaleString("en-GB")}` : ""}`}>
+      <svg viewBox="0 0 20 20" fill="none" className={`h-3.5 w-3.5 ${STAR[band]}`} aria-hidden>
+        <path d="M6.5 10.3l2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      {percent}% positive
+      {score ? <span className="font-medium opacity-75">· {score.toLocaleString("en-GB")}</span> : null}
+    </span>
+  );
+}
+
+/** A plain fact as a pill (orders, sold a month), in the brand's quiet tint. */
+export function FactPill({ children, tone = "indigo", title }: { children: React.ReactNode; tone?: "indigo" | "slate" | "amber" | "rose"; title?: string }) {
+  const tones = { indigo: "bg-indigo-50 text-indigo-700 ring-indigo-200", slate: "bg-slate-50 text-slate-700 ring-slate-200", amber: "bg-amber-50 text-amber-800 ring-amber-200", rose: "bg-rose-50 text-rose-700 ring-rose-200" };
+  return (
+    <span className={`${pill} ${tones[tone]}`} title={title}>
+      {children}
+    </span>
+  );
+}
+
+/** A store's three scores, each coloured: as described, communication, shipping speed. */
+export function StoreScores({ store }: { store: { described: number | null; communication: number | null; shipping: number | null } | null | undefined }) {
+  if (!store) return null;
+  const scores: [string, number | null][] = [
+    ["Described", store.described],
+    ["Service", store.communication],
+    ["Shipping", store.shipping],
+  ];
+  return (
+    <span className="flex flex-wrap gap-1">
+      {scores
+        .filter(([, v]) => v !== null && v !== undefined)
+        .map(([label, v]) => (
+          <span key={label} className={`inline-flex h-5 items-center gap-1 rounded px-1.5 text-[10.5px] font-semibold ring-1 ring-inset tabular-nums ${BAND[ratingBand(v as number)]}`} title={`${label}: ${v} out of 5`}>
+            {label} {(v as number).toFixed(1)}
+          </span>
+        ))}
     </span>
   );
 }

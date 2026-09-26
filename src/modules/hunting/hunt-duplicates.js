@@ -4,11 +4,16 @@
 // nothing here stops that. It says where the product already is (hunted,
 // drafted, live from the same supplier product), when the competitor
 // listing is one of the owner's own, and which live listings have a very
-// similar title, so nobody finds out after the fact.
+// similar title (the same product listed from another supplier, or under a
+// label without the supplier's number), so nobody finds out after the fact.
 
 const { wordsOf } = require('../research/research-analysis');
 
-const SIMILAR_AT = 0.55;
+// Similar enough to name: most of the shorter title's words (as stems) are
+// in the other, at least SIMILAR_WORDS of them, and a fair share of both.
+const SIMILAR_AT = 0.6;
+const SIMILAR_WORDS = 4;
+const SIMILAR_UNION = 0.35;
 const SIMILAR_MAX = 3;
 
 const nameOf = (name, email) => name || (email ? String(email).split('@')[0] : null);
@@ -18,13 +23,32 @@ function sameOf(supplier, competitor) {
   return supplier ? 'supplier' : 'competitor';
 }
 
-/** How alike two titles are: shared words over all words (0–1). */
+// One form per word, so "Curlers", "Curler", "Curling" and "Curls" are the
+// same word: a light stem (-ing, -er(s), plural -s), never below 3 letters.
+function stem(word) {
+  let w = String(word).toLowerCase();
+  for (const suffix of ['ings', 'ing', 'ers', 'er', 'es', 's']) {
+    if (w.endsWith(suffix) && w.length - suffix.length >= 3 && !(suffix === 's' && w.endsWith('ss'))) {
+      w = w.slice(0, -suffix.length);
+      break;
+    }
+  }
+  return w;
+}
+const stemsOf = (title) => new Set(wordsOf(title).map(stem));
+
+/**
+ * How alike two titles are, 0–1: the share of the shorter title's words
+ * found in the other (0 unless enough words are shared, and enough of both
+ * titles, that it isn't one generic word or two).
+ */
 function titleSimilarity(a, b) {
-  const wa = new Set(wordsOf(a));
-  const wb = new Set(wordsOf(b));
+  const wa = stemsOf(a);
+  const wb = stemsOf(b);
   if (wa.size < 3 || wb.size < 3) return 0;
   const shared = [...wa].filter((w) => wb.has(w)).length;
-  return shared / new Set([...wa, ...wb]).size;
+  if (shared < SIMILAR_WORDS || shared / new Set([...wa, ...wb]).size < SIMILAR_UNION) return 0;
+  return shared / Math.min(wa.size, wb.size);
 }
 
 /**
@@ -34,7 +58,9 @@ function titleSimilarity(a, b) {
  * competitor (`live`), then live listings with a similar title
  * (`allLive`). Each { type, account, connectionId, sameAccount, title, … }.
  */
-function describe({ hunts = [], listings = [], live = [], allLive = [] }, { productId, itemId, title, connectionId }) {
+function describe({ hunts = [], listings = [], live = [], allLive = [] }, { productId, itemId, title, titles, connectionId }) {
+  // Compared with the competitor's title and the supplier's, the closer counts.
+  const against = (titles || [title]).filter(Boolean);
   const out = [];
   for (const h of hunts) {
     out.push({
@@ -81,7 +107,7 @@ function describe({ hunts = [], listings = [], live = [], allLive = [] }, { prod
   }
   const similar = allLive
     .filter((item) => !seen.has(String(item.itemId)))
-    .map((item) => ({ item, score: titleSimilarity(title, item.title) }))
+    .map((item) => ({ item, score: Math.max(0, ...against.map((t) => titleSimilarity(t, item.title))) }))
     .filter((x) => x.score >= SIMILAR_AT)
     .sort((a, b) => b.score - a.score);
   const shown = new Set();
@@ -93,4 +119,4 @@ function describe({ hunts = [], listings = [], live = [], allLive = [] }, { prod
   return out;
 }
 
-module.exports = { describe, titleSimilarity, SIMILAR_AT };
+module.exports = { describe, titleSimilarity, stem, SIMILAR_AT };

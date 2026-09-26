@@ -401,6 +401,7 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
       : { basis: 'settings', counted: flatShipping, cost: flatShipping },
     fees: rates,
     demand,
+    sales: { variations: salesByVariation(competitor, rows, currency) },
     options: rows,
     summary: {
       entryPrice: entryIndex !== null ? rows[entryIndex].sellPrice : null,
@@ -556,6 +557,43 @@ function checksFor({ competitor, source, result, refusals = [], target }) {
   return checks;
 }
 
+// ---- sales by variation ------------------------------------------------------------------
+
+/**
+ * The competitor's sales split by variation (eBay's sold count for each,
+ * lifetime), most sold first: [{ label, sold, share (% of all sold), price,
+ * available, supplier: [the supplier options matched to it] }]. A listing
+ * without variations is one row. Empty without a competitor.
+ */
+function salesByVariation(competitor, rows, currency) {
+  if (!competitor) return [];
+  const variations = competitorVariations(competitor, currency);
+  const total = variations.reduce((sum, v) => sum + (v.sold || 0), 0);
+  return variations
+    .map((v) => ({
+      label: v.label,
+      sold: v.sold,
+      share: total && v.sold !== null ? Math.round((v.sold / total) * 1000) / 10 : null,
+      price: v.price,
+      available: v.available ?? null,
+      supplier: (rows || [])
+        .filter((r) => r.match && (r.match.quality === 'exact' || r.match.quality === 'close' || r.match.quality === 'single') && r.match.label === v.label)
+        .map((r) => r.label || 'The product')
+        .slice(0, 4),
+    }))
+    .sort((a, b) => (b.sold ?? -1) - (a.sold ?? -1));
+}
+
+/** A reading of the competitor's sold counts, to keep: { sold, available, variations }. */
+function salesReading(competitor, currency) {
+  if (!competitor) return null;
+  return {
+    sold: competitor.sold ?? null,
+    available: competitor.available ?? null,
+    variations: competitorVariations(competitor, currency).map((v) => ({ label: v.label, sold: v.sold, available: v.available ?? null, price: v.price })),
+  };
+}
+
 // ---- drafting from a hunt ----------------------------------------------------------------
 
 const optionKey = (attributes = {}) =>
@@ -603,4 +641,4 @@ function optionLabel(row) {
   return row?.label || 'The product';
 }
 
-module.exports = { analyse, feeRates, priceChanges, draftSelection, shippingAnchor, bestSellerOption, supplierOptions, competitorVariations, optionScore, valueScore, quantityOf, norm, optionLabel, VERSION, MAX_OPTIONS, ENOUGH_ORDERS };
+module.exports = { analyse, feeRates, priceChanges, draftSelection, salesByVariation, salesReading, shippingAnchor, bestSellerOption, supplierOptions, competitorVariations, optionScore, valueScore, quantityOf, norm, optionLabel, VERSION, MAX_OPTIONS, ENOUGH_ORDERS };

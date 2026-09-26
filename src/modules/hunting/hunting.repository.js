@@ -23,6 +23,7 @@ const SORT_SQL = {
   profit: 'h.headline_profit DESC NULLS LAST, h.created_at DESC',
   roi: 'h.headline_roi DESC NULLS LAST, h.created_at DESC',
   demand: 'h.sold_per_month DESC NULLS LAST, h.created_at DESC',
+  sales: 'h.sales_score DESC NULLS LAST, h.created_at DESC',
 };
 const SORTS = Object.keys(SORT_SQL);
 
@@ -42,8 +43,8 @@ const SELECT = `
 async function insert(fields) {
   const { rows } = await query(
     `INSERT INTO hunted_products (owner_user_id, connection_id, hunter_user_id, status, competitor_url, competitor_item_id, source_url, source_product_id,
-       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at, sales_score)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
      RETURNING id`,
     [
       fields.ownerId,
@@ -64,6 +65,7 @@ async function insert(fields) {
       fields.note || null,
       fields.reviewerId || null,
       fields.decidedAt || null,
+      fields.salesScore ?? null,
     ]
   );
   return rows[0].id;
@@ -141,12 +143,12 @@ async function setDecision(id, { status, reject_reason: rejectReason, decision_n
   );
 }
 
-async function setCheck(id, { competitorUrl, competitorItemId, sourceUrl, sourceProductId, title, imageUrl, currency, checkResult, headlineProfit, headlineRoi, soldPerMonth }) {
+async function setCheck(id, { competitorUrl, competitorItemId, sourceUrl, sourceProductId, title, imageUrl, currency, checkResult, headlineProfit, headlineRoi, soldPerMonth, salesScore }) {
   await query(
     `UPDATE hunted_products SET competitor_url = $2, competitor_item_id = $3, source_url = $4, source_product_id = $5, title = $6, image_url = $7, currency = $8,
-       check_result = $9, headline_profit = $10, headline_roi = $11, sold_per_month = $12, checked_at = now(), updated_at = now()
+       check_result = $9, headline_profit = $10, headline_roi = $11, sold_per_month = $12, sales_score = $13, checked_at = now(), updated_at = now()
      WHERE id = $1`,
-    [id, competitorUrl, competitorItemId, sourceUrl, sourceProductId, title, imageUrl, currency, JSON.stringify(checkResult), headlineProfit, headlineRoi, soldPerMonth]
+    [id, competitorUrl, competitorItemId, sourceUrl, sourceProductId, title, imageUrl, currency, JSON.stringify(checkResult), headlineProfit, headlineRoi, soldPerMonth, salesScore ?? null]
   );
 }
 
@@ -280,7 +282,91 @@ async function history(ownerId, huntId) {
   return rows;
 }
 
+// ---- the competitor's sales over time (migration 028) -------------------------------
+
+async function addReading(huntId, { sold, available, variations }) {
+  await query('INSERT INTO hunt_sales_snapshots (hunt_id, sold, available, variations) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [huntId, sold, available, JSON.stringify(variations || [])]);
+}
+
+/** A product's readings, oldest first. */
+async function readings(huntId) {
+  const { rows } = await query('SELECT taken_at, sold, available, variations FROM hunt_sales_snapshots WHERE hunt_id = $1 ORDER BY taken_at ASC', [huntId]);
+  return rows;
+}
+
+async function setSalesScore(huntId, score) {
+  await query('UPDATE hunted_products SET sales_score = $2 WHERE id = $1', [huntId, score]);
+}
+
+/**
+ * Products whose competitor is due a reading: hunted in the last `days`,
+ * with a competitor, not rejected, last read over `hours` ago; oldest
+ * reading first.
+ */
+async function dueForReading({ limit = 20, hours = 20, days = 90, ownerId = null } = {}) {
+  const { rows } = await query(
+    `SELECT h.id, h.owner_user_id, h.connection_id, h.competitor_url, h.competitor_item_id, h.check_result->'demand' AS demand, last.taken_at AS last_read
+       FROM hunted_products h
+       LEFT JOIN LATERAL (SELECT max(taken_at) AS taken_at FROM hunt_sales_snapshots s WHERE s.hunt_id = h.id) last ON TRUE
+      WHERE h.competitor_url IS NOT NULL AND h.status <> 'rejected' AND h.created_at > now() - make_interval(days => $3)
+        AND (last.taken_at IS NULL OR last.taken_at < now() - make_interval(hours => $2))
+        AND ($4::uuid IS NULL OR h.owner_user_id = $4)
+      ORDER BY last.taken_at ASC NULLS FIRST
+      LIMIT $1`,
+    [limit, hours, days, ownerId]
+  );
+  return rows;
+}
+
+// ---- a competitor's dated sales, pasted from eBay (migration 029) -------------------
+
+/** Keeps pasted sales, each once; returns how many were new. */
+async function addCompetitorSales(ownerId, itemId, rows, userId) {
+  let added = 0;
+  for (let i = 0; i < rows.length; i += 200) {
+    const chunk = rows.slice(i, i + 200);
+    const params = [ownerId, String(itemId), userId || null];
+    const values = chunk.map((r) => {
+      params.push(r.soldAt, r.variation || '', r.price, r.currency, r.quantity || 1);
+      const n = params.length;
+      return `($1, $2, $${n - 4}, $${n - 3}, $${n - 2}, $${n - 1}, $${n}, $3)`;
+    });
+    const { rowCount } = await query(
+      `INSERT INTO competitor_sales (owner_user_id, item_id, sold_at, variation, price, currency, quantity, imported_by) VALUES ${values.join(', ')} ON CONFLICT DO NOTHING`,
+      params
+    );
+    added += rowCount;
+  }
+  return added;
+}
+
+/** A competitor listing's pasted sales, newest first, and when they were last pasted. */
+async function competitorSales(ownerId, itemId) {
+  if (!itemId) return { rows: [], importedAt: null };
+  const { rows } = await query(
+    `SELECT sold_at, variation, price, currency, quantity, imported_at FROM competitor_sales WHERE owner_user_id = $1 AND item_id = $2 ORDER BY sold_at DESC LIMIT 2000`,
+    [ownerId, String(itemId)]
+  );
+  return {
+    rows: rows.map((r) => ({ soldAt: new Date(r.sold_at).toISOString(), variation: r.variation, price: r.price === null ? null : Number(r.price), currency: r.currency, quantity: r.quantity })),
+    importedAt: rows.reduce((at, r) => (!at || r.imported_at > at ? r.imported_at : at), null),
+  };
+}
+
+/** The owner's hunted products of this competitor listing (their scores follow new sales). */
+async function huntsOfCompetitor(ownerId, itemId) {
+  const { rows } = await query('SELECT id, check_result FROM hunted_products WHERE owner_user_id = $1 AND competitor_item_id = $2', [ownerId, String(itemId)]);
+  return rows;
+}
+
 module.exports = {
+  addCompetitorSales,
+  competitorSales,
+  huntsOfCompetitor,
+  addReading,
+  readings,
+  setSalesScore,
+  dueForReading,
   VIEWS,
   SORTS,
   insert,

@@ -153,7 +153,7 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
 
       {checked && (
         <div ref={resultRef} className="mt-4 scroll-mt-4 animate-[fadeIn_200ms_ease-out]">
-          <HuntResult result={checked.result} />
+          <HuntResult result={checked.result} connectionId={connectionId} />
         </div>
       )}
     </div>

@@ -1,10 +1,12 @@
 "use client";
 
 import { Fragment, ReactNode, useMemo, useState } from "react";
-import { HuntCheckResult, HuntDuplicate, HuntOption } from "@/lib/api";
+import Link from "next/link";
+import { HuntCheckResult, HuntDuplicate, HuntMatchQuality, HuntOption } from "@/lib/api";
 import { count, money, age } from "@/components/research/format";
 import { ToneIcon } from "@/components/research/ResearchPanels";
-import { ExternalIcon, INK, LEVEL_TONE, MatchChip, STAGE, Thumb, VERDICT, profitInk, roiText, signedMoney, ago } from "./HuntBits";
+import { HuntSales } from "./HuntSales";
+import { ExternalIcon, FactPill, FeedbackPill, INK, LEVEL_TONE, MATCH, MatchChip, RatingPill, STAGE, StoreScores, Thumb, VERDICT, profitInk, roiText, signedMoney, ago } from "./HuntBits";
 
 // A hunted product's profit check: the two listings side by side, the
 // verdict on the best seller, every supplier option worked out at the
@@ -23,7 +25,7 @@ function Stat({ label, value, note }: { label: string; value: ReactNode; note?: 
   );
 }
 
-function ProductCard({ kind, title, url, image, children }: { kind: "ebay" | "aliexpress"; title: string; url: string | null; image: string | null; children: ReactNode }) {
+function ProductCard({ kind, title, url, image, badges, children }: { kind: "ebay" | "aliexpress"; title: string; url: string | null; image: string | null; badges?: ReactNode; children: ReactNode }) {
   return (
     <section className="card flex min-w-0 flex-col p-4">
       <div className="flex items-center justify-between gap-2">
@@ -39,7 +41,11 @@ function ProductCard({ kind, title, url, image, children }: { kind: "ebay" | "al
       </div>
       <div className="mt-2.5 flex min-w-0 gap-3">
         <Thumb src={image} size={60} />
-        <p className="line-clamp-3 min-w-0 text-[13px] font-medium leading-snug text-[var(--color-ink)]">{title}</p>
+        <div className="min-w-0">
+          <p className="line-clamp-2 text-[13px] font-medium leading-snug text-[var(--color-ink)]">{title}</p>
+          {/* The record at a glance, coloured by how good it is. */}
+          {badges && <div className="mt-2 flex flex-wrap gap-1.5">{badges}</div>}
+        </div>
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-[var(--color-line)] pt-3">{children}</dl>
     </section>
@@ -182,6 +188,29 @@ function Split({ option, currency }: { option: HuntOption; currency: string }) {
   );
 }
 
+// What an option sells at, and what that price is: the competitor's same
+// option, their nearest, their lowest, or (no competitor) your own price.
+const MATCH_LINE: Record<HuntMatchQuality, { dot: string; text: (label: string | null) => string }> = {
+  exact: { dot: "bg-emerald-500", text: (l) => (l ? `Their ${l}` : "Same option") },
+  close: { dot: "bg-sky-500", text: (l) => (l ? `Nearest: ${l}` : "Nearest option") },
+  lowest: { dot: "bg-amber-500", text: () => "Their lowest price" },
+  single: { dot: "bg-slate-400", text: () => "Listing price" },
+  target: { dot: "bg-indigo-500", text: () => "At your target" },
+};
+
+function SellsAt({ match, currency }: { match: NonNullable<HuntOption["match"]>; currency: string }) {
+  const m = MATCH_LINE[match.quality];
+  return (
+    <span className="flex flex-col items-center leading-tight" title={MATCH[match.quality].title}>
+      <span className="font-semibold tabular-nums text-[var(--color-ink)]">{money(match.price, currency)}</span>
+      <span className="mt-1 inline-flex max-w-[140px] items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+        <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${m.dot}`} aria-hidden />
+        <span className="truncate">{m.text(match.label)}</span>
+      </span>
+    </span>
+  );
+}
+
 function StockText({ stock }: { stock: number | null }) {
   if (stock === null) return <span className="text-[var(--color-muted)]">—</span>;
   if (stock === 0) return <span className="font-semibold text-rose-600">Out</span>;
@@ -209,11 +238,24 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
   const isBestSeller = (index: number) => summary.bestSeller?.optionIndex === index;
   const single = result.options.length === 1 && !result.options[0].label;
 
+  // A marker under an option's name: the one matching the competitor's best
+  // seller, or the one earning most. Soft pills with a mark, never wrapping.
+  const tagClass = "inline-flex h-5 flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 text-[10.5px] font-semibold ring-1 ring-inset";
   const tag = (index: number) =>
     isBestSeller(index) ? (
-      <span className="inline-flex h-5 items-center rounded bg-[var(--color-primary)] px-1.5 text-[10.5px] font-semibold text-white">Best seller</span>
+      <span className={`${tagClass} bg-indigo-50 text-indigo-700 ring-indigo-200`}>
+        <svg viewBox="0 0 20 20" className="h-3 w-3" fill="currentColor" aria-hidden>
+          <path d="M10 2.2l2.4 4.9 5.4.8-3.9 3.8.9 5.4L10 14.6l-4.8 2.5.9-5.4L2.2 7.9l5.4-.8L10 2.2z" />
+        </svg>
+        Best seller{summary.bestSeller?.sold ? ` · ${count(summary.bestSeller.sold)} sold` : ""}
+      </span>
     ) : !unpriced && summary.bestOptionIndex === index && summary.headline.optionIndex !== index ? (
-      <span className="inline-flex h-5 items-center rounded bg-emerald-600 px-1.5 text-[10.5px] font-semibold text-white">Most profit</span>
+      <span className={`${tagClass} bg-emerald-50 text-emerald-700 ring-emerald-200`}>
+        <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3" aria-hidden>
+          <path d="M4 13.5l4.5-4.5 3 3L16 7.5M12 7.5h4v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        Most profit
+      </span>
     ) : null;
 
   return (
@@ -232,10 +274,8 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
             <button type="button" onClick={() => setOpen(open === index ? null : index)} className="flex w-full items-start gap-3 px-4 py-3 text-left">
               <Thumb src={option.imageUrl} size={44} />
               <span className="min-w-0 flex-1">
-                <span className="flex flex-wrap items-center gap-1.5">
-                  <span className="truncate text-[13.5px] font-medium text-[var(--color-ink)]">{option.label || "The product"}</span>
-                  {tag(index)}
-                </span>
+                <span className="block truncate text-[13.5px] font-medium text-[var(--color-ink)]">{option.label || "The product"}</span>
+                {tag(index) && <span className="mt-1 flex">{tag(index)}</span>}
                 <span className="mt-1 grid grid-cols-3 gap-x-2 text-[11.5px] text-[var(--color-muted)]">
                   <span>
                     Cost <b className="font-semibold tabular-nums text-[var(--color-ink)]">{option.cost === null ? "—" : money(option.cost, currency)}</b>
@@ -273,12 +313,12 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
       <div className="hidden overflow-x-auto border-t border-[var(--color-line)] md:block">
         <table className="w-full min-w-[760px] text-[12.5px]">
           <thead>
-            <tr className="bg-[var(--color-paper)] text-[10.5px] uppercase tracking-wide text-[var(--color-muted)]">
+            <tr className="bg-[var(--color-paper)] text-[10.5px] whitespace-nowrap uppercase tracking-wide text-[var(--color-muted)]">
               <th className="px-4 py-2.5 text-left font-semibold">Option</th>
               <th className="w-[76px] px-2 py-2.5 text-center font-semibold">Stock</th>
               <th className="w-[84px] px-2 py-2.5 text-center font-semibold">Cost</th>
               <th className="w-[84px] px-2 py-2.5 text-center font-semibold">Postage</th>
-              <th className="px-3 py-2.5 text-left font-semibold">{result.competitor ? "Competitor sells at" : "Sells at"}</th>
+              <th className="w-[150px] px-2 py-2.5 text-center font-semibold">{result.competitor ? "Their price" : "Your price"}</th>
               <th className="w-[92px] px-2 py-2.5 text-center font-semibold">eBay fees</th>
               <th className="w-[92px] px-2 py-2.5 text-center font-semibold">Profit</th>
               <th className="w-[84px] px-3 py-2.5 text-center font-semibold">Return</th>
@@ -297,10 +337,12 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
                       <span className="flex min-w-0 items-center gap-2.5">
                         <Thumb src={option.imageUrl} size={34} className="rounded-lg" />
                         <span className="min-w-0">
-                          <span className="block max-w-[240px] truncate font-medium text-[var(--color-ink)]">{option.label || "The product"}</span>
+                          <span className="block max-w-[260px] truncate font-medium text-[var(--color-ink)]" title={option.label || undefined}>
+                            {option.label || "The product"}
+                          </span>
+                          {tag(index) && <span className="mt-1 flex">{tag(index)}</span>}
                           {!option.costExact && <span className="block text-[11px] text-amber-700">Product price used</span>}
                         </span>
-                        {tag(index)}
                       </span>
                     </td>
                     <td className="px-2 py-2.5 text-center tabular-nums">
@@ -308,16 +350,8 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
                     </td>
                     <td className="px-2 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{option.cost === null ? "—" : money(option.cost, currency)}</td>
                     <td className="px-2 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{option.shipping ? money(option.shipping, currency) : <span className="text-[var(--color-muted)]">Free</span>}</td>
-                    <td className="px-3 py-2.5">
-                      {option.match ? (
-                        <span className="flex items-center gap-2">
-                          <span className="font-medium tabular-nums text-[var(--color-ink)]">{money(option.match.price, currency)}</span>
-                          <MatchChip quality={option.match.quality} />
-                          {option.match.label && option.match.quality !== "lowest" && <span className="max-w-[120px] truncate text-[11.5px] text-[var(--color-muted)]">{option.match.label}</span>}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
+                    <td className="px-2 py-2.5 text-center">
+                      {option.match ? <SellsAt match={option.match} currency={currency} /> : "—"}
                     </td>
                     <td className="px-2 py-2.5 text-center tabular-nums text-[var(--color-muted)]">{option.fees ? money(option.fees.total, currency) : "—"}</td>
                     <td className={`px-2 py-2.5 text-center font-semibold tabular-nums ${profitInk(option.profit, option.roi, targetRoiPercent, unpriced)}`}>{signedMoney(option.profit, currency)}</td>
@@ -409,9 +443,18 @@ export function Duplicates({ items }: { items: HuntDuplicate[] }) {
       <ul className="mt-2 space-y-2">
         {items.map((d, i) => {
           const line = duplicateLine(d);
+          // A live listing opens in the account's Listings, searched to it.
+          const href = d.itemId && d.type !== "draft" && d.type !== "hunt" ? `/accounts/${d.connectionId}/listings?q=${encodeURIComponent(d.itemId)}` : null;
           return (
             <li key={`${d.type}-${d.id || d.itemId || i}`} className="min-w-0 text-[12.5px]">
-              <p className="font-medium text-[var(--color-ink)]">{line.text}</p>
+              <p className="font-medium text-[var(--color-ink)]">
+                {line.text}
+                {href && (
+                  <Link href={href} target="_blank" className="ml-2 text-[12px] font-semibold text-amber-800 underline-offset-2 hover:underline">
+                    View listing
+                  </Link>
+                )}
+              </p>
               <p className="truncate text-[11.5px] text-amber-900/70">
                 {line.meta}
                 {d.title ? ` · ${d.title}` : ""}
@@ -443,7 +486,7 @@ function NoCompetitor({ target }: { target: number }) {
   );
 }
 
-export function HuntResult({ result }: { result: HuntCheckResult }) {
+export function HuntResult({ result, connectionId, onSalesImported }: { result: HuntCheckResult; connectionId?: string; onSalesImported?: () => void }) {
   const { competitor: c, source: s, currency, shipping, fees, demand } = result;
   const supplier = s.supplier;
   const postage = c?.postage ? (c.postage.cost ? `+ ${money(c.postage.cost, currency)} postage` : "Free postage") : null;
@@ -453,30 +496,73 @@ export function HuntResult({ result }: { result: HuntCheckResult }) {
         {!c ? (
           <NoCompetitor target={result.targetRoiPercent} />
         ) : (
-        <ProductCard kind="ebay" title={c.title} url={c.url} image={c.imageUrl}>
+        <ProductCard
+          kind="ebay"
+          title={c.title}
+          url={c.url}
+          image={c.imageUrl}
+          badges={
+            <>
+              <FeedbackPill percent={c.seller?.feedbackPercentage} score={c.seller?.feedbackScore} />
+              {demand.soldPerMonth !== null && demand.soldPerMonth > 0 && (
+                <FactPill tone={demand.soldPerMonth >= 3 ? "indigo" : "amber"} title="How many the competitor sells a month">
+                  {count(demand.soldPerMonth)} sold / month
+                </FactPill>
+              )}
+              {c.abroad && c.country && (
+                <FactPill tone="amber" title="The competitor posts from abroad">
+                  Posts from {c.country}
+                </FactPill>
+              )}
+            </>
+          }
+        >
           <Stat label="Price" value={c.lowestPrice === null ? "—" : `${result.options.length > 1 || demand.variations > 1 ? "From " : ""}${money(c.lowestPrice, currency)}`} note={postage || undefined} />
           <Stat label="Sold" value={demand.sold === null ? "—" : count(demand.sold)} note={demand.soldPerMonth === null ? undefined : `${count(demand.soldPerMonth)} a month`} />
           <Stat label="Listed for" value={demand.daysLive === null ? "—" : age(demand.daysLive)} note={demand.variations ? `${demand.sellingVariations} of ${demand.variations} options selling` : undefined} />
           <Stat
             label="Seller"
             value={c.seller?.username || "—"}
-            note={[c.seller?.feedbackPercentage ? `${c.seller.feedbackPercentage}%` : null, c.seller?.feedbackScore ? `${count(c.seller.feedbackScore)} feedback` : null, c.abroad && c.country ? `posts from ${c.country}` : null].filter(Boolean).join(" · ") || undefined}
+            note={c.seller?.business ? "Business seller" : c.seller ? "Private seller" : undefined}
           />
         </ProductCard>
         )}
-        <ProductCard kind="aliexpress" title={s.title} url={s.url} image={s.imageUrl}>
+        <ProductCard
+          kind="aliexpress"
+          title={s.title}
+          url={s.url}
+          image={s.imageUrl}
+          badges={
+            supplier ? (
+              <>
+                <RatingPill rating={supplier.rating} reviews={supplier.reviews} />
+                {supplier.orders && <FactPill title="Orders on AliExpress">{supplier.orders} orders</FactPill>}
+                {supplier.onSale === false && <FactPill tone="rose">No longer on sale</FactPill>}
+              </>
+            ) : undefined
+          }
+        >
           <Stat label="Cost" value={costRange(result.options, currency)} note={`${count(s.options)} option${s.options === 1 ? "" : "s"}`} />
           <Stat
             label="Postage"
             value={shipping.basis === "aliexpress" ? ((shipping.counted ?? shipping.cost) ? money(shipping.counted ?? shipping.cost, currency) : "Free") : `${money(shipping.cost, currency)} (settings)`}
             note={shipping.basis === "aliexpress" ? [shipping.freeOver ? `free over ${money(shipping.freeOver, currency)}` : null, dayRange({ min: shipping.minDays, max: shipping.maxDays })].filter(Boolean).join(" · ") || undefined : "AliExpress quote not available"}
           />
-          <Stat label="Orders" value={supplier?.orders || "—"} note={supplier?.rating ? `Rated ${supplier.rating}${supplier.reviews !== null ? ` · ${count(supplier.reviews)} reviews` : ""}` : undefined} />
-          <Stat label="Store" value={supplier?.store?.name || "—"} note={supplier?.store?.described ? `As described ${supplier.store.described}` : undefined} />
+          <Stat label="Delivery" value={s.days ? dayRange(s.days) || "—" : "—"} note={s.days ? "to the buyer" : undefined} />
+          <div className="min-w-0">
+            <dt className="text-[11px] font-medium text-[var(--color-muted)]">Store</dt>
+            <dd className="mt-0.5 truncate text-[13px] font-semibold text-[var(--color-ink)]" title={supplier?.store?.name}>
+              {supplier?.store?.name || "—"}
+            </dd>
+            <dd className="mt-1">
+              <StoreScores store={supplier?.store} />
+            </dd>
+          </div>
         </ProductCard>
       </div>
 
       <Verdict result={result} />
+      <HuntSales result={result} connectionId={connectionId} onImported={onSalesImported} />
       <OptionsTable result={result} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">

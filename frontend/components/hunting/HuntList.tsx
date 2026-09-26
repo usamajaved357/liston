@@ -3,7 +3,8 @@
 import { HuntList as HuntListData, HuntSort, HuntSummary, HuntView } from "@/lib/api";
 import { count, money } from "@/components/research/format";
 import { ToneIcon } from "@/components/research/ResearchPanels";
-import { Person, StageChip, Thumb, VERDICT, ago, profitInk, roiText, signedMoney } from "./HuntBits";
+import { Person, RatingPill, StageChip, Thumb, VERDICT, ago, profitInk, roiText, signedMoney } from "./HuntBits";
+import { SalesScorePill } from "./HuntSales";
 
 // The account's hunted products: the pipeline as tabs (waiting, sent back,
 // approved, drafted and listed, rejected), filters, and a row per product
@@ -25,6 +26,7 @@ export const SORT_LABELS: Record<HuntSort, string> = {
   profit: "Most profit",
   roi: "Best return",
   demand: "Most sold",
+  sales: "Best sales",
 };
 
 const EMPTY: Record<HuntView, { title: string; text: string }> = {
@@ -44,7 +46,7 @@ function Status({ hunt }: { hunt: HuntSummary }) {
   else if (hunt.stage === "listed") line = hunt.sales ? `${money(hunt.sales.sales, hunt.sales.currency || hunt.currency)} · ${count(hunt.sales.units)} sold` : "No sales yet";
   else if (hunt.stage === "approved") line = hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;
   return (
-    <div className="min-w-0">
+    <div className="flex min-w-0 flex-col items-center text-center">
       <StageChip stage={hunt.stage} />
       {line && <p className="mt-1 max-w-[190px] truncate text-[11.5px] text-[var(--color-muted)]">{line}</p>}
     </div>
@@ -54,6 +56,7 @@ function Status({ hunt }: { hunt: HuntSummary }) {
 function Signals({ hunt }: { hunt: HuntSummary }) {
   return (
     <>
+      {hunt.supplier?.rating !== null && hunt.supplier?.rating !== undefined && <RatingPill rating={hunt.supplier.rating} small />}
       {!hunt.competitorUrl && (
         <span className="inline-flex items-center rounded bg-indigo-50 px-1.5 text-[11px] font-semibold text-indigo-700" title="Checked without a competitor: priced at the target return, with no market price or demand">
           No competitor
@@ -63,6 +66,11 @@ function Signals({ hunt }: { hunt: HuntSummary }) {
         <span className="inline-flex items-center gap-1 text-amber-700" title={`${hunt.warnings} thing${hunt.warnings === 1 ? "" : "s"} to check before approving`}>
           <ToneIcon tone="warn" className="h-3.5 w-3.5" />
           {hunt.warnings}
+        </span>
+      )}
+      {!hunt.duplicates && (hunt.similar || 0) > 0 && (
+        <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 text-[11px] font-semibold text-amber-800" title="A live listing on your accounts has a very similar title">
+          Similar live
         </span>
       )}
       {hunt.duplicates > 0 && (
@@ -139,6 +147,11 @@ function Row({ hunt, you, onOpen, onApprove, onDraft }: { hunt: HuntSummary; you
               {returnText}
               {hunt.soldPerMonth !== null ? ` · ${count(hunt.soldPerMonth)}/mo sold` : ""}
             </p>
+            {hunt.salesScore && (
+              <span className="mt-1.5 inline-flex">
+                <SalesScorePill score={hunt.salesScore} small />
+              </span>
+            )}
           </div>
           <StageChip stage={hunt.stage} />
         </div>
@@ -158,7 +171,7 @@ function Row({ hunt, you, onOpen, onApprove, onDraft }: { hunt: HuntSummary; you
         tabIndex={0}
         onClick={onOpen}
         onKeyDown={(e) => e.key === "Enter" && onOpen()}
-        className="hidden cursor-pointer grid-cols-[minmax(0,1fr)_132px_104px_196px_176px] items-center gap-4 px-4 py-3 transition-colors hover:bg-[var(--color-paper)]/70 md:grid"
+        className="hidden cursor-pointer grid-cols-[minmax(0,1fr)_132px_120px_196px_176px] items-center gap-4 px-4 py-3 transition-colors hover:bg-[var(--color-paper)]/70 md:grid"
       >
         <div className="flex min-w-0 items-center gap-3">
           <Thumb src={hunt.imageUrl} size={52} />
@@ -176,9 +189,14 @@ function Row({ hunt, you, onOpen, onApprove, onDraft }: { hunt: HuntSummary; you
           <p className={`text-[15px] font-semibold tabular-nums ${ink}`}>{signedMoney(hunt.headline.profit, hunt.currency)}</p>
           <p className="text-[11.5px] tabular-nums text-[var(--color-muted)]">{returnText}</p>
         </div>
-        <div className="text-center">
-          <p className="text-[13px] font-semibold tabular-nums text-[var(--color-ink)]">{hunt.soldPerMonth === null ? "—" : count(hunt.soldPerMonth)}</p>
-          <p className="text-[11.5px] text-[var(--color-muted)]">sold a month</p>
+        <div className="flex flex-col items-center text-center">
+          <p className="text-[13px] font-semibold tabular-nums text-[var(--color-ink)]">
+            {hunt.soldPerMonth === null ? "—" : count(hunt.soldPerMonth)}
+            <span className="ml-1 text-[11.5px] font-normal text-[var(--color-muted)]">/ month</span>
+          </p>
+          <span className="mt-1">
+            <SalesScorePill score={hunt.salesScore} small />
+          </span>
         </div>
         <Status hunt={hunt} />
         <div className="flex justify-end">
@@ -254,11 +272,11 @@ export function HuntRows({ data, view, you, loading, onOpen, onApprove, onDraft,
   }
   return (
     <div className={loading ? "opacity-60 transition-opacity" : "transition-opacity"}>
-      <div className="hidden grid-cols-[minmax(0,1fr)_132px_104px_196px_176px] gap-4 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)] md:grid">
+      <div className="hidden grid-cols-[minmax(0,1fr)_132px_120px_196px_176px] gap-4 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)] md:grid">
         <span>Product</span>
         <span className="text-center">Profit per sale</span>
         <span className="text-center">Demand</span>
-        <span>Status</span>
+        <span className="text-center">Status</span>
         <span />
       </div>
       <ul className="divide-y divide-[var(--color-line)]">

@@ -1571,7 +1571,7 @@ export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "las
 
 export type HuntStage = "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
 export type HuntView = "review" | "sent_back" | "approved" | "listed" | "rejected" | "all";
-export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand";
+export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand" | "sales";
 // unpriced: checked without a competitor, so priced at the target return with no market to judge by.
 export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown";
 // target: no competitor, so the price a draft would list it at.
@@ -1667,6 +1667,17 @@ export interface HuntCheckResult {
     | { basis: "settings"; counted: number; cost: number };
   fees: { basis: "orders" | "settings"; adsPercent: number; processingPercent: number; fixed: number; orders?: number; days?: number };
   demand: { sold: number | null; soldPerMonth: number | null; daysLive: number | null; available: number | null; variations: number; sellingVariations: number };
+  sales?: {
+    // The competitor's sold count per variation (lifetime, eBay's figure), most sold first.
+    variations: HuntVariationSales[];
+    // Liston's own daily readings of the competitor (only on a saved product).
+    history?: HuntSalesHistory | null;
+    // eBay's dated sales (Marketplace Insights), once eBay grants it to Liston.
+    ebay?: { available: boolean; days?: number; sold?: number; lastSoldAt?: string | null; lastPrice?: number | null; found?: boolean } | null;
+    // Dated sales pasted from eBay's purchase history page (url: the page to copy them from).
+    exact?: HuntExactSales | null;
+  };
+  salesScore?: HuntSalesScore | null;
   options: HuntOption[];
   summary: {
     headline: { basis: "best_seller" | "best_option" | "your_price" | null; optionIndex: number | null; profit: number | null; roi: number | null };
@@ -1683,6 +1694,61 @@ export interface HuntCheckResult {
   warnings: string[];
   checks: HuntCheckItem[];
   duplicates: HuntDuplicate[];
+}
+
+export interface HuntVariationSales {
+  label: string | null;
+  sold: number | null;
+  share: number | null;
+  price: number | null;
+  available: number | null;
+  supplier: string[];
+}
+
+export interface HuntSalesHistory {
+  readings: number;
+  since: string | null;
+  coveredDays: number;
+  days: { day: string; sold: number }[];
+  soldLast7: number | null;
+  soldLast30: number | null;
+  perDay: number | null;
+  trend: "up" | "flat" | "down" | null;
+  byVariation: { label: string | null; sold: number }[];
+}
+
+export interface HuntExactFigures {
+  sales: number;
+  units: number;
+  windows: Record<"day" | "d3" | "d7" | "d15" | "d30" | "d90", { units: number; orders: number }>;
+  lastSoldAt: string;
+  daysSinceLast: number;
+  firstShownAt: string;
+  perDay: number;
+  perWeek: number;
+  perMonth: number;
+  currency: string | null;
+  price: { average: number; median: number; low: number; high: number; volatility: number } | null;
+  byVariation: { variation: string; units: number; orders: number; d7: number; d30: number; lastSoldAt: string | null; share: number | null }[];
+  daily: { day: string; units: number; price: number | null }[];
+  trend: "up" | "flat" | "down" | null;
+  recent: { soldAt: string; variation: string; price: number | null; quantity: number }[];
+}
+
+export interface HuntExactSales {
+  url: string;
+  importedAt: string | null;
+  figures: HuntExactFigures | null;
+}
+
+export type HuntSalesBand = "hot" | "strong" | "steady" | "slow" | "cold";
+export interface HuntSalesScore {
+  score: number;
+  band: HuntSalesBand;
+  label: string;
+  estimate: boolean;
+  exact?: boolean;
+  parts: { key: string; label: string; points: number; max: number; detail: string }[];
 }
 
 export interface HuntPermissions {
@@ -1715,7 +1781,9 @@ export interface HuntSummary {
   verdict: HuntVerdict;
   targetRoiPercent: number | null;
   soldPerMonth: number | null;
+  salesScore: { score: number; band: HuntSalesBand; label: string } | null;
   competitorSold: number | null;
+  supplier: { rating: number | null; reviews: number | null; orders: string | null } | null;
   options: number | null;
   hunter: HuntPerson | null;
   reviewer: HuntPerson | null;
@@ -1731,6 +1799,8 @@ export interface HuntSummary {
   hunterNote: string | null;
   warnings: number;
   duplicates: number;
+  // Live listings with a very similar title (the same product from another supplier, say).
+  similar?: number;
   competitorUrl: string | null;
   sourceUrl: string;
   listingId: string | null;
@@ -2064,6 +2134,12 @@ export const api = {
   // Product hunting: check a product, add it for review, decide, draft.
   huntCheck: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
+  // Sales pasted from eBay's purchase history page for a competitor listing.
+  huntSoldHistory: (connectionId: string, input: { itemId: string; competitorUrl?: string | null; text: string }) =>
+    request<{ read: number; added: number; exact: HuntExactSales }>(`/api/connections/${connectionId}/hunting/sold-history`, {
+      method: "POST",
+      body: JSON.stringify({ ...input, competitorUrl: input.competitorUrl || undefined }),
+    }),
   huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
     request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
   huntList: (connectionId: string, params: { view?: HuntView; mine?: boolean; hunter?: string; q?: string; sort?: HuntSort; page?: number } = {}) => {

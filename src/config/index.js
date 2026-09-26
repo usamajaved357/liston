@@ -143,6 +143,11 @@ const config = {
   // research always have calls left.
   hunting: {
     dailyCalls: parseInt(process.env.HUNTING_DAILY_CALLS || '1000', 10),
+    // The daily re-read of hunted products' competitors (their sales
+    // history): at most this many Browse calls a day, and off on a machine
+    // that shouldn't spend the shared allowance.
+    trackCalls: parseInt(process.env.HUNT_TRACK_DAILY_CALLS || '300', 10),
+    trackerEnabled: process.env.HUNT_TRACKER !== 'off',
   },
   analytics: {
     dailyLimit: parseInt(process.env.EBAY_ANALYTICS_DAILY_LIMIT || '100', 10),

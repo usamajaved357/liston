@@ -2,6 +2,10 @@ const crypto = require('crypto');
 const huntingRepository = require('./hunting.repository');
 const huntProfit = require('./hunt-profit');
 const huntDuplicates = require('./hunt-duplicates');
+const huntSales = require('./hunt-sales');
+const soldHistory = require('./sold-history');
+const salesHistory = require('../ebay/sales-history');
+const logger = require('../../utils/logger');
 const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, HuntError, rules } = require('./hunt-rules');
 const stats = require('./hunting-stats');
 const connectionService = require('../connections/connection.service');
@@ -85,14 +89,14 @@ async function ensureAllowance() {
 }
 
 /** Every warning about where this product already is on the owner's accounts. */
-async function duplicatesFor(ownerId, { productId, itemId, title, connectionId, excludeId = null }) {
+async function duplicatesFor(ownerId, { productId, itemId, title, titles, connectionId, excludeId = null }) {
   const [hunts, listings, live, allLive] = await Promise.all([
     huntingRepository.huntsMatching(ownerId, { productId, itemId, excludeId }),
     huntingRepository.listingsMatching(ownerId, { productId, itemId }),
     mirror.ownerLiveListings(ownerId, { productId, itemId }),
     mirror.ownerLiveListings(ownerId),
   ]);
-  return huntDuplicates.describe({ hunts, listings, live, allLive }, { productId, itemId, title, connectionId });
+  return huntDuplicates.describe({ hunts, listings, live, allLive }, { productId, itemId, title, titles: titles || [title], connectionId });
 }
 
 /**
@@ -129,9 +133,58 @@ async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, 
   result.source.productId = productId;
   if (result.competitor) result.competitor.itemId = result.competitor.itemId || itemId;
   if (postage) result.shipping.forOption = anchor.label;
+  // eBay's dated sales for the listing, once eBay grants Liston its sales
+  // history (Marketplace Insights): sold in the last 90 days and when last.
+  result.sales.ebay = competitor ? await ebaySoldHistory(competitor, itemId, site.id) : null;
+  // Sales pasted from eBay's purchase history for this listing earlier.
+  result.sales.exact = competitor ? await exactSales(ownerId, itemId, competitorUrl, site.id) : null;
+  result.salesScore = huntSales.salesScore({ demand: result.demand, variations: result.sales.variations, exact: result.sales.exact?.figures || null });
   result.market = { id: site.id, name: site.name, country: site.country };
-  result.duplicates = await duplicatesFor(ownerId, { productId, itemId, title: competitor?.title || source.title, connectionId, excludeId });
-  return { competitorUrl: competitorUrl || null, sourceUrl, itemId, productId, result };
+  result.duplicates = await duplicatesFor(ownerId, { productId, itemId, title: competitor?.title || source.title, titles: [competitor?.title, source.title], connectionId, excludeId });
+  return { competitorUrl: competitorUrl || null, sourceUrl, itemId, productId, result, reading: huntProfit.salesReading(competitor, site.currency) };
+}
+
+// The listing in eBay's sales history for its title, or { available: false }
+// while eBay hasn't granted the API (asked again hourly, see sales-history).
+async function ebaySoldHistory(competitor, itemId, marketplaceId) {
+  try {
+    const found = await salesHistory.soldListings({ q: String(competitor.title || '').slice(0, 100), marketplaceId });
+    if (!found.available) return { available: false };
+    const item = (found.items || []).find((i) => String(i.legacyItemId) === String(itemId));
+    return { available: true, days: 90, sold: item?.sold ?? 0, lastSoldAt: item?.lastSoldAt || null, lastPrice: item?.price ?? null, found: Boolean(item) };
+  } catch (err) {
+    logger.warn('Hunting: eBay sales history not read', { error: err.message });
+    return { available: false };
+  }
+}
+
+/**
+ * A competitor listing's dated sales pasted from eBay's purchase history, as
+ * figures (sold-history.insights), with the page to copy them from; null
+ * figures until someone has pasted them.
+ */
+async function exactSales(ownerId, itemId, competitorUrl, marketplaceId) {
+  if (!itemId) return null;
+  const { rows, importedAt } = await huntingRepository.competitorSales(ownerId, itemId);
+  const timeZone = analyticsDays.timeZoneFor(marketplaceId || 'EBAY_GB') || 'Europe/London';
+  const figures = rows.length ? soldHistory.insights(rows, { timeZone }) : null;
+  return { url: soldHistory.purchaseHistoryUrl(competitorUrl, itemId), importedAt, figures };
+}
+
+/** A product's readings as history, and its sales score with them (and eBay's dated sales, when pasted). */
+async function salesWithHistory(huntId, result, exact = null) {
+  const readings = await huntingRepository.readings(huntId);
+  const spm = result?.demand?.soldPerMonth;
+  const h = huntSales.history(readings, { lifetimePerDay: spm === null || spm === undefined ? null : spm / 30 });
+  return { history: h, score: huntSales.salesScore({ demand: result?.demand, variations: result?.sales?.variations || [], history: h, exact: exact?.figures || null }) };
+}
+
+/** Keeps a reading of the competitor's sales and the score it gives. */
+async function recordReading(huntId, read) {
+  if (!read.reading) return;
+  await huntingRepository.addReading(huntId, read.reading);
+  const { score } = await salesWithHistory(huntId, read.result, read.result?.sales?.exact);
+  await huntingRepository.setSalesScore(huntId, score ? score.score : null);
 }
 
 function checkColumns(read) {
@@ -148,10 +201,16 @@ function checkColumns(read) {
     headlineProfit: result.summary.headline.profit,
     headlineRoi: result.summary.headline.roi,
     soldPerMonth: result.demand.soldPerMonth,
+    salesScore: result.salesScore ? result.salesScore.score : null,
   };
 }
 
 // ---- shaping for the page --------------------------------------------------------------------
+
+function bandOf(score) {
+  const [, band, label] = huntSales.BANDS.find(([min]) => score >= min);
+  return { band, label };
+}
 
 function levelCount(result) {
   return (result?.checks || []).filter((c) => c.level === 'warn' || c.level === 'bad').length;
@@ -175,7 +234,10 @@ function summaryOf(row, viewer, sales = []) {
     verdict: result.summary?.verdict || 'unknown',
     targetRoiPercent: result.targetRoiPercent ?? null,
     soldPerMonth: row.sold_per_month === null ? null : Number(row.sold_per_month),
+    salesScore: row.sales_score === null || row.sales_score === undefined ? null : { score: row.sales_score, ...bandOf(row.sales_score) },
     competitorSold: result.demand?.sold ?? null,
+    // The supplier's record, for the list at a glance.
+    supplier: result.source?.supplier ? { rating: result.source.supplier.rating ?? null, reviews: result.source.supplier.reviews ?? null, orders: result.source.supplier.orders ?? null } : null,
     options: result.summary?.total ?? null,
     hunter: personOf(row.hunter_user_id, row.hunter_name, row.hunter_email),
     reviewer: personOf(row.reviewer_user_id, row.reviewer_name, row.reviewer_email),
@@ -191,6 +253,7 @@ function summaryOf(row, viewer, sales = []) {
     hunterNote: row.hunter_note,
     warnings: levelCount(result),
     duplicates: (result.duplicates || []).filter((d) => d.type !== 'similar').length,
+    similar: (result.duplicates || []).filter((d) => d.type === 'similar').length,
     competitorUrl: row.competitor_url,
     sourceUrl: row.source_url,
     listingId: row.listing_id,
@@ -274,6 +337,7 @@ async function add(auth, connectionId, { checkId, note }) {
     note: typeof note === 'string' ? note.trim().slice(0, 1000) : null,
   });
   checks.delete(checkId);
+  await recordReading(id, kept.read).catch((err) => logger.warn('Hunting: sales reading not kept', { error: err.message }));
   await activityRepository.record({
     actorUserId: auth.userId,
     connectionId,
@@ -314,16 +378,28 @@ async function list(auth, connectionId, { view, mine, hunter, q, sort, page } = 
 
 /** One product in full: its check, history, where else it is, its sales and what this person may do. */
 async function detail(auth, huntId) {
-  const { hunt, viewer } = await loadHunt(auth, huntId);
-  const [events, duplicates, sales] = await Promise.all([
+  const loaded = await loadHunt(auth, huntId);
+  const { viewer } = loaded;
+  let { hunt } = loaded;
+  // Keep its sales history current for whoever's looking.
+  await readIfStale(hunt);
+  if (hunt.competitor_url) hunt = (await huntingRepository.findForOwner(huntId, auth.ownerId)) || hunt;
+  const checkResult = hunt.check_result || {};
+  const variations = checkResult.sales?.variations?.length ? checkResult.sales.variations : variationsFromReading(checkResult, await huntingRepository.readings(hunt.id));
+  const [events, duplicates, sales, withHistory] = await Promise.all([
     huntingRepository.history(auth.ownerId, hunt.id),
-    duplicatesFor(auth.ownerId, { productId: hunt.source_product_id, itemId: hunt.competitor_item_id, title: hunt.title, connectionId: hunt.connection_id, excludeId: hunt.id }).catch(() => hunt.check_result?.duplicates || []),
+    duplicatesFor(auth.ownerId, { productId: hunt.source_product_id, itemId: hunt.competitor_item_id, title: hunt.title, titles: [hunt.check_result?.competitor?.title, hunt.check_result?.source?.title, hunt.title], connectionId: hunt.connection_id, excludeId: hunt.id }).catch(() => hunt.check_result?.duplicates || []),
     salesOf([hunt]).catch(() => new Map()),
+    (async () => {
+      const exact = await exactSales(auth.ownerId, hunt.competitor_item_id, hunt.competitor_url, checkResult.market?.id);
+      const withHistory = await salesWithHistory(hunt.id, { ...checkResult, sales: { variations } }, exact);
+      return { ...withHistory, exact };
+    })().catch(() => ({ history: null, score: checkResult.salesScore || null, exact: null })),
   ]);
   return {
     ...summaryOf(hunt, viewer, sales.get(hunt.id)),
     connectionLabel: hunt.connection_label,
-    result: { ...hunt.check_result, duplicates },
+    result: { ...checkResult, duplicates, salesScore: withHistory.score, sales: { ...(checkResult.sales || {}), variations, history: withHistory.history, exact: withHistory.exact } },
     timeline: timelineOf(hunt, events),
     viewer: viewerSummary(viewer),
     reasons: REJECT_REASONS,
@@ -336,6 +412,7 @@ async function recheck(auth, huntId) {
   if (!rules.canRecheck(hunt, viewer)) refuse('This product is already listed.');
   const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: hunt.competitor_url, sourceUrl: hunt.source_url }, { excludeId: hunt.id });
   await huntingRepository.setCheck(hunt.id, checkColumns(read));
+  await recordReading(hunt.id, read);
   const previous = hunt.check_result?.summary?.headline || {};
   return { ...(await detail(auth, huntId)), previous: { profit: previous.profit ?? null, roi: previous.roi ?? null } };
 }
@@ -354,6 +431,7 @@ async function update(auth, huntId, { competitorUrl, sourceUrl, note }) {
   if (links) {
     const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: nextCompetitor, sourceUrl: nextSource }, { excludeId: hunt.id });
     await huntingRepository.setCheck(hunt.id, checkColumns(read));
+    await recordReading(hunt.id, read);
   }
   if (typeof note === 'string') await huntingRepository.setNote(hunt.id, note.trim().slice(0, 1000));
   await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.updated', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { links: Boolean(links) } });
@@ -399,6 +477,31 @@ async function withdraw(auth, huntId) {
   if (!rules.canWithdraw(hunt, viewer)) refuse('It can only be withdrawn by its hunter while it waits for review, or removed by the owner before it is drafted.');
   await huntingRepository.deleteById(hunt.id);
   await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.withdrawn', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { stage: stageOf(hunt) } });
+}
+
+/**
+ * Sales pasted from eBay's purchase history for a competitor listing: read,
+ * kept (each sale once) and the figures returned; the owner's hunted
+ * products of that listing have their sales score redone. A team member
+ * opens the page in their own browser and copies it: Liston never fetches
+ * eBay pages.
+ */
+async function importSoldHistory(auth, connectionId, { itemId, competitorUrl, text }) {
+  const viewer = await viewerFor(auth, connectionId);
+  if (!viewer.canHunt && !viewer.canReview) refuse("You don't have access to hunting on this account.");
+  const rows = soldHistory.parse(text);
+  if (!rows.length) {
+    throw new HuntError("No sales found in what you pasted. Open the listing's sold history on eBay, select everything on the page (Cmd/Ctrl+A), copy it and paste it here.");
+  }
+  const added = await huntingRepository.addCompetitorSales(auth.ownerId, itemId, rows, auth.userId);
+  const connection = await connectionService.getConnectionSummary(connectionId, auth.ownerId);
+  const marketplaceId = connection.marketplace?.id || connection.settings?.ebay?.marketplaceId;
+  const exact = await exactSales(auth.ownerId, itemId, competitorUrl, marketplaceId);
+  for (const hunt of await huntingRepository.huntsOfCompetitor(auth.ownerId, itemId)) {
+    const { score } = await salesWithHistory(hunt.id, hunt.check_result, exact).catch(() => ({ score: null }));
+    if (score) await huntingRepository.setSalesScore(hunt.id, score.score);
+  }
+  return { read: rows.length, added, exact };
 }
 
 /** The side menu's badge. */
@@ -523,9 +626,77 @@ async function memberFigures(ownerId, memberId, win) {
   };
 }
 
+/**
+ * The daily reading of hunted products' competitors (hunting.scheduler):
+ * each due product's listing read once more through Browse, within
+ * `HUNT_TRACK_DAILY_CALLS`, its sold counts kept and its score redone.
+ * Returns how many were read.
+ */
+const trackAllowanceLeft = () => (browseUsage.snapshot().byKind['hunting-track'] || 0) < config.hunting.trackCalls;
+
+/** Reads one product's competitor now: its sold counts kept, its score redone. */
+async function readSalesNow(hunt) {
+  const connection = await connectionService.getConnectionSummary(hunt.connection_id, hunt.owner_user_id);
+  const site = marketplaces.byId(connection.marketplace?.id) || marketplaces.byId(connection.settings?.ebay?.marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
+  const competitor = await browseUsage.as('hunting-track', () => ebaySource.fetchListing(hunt.competitor_url, site.id));
+  const reading = huntProfit.salesReading(competitor, site.currency);
+  await huntingRepository.addReading(hunt.id, reading);
+  const demand = { ...(hunt.demand || hunt.check_result?.demand || {}), sold: competitor.sold ?? null };
+  const exact = await exactSales(hunt.owner_user_id, hunt.competitor_item_id, hunt.competitor_url, site.id);
+  const { score } = await salesWithHistory(hunt.id, { demand, sales: { variations: reading.variations } }, exact);
+  await huntingRepository.setSalesScore(hunt.id, score ? score.score : null);
+}
+
+async function readDueSales({ limit = 20, ownerId = null } = {}) {
+  const due = await huntingRepository.dueForReading({ limit, ownerId });
+  let read = 0;
+  for (const hunt of due) {
+    if (!trackAllowanceLeft()) break;
+    try {
+      await readSalesNow(hunt);
+      read += 1;
+    } catch (err) {
+      logger.warn('Hunting: competitor sales not read', { huntId: hunt.id, error: err.message });
+    }
+  }
+  return read;
+}
+
+// Opening a product reads its competitor when the last reading is over this
+// old (or there's none), whatever stage it's at: the daily reading skips
+// rejected products, and ones hunted before readings existed have none.
+const READ_ON_OPEN_HOURS = 20;
+async function readIfStale(hunt) {
+  if (!hunt.competitor_url || !trackAllowanceLeft()) return;
+  const readings = await huntingRepository.readings(hunt.id);
+  const last = readings[readings.length - 1];
+  if (last && Date.now() - new Date(last.taken_at).getTime() < READ_ON_OPEN_HOURS * 3600000) return;
+  await readSalesNow(hunt).catch((err) => logger.warn('Hunting: competitor sales not read on open', { huntId: hunt.id, error: err.message }));
+}
+
+/**
+ * Sold by variation for a product checked before the check kept it: from its
+ * latest reading, with the supplier options the check matched to each.
+ */
+function variationsFromReading(checkResult, readings) {
+  const last = readings[readings.length - 1];
+  if (!last || !Array.isArray(last.variations) || !last.variations.length) return [];
+  const total = last.variations.reduce((sum, v) => sum + (v.sold || 0), 0);
+  return last.variations
+    .map((v) => ({
+      label: v.label,
+      sold: v.sold ?? null,
+      share: total && v.sold !== null && v.sold !== undefined ? Math.round((v.sold / total) * 1000) / 10 : null,
+      price: v.price ?? null,
+      available: v.available ?? null,
+      supplier: (checkResult?.options || []).filter((r) => r.match && r.match.quality !== 'lowest' && r.match.label === v.label).map((r) => r.label || 'The product').slice(0, 4),
+    }))
+    .sort((a, b) => (b.sold ?? -1) - (a.sold ?? -1));
+}
+
 /** Test hook. */
 function forgetChecks() {
   checks.clear();
 }
 
-module.exports = { check, add, list, detail, recheck, update, resubmit, decide, withdraw, badge, draftStart, team, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };
+module.exports = { importSoldHistory, readDueSales, check, add, list, detail, recheck, update, resubmit, decide, withdraw, badge, draftStart, team, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };
