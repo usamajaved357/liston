@@ -3,19 +3,20 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { AccountOverview, api, ApiError, EbaySite, OrderCounts, OrderStatusFilter } from "@/lib/api";
+import { AccountOverview, api, ApiError, EbaySite, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
-import { ListingCards, MetricCards, MetricTabs, Metric } from "@/components/overview/OverviewMoney";
+import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric } from "@/components/overview/OverviewMoney";
+import { useAmounts } from "@/lib/useAmounts";
 import { AccountShell } from "@/components/AccountShell";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { useAccountRefresh } from "@/lib/useAccountRefresh";
 import { Alert } from "@/components/Alert";
 
-// The account's Overview: the same figures as the business Overview — a tab
-// per figure (sales, fees, earnings, source cost, profit, listings) and cards
-// breaking it down — in the account's own currency and time zone, then what
+// The account's Overview: the same figures as the business Overview — a
+// Sales tab with every money figure and a Listings tab — in the account's
+// own currency and time zone, then what
 // needs doing (late dispatches, orders not yet bought from the supplier) and
-// the order queue by state.
+// the order queue by state in one line.
 
 const RANGES: { key: string; label: string; phrase: string }[] = [
   { key: "today", label: "Today", phrase: "today" },
@@ -28,11 +29,22 @@ const RANGES: { key: string; label: string; phrase: string }[] = [
 
 const SUMMARY_RANGE = "90d";
 
-const ORDER_TILES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; tone: string }[] = [
-  { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid, needs shipping", tone: "text-[var(--color-primary)]" },
-  { key: "dispatched", label: "Dispatched", hint: "On the way to the buyer", tone: "text-emerald-700" },
-  { key: "delivered", label: "Delivered", hint: "Carrier confirmed delivery", tone: "text-emerald-800" },
-  { key: "cancelled", label: "Cancelled", hint: "No action needed", tone: "text-[var(--color-muted)]" },
+// The Orders page's period that covers an Overview range (it offers 7, 30
+// and 90 days), for the queue's links.
+const ORDERS_RANGE: Record<string, OrderRange> = { today: "7d", "7d": "7d", "30d": "30d", this_month: "30d", last_month: "90d", "90d": "90d" };
+
+// Which orders the queue counts: the Overview's dates for an owner, the
+// last 90 days for a member (who has no date filter).
+type QueuePeriod = { key: string; label: string; ordersRange: OrderRange };
+const LAST_90_DAYS: QueuePeriod = { key: "90d", label: "last 90 days", ordersRange: "90d" };
+
+// The queue by state, one small link each, coloured by what the state means:
+// amber waits on you, blue is on its way, green arrived, red fell through.
+const ORDER_STATES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; dot: string; ink: string }[] = [
+  { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid, needs shipping", dot: "bg-amber-500", ink: "text-amber-700" },
+  { key: "dispatched", label: "Dispatched", hint: "On the way to the buyer", dot: "bg-sky-500", ink: "text-sky-700" },
+  { key: "delivered", label: "Delivered", hint: "Carrier confirmed delivery", dot: "bg-emerald-500", ink: "text-emerald-700" },
+  { key: "cancelled", label: "Cancelled", hint: "No action needed", dot: "bg-rose-400", ink: "text-rose-600" },
 ];
 
 type Attention = { overdue: number; notOrdered: number | null };
@@ -56,70 +68,126 @@ const TodoIcons = {
 };
 
 // The order queue by state, and above it what needs doing now.
-function OrderQueue({ connectionId, counts, attention, loading, error }: { connectionId: string; counts: OrderCounts | null; attention: Attention | null; loading: boolean; error: string | null }) {
+function OrderQueue({
+  connectionId,
+  counts,
+  attention,
+  loading,
+  error,
+  period = LAST_90_DAYS,
+}: {
+  connectionId: string;
+  counts: OrderCounts | null;
+  attention: Attention | null;
+  loading: boolean;
+  error: string | null;
+  period?: QueuePeriod;
+}) {
   const todo = [
     attention?.overdue
       ? { n: attention.overdue, text: `past ${attention.overdue === 1 ? "its" : "their"} dispatch-by date`, tone: "danger" as const, icon: TodoIcons.late }
       : null,
     attention?.notOrdered ? { n: attention.notOrdered, text: "paid but not yet ordered from the supplier", tone: "warning" as const, icon: TodoIcons.supplier } : null,
   ].filter((t) => t !== null);
-  return (
-    <section>
-      <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Order queue</h2>
-        <span className="text-[12px] text-[var(--color-muted)]">Last 90 days</span>
-      </div>
-      {todo.length > 0 && (
-        <div className={`mb-4 grid gap-3 ${todo.length > 1 ? "lg:grid-cols-2" : ""}`}>
-          {todo.map((t) => {
-            const tone =
-              t.tone === "danger"
-                ? { box: "border-rose-200 bg-rose-50/70 hover:border-rose-300", icon: "bg-rose-100 text-rose-600", action: "text-rose-700" }
-                : { box: "border-amber-200 bg-amber-50/70 hover:border-amber-300", icon: "bg-amber-100 text-amber-700", action: "text-amber-800" };
-            return (
-              <Link
-                key={t.text}
-                href={`/accounts/${connectionId}/orders?status=awaiting_dispatch&range=${SUMMARY_RANGE}`}
-                className={`group flex items-center gap-3 rounded-xl border px-4 py-3 transition-colors ${tone.box}`}
-              >
-                <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${tone.icon}`}>{t.icon}</span>
-                <span className="min-w-0 flex-1 text-[13.5px] text-[var(--color-ink)]">
-                  <span className="font-semibold tabular-nums">
-                    {t.n.toLocaleString("en-GB")} order{t.n === 1 ? "" : "s"}
-                  </span>{" "}
-                  <span className="text-[var(--color-muted)]">{t.text}</span>
-                </span>
-                <span className={`flex shrink-0 items-center gap-1 text-[13px] font-medium ${tone.action}`}>
-                  Review
-                  <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-4 w-4 transition-transform group-hover:translate-x-0.5">
-                    <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-      {error ? (
+  const total = ORDER_STATES.reduce((sum, st) => sum + (counts?.[st.key] ?? 0), 0);
+  const share = (n: number) => (total ? `${Math.round((n / total) * 100)}%` : "0%");
+
+  if (error) {
+    return (
+      <section>
+        <h2 className="mb-3 text-[14px] font-semibold text-[var(--color-ink)]">Order queue</h2>
         <Alert>{error}</Alert>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {ORDER_TILES.map((tile) => (
+      </section>
+    );
+  }
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex items-baseline justify-between gap-3 px-5 pt-4">
+        <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Order queue</h2>
+        <span className="text-[12px] text-[var(--color-muted)]">
+          {loading ? period.label.replace(/^./, (c) => c.toUpperCase()) : `${total.toLocaleString("en-GB")} order${total === 1 ? "" : "s"} · ${period.label}`}
+        </span>
+      </div>
+
+      {/* How the orders split, as one bar. */}
+      <div className="px-5 pt-3">
+        {loading ? (
+          <div className="h-2 animate-pulse rounded-full bg-[var(--color-line)]" />
+        ) : (
+          <div className="flex h-2 gap-[3px] overflow-hidden rounded-full bg-[var(--color-line)]" role="img" aria-label="Orders by state">
+            {total > 0 &&
+              ORDER_STATES.filter((st) => (counts?.[st.key] ?? 0) > 0).map((st) => (
+                <span key={st.key} className={`h-full ${st.dot}`} style={{ flexGrow: counts?.[st.key] ?? 0, flexBasis: 0, minWidth: 6 }} title={`${st.label}: ${counts?.[st.key] ?? 0}`} />
+              ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 divide-[var(--color-line)] border-t border-[var(--color-line)] lg:grid-cols-4 lg:divide-x">
+        {ORDER_STATES.map((st) => {
+          const n = counts?.[st.key] ?? 0;
+          return (
             <Link
-              key={tile.key}
-              href={`/accounts/${connectionId}/orders?status=${tile.key}&range=${SUMMARY_RANGE}`}
-              className="card p-5 transition-colors hover:border-[var(--color-line-strong)]"
+              key={st.key}
+              href={`/accounts/${connectionId}/orders?status=${st.key}&range=${period.ordersRange}`}
+              className="group px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)]/70"
             >
+              <span className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
+                <span className={`h-2 w-2 rounded-full ${st.dot}`} aria-hidden />
+                {st.label}
+              </span>
               {loading ? (
-                <div className="h-7 w-12 animate-pulse rounded-md bg-[var(--color-line)]" />
+                <span className="mt-2 block h-6 w-14 animate-pulse rounded-md bg-[var(--color-line)]" />
               ) : (
-                <p className={`text-[28px] font-semibold leading-none tracking-tight tabular-nums ${tile.tone}`}>{(counts?.[tile.key] ?? 0).toLocaleString("en-GB")}</p>
+                <span className="mt-1.5 flex items-baseline gap-2">
+                  <span className={`text-[22px] font-semibold leading-none tracking-tight tabular-nums ${n ? st.ink : "text-[var(--color-ink)]"}`}>{n.toLocaleString("en-GB")}</span>
+                  <span className="text-[12px] tabular-nums text-[var(--color-muted)]">{share(n)}</span>
+                </span>
               )}
-              <p className="mt-3 text-sm font-medium text-[var(--color-ink)]">{tile.label}</p>
-              <p className="text-[12px] text-[var(--color-muted)]">{tile.hint}</p>
+              <span className="mt-1 block text-[12px] text-[var(--color-muted)] group-hover:text-[var(--color-ink)]">{st.hint}</span>
             </Link>
-          ))}
-        </div>
+          );
+        })}
+      </div>
+
+      {/* What needs doing, at the foot of the card. */}
+      {todo.map((t) => {
+        const tone =
+          t.tone === "danger"
+            ? { row: "bg-rose-50/70 hover:bg-rose-50", icon: "bg-rose-100 text-rose-600", action: "text-rose-700" }
+            : { row: "bg-amber-50/70 hover:bg-amber-50", icon: "bg-amber-100 text-amber-700", action: "text-amber-800" };
+        return (
+          <Link
+            key={t.text}
+            href={`/accounts/${connectionId}/orders?status=awaiting_dispatch&range=${SUMMARY_RANGE}`}
+            className={`group flex items-center gap-3 border-t border-[var(--color-line)] px-5 py-3 transition-colors ${tone.row}`}
+          >
+            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tone.icon}`}>{t.icon}</span>
+            <span className="min-w-0 flex-1 text-[13.5px] text-[var(--color-ink)]">
+              <span className="font-semibold tabular-nums">
+                {t.n.toLocaleString("en-GB")} order{t.n === 1 ? "" : "s"}
+              </span>{" "}
+              <span className="text-[var(--color-muted)]">{t.text}</span>
+              {/* What needs doing looks at every open order, whatever the dates above. */}
+              {period.key !== "90d" && <span className="text-[var(--color-muted)]"> · last 90 days</span>}
+            </span>
+            <span className={`flex shrink-0 items-center gap-1 text-[13px] font-medium ${tone.action}`}>
+              Review
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-4 w-4 transition-transform group-hover:translate-x-0.5">
+                <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          </Link>
+        );
+      })}
+      {!loading && todo.length === 0 && (
+        <p className="flex items-center gap-2 border-t border-[var(--color-line)] px-5 py-3 text-[13px] text-[var(--color-muted)]">
+          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden>
+            <circle cx="10" cy="10" r="8" fill="currentColor" opacity=".15" />
+            <path d="M6.5 10.2l2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Nothing waiting on you: every paid order is ordered from its supplier and on time.
+        </p>
       )}
     </section>
   );
@@ -156,6 +224,7 @@ type DashboardProps = { connectionId: string; reloadKey: number; onSynced: (sync
 function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
   const [range, setRange] = useState("today");
   const [metric, setMetric] = useState<Metric>("sales");
+  const amounts = useAmounts();
   // Keyed by range, so switching shows the skeleton without a reset in the effect.
   const [byRange, setByRange] = useState<Record<string, AccountOverview | { error: string }>>({});
   const loaded = byRange[range];
@@ -198,7 +267,7 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
   }, [data, polls, range]);
 
   const phrase = RANGES.find((r) => r.key === range)?.phrase ?? "";
-  const moneyTab = metric !== "sales" && metric !== "listings";
+  const moneyTab = metric === "sales";
 
   async function reconnect() {
     try {
@@ -234,14 +303,14 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
           </div>
         </div>
 
-        <MetricTabs metric={metric} onMetric={setMetric} />
+        <MetricTabs metric={metric} onMetric={setMetric} trailing={metric === "sales" ? <AmountsToggle hidden={amounts.hidden} onToggle={amounts.toggle} /> : undefined} />
         <div className="mt-5">
           {dataError ? (
             <Alert>{dataError}</Alert>
           ) : metric === "listings" ? (
             <ListingCards work={data?.listings ?? null} loading={!data} />
           ) : (
-            <MetricCards metric={metric} summaries={data ? [data.money] : []} loading={!data} unavailable={data ? !data.financesAccess : false} />
+            <SalesCards summaries={data ? [data.money] : []} loading={!data} unavailable={data ? !data.financesAccess : false} hidden={amounts.hidden} />
           )}
         </div>
 
@@ -261,7 +330,20 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
         )}
       </section>
 
-      <OrderQueue connectionId={connectionId} counts={queue.counts} attention={queue.attention} loading={!queue.counts && !queue.error} error={queue.error} />
+      {/* The queue counts the dates chosen above; if those figures couldn't
+          be read, the last 90 days. What needs doing is always every open order. */}
+      {dataError ? (
+        <OrderQueue connectionId={connectionId} counts={queue.counts} attention={queue.attention} loading={!queue.counts && !queue.error} error={queue.error} />
+      ) : (
+        <OrderQueue
+          connectionId={connectionId}
+          counts={data?.queue ?? null}
+          attention={queue.attention}
+          loading={!data?.queue}
+          error={queue.error}
+          period={{ key: range, label: phrase.replace(/^in (the )?/, ""), ordersRange: ORDERS_RANGE[range] ?? "90d" }}
+        />
+      )}
     </div>
   );
 }

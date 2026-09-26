@@ -1465,6 +1465,21 @@ async function bestSellingListings(credentials, connectionId, { exclude, count =
   return { items: rows, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// For the business Overview's sales by day and best sellers: every order of
+// the last 90 days, and the account's live listings' photos and links by
+// item id. Both from the copies Liston keeps, so nothing new is asked of
+// eBay while they're fresh.
+async function overviewSales(credentials, connectionId, { push = false } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const [orders, items] = await Promise.all([
+    getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
+    cachedListings(id, 'active', { accessToken, siteId, push }).catch(() => []),
+  ]);
+  const listings = new Map((items || []).map((item) => [String(item.itemId), { imageUrl: item.imageUrl || null, url: item.viewItemUrl || null }]));
+  return { orders: orders || [], listings, credentialsChanged, credentials: refreshedCredentials };
+}
+
 const CURRENCY_SYMBOLS = { GBP: '£', USD: '$', EUR: '€', AUD: 'A$', CAD: 'C$' };
 function formatMoneyFor(price) {
   const symbol = CURRENCY_SYMBOLS[price.currency] || `${price.currency || ''} `;
@@ -2546,6 +2561,7 @@ module.exports = {
   getBestReviews,
   listUnsoldListings,
   bestSellingListings,
+  overviewSales,
   listOrders,
   getLiveItem,
   detectMarketplace,

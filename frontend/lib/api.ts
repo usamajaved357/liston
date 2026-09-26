@@ -77,6 +77,8 @@ export interface MoneySummary {
   withCost: number;
   // Profit as a share of the sales it covers.
   margin: number | null;
+  // Profit ÷ supplier cost (%), over orders with eBay's figures and a cost.
+  roi?: number | null;
 }
 
 // Listing work for the Overview: live on eBay now, drafts waiting now, and
@@ -111,6 +113,8 @@ export interface AccountOverview {
   activeListings: number;
   listings: ListingWork;
   money: MoneySummary;
+  // The same dates' orders by state (archived ones left out).
+  queue?: OrderCounts;
   financesPending: boolean;
   financesAccess: boolean;
 }
@@ -287,6 +291,33 @@ export interface ResearchResult {
   budget: ResearchBudget;
 }
 
+// Sales by day under the business Overview's cards: what buyers paid each
+// day, the same day of the previous stretch alongside (null when older than
+// the 90 days Liston keeps), today still running.
+export interface OverviewTrendPoint {
+  day: string;
+  value: number;
+  previous: number | null;
+  previousDay: string | null;
+  partial: boolean;
+}
+
+// A listing that sold most in the dates: units, orders and item sales
+// (postage apart) in its own currency, its photo and link, and the account.
+export interface OverviewBestSeller {
+  itemId: string;
+  title: string | null;
+  units: number;
+  orders: number;
+  sales: number;
+  currency: string | null;
+  image: string | null;
+  url: string;
+  live: boolean;
+  account: string;
+  marketplaceId: string;
+}
+
 export interface OverviewMarket {
   id: string;
   label: string;
@@ -297,6 +328,8 @@ export interface OverviewMarket {
   activeListings: number;
   listings: ListingWork;
   money: MoneySummary;
+  trend?: OverviewTrendPoint[];
+  bestSellers?: OverviewBestSeller[];
 }
 
 export interface Overview {
@@ -311,7 +344,7 @@ export interface Overview {
   // Every market as one figure in the busiest market's currency, the others
   // converted at the day's ECB rate (rates: how many of each currency 1 of
   // it buys). Null when no rate could be had.
-  combined: { money: MoneySummary; rates: Record<string, number>; ratesDate: string | null } | null;
+  combined: { money: MoneySummary; trend?: OverviewTrendPoint[]; bestSellers?: OverviewBestSeller[]; rates: Record<string, number>; ratesDate: string | null } | null;
   // Some accounts' fees and earnings were still being read from eBay.
   financesPending: boolean;
   perAccount: OverviewAccount[];

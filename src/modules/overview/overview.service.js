@@ -15,6 +15,9 @@ const mirror = require('../ebay/ebay-mirror.repository');
 const orderRepository = require('../orders/order.repository');
 const marketplaces = require('../ebay/marketplaces');
 const moneySummary = require('./money-summary');
+const { countQueue } = require('./order-queue');
+const salesTrend = require('./sales-trend');
+const analyticsDays = require('../analytics/analytics-days');
 const exchangeRates = require('../rates/exchange-rates');
 const listingRepository = require('../listings/listing.repository');
 const { query } = require('../../db/client');
@@ -27,7 +30,8 @@ const FINANCES_WAIT_MS = 6000;
 
 const isCancelled = (order) => ebayService.classifyOrderStatus(order) === 'cancelled';
 
-async function accountFigures(connection, ownerId, { range, timeZone }) {
+// `extras`: the business Overview also shows sales by day and best sellers.
+async function accountFigures(connection, ownerId, { range, timeZone, extras = false }) {
   const currency = marketplaces.currencyFor(connection.marketplace?.id || marketplaces.DEFAULT_ID);
   const push = ebayService.pushEnabled(connection);
 
@@ -41,27 +45,58 @@ async function accountFigures(connection, ownerId, { range, timeZone }) {
     });
   const settled = await Promise.race([finances.then((r) => r), new Promise((resolve) => setTimeout(() => resolve(null), FINANCES_WAIT_MS))]);
 
-  const { listings, orders } = await connectionService.withDecryptedCredentials(connection.id, ownerId, async (credentials) => {
-    const [count, inRange] = await Promise.all([
+  const { listings, orders, recent } = await connectionService.withDecryptedCredentials(connection.id, ownerId, async (credentials) => {
+    const [count, inRange, sales] = await Promise.all([
       ebayService.countActiveListings(credentials, connection.id, { push }),
       ebayService.ordersInRange(credentials, { connectionId: connection.id, range, timeZone, push }),
+      extras ? ebayService.overviewSales(credentials, connection.id, { push }) : null,
     ]);
-    return { listings: count.totalEntries || 0, orders: inRange, credentialsChanged: count.credentialsChanged, credentials: count.credentials };
+    return { listings: count.totalEntries || 0, orders: inRange, recent: sales, credentialsChanged: count.credentialsChanged, credentials: count.credentials };
   });
   // Listing work in the same dates, in the same time zone as the orders.
   const [start, end] = ebayService.resolveRangeWindow(range, null, null, timeZone || marketplaces.timeZoneOf(connection.marketplace?.id || marketplaces.DEFAULT_ID));
   const work = await listingRepository.countListingWork(connection.id, start, end);
   const orderIds = orders.map((o) => o.orderId);
-  const [moneyByOrder, costs] = await Promise.all([mirror.loadOrderFinances(connection.id, orderIds), orderRepository.sourceCostsByOrder(connection.id, orderIds)]);
+  const [moneyByOrder, costs, archived] = await Promise.all([
+    mirror.loadOrderFinances(connection.id, orderIds),
+    orderRepository.sourceCostsByOrder(connection.id, orderIds),
+    orderRepository.listArchivedOrderIds(connection.id).catch(() => []),
+  ]);
   return {
     activeListings: listings,
     listings: { live: listings, drafted: work.drafted, published: work.published, waiting: work.waiting },
+    ...(extras ? await salesExtras(connection, { range, timeZone, orders, recent }) : {}),
     money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled }),
+    // The same dates' orders by state, for the account Overview's queue.
+    queue: countQueue(orders, ebayService.classifyOrderStatus, archived),
     financesPending: !settled,
     // Linked before Liston asked eBay for its finances permission: fees and
     // earnings need the account reconnected once.
     financesAccess: settled?.skipped !== 'scope',
   };
+}
+
+// Sales by day over the chosen dates and the account's best sellers in them,
+// each with its photo and link: from the live listings Liston keeps, else a
+// listing's saved summary (one that has ended), never a new eBay read.
+async function salesExtras(connection, { range, timeZone, orders, recent }) {
+  const siteId = connection.marketplace?.id || marketplaces.DEFAULT_ID;
+  const tz = timeZone || marketplaces.timeZoneOf(siteId);
+  const trend = salesTrend.salesTrend(recent?.orders || [], { timeZone: tz, range, today: analyticsDays.today(tz), isCancelled });
+  const top = salesTrend.bestSellers(orders, { isCancelled, limit: 6 });
+  const live = recent?.listings || new Map();
+  const ended = top.filter((b) => !live.has(b.itemId)).map((b) => b.itemId);
+  const saved = ended.length ? await mirror.loadItemSummaries(ended).catch(() => new Map()) : new Map();
+  const host = marketplaces.summary(siteId).itemHost;
+  const bestSellers = top.map((b) => ({
+    ...b,
+    image: live.get(b.itemId)?.imageUrl || saved.get(b.itemId)?.summary?.imageUrl || null,
+    url: live.get(b.itemId)?.url || `https://${host}/itm/${b.itemId}`,
+    live: live.has(b.itemId),
+    account: connection.label,
+    marketplaceId: siteId,
+  }));
+  return { trend, bestSellers };
 }
 
 async function getOverview(ownerId, viewer, { range = 'today', timeZone = null } = {}) {
@@ -73,7 +108,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
     ebayConnections.map(async (connection) => {
       const base = { id: connection.id, label: connection.label, status: connection.status, marketplace: connection.marketplace || null };
       try {
-        return { ...base, ok: true, ...(await accountFigures(connection, ownerId, { range: effectiveRange, timeZone })) };
+        return { ...base, ok: true, ...(await accountFigures(connection, ownerId, { range: effectiveRange, timeZone, extras: true })) };
       } catch (err) {
         logger.warn('Overview: account could not be read', { connectionId: connection.id, error: err.message });
         return { ...base, ok: false, error: err.message, activeListings: 0, listings: null, money: null, financesPending: false, financesAccess: true };
@@ -104,6 +139,9 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
           {}
         ),
         money: moneySummary.addUp(accounts.map((a) => a.money).filter(Boolean), summary.currency),
+        // Its accounts' sales by day added up, and its best sellers.
+        trend: salesTrend.addTrends(accounts.map((a) => a.trend)),
+        bestSellers: salesTrend.mergeBestSellers(accounts.map((a) => a.bestSellers || [])),
       };
     })
     .sort((a, b) => b.accounts - a.accounts || b.money.sales - a.money.sales);
@@ -117,8 +155,15 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
     const fx = await exchangeRates.ratesFor(base, markets.map((m) => m.currency));
     if (fx) {
       const converted = markets.map((m) => (m.currency === base ? m.money : moneySummary.convert(m.money, fx.rates[m.currency], base)));
+      const rateOf = (currency) => (currency === base ? 1 : fx.rates[currency]);
       combined = {
         money: moneySummary.addUp(converted, base),
+        trend: salesTrend.addTrends(markets.map((m) => (m.currency === base ? m.trend : salesTrend.convertTrend(m.trend, rateOf(m.currency))))),
+        // Each keeps its own currency; they're compared in the main one.
+        bestSellers: salesTrend.mergeBestSellers(
+          markets.map((m) => m.bestSellers),
+          { rateOf: (item) => rateOf(item.currency) }
+        ),
         // What was converted, and at what: { USD: 1.322, … } per 1 of base.
         rates: fx.rates,
         ratesDate: fx.date,
