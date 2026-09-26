@@ -71,7 +71,7 @@ export function SoldListings({ sales, currency }: { sales: ResearchSales; curren
                 const removed = item.state === "removed";
                 const landed = item.price === null ? null : item.price + (item.shipping ?? 0);
                 return (
-                  <SoldRow key={item.itemId ?? i} removed={removed}>
+                  <SoldRow key={item.itemId ?? i} removed={removed} url={removed ? null : item.url}>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-3">
                         {item.image ? (
@@ -82,7 +82,7 @@ export function SoldListings({ sales, currency }: { sales: ResearchSales; curren
                         )}
                         <div className="min-w-0 max-w-[460px]">
                           {item.url && !removed ? (
-                            <a href={item.url} target="_blank" rel="noreferrer" className="line-clamp-2 font-medium text-[var(--color-ink)] hover:text-[var(--color-primary)] hover:underline">
+                            <a href={item.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="line-clamp-2 font-medium text-[var(--color-ink)] hover:text-[var(--color-primary)] hover:underline">
                               {item.title}
                             </a>
                           ) : (
@@ -109,9 +109,15 @@ export function SoldListings({ sales, currency }: { sales: ResearchSales; curren
   );
 }
 
-// A sold listing's row; one eBay removed gets eBay's banner above it.
-function SoldRow({ removed, children }: { removed: boolean; children: React.ReactNode }) {
-  if (!removed) return <tr className="align-middle hover:bg-[var(--color-paper)]/60">{children}</tr>;
+// A sold listing's row (a click opens it on eBay); one eBay removed gets
+// eBay's banner above it and can't be opened.
+function SoldRow({ removed, url, children }: { removed: boolean; url: string | null; children: React.ReactNode }) {
+  if (!removed)
+    return (
+      <tr onClick={() => url && window.open(url, "_blank", "noopener,noreferrer")} title={url ? "Open on eBay" : undefined} className={`align-middle hover:bg-[var(--color-paper)]/60 ${url ? "cursor-pointer" : ""}`}>
+        {children}
+      </tr>
+    );
   return (
     <>
       <tr className="bg-rose-50">

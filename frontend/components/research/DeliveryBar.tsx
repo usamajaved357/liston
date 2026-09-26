@@ -1,6 +1,7 @@
 "use client";
 
 import { ResearchDelivery, ResearchDeliveryFilter } from "@/lib/api";
+import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { count } from "./format";
 
 // Which listings research compares the account with, by delivery time: a
@@ -45,25 +46,14 @@ export function DeliveryBar({
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
       <span className="text-[12.5px] text-[var(--color-muted)]">Sellers who deliver</span>
-      <div role="radiogroup" aria-label="Compare with" className="inline-flex rounded-lg bg-[var(--color-paper)] p-0.5">
-        {options.map((o) => (
-          <button
-            key={o.key}
-            type="button"
-            role="radio"
-            aria-checked={filter === o.key}
-            title={o.hint}
-            disabled={busy}
-            onClick={() => filter !== o.key && onChange(o.key)}
-            className={`flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors disabled:opacity-60 ${
-              filter === o.key ? "bg-[var(--color-panel)] text-[var(--color-ink)] shadow-sm ring-1 ring-[var(--color-line)]" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-            }`}
-          >
-            {o.label}
-            <span className="tabular-nums text-[var(--color-muted)]">{count(o.n)}</span>
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        size="sm"
+        label="Compare with"
+        value={filter}
+        disabled={busy}
+        onChange={onChange}
+        options={options.map((o) => ({ key: o.key, label: `${o.label} ${count(o.n)}`, title: o.hint }))}
+      />
       <span
         className="min-w-0 flex-1 truncate text-right text-[12px] text-[var(--color-muted)]"
         title={`${how}${counts.unknown > 0 ? ` · ${counts.unknown} listing${counts.unknown === 1 ? "" : "s"} gave no delivery dates (often posted from abroad), only under All` : ""}`}

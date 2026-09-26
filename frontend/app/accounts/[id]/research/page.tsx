@@ -7,12 +7,12 @@ import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton } from "@/components/Skeleton";
-import { currencySymbol } from "@/lib/format";
 import { count } from "@/components/research/format";
 import { ResearchFolds, ResearchOverview } from "@/components/research/ResearchPanels";
 import { RESEARCH_SORTS, ResearchListings, ResearchSort, sortResearch } from "@/components/research/ResearchListings";
 import { DeliveryBar } from "@/components/research/DeliveryBar";
 import { SoldListings } from "@/components/research/SoldListings";
+import { SegmentedControl } from "@/components/charts/SegmentedControl";
 
 // Product research on the account's eBay site: whether to list a product,
 // at what price, under what title, and what could get it taken down — from
@@ -32,8 +32,6 @@ export default function ResearchPage() {
   const { connection, user, loading, error } = useConnection(params.id);
   const [q, setQ] = useState("");
   const [condition, setCondition] = useState("new");
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
   const [result, setResult] = useState<ResearchResult | null>(null);
   const [searching, setSearching] = useState(false);
   const [readingSold, setReadingSold] = useState(false);
@@ -69,7 +67,7 @@ export default function ResearchPage() {
 
   async function run(query: string) {
     if (!connection || query.trim().length < 2) return;
-    return runWith({ q: query.trim(), condition, minPrice, maxPrice });
+    return runWith({ q: query.trim(), condition, minPrice: "", maxPrice: "" });
   }
 
   // The same search, compared with listings that deliver faster, slower,
@@ -161,6 +159,17 @@ export default function ResearchPage() {
       status={connection.status}
       permissions={connection.permissions}
       user={user}
+      actions={
+        budget ? (
+          <span
+            className="inline-flex h-[30px] items-center gap-1.5 rounded-full bg-[var(--color-panel)] px-3 text-[12px] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]"
+            title="eBay reads research can use today. Each search reads up to 200 fixed-price listings and the sold counts of the top 20. Resets when eBay's allowance does."
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${budget.remaining / budget.limit > 0.2 ? "bg-emerald-500" : budget.remaining > 0 ? "bg-amber-500" : "bg-rose-500"}`} aria-hidden />
+            <b className="font-semibold tabular-nums text-[var(--color-ink)]">{count(budget.remaining)}</b>/{count(budget.limit)} reads left today
+          </span>
+        ) : undefined
+      }
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Product research</h1>
@@ -185,50 +194,20 @@ export default function ResearchPage() {
             autoFocus
           />
         </label>
-        <div role="radiogroup" aria-label="Condition" className="inline-flex h-9 items-center rounded-lg bg-[var(--color-paper)] p-0.5">
-          {[
+        <SegmentedControl
+          label="Condition"
+          value={condition}
+          onChange={setCondition}
+          options={[
             { key: "new", label: "New" },
             { key: "used", label: "Used" },
             { key: "any", label: "Any" },
-          ].map((c) => (
-            <button
-              key={c.key}
-              type="button"
-              role="radio"
-              aria-checked={condition === c.key}
-              onClick={() => setCondition(c.key)}
-              className={`h-8 rounded-md px-3 text-[12.5px] font-medium transition-colors ${
-                condition === c.key ? "bg-[var(--color-panel)] text-[var(--color-ink)] shadow-sm ring-1 ring-[var(--color-line)]" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              }`}
-            >
-              {c.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex h-9 items-center rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-panel)] text-[13px] transition-colors hover:border-[var(--color-line-strong)] focus-within:!border-[var(--color-primary)]">
-          <label className="flex h-full items-center pl-3">
-            <span className="text-[var(--color-muted)]">{currencySymbol(currency)}</span>
-            <span className="sr-only">Min price</span>
-            <input value={minPrice} onChange={(e) => setMinPrice(e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="Min" className="h-full w-14 bg-transparent px-1.5 outline-none placeholder:text-[var(--color-muted)]" />
-          </label>
-          <span className="text-[var(--color-muted)]" aria-hidden>
-            –
-          </span>
-          <label className="flex h-full items-center pl-2 pr-1">
-            <span className="text-[var(--color-muted)]">{currencySymbol(currency)}</span>
-            <span className="sr-only">Max price</span>
-            <input value={maxPrice} onChange={(e) => setMaxPrice(e.target.value.replace(/[^\d.]/g, ""))} inputMode="decimal" placeholder="Max" className="h-full w-14 bg-transparent px-1.5 outline-none placeholder:text-[var(--color-muted)]" />
-          </label>
-        </div>
+          ]}
+        />
         <button type="submit" disabled={searching || q.trim().length < 2} className="btn btn-primary btn-sm !h-9 px-4">
           {searching ? "Searching…" : "Research"}
         </button>
       </form>
-      {budget && (
-        <p className="mt-2 px-1 text-[12px] text-[var(--color-muted)]" title="Fixed-price listings. Each search reads up to 200 listings and the sold counts of the top 20.">
-          {count(budget.remaining)} of {count(budget.limit)} research reads left today
-        </p>
-      )}
 
       {problem && (
         <div className="mt-4">
@@ -261,7 +240,7 @@ export default function ResearchPage() {
       )}
 
       {result && s && (
-        <div className={`mt-5 space-y-4 ${searching ? "opacity-60" : ""}`}>
+        <div className={`mt-4 space-y-4 ${searching ? "opacity-60" : ""}`}>
           <p className="px-1 text-[13px] text-[var(--color-muted)]">
             <span className="font-semibold text-[var(--color-ink)]">{count(result.total)}</span> live listings
             {result.delivery?.filter && result.delivery.filter !== "all"
@@ -277,50 +256,49 @@ export default function ResearchPage() {
           <ResearchFolds result={result} checking={checking} />
 
           <section className="card overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3">
-              <div role="tablist" aria-label="Listings" className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 border-b border-[var(--color-line)] px-4">
+              <div role="tablist" aria-label="Listings" className="flex gap-x-1">
                 {[
                   { key: "active" as const, label: "Active", n: result.items.length, removed: 0 },
                   { key: "sold" as const, label: "Sold · 90 days", n: result.sales?.available ? result.sales.items.length : null, removed: result.sales?.available ? result.sales.summary.removed : 0 },
-                ].map((t) => (
-                  <button
-                    key={t.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={view === t.key}
-                    onClick={() => setView(t.key)}
-                    className={`relative flex h-8 items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold transition-colors ${
-                      view === t.key ? "bg-[var(--color-paper)] text-[var(--color-ink)]" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                    }`}
-                  >
-                    {t.label}
-                    {t.n !== null && <span className="text-[12px] font-medium tabular-nums text-[var(--color-muted)]">{count(t.n)}</span>}
-                    {t.removed > 0 && <span className="rounded-full bg-rose-50 px-1.5 text-[11px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">{t.removed} removed</span>}
-                  </button>
-                ))}
+                ].map((t) => {
+                  const on = view === t.key;
+                  return (
+                    <button
+                      key={t.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      onClick={() => setView(t.key)}
+                      className={`-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3.5 py-3 text-[14px] font-medium transition-colors ${
+                        on ? "border-[var(--color-primary)] text-[var(--color-primary)]" : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                      }`}
+                    >
+                      {t.label}
+                      {t.n !== null && <span className="text-[12.5px] tabular-nums opacity-70">{count(t.n)}</span>}
+                      {t.removed > 0 && <span className="rounded-full bg-rose-50 px-1.5 text-[11px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">{t.removed} removed</span>}
+                    </button>
+                  );
+                })}
               </div>
               {view === "active" && (
-              <div className="flex flex-wrap items-center gap-2">
-                {unread.length > 0 && (
-                  <button type="button" onClick={() => readMoreSold(ordered)} disabled={readingSold} className="btn btn-secondary btn-sm">
-                    {readingSold ? "Reading sold counts…" : `Read sold counts for the next ${Math.min(20, unread.length)}`}
-                  </button>
-                )}
-                <div role="radiogroup" aria-label="Sort" className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-                  {RESEARCH_SORTS.map((o) => (
+                <div className="flex flex-wrap items-center gap-2 py-2">
+                  <SegmentedControl size="sm" label="Sort" value={sort} onChange={setSort} options={RESEARCH_SORTS} />
+                  {unread.length > 0 && (
                     <button
-                      key={o.key}
                       type="button"
-                      role="radio"
-                      aria-checked={sort === o.key}
-                      onClick={() => setSort(o.key)}
-                      className={`h-7 rounded-full px-3 text-[12px] font-medium ${sort === o.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"}`}
+                      onClick={() => readMoreSold(ordered)}
+                      disabled={readingSold}
+                      title="Read eBay's sold count for the next listings that don't have one yet"
+                      className="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-[12px] font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary-soft)] disabled:opacity-60"
                     >
-                      {o.label}
+                      <svg viewBox="0 0 20 20" fill="none" className={`h-3.5 w-3.5 ${readingSold ? "animate-spin" : ""}`} aria-hidden>
+                        <path d="M16 10a6 6 0 11-1.8-4.3M16 4v3.5h-3.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      {readingSold ? "Reading…" : `Sold counts for ${Math.min(20, unread.length)} more`}
                     </button>
-                  ))}
+                  )}
                 </div>
-              </div>
               )}
             </div>
             {view === "sold" ? (
