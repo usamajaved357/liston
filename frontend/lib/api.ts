@@ -1572,8 +1572,10 @@ export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "las
 export type HuntStage = "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
 export type HuntView = "review" | "sent_back" | "approved" | "listed" | "rejected" | "all";
 export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand";
-export type HuntVerdict = "strong" | "thin" | "loss" | "unknown";
-export type HuntMatchQuality = "exact" | "close" | "lowest" | "single";
+// unpriced: checked without a competitor, so priced at the target return with no market to judge by.
+export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown";
+// target: no competitor, so the price a draft would list it at.
+export type HuntMatchQuality = "exact" | "close" | "lowest" | "single" | "target";
 export type HuntLevel = "ok" | "warn" | "bad" | "unknown";
 
 export interface HuntPerson {
@@ -1630,6 +1632,7 @@ export interface HuntCheckResult {
   currency: string;
   targetRoiPercent: number;
   market?: { id: string; name: string; country: string };
+  // Null when the product was checked without a competitor.
   competitor: {
     itemId: string | null;
     url: string | null;
@@ -1641,7 +1644,7 @@ export interface HuntCheckResult {
     country: string | null;
     abroad: boolean;
     categoryPath: string[];
-  };
+  } | null;
   source: {
     productId: string | null;
     url: string | null;
@@ -1658,14 +1661,17 @@ export interface HuntCheckResult {
     } | null;
     days: { min: number | null; max: number } | null;
   };
+  // counted: postage per sale in the figures (0 with a free-shipping offer); cost: what AliExpress quoted.
   shipping:
-    | { basis: "aliexpress"; cost: number; freeOver: number | null; company: string | null; minDays: number | null; maxDays: number | null; tracking: boolean; forOption?: string | null }
-    | { basis: "settings"; cost: number };
+    | { basis: "aliexpress"; counted: number; cost: number; freeOver: number | null; company: string | null; minDays: number | null; maxDays: number | null; tracking: boolean; forOption?: string | null }
+    | { basis: "settings"; counted: number; cost: number };
   fees: { basis: "orders" | "settings"; adsPercent: number; processingPercent: number; fixed: number; orders?: number; days?: number };
   demand: { sold: number | null; soldPerMonth: number | null; daysLive: number | null; available: number | null; variations: number; sellingVariations: number };
   options: HuntOption[];
   summary: {
-    headline: { basis: "best_seller" | "best_option" | null; optionIndex: number | null; profit: number | null; roi: number | null };
+    headline: { basis: "best_seller" | "best_option" | "your_price" | null; optionIndex: number | null; profit: number | null; roi: number | null };
+    // The cheapest option's price: what buyers would see first.
+    entryPrice?: number | null;
     bestSeller: { label: string | null; price: number | null; sold: number | null; optionIndex: number | null; quality: HuntMatchQuality | null } | null;
     bestOptionIndex: number | null;
     total: number;
@@ -1704,7 +1710,7 @@ export interface HuntSummary {
   stage: HuntStage;
   status: "pending" | "approved" | "rejected" | "sent_back";
   currency: string;
-  headline: { profit: number | null; roi: number | null; basis: "best_seller" | "best_option" | null; label: string | null };
+  headline: { profit: number | null; roi: number | null; basis: "best_seller" | "best_option" | "your_price" | null; label: string | null };
   bestSeller: { label: string | null; sold: number | null } | null;
   verdict: HuntVerdict;
   targetRoiPercent: number | null;
@@ -1725,7 +1731,7 @@ export interface HuntSummary {
   hunterNote: string | null;
   warnings: number;
   duplicates: number;
-  competitorUrl: string;
+  competitorUrl: string | null;
   sourceUrl: string;
   listingId: string | null;
   itemIds: string[];
@@ -1829,7 +1835,7 @@ export interface HuntDraftStart {
     id: string;
     title: string;
     currency: string;
-    competitorUrl: string;
+    competitorUrl: string | null;
     sourceUrl: string;
     hunter: HuntPerson | null;
     headline: HuntCheckResult["summary"]["headline"] | null;
@@ -2056,7 +2062,7 @@ export const api = {
   researchBudget: (id: string) => request<ResearchBudget>(`/api/connections/${id}/research/budget`),
 
   // Product hunting: check a product, add it for review, decide, draft.
-  huntCheck: (connectionId: string, input: { competitorUrl: string; sourceUrl: string }) =>
+  huntCheck: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
   huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
     request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
@@ -2074,7 +2080,8 @@ export const api = {
   huntTeam: (connectionId: string, range: TeamRange) => request<HuntTeam>(`/api/connections/${connectionId}/hunting/team?range=${range}`),
   huntDetail: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}`),
   huntRecheck: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}/recheck`, { method: "POST" }),
-  huntUpdate: (huntId: string, input: { competitorUrl?: string; sourceUrl?: string; note?: string }) =>
+  // competitorUrl: null takes the competitor away; left out, it stays.
+  huntUpdate: (huntId: string, input: { competitorUrl?: string | null; sourceUrl?: string; note?: string }) =>
     request<HuntDetail>(`/api/hunting/${huntId}`, { method: "PATCH", body: JSON.stringify(input) }),
   huntResubmit: (huntId: string, note?: string) => request<HuntDetail>(`/api/hunting/${huntId}/resubmit`, { method: "POST", body: JSON.stringify(note === undefined ? {} : { note }) }),
   huntDecide: (huntId: string, input: { decision: "approve" | "reject" | "send_back"; reason?: string; note?: string }) =>

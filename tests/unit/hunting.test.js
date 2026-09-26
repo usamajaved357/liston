@@ -102,13 +102,23 @@ test('analyse judges the product on the option matching the best-selling variati
   assert.strictEqual(result.demand.soldPerMonth, 42.4); // 130 over 92 days
 });
 
-test("analyse uses AliExpress's postage, free at or over its threshold", () => {
-  const shipping = { cost: 1.99, freeOver: 3.05, minDays: 5, maxDays: 8, company: 'AliExpress Standard', tracking: true };
-  const result = huntProfit.analyse({ competitor: competitor(), source: source(), pricing: PRICING, shipping, site: SITE, now: NOW });
-  assert.strictEqual(result.options[0].shipping, 1.99); // 3.00 is under 3.05
+test("analyse adds AliExpress's postage only when it's charged outright", () => {
+  const charged = { cost: 1.99, freeOver: null, minDays: 5, maxDays: 8, company: 'AliExpress Standard', tracking: true };
+  const result = huntProfit.analyse({ competitor: competitor(), source: source(), pricing: PRICING, shipping: charged, site: SITE, now: NOW });
+  assert.strictEqual(result.options[0].shipping, 1.99);
   assert.strictEqual(result.options[0].profit, 3.8);
-  assert.strictEqual(result.options[1].shipping, 0); // 3.20 is over it
   assert.strictEqual(result.shipping.basis, 'aliexpress');
+  assert.strictEqual(result.shipping.counted, 1.99);
+});
+
+test('a free-shipping offer ("free over £8") counts as free postage, whatever the option costs', () => {
+  const offer = { cost: 1.99, freeOver: 8, minDays: 5, maxDays: 8, company: 'AliExpress Selection Premium shipping', tracking: true };
+  const result = huntProfit.analyse({ competitor: competitor(), source: source(), pricing: PRICING, shipping: offer, site: SITE, now: NOW });
+  // Every option costs under £8, and none is charged postage.
+  assert.ok(result.options.every((o) => o.shipping === 0));
+  assert.strictEqual(result.options[0].profit, 5.79);
+  assert.strictEqual(result.shipping.counted, 0);
+  assert.strictEqual(result.shipping.cost, 1.99);
 });
 
 test('analyse falls back to the settings flat postage without an AliExpress quote', () => {
@@ -290,4 +300,23 @@ test('the demand check calls no sales in a month bad, a few slow, and steady sal
   assert.strictEqual(level({ sold: 0, createdAt: '2026-09-20T00:00:00Z' }), 'warn');
   assert.strictEqual(level({ sold: 4, createdAt: '2026-06-27T12:00:00Z' }), 'warn');
   assert.strictEqual(level({ sold: null }), 'unknown');
+});
+
+test('without a competitor each option is priced as a draft would be, and the check says there is no market to judge', () => {
+  const result = huntProfit.analyse({ competitor: null, source: source(), pricing: PRICING, site: SITE, now: NOW });
+  assert.strictEqual(result.competitor, null);
+  const black = result.options[0];
+  // The target-return floor for £3.00: (3 × 1.6 + 0.30) / 0.7 = 7.29 → £7.99.
+  assert.strictEqual(black.sellPrice, 7.99);
+  assert.strictEqual(black.match.quality, 'target');
+  assert.ok(black.roi >= 60);
+  assert.strictEqual(result.summary.verdict, 'unpriced');
+  assert.strictEqual(result.summary.headline.basis, 'your_price');
+  assert.strictEqual(result.summary.bestSeller, null);
+  assert.strictEqual(result.summary.entryPrice, 7.99);
+  const check = (key) => result.checks.find((c) => c.key === key);
+  assert.strictEqual(check('demand').level, 'unknown');
+  assert.match(check('demand').detail, /No competitor/);
+  assert.strictEqual(check('margin'), undefined);
+  assert.deepStrictEqual(result.warnings, []);
 });

@@ -17,10 +17,13 @@ const sourceUrl = z
   .refine((u) => /aliexpress\./i.test(u) && /\/item\/(?:[^/?#]*?)\d{6,}/.test(u), "That doesn't look like an AliExpress product link (it should have /item/ and the product number).");
 const note = z.string().max(1000, 'Keep the note under 1,000 characters.');
 
-const checkSchema = z.object({ competitorUrl: z.preprocess(blankToUndefined, competitorUrl), sourceUrl: z.preprocess(blankToUndefined, sourceUrl) });
+// The competitor is optional, as in drafting.
+const checkSchema = z.object({ competitorUrl: z.preprocess(blankToUndefined, competitorUrl.optional()), sourceUrl: z.preprocess(blankToUndefined, sourceUrl) });
 const addSchema = z.object({ checkId: z.string().uuid('Check the product first.'), note: note.optional() });
+// A blank or null competitor takes it away; leaving it out keeps it.
+const blankToNull = (v) => (v === null || (typeof v === 'string' && v.trim() === '') ? null : typeof v === 'string' ? v.trim() : v);
 const updateSchema = z.object({
-  competitorUrl: z.preprocess(blankToUndefined, competitorUrl.optional()),
+  competitorUrl: z.preprocess(blankToNull, competitorUrl.nullable().optional()),
   sourceUrl: z.preprocess(blankToUndefined, sourceUrl.optional()),
   note: note.optional(),
 });

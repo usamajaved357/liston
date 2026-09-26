@@ -407,6 +407,13 @@ select:focus-visible {
     min-height: auto;
     overflow: visible;
   }
+  /* An action bar (Add for review, say) stays at the foot of the screen. */
+  [data-page-column] > [data-pinned-footer] {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    margin-top: auto;
+  }
   /* iPhone Safari zooms the page into any field under 16px when it's
      tapped; at 16px it stays put. */
   input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),

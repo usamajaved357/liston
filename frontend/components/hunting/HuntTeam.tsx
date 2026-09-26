@@ -32,6 +32,44 @@ function Tile({ label, value, note }: { label: string; value: string; note?: str
 
 const rate = (n: number | null) => (n === null ? "—" : `${n}%`);
 
+type Row = Pick<HuntTeamData["people"][number], "hunter" | "reviewer" | "sales">;
+type Col = { key: string; label: string; value: (row: Row, currency: string) => string; muted?: (row: Row) => boolean };
+
+// The table's columns, a heading centred over each figure.
+const HUNTER_COLS: Col[] = [
+  { key: "hunted", label: "Hunted", value: (r) => count(r.hunter.hunted), muted: (r) => !r.hunter.hunted },
+  { key: "approved", label: "Approved", value: (r) => count(r.hunter.approved), muted: (r) => !r.hunter.approved },
+  { key: "sent_back", label: "Sent back", value: (r) => count(r.hunter.sentBack), muted: (r) => !r.hunter.sentBack },
+  { key: "rejected", label: "Rejected", value: (r) => count(r.hunter.rejected), muted: (r) => !r.hunter.rejected },
+  { key: "waiting", label: "Waiting", value: (r) => count(r.hunter.waiting), muted: (r) => !r.hunter.waiting },
+  { key: "rate", label: "Approval", value: (r) => rate(r.hunter.approvalRate), muted: (r) => r.hunter.approvalRate === null },
+  { key: "sales", label: "Sales", value: (r, c) => (r.sales ? money(r.sales.sales, r.sales.currency || c) : "—"), muted: (r) => !r.sales },
+];
+const REVIEWER_COLS: Col[] = [
+  { key: "reviewed", label: "Reviewed", value: (r) => count(r.reviewer.reviewed), muted: (r) => !r.reviewer.reviewed },
+  { key: "approved", label: "Approved", value: (r) => count(r.reviewer.approved), muted: (r) => !r.reviewer.approved },
+  { key: "sent_back", label: "Sent back", value: (r) => count(r.reviewer.sentBack), muted: (r) => !r.reviewer.sentBack },
+  { key: "rejected", label: "Rejected", value: (r) => count(r.reviewer.rejected), muted: (r) => !r.reviewer.rejected },
+  { key: "avg", label: "Avg wait", value: (r) => hoursText(r.reviewer.avgHoursToDecide), muted: (r) => r.reviewer.avgHoursToDecide === null },
+];
+
+function Cells({ row, currency, strong = false }: { row: Row; currency: string; strong?: boolean }) {
+  return (
+    <>
+      {[...HUNTER_COLS, ...REVIEWER_COLS].map((c, i) => (
+        <td
+          key={`${i}-${c.key}`}
+          className={`px-2 py-2.5 text-center tabular-nums ${i === 0 || i === HUNTER_COLS.length ? "border-l border-[var(--color-line)]" : ""} ${
+            c.muted?.(row) ? "text-[var(--color-muted)]" : "text-[var(--color-ink)]"
+          } ${strong || c.key === "rate" ? "font-semibold" : ""}`}
+        >
+          {c.value(row, currency)}
+        </td>
+      ))}
+    </>
+  );
+}
+
 export function HuntTeam({ connectionId, you }: { connectionId: string; you: string }) {
   const [range, setRange] = useState<TeamRange>("30d");
   const [data, setData] = useState<HuntTeamData | null>(null);
@@ -126,53 +164,56 @@ export function HuntTeam({ connectionId, you }: { connectionId: string; you: str
                   ))}
                 </ul>
                 <div className="hidden overflow-x-auto border-t border-[var(--color-line)] md:block">
-                  <table className="w-full min-w-[940px] text-[12.5px]">
+                  <table className="w-full min-w-[980px] table-fixed text-[12.5px]">
+                    <colgroup>
+                      <col className="w-[200px]" />
+                      {HUNTER_COLS.map((c) => (
+                        <col key={`h-${c.key}`} />
+                      ))}
+                      {REVIEWER_COLS.map((c) => (
+                        <col key={`r-${c.key}`} />
+                      ))}
+                    </colgroup>
                     <thead>
-                      <tr className="bg-[var(--color-paper)] text-[10.5px] uppercase tracking-wide text-[var(--color-muted)]">
-                        <th rowSpan={2} className="px-4 py-2 text-left align-bottom font-semibold">Person</th>
-                        <th colSpan={7} className="border-l border-[var(--color-line)] px-3 pt-2 text-left font-semibold text-[var(--color-ink)]">As hunter</th>
-                        <th colSpan={5} className="border-l border-[var(--color-line)] px-3 pt-2 text-left font-semibold text-[var(--color-ink)]">As reviewer</th>
+                      <tr className="text-[10.5px] uppercase tracking-wide">
+                        <th rowSpan={2} className="bg-[var(--color-paper)] px-4 py-2 text-left align-bottom font-semibold text-[var(--color-muted)]">
+                          Person
+                        </th>
+                        <th colSpan={HUNTER_COLS.length} className="border-l border-[var(--color-line)] bg-indigo-50/60 px-3 py-1.5 text-center font-semibold text-indigo-700">
+                          As hunter
+                        </th>
+                        <th colSpan={REVIEWER_COLS.length} className="border-l border-[var(--color-line)] bg-emerald-50/60 px-3 py-1.5 text-center font-semibold text-emerald-700">
+                          As reviewer
+                        </th>
                       </tr>
                       <tr className="bg-[var(--color-paper)] text-[10.5px] uppercase tracking-wide text-[var(--color-muted)]">
-                        {["Hunted", "Approved", "Sent back", "Rejected", "Waiting", "Rate", "Sales"].map((h, i) => (
-                          <th key={h} className={`px-3 pb-2 pt-1 text-right font-semibold ${i === 0 ? "border-l border-[var(--color-line)]" : ""}`}>
-                            {h}
-                          </th>
-                        ))}
-                        {["Reviewed", "Approved", "Sent back", "Rejected", "Avg time"].map((h, i) => (
-                          <th key={h} className={`px-3 pb-2 pt-1 text-right font-semibold ${i === 0 ? "border-l border-[var(--color-line)]" : ""}`}>
-                            {h}
+                        {[...HUNTER_COLS, ...REVIEWER_COLS].map((c, i) => (
+                          <th key={`${i}-${c.key}`} className={`px-2 py-2 text-center font-semibold ${i === 0 || i === HUNTER_COLS.length ? "border-l border-[var(--color-line)]" : ""}`}>
+                            {c.label}
                           </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[var(--color-line)]">
-                      {data.people.map((row) => {
-                        const cells = [row.hunter.hunted, row.hunter.approved, row.hunter.sentBack, row.hunter.rejected, row.hunter.waiting];
-                        return (
-                          <tr key={row.person.id}>
-                            <td className="px-4 py-2.5 font-medium text-[var(--color-ink)]">
-                              <Person person={row.person} you={you} />
-                              {row.person.isOwner && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">owner</span>}
-                              {row.person.removed && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">(removed)</span>}
-                            </td>
-                            {cells.map((n, i) => (
-                              <td key={i} className={`px-3 py-2.5 text-right tabular-nums ${n ? "text-[var(--color-ink)]" : "text-[var(--color-muted)]"} ${i === 0 ? "border-l border-[var(--color-line)]" : ""}`}>
-                                {count(n)}
-                              </td>
-                            ))}
-                            <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-[var(--color-ink)]">{rate(row.hunter.approvalRate)}</td>
-                            <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-ink)]">{row.sales ? money(row.sales.sales, row.sales.currency || currency) : "—"}</td>
-                            {[row.reviewer.reviewed, row.reviewer.approved, row.reviewer.sentBack, row.reviewer.rejected].map((n, i) => (
-                              <td key={i} className={`px-3 py-2.5 text-right tabular-nums ${n ? "text-[var(--color-ink)]" : "text-[var(--color-muted)]"} ${i === 0 ? "border-l border-[var(--color-line)]" : ""}`}>
-                                {count(n)}
-                              </td>
-                            ))}
-                            <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-ink)]">{hoursText(row.reviewer.avgHoursToDecide)}</td>
-                          </tr>
-                        );
-                      })}
+                      {data.people.map((row) => (
+                        <tr key={row.person.id} className="hover:bg-[var(--color-paper)]/60">
+                          <td className="truncate px-4 py-2.5 font-medium text-[var(--color-ink)]">
+                            <Person person={row.person} you={you} />
+                            {row.person.isOwner && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">owner</span>}
+                            {row.person.removed && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">(removed)</span>}
+                          </td>
+                          <Cells row={row} currency={currency} />
+                        </tr>
+                      ))}
                     </tbody>
+                    {data.people.length > 1 && (
+                      <tfoot>
+                        <tr className="border-t border-[var(--color-line-strong)] bg-[var(--color-paper)]/70 font-semibold">
+                          <td className="px-4 py-2.5 text-[var(--color-ink)]">Everyone</td>
+                          <Cells row={{ hunter: t.hunter, reviewer: t.reviewer, sales: t.sales }} currency={currency} strong />
+                        </tr>
+                      </tfoot>
+                    )}
                   </table>
                 </div>
               </>

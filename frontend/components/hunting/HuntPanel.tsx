@@ -143,7 +143,7 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
 
 function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetail) => void }) {
   const [open, setOpen] = useState(false);
-  const [competitorUrl, setCompetitorUrl] = useState(hunt.competitorUrl);
+  const [competitorUrl, setCompetitorUrl] = useState(hunt.competitorUrl || "");
   const [sourceUrl, setSourceUrl] = useState(hunt.sourceUrl);
   const [note, setNote] = useState(hunt.hunterNote || "");
   const [busy, setBusy] = useState(false);
@@ -154,7 +154,8 @@ function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetai
     setBusy(true);
     setError(null);
     try {
-      onSaved(await api.huntUpdate(hunt.id, { competitorUrl: competitorUrl.trim(), sourceUrl: sourceUrl.trim(), note }));
+      // A cleared competitor is taken away: the product is priced at the target return.
+      onSaved(await api.huntUpdate(hunt.id, { competitorUrl: competitorUrl.trim() || null, sourceUrl: sourceUrl.trim(), note }));
       setOpen(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save it. Try again.");
@@ -173,8 +174,10 @@ function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetai
   return (
     <form onSubmit={save} className="card w-full space-y-3 p-4">
       <label className="block">
-        <span className="label">Competitor on eBay</span>
-        <input className="input mt-1.5" type="url" value={competitorUrl} onChange={(e) => setCompetitorUrl(e.target.value)} disabled={busy} required />
+        <span className="label">
+          Competitor on eBay <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>
+        </span>
+        <input className="input mt-1.5" type="url" value={competitorUrl} onChange={(e) => setCompetitorUrl(e.target.value)} placeholder="https://www.ebay.co.uk/itm/…" disabled={busy} />
       </label>
       <label className="block">
         <span className="label">Supplier on AliExpress</span>
@@ -300,7 +303,8 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
                     <Person person={hunt.hunter} you={you} size={18} /> · {ago(hunt.createdAt)}
                   </span>
                   <span>
-                    <b className={`font-semibold tabular-nums ${profitInk(hunt.headline.profit, hunt.headline.roi, hunt.targetRoiPercent)}`}>{signedMoney(hunt.headline.profit, hunt.currency)}</b> · {roiText(hunt.headline.roi)}
+                    <b className={`font-semibold tabular-nums ${profitInk(hunt.headline.profit, hunt.headline.roi, hunt.targetRoiPercent, hunt.verdict === "unpriced")}`}>{signedMoney(hunt.headline.profit, hunt.currency)}</b> · {roiText(hunt.headline.roi)}
+                    {hunt.verdict === "unpriced" ? " at your price" : ""}
                   </span>
                 </div>
               )}

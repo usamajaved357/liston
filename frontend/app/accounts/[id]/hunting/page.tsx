@@ -8,7 +8,7 @@ import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton } from "@/components/Skeleton";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
-import { HuntForm } from "@/components/hunting/HuntForm";
+import { HuntAddBar, HuntCheck, HuntForm } from "@/components/hunting/HuntForm";
 import { HuntRows, PipelineTabs, SORT_LABELS } from "@/components/hunting/HuntList";
 import { HuntPanel } from "@/components/hunting/HuntPanel";
 import { HuntTeam } from "@/components/hunting/HuntTeam";
@@ -54,6 +54,11 @@ function HuntingBody() {
   const [openId, setOpenId] = useState<string | null>(search.get("open"));
   const [quick, setQuick] = useState<HuntSummary | null>(null);
   const [reload, setReload] = useState(0);
+  // A product checked but not added yet: its Add bar is the page's footer.
+  const [checked, setChecked] = useState<HuntCheck | null>(null);
+  const [added, setAdded] = useState<string | null>(null);
+  // A fresh form after each add.
+  const [formKey, setFormKey] = useState(0);
 
   // The page's place in the URL, so a shared or reopened link lands the same.
   const writeUrl = useCallback(
@@ -134,6 +139,17 @@ function HuntingBody() {
     writeUrl({ tab: next });
   }
   const refresh = useCallback(() => setReload((n) => n + 1), []);
+
+  function onChecked(next: HuntCheck | null) {
+    setChecked(next);
+    if (next) setAdded(null);
+  }
+  function onAdded(hunt: { stage: string }) {
+    setChecked(null);
+    setAdded(hunt.stage === "approved" ? "Added and approved: it's ready to draft." : "Added: it's waiting for a reviewer.");
+    setFormKey((k) => k + 1);
+    refresh();
+  }
   const closePanel = useCallback(() => open(null), [open]);
 
   async function quickApprove(input: { decision: Decision; reason?: string; note?: string }) {
@@ -185,6 +201,8 @@ function HuntingBody() {
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Find products worth listing on {market?.name ?? "eBay"}. Each one is checked for profit and approved before it&apos;s drafted.</p>
         </div>
       }
+      footer={checked && tab === "products" ? <HuntAddBar key={checked.checkId} connectionId={connection.id} checked={checked} onDiscard={() => setChecked(null)} onAdded={onAdded} /> : undefined}
+      pinFooter
       actions={
         canReview ? (
           <SegmentedControl
@@ -203,11 +221,30 @@ function HuntingBody() {
         <HuntTeam connectionId={connection.id} you={user.id} />
       ) : (
         <div className="space-y-5">
-          {canHunt && <HuntForm connectionId={connection.id} marketName={market?.name ?? "eBay"} initialCompetitor={search.get("competitor")} onAdded={refresh} />}
+          {added && !checked && (
+            <div className="notice notice-success">
+              <span className="flex-1">{added}</span>
+              <button type="button" onClick={() => setAdded(null)} className="text-[12.5px] font-semibold hover:underline">
+                Dismiss
+              </button>
+            </div>
+          )}
+          {canHunt && (
+            <HuntForm
+              key={formKey}
+              connectionId={connection.id}
+              marketName={market?.name ?? "eBay"}
+              initialCompetitor={formKey === 0 ? search.get("competitor") : null}
+              checked={checked}
+              onChecked={onChecked}
+            />
+          )}
 
           <section className="card overflow-hidden">
-            <div className="space-y-3 border-b border-[var(--color-line)] px-4 py-3">
+            <div className="border-b border-[var(--color-line)] px-2 sm:px-3">
               <PipelineTabs views={views} counts={data?.counts || ({} as HuntList["counts"])} value={effectiveView || "all"} onChange={changeView} />
+            </div>
+            <div className="border-b border-[var(--color-line)] bg-[var(--color-paper)]/40 px-4 py-2.5">
               <div className="flex flex-wrap items-center gap-2">
                 <label className="relative min-w-[180px] flex-1 max-sm:basis-full">
                   <span className="sr-only">Search</span>

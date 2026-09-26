@@ -211,7 +211,7 @@ export default function DraftListingPage() {
 
   function applyHunt(data: HuntDraftStart) {
     setHunt(data.hunt);
-    setCompetitorUrl(data.hunt.competitorUrl);
+    setCompetitorUrl(data.hunt.competitorUrl || "");
     setSourceUrl(data.hunt.sourceUrl);
     startWith(data.preview, data.hunt.selection);
   }

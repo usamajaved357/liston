@@ -1,7 +1,12 @@
 // Whether a hunted product is worth listing, option by option. Pure: the
-// competitor's eBay listing and the supplier's product (as the sourcing
-// readers return them), the account's pricing and fees, and what AliExpress
-// charges to post it, in; the profit check out.
+// competitor's eBay listing (optional, as in drafting) and the supplier's
+// product (as the sourcing readers return them), the account's pricing and
+// fees, and what AliExpress charges to post it, in; the profit check out.
+//
+// Without a competitor there is no market price: each option is priced as a
+// draft would be (supplier price and postage marked up to the account's
+// target return, rounded to .99), and the check says so rather than judging
+// it against a market it hasn't seen.
 //
 // Every supplier option is matched to the competitor's variation that sells
 // the same thing (Black / M to Black / M, "2PCS" to "2 Pack"), and its
@@ -224,6 +229,14 @@ function shippingAnchor(source, competitor, currency) {
   return anchor || null;
 }
 
+// What postage costs a sale. AliExpress's free-shipping offers ("free over
+// £8", Choice products) count as free: a seller's orders clear them, so the
+// fee is only added when the supplier charges postage outright.
+const hasFreeOffer = (shipping) => shipping.freeOver !== null && shipping.freeOver !== undefined;
+function postageFor(shipping) {
+  return hasFreeOffer(shipping) ? 0 : Number(shipping.cost) || 0;
+}
+
 function daysUntil(iso, now) {
   if (!iso) return null;
   const end = new Date(iso).getTime();
@@ -244,6 +257,7 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
   const rates = fees || feeRates(pricing);
   const feeRate = (rates.adsPercent + rates.processingPercent) / 100;
   const target = Number(settings.targetRoiPercent);
+  const hasCompetitor = Boolean(competitor);
   const options = supplierOptions(source, currency);
   const variations = competitorVariations(competitor, currency);
   const priced = variations.filter((v) => v.price !== null);
@@ -251,11 +265,21 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
   const flatShipping = Number(settings.shippingCostPerOrder || 0);
   const warnings = [];
 
+  const priceRules = { ...settings, adsFeePercent: rates.adsPercent, processingFeePercent: rates.processingPercent, fixedFeePerOrder: rates.fixed };
   const rows = options.map((option) => {
-    const match = bestMatch(option, variations);
+    const match = hasCompetitor ? bestMatch(option, variations) : null;
     const variation = match ? variations[match.index] : null;
-    const sellPrice = variation?.price ?? lowest;
-    const ship = shipping ? (shipping.freeOver !== null && shipping.freeOver !== undefined && option.cost !== null && option.cost >= shipping.freeOver ? 0 : shipping.cost) : flatShipping;
+    const ship = shipping ? postageFor(shipping) : flatShipping;
+    // No competitor: the price a draft would list it at.
+    const ownPrice = !hasCompetitor && option.cost > 0 ? pricingService.priceForCost(option.cost, { ...priceRules, shippingCostPerOrder: ship || 0 }).floorPrice : null;
+    const sellPrice = hasCompetitor ? variation?.price ?? lowest : ownPrice;
+    const matched = variation
+      ? { label: variation.label, price: variation.price, sold: variation.sold, quality: match.quality }
+      : hasCompetitor && lowest !== null
+        ? { label: null, price: lowest, sold: null, quality: 'lowest' }
+        : ownPrice !== null
+          ? { label: null, price: ownPrice, sold: null, quality: 'target' }
+          : null;
     const row = {
       label: option.label,
       attributes: option.attributes,
@@ -265,8 +289,8 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
       costExact: option.costExact,
       stock: option.stock,
       shipping: round2(ship || 0),
-      match: variation ? { label: variation.label, price: variation.price, sold: variation.sold, quality: match.quality } : lowest !== null ? { label: null, price: lowest, sold: null, quality: 'lowest' } : null,
-      sellPrice: sellPrice === null ? null : round2(sellPrice),
+      match: matched,
+      sellPrice: sellPrice === null || sellPrice === undefined ? null : round2(sellPrice),
       fees: null,
       profit: null,
       roi: null,
@@ -274,12 +298,12 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
       breakEven: null,
       targetPrice: null,
     };
-    if (option.cost === null || !(option.cost > 0) || sellPrice === null) return row;
+    if (option.cost === null || !(option.cost > 0) || sellPrice === null || sellPrice === undefined) return row;
     const totalCost = option.cost + (ship || 0);
     const ads = round2(sellPrice * (rates.adsPercent / 100));
     const processing = round2(sellPrice * (rates.processingPercent / 100));
     const profit = round2(sellPrice - totalCost - ads - processing - rates.fixed);
-    const quoted = pricingService.priceForCost(option.cost, { ...settings, adsFeePercent: rates.adsPercent, processingFeePercent: rates.processingPercent, fixedFeePerOrder: rates.fixed, shippingCostPerOrder: ship || 0 }, { competitorPrice: sellPrice });
+    const quoted = pricingService.priceForCost(option.cost, { ...priceRules, shippingCostPerOrder: ship || 0 }, { competitorPrice: sellPrice });
     return {
       ...row,
       totalCost: round2(totalCost),
@@ -298,21 +322,27 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
     warnings.push(`AliExpress showed one price for every option, so each is costed at ${currency} ${options[0].cost?.toFixed(2) ?? '?'}. Check bigger packs before approving.`);
   }
   if ((source?.variants || []).length > MAX_OPTIONS) warnings.push(`Only the first ${MAX_OPTIONS} of the supplier's ${(source.variants || []).length} options are shown.`);
-  if (lowest === null) warnings.push("The competitor's price couldn't be read in " + currency + ', so no profit could be worked out.');
+  if (hasCompetitor && lowest === null) warnings.push("The competitor's price couldn't be read in " + currency + ', so no profit could be worked out.');
 
   // ---- summary ----
   const inStock = rows.filter((r) => r.stock !== 0);
   const withProfit = inStock.filter((r) => r.profit !== null);
-  const pick = bestSellerOption(source, competitor, currency);
+  const pick = hasCompetitor ? bestSellerOption(source, competitor, currency) : { variation: null, optionIndex: null, quality: null };
   const bestSellerRow = pick.optionIndex !== null ? rows[pick.optionIndex] : null;
   const bestRowIndex = withProfit.length ? rows.indexOf(withProfit.reduce((a, b) => (b.profit > a.profit ? b : a))) : null;
-  const headline =
-    bestSellerRow && bestSellerRow.profit !== null
+  // Without a competitor every option earns about the target by design, so
+  // the figure shown is the cheapest option's: the price buyers would see first.
+  const entryIndex = withProfit.length ? rows.indexOf(withProfit.reduce((a, b) => (b.sellPrice < a.sellPrice ? b : a))) : null;
+  const headline = !hasCompetitor
+    ? entryIndex !== null
+      ? { basis: 'your_price', optionIndex: entryIndex, profit: rows[entryIndex].profit, roi: rows[entryIndex].roi }
+      : { basis: null, optionIndex: null, profit: null, roi: null }
+    : bestSellerRow && bestSellerRow.profit !== null
       ? { basis: 'best_seller', optionIndex: pick.optionIndex, profit: bestSellerRow.profit, roi: bestSellerRow.roi }
       : bestRowIndex !== null
         ? { basis: 'best_option', optionIndex: bestRowIndex, profit: rows[bestRowIndex].profit, roi: rows[bestRowIndex].roi }
         : { basis: null, optionIndex: null, profit: null, roi: null };
-  const verdict = headline.profit === null ? 'unknown' : headline.roi >= target ? 'strong' : headline.profit > 0 ? 'thin' : 'loss';
+  const verdict = headline.profit === null ? 'unknown' : !hasCompetitor ? 'unpriced' : headline.roi >= target ? 'strong' : headline.profit > 0 ? 'thin' : 'loss';
 
   // ---- demand ----
   const sold = competitor?.sold ?? null;
@@ -333,7 +363,8 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
     version: VERSION,
     currency,
     targetRoiPercent: target,
-    competitor: {
+    // Null when the product was checked without a competitor.
+    competitor: !hasCompetitor ? null : {
       itemId: competitor?.legacyItemId || null,
       url: competitor?.url || competitor?.sourceUrl || null,
       title: competitor?.title || '',
@@ -356,12 +387,23 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
       days: supplierDays,
     },
     shipping: shipping
-      ? { basis: 'aliexpress', cost: shipping.cost, freeOver: shipping.freeOver ?? null, company: shipping.company || null, minDays: shipping.minDays ?? null, maxDays: shipping.maxDays ?? null, tracking: Boolean(shipping.tracking) }
-      : { basis: 'settings', cost: flatShipping },
+      ? {
+          basis: 'aliexpress',
+          // What's counted per sale (free with a free-shipping offer) and what AliExpress quoted.
+          counted: postageFor(shipping),
+          cost: shipping.cost,
+          freeOver: shipping.freeOver ?? null,
+          company: shipping.company || null,
+          minDays: shipping.minDays ?? null,
+          maxDays: shipping.maxDays ?? null,
+          tracking: Boolean(shipping.tracking),
+        }
+      : { basis: 'settings', counted: flatShipping, cost: flatShipping },
     fees: rates,
     demand,
     options: rows,
     summary: {
+      entryPrice: entryIndex !== null ? rows[entryIndex].sellPrice : null,
       headline,
       bestSeller: pick.variation
         ? { label: pick.variation.label, price: pick.variation.price, sold: pick.variation.sold, optionIndex: pick.optionIndex, quality: pick.quality }
@@ -437,8 +479,9 @@ function checksFor({ competitor, source, result, refusals = [], target }) {
     key: 'demand',
     label: 'Demand',
     level: demand.sold === null ? 'unknown' : perMonth >= SLOW_MONTHLY ? 'ok' : demand.sold === 0 && (demand.daysLive ?? 0) >= 30 ? 'bad' : 'warn',
-    detail:
-      demand.sold === null
+    detail: !result.competitor
+      ? 'No competitor listing to judge demand from. Add one to see how many sell.'
+      : demand.sold === null
         ? "eBay doesn't show how many the competitor has sold."
         : demand.sold === 0
           ? `The competitor hasn't sold any${demand.daysLive !== null ? ` in ${demand.daysLive} days` : ''}.`
@@ -470,15 +513,19 @@ function checksFor({ competitor, source, result, refusals = [], target }) {
           `Every option in stock (the lowest has ${Math.min(...known.map((r) => r.stock))}).`,
   });
 
-  const theirs = result.competitor.postage?.days?.max ?? null;
+  const theirs = result.competitor?.postage?.days?.max ?? null;
   const ours = result.source.days?.max ?? null;
   checks.push({
     key: 'delivery',
     label: 'Delivery time',
     level: theirs === null || ours === null ? 'unknown' : ours > theirs + 3 ? 'warn' : 'ok',
     detail:
-      theirs === null || ours === null
-        ? 'Delivery times could not be compared.'
+      !result.competitor
+        ? ours === null
+          ? 'No competitor to compare delivery with.'
+          : `The supplier delivers in up to ${ours} days. There's no competitor to compare with.`
+        : theirs === null || ours === null
+          ? 'Delivery times could not be compared.'
         : ours > theirs + 3
           ? `Buyers get the competitor's within about ${theirs} days; the supplier takes up to ${ours}. Slower delivery sells less.`
           : `The supplier delivers in up to ${ours} days, close to the competitor's ${theirs}.`,
@@ -497,7 +544,7 @@ function checksFor({ competitor, source, result, refusals = [], target }) {
           'No rating yet.',
   });
 
-  const thin = result.summary.headline.roi !== null && result.summary.headline.roi < target;
+  const thin = Boolean(result.competitor) && result.summary.headline.roi !== null && result.summary.headline.roi < target;
   if (thin) {
     checks.push({
       key: 'margin',

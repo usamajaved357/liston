@@ -31,6 +31,7 @@ export const VERDICT: Record<HuntVerdict, { label: string; tone: Tone; ink: stri
   strong: { label: "Good profit", tone: "good", ink: "text-emerald-700", soft: "bg-emerald-50 ring-emerald-200" },
   thin: { label: "Thin margin", tone: "warn", ink: "text-amber-700", soft: "bg-amber-50 ring-amber-200" },
   loss: { label: "Loses money", tone: "bad", ink: "text-rose-700", soft: "bg-rose-50 ring-rose-200" },
+  unpriced: { label: "No competitor", tone: "unknown", ink: "text-indigo-700", soft: "bg-indigo-50/70 ring-indigo-200" },
   unknown: { label: "Profit unknown", tone: "unknown", ink: "text-[var(--color-muted)]", soft: "bg-[var(--color-paper)] ring-[var(--color-line)]" },
 };
 
@@ -47,9 +48,14 @@ export function VerdictChip({ verdict }: { verdict: HuntVerdict }) {
 export const LEVEL_TONE: Record<HuntLevel, Tone> = { ok: "good", warn: "warn", bad: "bad", unknown: "unknown" };
 export const INK: Record<Tone, string> = { good: "text-emerald-600", warn: "text-amber-600", bad: "text-rose-600", unknown: "text-[var(--color-muted)]" };
 
-/** The colour a profit reads in: green at or over the target return, amber above nothing, red at a loss. */
-export function profitInk(profit: number | null | undefined, roi: number | null | undefined, target: number | null | undefined) {
+/**
+ * The colour a profit reads in: green at or over the target return, amber
+ * above nothing, red at a loss; plain ink when it's only the target by
+ * design (no competitor, `unpriced`), since nothing has proved it.
+ */
+export function profitInk(profit: number | null | undefined, roi: number | null | undefined, target: number | null | undefined, unpriced = false) {
   if (profit === null || profit === undefined) return "text-[var(--color-muted)]";
+  if (unpriced && profit > 0) return "text-[var(--color-ink)]";
   if (profit <= 0) return "text-rose-600";
   if (target !== null && target !== undefined && roi !== null && roi !== undefined && roi < target) return "text-amber-600";
   return "text-emerald-600";
@@ -70,6 +76,7 @@ export const MATCH: Record<HuntMatchQuality, { label: string; title: string; chi
   close: { label: "Close match", title: "The nearest option the competitor sells.", chip: "text-sky-700 bg-sky-50" },
   lowest: { label: "Their lowest", title: "The competitor doesn't sell this option, so their lowest price is used.", chip: "text-amber-800 bg-amber-50" },
   single: { label: "Listing price", title: "The competitor's listing has one price for everything.", chip: "text-[var(--color-muted)] bg-[var(--color-paper)]" },
+  target: { label: "Your price", title: "No competitor: priced as a draft would be, at your target return.", chip: "text-indigo-700 bg-indigo-50" },
 };
 
 export function MatchChip({ quality }: { quality: HuntMatchQuality }) {

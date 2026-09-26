@@ -104,14 +104,16 @@ async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, 
   const connection = await connectionService.getConnectionSummary(connectionId, ownerId);
   if (connection.platform_key !== 'ebay') throw new HuntError('Product hunting needs an eBay account.');
   const site = marketplaces.byId(connection.marketplace?.id) || marketplaces.byId(connection.settings?.ebay?.marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
-  const itemId = ebaySource.legacyItemIdFromUrl(competitorUrl);
+  // The competitor is optional, as in drafting: without one nothing is read
+  // from eBay and each option is priced at the account's target return.
+  const itemId = competitorUrl ? ebaySource.legacyItemIdFromUrl(competitorUrl) : null;
   const productId = aliexpressSource.productIdFromUrl(sourceUrl);
-  await ensureAllowance();
+  if (competitorUrl) await ensureAllowance();
 
   // AliExpress is the slower read: started first, awaited after eBay's.
   const sourcePromise = aliexpressSource.fetchProduct(sourceUrl, { shipTo: site.country, currency: site.currency });
   sourcePromise.catch(() => {});
-  const competitor = await browseUsage.as('hunting', () => ebaySource.fetchListing(competitorUrl, site.id));
+  const competitor = competitorUrl ? await browseUsage.as('hunting', () => ebaySource.fetchListing(competitorUrl, site.id)) : null;
   const source = await sourcePromise;
 
   const pricing = { ...(connection.settings?.pricing || {}), currency: site.currency };
@@ -125,11 +127,11 @@ async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, 
   const postage = shipping && (!shipping.currency || shipping.currency === site.currency) ? shipping : null;
   const result = huntProfit.analyse({ competitor, source, pricing, fees: huntProfit.feeRates(pricing, totals, FEE_DAYS), shipping: postage, site, refusals });
   result.source.productId = productId;
-  result.competitor.itemId = result.competitor.itemId || itemId;
+  if (result.competitor) result.competitor.itemId = result.competitor.itemId || itemId;
   if (postage) result.shipping.forOption = anchor.label;
   result.market = { id: site.id, name: site.name, country: site.country };
-  result.duplicates = await duplicatesFor(ownerId, { productId, itemId, title: competitor.title, connectionId, excludeId });
-  return { competitorUrl, sourceUrl, itemId, productId, result };
+  result.duplicates = await duplicatesFor(ownerId, { productId, itemId, title: competitor?.title || source.title, connectionId, excludeId });
+  return { competitorUrl: competitorUrl || null, sourceUrl, itemId, productId, result };
 }
 
 function checkColumns(read) {
@@ -139,8 +141,8 @@ function checkColumns(read) {
     competitorItemId: read.itemId,
     sourceUrl: read.sourceUrl,
     sourceProductId: read.productId,
-    title: result.competitor.title || result.source.title || 'Untitled product',
-    imageUrl: result.source.imageUrl || result.competitor.imageUrl || null,
+    title: result.competitor?.title || result.source.title || 'Untitled product',
+    imageUrl: result.source.imageUrl || result.competitor?.imageUrl || null,
     currency: result.currency,
     checkResult: result,
     headlineProfit: result.summary.headline.profit,
@@ -338,13 +340,19 @@ async function recheck(auth, huntId) {
   return { ...(await detail(auth, huntId)), previous: { profit: previous.profit ?? null, roi: previous.roi ?? null } };
 }
 
-/** The hunter changes a waiting (or sent back) product: other links, which re-reads it, or their note. */
+/**
+ * The hunter changes a waiting (or sent back) product: other links, which
+ * re-reads it, or their note. `competitorUrl: null` takes the competitor
+ * away (undefined leaves it as it is).
+ */
 async function update(auth, huntId, { competitorUrl, sourceUrl, note }) {
   const { hunt, viewer } = await loadHunt(auth, huntId);
   if (!rules.canEdit(hunt, viewer)) refuse('Only the hunter can change it, and only while it waits for review or has been sent back.');
-  const links = (competitorUrl && competitorUrl !== hunt.competitor_url) || (sourceUrl && sourceUrl !== hunt.source_url);
+  const nextCompetitor = competitorUrl === undefined ? hunt.competitor_url : competitorUrl || null;
+  const nextSource = sourceUrl || hunt.source_url;
+  const links = nextCompetitor !== hunt.competitor_url || nextSource !== hunt.source_url;
   if (links) {
-    const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: competitorUrl || hunt.competitor_url, sourceUrl: sourceUrl || hunt.source_url }, { excludeId: hunt.id });
+    const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: nextCompetitor, sourceUrl: nextSource }, { excludeId: hunt.id });
     await huntingRepository.setCheck(hunt.id, checkColumns(read));
   }
   if (typeof note === 'string') await huntingRepository.setNote(hunt.id, note.trim().slice(0, 1000));
@@ -411,7 +419,7 @@ async function draftStart(auth, huntId) {
   if (!rules.canDraft(hunt, viewer)) refuse(viewer.canDraft ? 'Only an approved product can be drafted.' : 'Drafting needs Listings access on this account.');
   // Required here, not at the top: listing.service marks hunts drafted and listed through this module's repository.
   const listingService = require('../listings/listing.service');
-  const { readSource, ...preview } = await listingService.previewDraftSources(hunt.connection_id, auth.ownerId, { competitorUrl: hunt.competitor_url, sourceUrl: hunt.source_url }, { withSource: true });
+  const { readSource, ...preview } = await listingService.previewDraftSources(hunt.connection_id, auth.ownerId, { competitorUrl: hunt.competitor_url || undefined, sourceUrl: hunt.source_url }, { withSource: true });
   const rows = hunt.check_result?.options || [];
   return {
     preview,

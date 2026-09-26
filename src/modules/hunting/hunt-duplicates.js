@@ -47,7 +47,7 @@ function describe({ hunts = [], listings = [], live = [], allLive = [] }, { prod
       stage: h.stage,
       by: nameOf(h.hunter_name, h.hunter_email),
       at: h.created_at,
-      same: sameOf(h.source_product_id === productId, h.competitor_item_id === itemId),
+      same: sameOf(h.source_product_id === productId, Boolean(itemId) && h.competitor_item_id === itemId),
     });
   }
   const seen = new Set();
@@ -68,7 +68,7 @@ function describe({ hunts = [], listings = [], live = [], allLive = [] }, { prod
   for (const item of live) {
     if (seen.has(String(item.itemId))) continue;
     seen.add(String(item.itemId));
-    const isCompetitor = String(item.itemId) === String(itemId);
+    const isCompetitor = Boolean(itemId) && String(item.itemId) === String(itemId);
     out.push({
       type: isCompetitor ? 'own_competitor' : 'live',
       itemId: item.itemId,

@@ -127,6 +127,38 @@ test('a check works out profit per option at the competitor price, with the real
   assert.strictEqual(listed.data.items.length, 0);
 });
 
+test('the competitor is optional: without one nothing is read from eBay and options are priced at the target return', async () => {
+  const t = await team();
+  let ebayReads = 0;
+  const counted = ebaySource.fetchListing;
+  ebaySource.fetchListing = async (...args) => {
+    ebayReads += 1;
+    return counted(...args);
+  };
+  try {
+    const { data, status } = await request('POST', `/api/connections/${t.connectionId}/hunting/check`, { competitorUrl: '', sourceUrl: SOURCE_URL }, t.hunter.token);
+    assert.strictEqual(status, 200, JSON.stringify(data));
+    assert.strictEqual(ebayReads, 0);
+    assert.strictEqual(data.result.competitor, null);
+    assert.strictEqual(data.result.summary.verdict, 'unpriced');
+    assert.ok(data.result.options.every((o) => o.match.quality === 'target' && o.roi >= 60));
+    const added = await request('POST', `/api/connections/${t.connectionId}/hunting`, { checkId: data.checkId }, t.hunter.token);
+    assert.strictEqual(added.status, 201);
+    assert.strictEqual(added.data.competitorUrl, null);
+    assert.strictEqual(added.data.title, 'TWS Earbuds');
+
+    // A competitor added later is read and judged against; taken away again, it's gone.
+    const withOne = await request('PATCH', `/api/hunting/${added.data.id}`, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
+    assert.strictEqual(withOne.data.competitorUrl, COMPETITOR_URL);
+    assert.notStrictEqual(withOne.data.verdict, 'unpriced');
+    const without = await request('PATCH', `/api/hunting/${added.data.id}`, { competitorUrl: '' }, t.hunter.token);
+    assert.strictEqual(without.data.competitorUrl, null);
+    assert.strictEqual(without.data.verdict, 'unpriced');
+  } finally {
+    ebaySource.fetchListing = counted;
+  }
+});
+
 test('a bad link is refused before anything is read', async () => {
   const t = await team();
   const { status, data } = await request('POST', `/api/connections/${t.connectionId}/hunting/check`, { competitorUrl: 'https://www.ebay.co.uk/sch/earbuds', sourceUrl: SOURCE_URL }, t.hunter.token);

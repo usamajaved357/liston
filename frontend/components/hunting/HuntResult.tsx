@@ -67,12 +67,16 @@ function Verdict({ result }: { result: HuntCheckResult }) {
   const v = VERDICT[summary.verdict];
   const row = head.optionIndex !== null ? result.options[head.optionIndex] : null;
   const best = summary.bestSeller;
+  const unpriced = summary.verdict === "unpriced";
   const about =
     head.basis === "best_seller" && best
       ? `per sale on the best seller${best.label ? `, ${best.label}` : ""}${best.sold ? ` (${count(best.sold)} sold)` : ""}`
       : head.basis === "best_option"
         ? `per sale on the best option${row?.label ? `, ${row.label}` : ""}`
-        : "no profit could be worked out";
+        : head.basis === "your_price"
+          ? `per sale at your price of ${row?.sellPrice !== null && row?.sellPrice !== undefined ? money(row.sellPrice, currency) : "—"}${row?.label && result.options.length > 1 ? ` on the cheapest option, ${row.label}` : ""}`
+          : "no profit could be worked out";
+  const prices = result.options.filter((o) => o.stock !== 0 && o.sellPrice !== null).map((o) => o.sellPrice as number);
   return (
     <section className={`overflow-hidden rounded-[var(--radius-card)] ring-1 ring-inset ${v.soft}`}>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4 sm:px-5">
@@ -81,9 +85,9 @@ function Verdict({ result }: { result: HuntCheckResult }) {
             <ToneIcon tone={v.tone} className="h-6 w-6" />
           </span>
           <div className="min-w-0">
-            <p className={`text-[12px] font-semibold uppercase tracking-wide ${v.ink}`}>{v.label}</p>
+            <p className={`text-[12px] font-semibold uppercase tracking-wide ${v.ink}`}>{unpriced ? `No competitor · priced at your ${targetRoiPercent}% target` : v.label}</p>
             <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2">
-              <span className={`text-[26px] font-semibold leading-none tracking-tight tabular-nums ${profitInk(head.profit, head.roi, targetRoiPercent)}`}>{signedMoney(head.profit, currency)}</span>
+              <span className={`text-[26px] font-semibold leading-none tracking-tight tabular-nums ${profitInk(head.profit, head.roi, targetRoiPercent, unpriced)}`}>{signedMoney(head.profit, currency)}</span>
               <span className="text-[14px] font-semibold tabular-nums text-[var(--color-ink)]">{roiText(head.roi)} return</span>
             </p>
             <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">
@@ -92,12 +96,25 @@ function Verdict({ result }: { result: HuntCheckResult }) {
             </p>
           </div>
         </div>
-        <dl className="grid w-full grid-cols-3 gap-x-5 gap-y-2 sm:w-auto">
-          <Stat label="Options earning" value={`${summary.profitable} of ${summary.inStock}`} note={summary.inStock < summary.total ? `${summary.total - summary.inStock} out of stock` : "in stock"} />
-          <Stat label={`Under ${targetRoiPercent}% target`} value={count(summary.belowTarget)} note="in-stock options" />
-          <Stat label="Sold a month" value={result.demand.soldPerMonth === null ? "—" : count(result.demand.soldPerMonth)} note={result.demand.sold === null ? "not shown by eBay" : `${count(result.demand.sold)} in all`} />
-        </dl>
+        {unpriced ? (
+          <dl className="grid w-full grid-cols-3 gap-x-5 gap-y-2 sm:w-auto">
+            <Stat label="Your prices" value={prices.length ? (Math.min(...prices) === Math.max(...prices) ? money(prices[0], currency) : `${money(Math.min(...prices), currency)} – ${money(Math.max(...prices), currency)}`) : "—"} note="rounded to .99" />
+            <Stat label="In stock" value={`${summary.inStock} of ${summary.total}`} note="options" />
+            <Stat label="Market price" value="—" note="add a competitor" />
+          </dl>
+        ) : (
+          <dl className="grid w-full grid-cols-3 gap-x-5 gap-y-2 sm:w-auto">
+            <Stat label="Options earning" value={`${summary.profitable} of ${summary.inStock}`} note={summary.inStock < summary.total ? `${summary.total - summary.inStock} out of stock` : "in stock"} />
+            <Stat label={`Under ${targetRoiPercent}% target`} value={count(summary.belowTarget)} note="in-stock options" />
+            <Stat label="Sold a month" value={result.demand.soldPerMonth === null ? "—" : count(result.demand.soldPerMonth)} note={result.demand.sold === null ? "not shown by eBay" : `${count(result.demand.sold)} in all`} />
+          </dl>
+        )}
       </div>
+      {unpriced && (
+        <p className="border-t border-black/5 bg-white/50 px-4 py-2 text-[12px] text-[var(--color-ink)] sm:px-5">
+          Checked from the supplier alone: there&apos;s no market price, best seller or demand to judge by, so each option earns your target by design. Add a competitor to see whether buyers pay these prices.
+        </p>
+      )}
       {best && best.optionIndex === null && head.basis !== "best_seller" && best.label && (
         <p className="border-t border-black/5 bg-white/50 px-4 py-2 text-[12px] text-[var(--color-ink)] sm:px-5">
           The competitor&apos;s best seller, <b className="font-semibold">{best.label}</b>, has no matching option at this supplier.
@@ -173,6 +190,7 @@ function StockText({ stock }: { stock: number | null }) {
 
 function OptionsTable({ result }: { result: HuntCheckResult }) {
   const { currency, targetRoiPercent, summary } = result;
+  const unpriced = summary.verdict === "unpriced";
   const [open, setOpen] = useState<number | null>(summary.headline.optionIndex);
   const [all, setAll] = useState(false);
   // The option the product is judged on first, then what earns most, the out-of-stock last.
@@ -194,7 +212,7 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
   const tag = (index: number) =>
     isBestSeller(index) ? (
       <span className="inline-flex h-5 items-center rounded bg-[var(--color-primary)] px-1.5 text-[10.5px] font-semibold text-white">Best seller</span>
-    ) : summary.bestOptionIndex === index && summary.headline.optionIndex !== index ? (
+    ) : !unpriced && summary.bestOptionIndex === index && summary.headline.optionIndex !== index ? (
       <span className="inline-flex h-5 items-center rounded bg-emerald-600 px-1.5 text-[10.5px] font-semibold text-white">Most profit</span>
     ) : null;
 
@@ -202,7 +220,9 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3">
         <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">{single ? "Profit per sale" : `Profit on each option (${result.options.length})`}</h3>
-        <p className="text-[11.5px] text-[var(--color-muted)]">At the competitor&apos;s price, postage included. Tap a row for the breakdown.</p>
+        <p className="text-[11.5px] text-[var(--color-muted)]">
+          {result.competitor ? "At the competitor's price, postage included." : `At your price: cost and postage marked up to your ${targetRoiPercent}% target return.`} Tap a row for the breakdown.
+        </p>
       </div>
 
       {/* Phones: a card per option. */}
@@ -229,7 +249,7 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
                 </span>
               </span>
               <span className="flex-shrink-0 text-right">
-                <span className={`block text-[15px] font-semibold tabular-nums ${profitInk(option.profit, option.roi, targetRoiPercent)}`}>{signedMoney(option.profit, currency)}</span>
+                <span className={`block text-[15px] font-semibold tabular-nums ${profitInk(option.profit, option.roi, targetRoiPercent, unpriced)}`}>{signedMoney(option.profit, currency)}</span>
                 <span className="block text-[11.5px] tabular-nums text-[var(--color-muted)]">{roiText(option.roi)}</span>
               </span>
             </button>
@@ -238,7 +258,7 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
                 {option.match && (
                   <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-muted)]">
                     <MatchChip quality={option.match.quality} />
-                    {option.match.label ? `Competitor's ${option.match.label}` : "Competitor's price"}
+                    {option.match.quality === "target" ? `Your price at a ${targetRoiPercent}% return` : option.match.label ? `Competitor's ${option.match.label}` : "Competitor's price"}
                     {option.match.sold ? ` · ${count(option.match.sold)} sold` : ""}
                   </p>
                 )}
@@ -254,14 +274,14 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
         <table className="w-full min-w-[760px] text-[12.5px]">
           <thead>
             <tr className="bg-[var(--color-paper)] text-[10.5px] uppercase tracking-wide text-[var(--color-muted)]">
-              <th className="px-4 py-2 text-left font-semibold">Option</th>
-              <th className="px-3 py-2 text-right font-semibold">Stock</th>
-              <th className="px-3 py-2 text-right font-semibold">Cost</th>
-              <th className="px-3 py-2 text-right font-semibold">Postage</th>
-              <th className="px-3 py-2 text-left font-semibold">Competitor sells at</th>
-              <th className="px-3 py-2 text-right font-semibold">eBay fees</th>
-              <th className="px-3 py-2 text-right font-semibold">Profit</th>
-              <th className="px-4 py-2 text-right font-semibold">Return</th>
+              <th className="px-4 py-2.5 text-left font-semibold">Option</th>
+              <th className="w-[76px] px-2 py-2.5 text-center font-semibold">Stock</th>
+              <th className="w-[84px] px-2 py-2.5 text-center font-semibold">Cost</th>
+              <th className="w-[84px] px-2 py-2.5 text-center font-semibold">Postage</th>
+              <th className="px-3 py-2.5 text-left font-semibold">{result.competitor ? "Competitor sells at" : "Sells at"}</th>
+              <th className="w-[92px] px-2 py-2.5 text-center font-semibold">eBay fees</th>
+              <th className="w-[92px] px-2 py-2.5 text-center font-semibold">Profit</th>
+              <th className="w-[84px] px-3 py-2.5 text-center font-semibold">Return</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[var(--color-line)]">
@@ -283,11 +303,11 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
                         {tag(index)}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">
+                    <td className="px-2 py-2.5 text-center tabular-nums">
                       <StockText stock={option.stock} />
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-ink)]">{option.cost === null ? "—" : money(option.cost, currency)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-ink)]">{option.shipping ? money(option.shipping, currency) : <span className="text-[var(--color-muted)]">Free</span>}</td>
+                    <td className="px-2 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{option.cost === null ? "—" : money(option.cost, currency)}</td>
+                    <td className="px-2 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{option.shipping ? money(option.shipping, currency) : <span className="text-[var(--color-muted)]">Free</span>}</td>
                     <td className="px-3 py-2.5">
                       {option.match ? (
                         <span className="flex items-center gap-2">
@@ -299,9 +319,9 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
                         "—"
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-muted)]">{option.fees ? money(option.fees.total, currency) : "—"}</td>
-                    <td className={`px-3 py-2.5 text-right font-semibold tabular-nums ${profitInk(option.profit, option.roi, targetRoiPercent)}`}>{signedMoney(option.profit, currency)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-[var(--color-ink)]">{roiText(option.roi)}</td>
+                    <td className="px-2 py-2.5 text-center tabular-nums text-[var(--color-muted)]">{option.fees ? money(option.fees.total, currency) : "—"}</td>
+                    <td className={`px-2 py-2.5 text-center font-semibold tabular-nums ${profitInk(option.profit, option.roi, targetRoiPercent, unpriced)}`}>{signedMoney(option.profit, currency)}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-ink)]">{roiText(option.roi)}</td>
                   </tr>
                   {expanded && (
                     <tr className="bg-[var(--color-paper)]/50">
@@ -407,13 +427,32 @@ export function Duplicates({ items }: { items: HuntDuplicate[] }) {
 
 // ---- the whole check -----------------------------------------------------------------------------
 
+// Checked from the supplier alone: what that means, where the competitor's card would be.
+function NoCompetitor({ target }: { target: number }) {
+  return (
+    <section className="flex min-w-0 flex-col rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] bg-[var(--color-panel)]/60 p-4">
+      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+        <span className="h-2 w-2 rounded-full border border-[#0064D2]" aria-hidden />
+        No competitor
+      </span>
+      <p className="mt-2.5 text-[13px] font-medium text-[var(--color-ink)]">Checked from the supplier alone</p>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+        Each option is priced as a draft would be: its cost and postage marked up to your {target}% target return. A competitor&apos;s listing adds the market price, the best seller and how many sell.
+      </p>
+    </section>
+  );
+}
+
 export function HuntResult({ result }: { result: HuntCheckResult }) {
   const { competitor: c, source: s, currency, shipping, fees, demand } = result;
   const supplier = s.supplier;
-  const postage = c.postage ? (c.postage.cost ? `+ ${money(c.postage.cost, currency)} postage` : "Free postage") : null;
+  const postage = c?.postage ? (c.postage.cost ? `+ ${money(c.postage.cost, currency)} postage` : "Free postage") : null;
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {!c ? (
+          <NoCompetitor target={result.targetRoiPercent} />
+        ) : (
         <ProductCard kind="ebay" title={c.title} url={c.url} image={c.imageUrl}>
           <Stat label="Price" value={c.lowestPrice === null ? "—" : `${result.options.length > 1 || demand.variations > 1 ? "From " : ""}${money(c.lowestPrice, currency)}`} note={postage || undefined} />
           <Stat label="Sold" value={demand.sold === null ? "—" : count(demand.sold)} note={demand.soldPerMonth === null ? undefined : `${count(demand.soldPerMonth)} a month`} />
@@ -424,11 +463,12 @@ export function HuntResult({ result }: { result: HuntCheckResult }) {
             note={[c.seller?.feedbackPercentage ? `${c.seller.feedbackPercentage}%` : null, c.seller?.feedbackScore ? `${count(c.seller.feedbackScore)} feedback` : null, c.abroad && c.country ? `posts from ${c.country}` : null].filter(Boolean).join(" · ") || undefined}
           />
         </ProductCard>
+        )}
         <ProductCard kind="aliexpress" title={s.title} url={s.url} image={s.imageUrl}>
           <Stat label="Cost" value={costRange(result.options, currency)} note={`${count(s.options)} option${s.options === 1 ? "" : "s"}`} />
           <Stat
             label="Postage"
-            value={shipping.basis === "aliexpress" ? (shipping.cost ? money(shipping.cost, currency) : "Free") : `${money(shipping.cost, currency)} (settings)`}
+            value={shipping.basis === "aliexpress" ? ((shipping.counted ?? shipping.cost) ? money(shipping.counted ?? shipping.cost, currency) : "Free") : `${money(shipping.cost, currency)} (settings)`}
             note={shipping.basis === "aliexpress" ? [shipping.freeOver ? `free over ${money(shipping.freeOver, currency)}` : null, dayRange({ min: shipping.minDays, max: shipping.maxDays })].filter(Boolean).join(" · ") || undefined : "AliExpress quote not available"}
           />
           <Stat label="Orders" value={supplier?.orders || "—"} note={supplier?.rating ? `Rated ${supplier.rating}${supplier.reviews !== null ? ` · ${count(supplier.reviews)} reviews` : ""}` : undefined} />
@@ -455,12 +495,16 @@ export function HuntResult({ result }: { result: HuntCheckResult }) {
             <p className="mt-1">
               <b className="font-semibold text-[var(--color-ink)]">Postage:</b>{" "}
               {shipping.basis === "aliexpress"
-                ? `AliExpress's own quote to ${result.market?.name || "the buyer"}${shipping.company ? ` (${shipping.company})` : ""}${shipping.forOption ? ` for ${shipping.forOption}` : ""}${shipping.freeOver ? `, free on options costing ${money(shipping.freeOver, currency)} or more` : ""}.`
+                ? shipping.freeOver
+                  ? `AliExpress ships it free on orders over ${money(shipping.freeOver, currency)}${shipping.company ? ` (${shipping.company})` : ""}, so postage isn't counted. It only adds the ${money(shipping.cost, currency)} fee when there's no free-shipping offer.`
+                  : `AliExpress's own charge to ${result.market?.name || "the buyer"}${shipping.company ? ` (${shipping.company})` : ""}${shipping.forOption ? ` for ${shipping.forOption}` : ""}, added to every sale.`
                 : "the flat postage cost in this account's pricing settings (AliExpress didn't quote)."}
             </p>
             <p className="mt-1">
               <b className="font-semibold text-[var(--color-ink)]">Price:</b>{" "}
-              each option is sold at the competitor&apos;s price for the same option, postage included; an option they don&apos;t sell uses their lowest price.
+              {c
+                ? "each option is sold at the competitor's price for the same option, postage included; an option they don't sell uses their lowest price."
+                : `no competitor, so each option is priced as a draft would be: cost and postage marked up to your ${result.targetRoiPercent}% target return, rounded up to .99.`}
             </p>
           </section>
         </div>

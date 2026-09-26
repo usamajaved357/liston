@@ -26,6 +26,9 @@ interface AccountShellProps {
   subheader?: React.ReactNode;
   // A full-width row pinned under the scrolling body (paging, say).
   footer?: React.ReactNode;
+  // Keep the footer pinned on phones too (an action bar), where a footer
+  // otherwise follows the content.
+  pinFooter?: boolean;
   connectionId: string;
   label: string;
   platformKey: string;
@@ -79,6 +82,7 @@ export function AccountShell({
   actions,
   subheader,
   footer,
+  pinFooter = false,
   connectionId,
   label,
   platformKey,
@@ -135,15 +139,17 @@ export function AccountShell({
               }
             />
           )}
-          {canShow("listings") && (
+          {huntingAccess && (
             <NavItem
-              href={`${base}/listings`}
-              active={pathname.startsWith(`${base}/listings`)}
-              label="Listings"
+              href={`${base}/hunting`}
+              active={pathname.startsWith(`${base}/hunting`)}
+              label="Hunting"
+              badge={huntBadge}
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+                  <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                 </svg>
               }
             />
@@ -162,17 +168,15 @@ export function AccountShell({
               }
             />
           )}
-          {huntingAccess && (
+          {canShow("listings") && (
             <NavItem
-              href={`${base}/hunting`}
-              active={pathname.startsWith(`${base}/hunting`)}
-              label="Hunting"
-              badge={huntBadge}
+              href={`${base}/listings`}
+              active={pathname.startsWith(`${base}/listings`)}
+              label="Listings"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.8" />
-                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <circle cx="8" cy="8" r="1.4" fill="currentColor" />
                 </svg>
               }
             />
@@ -190,6 +194,22 @@ export function AccountShell({
               }
             />
           )}
+          {canShow("inbox") && (
+            <NavItem
+              href={`${base}/inbox`}
+              active={pathname.startsWith(`${base}/inbox`)}
+              label="Inbox"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+          )}
+          {/* Connection Settings (business policies, shipping location) is always
+              admin-only, never delegable — hidden outright for a member rather
+              than shown then 403'd. */}
           {canShow("analytics") && (
             <NavItem
               href={`${base}/analytics`}
@@ -215,22 +235,6 @@ export function AccountShell({
               }
             />
           )}
-          {canShow("inbox") && (
-            <NavItem
-              href={`${base}/inbox`}
-              active={pathname.startsWith(`${base}/inbox`)}
-              label="Inbox"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              }
-            />
-          )}
-          {/* Connection Settings (business policies, shipping location) is always
-              admin-only, never delegable — hidden outright for a member rather
-              than shown then 403'd. */}
           {permissions === undefined && (
             <NavItem
               href={`${base}/settings`}
@@ -307,7 +311,14 @@ export function AccountShell({
         <div data-scroller className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>
           {children}
         </div>
-        {footer && <div className="flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)]">{footer}</div>}
+        {footer && (
+          <div
+            data-pinned-footer={pinFooter ? "" : undefined}
+            className={`flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)] ${pinFooter ? "shadow-[0_-8px_24px_-18px_rgba(15,23,42,0.35)]" : ""}`}
+          >
+            {footer}
+          </div>
+        )}
       </div>
 
       <ConfirmDialog
