@@ -285,6 +285,30 @@ async function shippingServicesFor(accessToken, siteId) {
   return services;
 }
 
+/**
+ * What became of other sellers' listings (product research): { [itemId]:
+ * 'live' | 'ended' | 'removed' }, one GetItem each, a few at a time. A
+ * listing that couldn't be read is left out.
+ */
+async function listingStates(credentials, itemIds, marketplaceId) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const siteId = marketplaces.siteIdFor(marketplaceId);
+  const states = {};
+  let next = 0;
+  async function worker() {
+    while (next < itemIds.length) {
+      const itemId = itemIds[next++];
+      try {
+        states[itemId] = (await ebayTrading.getListingState(accessToken, itemId, { siteId })).state;
+      } catch (err) {
+        logger.warn('Research: listing state not read', { itemId, error: err.message });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: 3 }, worker));
+  return { states, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function postagePolicyDetails(credentials, { connectionId, marketplaceId, fulfillmentPolicyId }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
   const key = `${connectionId}:${fulfillmentPolicyId || ''}`;
@@ -2484,6 +2508,7 @@ function categoryAspectSchema(marketplaceId, categoryId) {
 
 module.exports = {
   postagePolicyDetails,
+  listingStates,
   searchSimilarListings,
   categoryAspectSchema,
   pushEnabled,

@@ -8,10 +8,11 @@ import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton } from "@/components/Skeleton";
 import { currencySymbol } from "@/lib/format";
-import { bigMoney, count, money } from "@/components/research/format";
-import { PriceCard, RiskCard, TitleCard, VerdictCard } from "@/components/research/ResearchPanels";
+import { count } from "@/components/research/format";
+import { ResearchFolds, ResearchOverview } from "@/components/research/ResearchPanels";
 import { RESEARCH_SORTS, ResearchListings, ResearchSort, sortResearch } from "@/components/research/ResearchListings";
 import { DeliveryBar } from "@/components/research/DeliveryBar";
+import { SoldListings } from "@/components/research/SoldListings";
 
 // Product research on the account's eBay site: whether to list a product,
 // at what price, under what title, and what could get it taken down — from
@@ -26,22 +27,6 @@ import { DeliveryBar } from "@/components/research/DeliveryBar";
 type Params = { q: string; condition: string; minPrice: string; maxPrice: string; delivery?: ResearchDeliveryFilter };
 const PAGE = 50;
 
-function Stat({ label, value, lines }: { label: string; value: string; lines: string[] }) {
-  return (
-    <div className="card flex flex-col p-5">
-      <span className="text-[13px] font-medium text-[var(--color-muted)]">{label}</span>
-      <span className="mt-2.5 text-[26px] font-semibold leading-none tracking-tight tabular-nums text-[var(--color-ink)]">{value}</span>
-      <span className="mt-auto space-y-0.5 pt-3">
-        {lines.map((line) => (
-          <span key={line} className="block text-[12px] text-[var(--color-muted)]">
-            {line}
-          </span>
-        ))}
-      </span>
-    </div>
-  );
-}
-
 export default function ResearchPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
@@ -55,6 +40,8 @@ export default function ResearchPage() {
   const [problem, setProblem] = useState<string | null>(null);
   const [budget, setBudget] = useState<ResearchBudget | null>(null);
   const [sort, setSort] = useState<ResearchSort>("best");
+  // The listings card: what's live now, or what sold in the last 90 days.
+  const [view, setView] = useState<"active" | "sold">("active");
   const [checking, setChecking] = useState(false);
   // The search on screen, as asked (the form may have changed since).
   const asked = useRef<Params | null>(null);
@@ -162,7 +149,6 @@ export default function ResearchPage() {
   const currency = result?.market.currency ?? market?.currency ?? "GBP";
   const ordered = result ? sortResearch(result.items, sort) : [];
   const s = result?.summary;
-  const a = result?.analysis;
   const maxSold = result ? Math.max(0, ...result.items.map((i) => i.sold ?? 0)) : 0;
 
   return (
@@ -238,10 +224,11 @@ export default function ResearchPage() {
           {searching ? "Searching…" : "Research"}
         </button>
       </form>
-      <p className="mt-2 px-1 text-[12px] text-[var(--color-muted)]">
-        {market?.name ?? "eBay"} · fixed-price listings · each search reads up to 200 listings and the sold counts of the top 20
-        {budget && ` · ${count(budget.remaining)} of today's ${count(budget.limit)} research reads left`}
-      </p>
+      {budget && (
+        <p className="mt-2 px-1 text-[12px] text-[var(--color-muted)]" title="Fixed-price listings. Each search reads up to 200 listings and the sold counts of the top 20.">
+          {count(budget.remaining)} of {count(budget.limit)} research reads left today
+        </p>
+      )}
 
       {problem && (
         <div className="mt-4">
@@ -274,121 +261,45 @@ export default function ResearchPage() {
       )}
 
       {result && s && (
-        <div className={`mt-6 space-y-6 ${searching ? "opacity-60" : ""}`}>
-          <p className="text-[14px] text-[var(--color-ink)]">
-            <span className="font-semibold">{count(result.total)}</span> live listings for “{result.query}” on {result.market.flag} {result.market.name}
-            {result.delivery?.filter && result.delivery.filter !== "all" ? (
-              <span className="text-[var(--color-muted)]">
-                {" "}
-                · figures from the {count(s.sampled)} of the top {count(result.delivery.counts.all)} that deliver{" "}
-                {result.delivery.filter === "similar" ? "like you" : result.delivery.filter === "faster" ? "faster than you" : "slower than you"}
-              </span>
-            ) : (
-              s.sampled < result.total && <span className="text-[var(--color-muted)]"> · figures from the top {count(s.sampled)}</span>
-            )}
+        <div className={`mt-5 space-y-4 ${searching ? "opacity-60" : ""}`}>
+          <p className="px-1 text-[13px] text-[var(--color-muted)]">
+            <span className="font-semibold text-[var(--color-ink)]">{count(result.total)}</span> live listings
+            {result.delivery?.filter && result.delivery.filter !== "all"
+              ? ` · figures from the ${count(s.sampled)} that deliver ${result.delivery.filter === "similar" ? "like you" : result.delivery.filter === "faster" ? "faster" : "slower"}`
+              : s.sampled < result.total
+                ? ` · figures from the top ${count(s.sampled)}`
+                : ""}
           </p>
 
-          {result.delivery && (
-            <DeliveryBar delivery={result.delivery} accountName={connection.label} busy={searching} onChange={compareWith} />
-          )}
-          {a && <VerdictCard verdict={a.verdict} advice={result.advice} checking={checking} />}
-          {a && (
-            <div className="grid gap-4 lg:grid-cols-3">
-              <PriceCard price={a.price} currency={currency} />
-              <TitleCard advice={result.advice} keywords={a.keywords} checking={checking} />
-              <RiskCard risks={a.risks} checking={checking} />
-            </div>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <Stat
-              label="Price buyers pay"
-              value={s.price ? money(s.price.median, currency) : "—"}
-              lines={s.price ? [`Middle price, postage included`, `${money(s.price.min, currency)} to ${money(s.price.max, currency)} · average ${money(s.price.average, currency)}`] : ["No prices"]}
-            />
-            <Stat
-              label="Demand"
-              value={s.sold ? `${count(Math.round(s.sold.perMonth))}/mo` : "—"}
-              lines={
-                s.sold
-                  ? [
-                      `Sold a month by the ${s.sold.read} listings read · about ${bigMoney(s.sold.revenuePerMonth, currency)}`,
-                      `${count(s.sold.total)} sold in all (${bigMoney(s.sold.revenue, currency)}) · ${s.sold.selling} of ${s.sold.read} have sold`,
-                    ]
-                  : ["Sold counts not read yet"]
-              }
-            />
-            <Stat
-              label="Competition"
-              value={`${count(s.sellers)} sellers`}
-              lines={[`In the top ${count(s.sampled)} listings`, `Biggest seller has ${s.topSellerShare}% · ${s.newInLast30Days} listed in the last 30 days`]}
-            />
-            <Stat
-              label={`Ships from ${result.market.countryName}`}
-              value={`${s.domestic}%`}
-              lines={[`${100 - s.domestic}% ship from overseas`, `${s.freePostage}% offer free postage`]}
-            />
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <section className="card p-5">
-              <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Where prices sit</h2>
-              <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">Listings in each price band, postage included</p>
-              {s.bands.length ? (
-                <div className="mt-4 flex h-40 items-end gap-1.5" role="img" aria-label="Listings per price band">
-                  {s.bands.map((band) => {
-                    const max = Math.max(...s.bands.map((b) => b.count));
-                    return (
-                      <div key={band.from} className="group flex min-w-0 flex-1 flex-col items-center gap-1" title={`${money(band.from, currency)}${band.to === null ? " and up" : `–${money(band.to, currency)}`}: ${band.count} listings`}>
-                        <span className="text-[11px] tabular-nums text-[var(--color-muted)]">{band.count}</span>
-                        <div className="w-full rounded-t-md bg-[var(--color-primary)] opacity-80 group-hover:opacity-100" style={{ height: `${Math.max(4, (band.count / max) * 110)}px` }} />
-                        <span className="w-full truncate text-center text-[10.5px] tabular-nums text-[var(--color-muted)]">
-                          {`${currencySymbol(currency)}${band.from}${band.to === null ? "+" : ""}`}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="py-8 text-center text-[13px] text-[var(--color-muted)]">Too few listings to show a spread.</p>
-              )}
-            </section>
-            <section className="card p-5">
-              <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Biggest sellers</h2>
-              <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">Listings each has in the top {count(s.sampled)}, and what the ones read have sold</p>
-              <table className="mt-3 w-full text-[13px]">
-                <thead className="text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-                  <tr>
-                    <th className="pb-1.5 font-semibold">Seller</th>
-                    <th className="pb-1.5 text-right font-semibold">Listings</th>
-                    <th className="pb-1.5 text-right font-semibold">Sold</th>
-                    <th className="pb-1.5 text-right font-semibold">Sales</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-line)]">
-                  {s.topSellers.map((seller) => (
-                    <tr key={seller.username}>
-                      <td className="max-w-0 py-2 pr-2">
-                        <span className="block truncate text-[var(--color-ink)]">{seller.username}</span>
-                        {seller.feedbackPercentage !== null && (
-                          <span className="block text-[11.5px] text-[var(--color-muted)]">
-                            {seller.feedbackPercentage}% · {count(seller.feedbackScore ?? 0)} feedback
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2 text-right font-semibold tabular-nums text-[var(--color-ink)]">{seller.listings}</td>
-                      <td className="py-2 text-right tabular-nums text-[var(--color-ink)]">{seller.sold === null ? <span className="text-[var(--color-muted)]">—</span> : count(seller.sold)}</td>
-                      <td className="py-2 text-right tabular-nums text-[var(--color-ink)]">{seller.revenue === null ? <span className="text-[var(--color-muted)]">—</span> : bigMoney(seller.revenue, currency)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
-          </div>
+          <ResearchOverview result={result} checking={checking} onRecheck={() => asked.current && readAdvice(asked.current)}>
+            {result.delivery && <DeliveryBar delivery={result.delivery} accountName={connection.label} busy={searching} onChange={compareWith} />}
+          </ResearchOverview>
+          <ResearchFolds result={result} checking={checking} />
 
           <section className="card overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3">
-              <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Listings</h2>
+              <div role="tablist" aria-label="Listings" className="flex items-center gap-1">
+                {[
+                  { key: "active" as const, label: "Active", n: result.items.length, removed: 0 },
+                  { key: "sold" as const, label: "Sold · 90 days", n: result.sales?.available ? result.sales.items.length : null, removed: result.sales?.available ? result.sales.summary.removed : 0 },
+                ].map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={view === t.key}
+                    onClick={() => setView(t.key)}
+                    className={`relative flex h-8 items-center gap-1.5 rounded-lg px-3 text-[13px] font-semibold transition-colors ${
+                      view === t.key ? "bg-[var(--color-paper)] text-[var(--color-ink)]" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                    }`}
+                  >
+                    {t.label}
+                    {t.n !== null && <span className="text-[12px] font-medium tabular-nums text-[var(--color-muted)]">{count(t.n)}</span>}
+                    {t.removed > 0 && <span className="rounded-full bg-rose-50 px-1.5 text-[11px] font-semibold text-rose-700 ring-1 ring-inset ring-rose-200">{t.removed} removed</span>}
+                  </button>
+                ))}
+              </div>
+              {view === "active" && (
               <div className="flex flex-wrap items-center gap-2">
                 {unread.length > 0 && (
                   <button type="button" onClick={() => readMoreSold(ordered)} disabled={readingSold} className="btn btn-secondary btn-sm">
@@ -410,9 +321,14 @@ export default function ResearchPage() {
                   ))}
                 </div>
               </div>
+              )}
             </div>
-            <ResearchListings items={ordered.slice(0, shown)} currency={currency} connectionId={connection.id} maxSold={maxSold} />
-            {shown < ordered.length && (
+            {view === "sold" ? (
+              <SoldListings sales={result.sales ?? { available: false }} currency={currency} />
+            ) : (
+              <ResearchListings items={ordered.slice(0, shown)} currency={currency} connectionId={connection.id} maxSold={maxSold} />
+            )}
+            {view === "active" && shown < ordered.length && (
               <div className="border-t border-[var(--color-line)] px-4 py-3 text-center">
                 <button type="button" onClick={() => setShown((n) => n + PAGE)} className="btn btn-ghost btn-sm">
                   Show {Math.min(PAGE, ordered.length - shown)} more of {count(ordered.length)}
@@ -421,9 +337,11 @@ export default function ResearchPage() {
             )}
           </section>
           <p className="text-[12px] text-[var(--color-muted)]">
-            Sold is eBay&apos;s own count of how many a listing has sold since it went live; a month is counted from that date. Sales is that
-            count at today&apos;s price with postage — eBay doesn&apos;t give past sale prices. Sold listings from the last 90 days (what
-            eBay&apos;s Terapeak shows) need eBay&apos;s approval for Liston first.
+            {view === "active"
+              ? "Sold is eBay's own count of how many a listing has sold since it went live; a month is counted from that date. Sales is that count at today's price with postage."
+              : result.sales?.available
+                ? "From eBay's sales history for the last 90 days. A listing eBay removed can't be opened any more; Liston tells it apart from one that ended the normal way by asking eBay about it."
+                : ""}
           </p>
         </div>
       )}

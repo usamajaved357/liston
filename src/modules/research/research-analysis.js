@@ -165,8 +165,24 @@ function aboutProduct(title, query) {
  *    that has listings taken down (VeRO), per the AI;
  *  - safety: restricted or regulated product, per the AI.
  */
-function riskChecks({ query, items, breakdown, refusals = [], advice = null }) {
+function riskChecks({ query, items, breakdown, refusals = [], advice = null, sales = null }) {
   const checks = [];
+
+  // Listings eBay removed, from its sales history for the search: they sold
+  // in the last 90 days, then eBay deleted them.
+  const removed = sales?.available ? (sales.items || []).filter((i) => i.state === 'removed') : [];
+  checks.push({
+    key: 'removals',
+    label: 'Removed by eBay',
+    level: !sales?.available || sales.failed ? 'unknown' : removed.length >= 3 ? 'bad' : removed.length ? 'warn' : 'ok',
+    detail: !sales?.available
+      ? "Needs eBay's sales history (Marketplace Insights), which eBay hasn't granted Liston yet."
+      : sales.failed
+        ? "eBay's sales history couldn't be read just now."
+        : removed.length
+          ? `eBay removed ${removed.length} of the ${sales.items.length} listings that sold in the last ${sales.days} days${removed.reduce((n, i) => n + (i.sold || 0), 0) ? ` (they had sold ${removed.reduce((n, i) => n + (i.sold || 0), 0)})` : ''}.`
+          : `None of the ${sales.items.length} listings that sold in the last ${sales.days} days has been removed by eBay.`,
+  });
 
   const past = refusals.filter((r) => aboutProduct(r.title, query));
   const ip = past.filter((r) => refusalKind(r.message) === 'ip');

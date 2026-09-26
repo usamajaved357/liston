@@ -328,3 +328,18 @@ test("a Global Shipping Programme order posts to eBay's UK hub with its Ref #, f
   assert.strictEqual(plain.shippingProgramme, null);
   assert.strictEqual(plain.finalDestination, null);
 });
+
+test("what became of another seller's listing: live, ended the normal way, or deleted by eBay (error 17); any other failure is an error, not a verdict", async () => {
+  const reply = (body) => mock.method(global, 'fetch', async () => fakeResponse(`<?xml version="1.0"?><GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">${body}</GetItemResponse>`));
+  reply('<Ack>Success</Ack><Item><SellingStatus><ListingStatus>Active</ListingStatus></SellingStatus></Item>');
+  assert.strictEqual((await ebayTrading.getListingState('t', '1', { siteId: 3 })).state, 'live');
+  mock.restoreAll();
+  reply('<Ack>Success</Ack><Item><SellingStatus><ListingStatus>Completed</ListingStatus></SellingStatus><ListingDetails><EndTime>2026-09-20T10:00:00.000Z</EndTime></ListingDetails></Item>');
+  assert.deepStrictEqual(await ebayTrading.getListingState('t', '1', { siteId: 3 }), { state: 'ended', endTime: '2026-09-20T10:00:00.000Z' });
+  mock.restoreAll();
+  reply('<Ack>Failure</Ack><Errors><ShortMessage>Item cannot be accessed.</ShortMessage><LongMessage>This item cannot be accessed because the listing has been deleted, is a Half.com listing, or you are not the seller.</LongMessage><ErrorCode>17</ErrorCode></Errors>');
+  assert.strictEqual((await ebayTrading.getListingState('t', '1', { siteId: 3 })).state, 'removed');
+  mock.restoreAll();
+  reply('<Ack>Failure</Ack><Errors><ShortMessage>Invalid token.</ShortMessage><ErrorCode>931</ErrorCode></Errors>');
+  await assert.rejects(ebayTrading.getListingState('t', '1', { siteId: 3 }));
+});

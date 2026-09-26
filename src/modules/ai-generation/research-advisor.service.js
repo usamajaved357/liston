@@ -1,5 +1,7 @@
+const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../../config');
+const appState = require('../../db/app-state.repository');
 const logger = require('../../utils/logger');
 const aiUsage = require('./ai-usage');
 
@@ -7,7 +9,9 @@ const aiUsage = require('./ai-usage');
 // a brand that has eBay take listings down (VeRO), is the product restricted
 // or regulated on the site, and what title would a buyer's search find —
 // read from the listings that actually sell. One small model call per
-// search, kept a day; research works without it (no key, or it fails).
+// product (site, search and condition), kept a day in the database so a
+// restart or another delivery filter never asks again and gets a different
+// answer; research works without it (no key, or it fails).
 
 const TTL_MS = 24 * 60 * 60 * 1000;
 const copies = new Map(); // key -> { at, value }
@@ -90,10 +94,18 @@ function withoutBrands(title, brands) {
 
 const levelOf = (v) => (['none', 'low', 'high'].includes(v) ? v : 'low');
 
-/** The day's copy of a search's advice, or null. */
-function keptAdvice(key) {
+const stateKey = (key) => `research-advice:${crypto.createHash('sha1').update(key).digest('hex')}`;
+
+/** The day's copy of a product's advice, or null. */
+async function keptAdvice(key) {
   const hit = copies.get(key);
-  return hit && Date.now() - hit.at < TTL_MS ? hit.value : null;
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
+  const kept = await appState.get(stateKey(key)).catch(() => null);
+  if (kept?.at && Date.now() - kept.at < TTL_MS && kept.value) {
+    copies.set(key, kept);
+    return kept.value;
+  }
+  return null;
 }
 
 /**
@@ -102,7 +114,7 @@ function keptAdvice(key) {
  * or didn't answer. `key` identifies the search for the day's copy.
  */
 async function advise(key, input) {
-  const hit = keptAdvice(key);
+  const hit = await keptAdvice(key);
   if (hit) return hit;
   if (!config.anthropicApiKey) return null;
   try {
@@ -110,6 +122,8 @@ async function advise(key, input) {
     const response = await anthropic.messages.create({
       model: config.aiModel,
       max_tokens: 1024,
+      // The same product gets the same judgement.
+      temperature: 0,
       tools: [TOOL],
       tool_choice: { type: 'tool', name: TOOL.name },
       messages: [{ role: 'user', content: prompt(input) }],
@@ -125,7 +139,9 @@ async function advise(key, input) {
       safetyRisk: { level: levelOf(out.safetyRisk?.level), reason: String(out.safetyRisk?.reason || '') },
       summary: String(out.summary || ''),
     };
-    copies.set(key, { at: Date.now(), value });
+    const copy = { at: Date.now(), value };
+    copies.set(key, copy);
+    await appState.set(stateKey(key), copy).catch(() => {});
     return value;
   } catch (err) {
     logger.warn('Research advice not written', { error: err.message });

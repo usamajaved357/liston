@@ -182,6 +182,25 @@ async function getListingItem(accessToken, itemId, { siteId } = {}) {
   return { item: mapped, active: (item.SellingStatus?.ListingStatus || 'Active') === 'Active' };
 }
 
+// What became of another seller's listing, for product research: 'live',
+// 'ended' (it ran its course, sold out or the seller ended it; eBay keeps
+// it readable for about 90 days), or 'removed' — eBay deleted it, which is
+// what happens when eBay takes a listing down for a policy violation.
+// GetItem answers a deleted listing with error 17 ("the listing has been
+// deleted"); anything else it can't answer is an error, not a verdict.
+const DELETED_LISTING = '17';
+async function getListingState(accessToken, itemId, { siteId } = {}) {
+  const body = `<ItemID>${itemId}</ItemID><OutputSelector>Item.SellingStatus.ListingStatus</OutputSelector><OutputSelector>Item.ListingDetails.EndTime</OutputSelector>`;
+  try {
+    const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
+    const status = res.Item?.SellingStatus?.ListingStatus || 'Active';
+    return { state: status === 'Active' ? 'live' : 'ended', endTime: res.Item?.ListingDetails?.EndTime || null };
+  } catch (err) {
+    if (err instanceof EbayTradingError && toArray(err.details).some((e) => String(e.ErrorCode) === DELETED_LISTING)) return { state: 'removed', endTime: null };
+    throw err;
+  }
+}
+
 async function getUnsoldListings(accessToken, { pageNumber = 1, entriesPerPage = 25, siteId } = {}) {
   const body = `<UnsoldList><Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination></UnsoldList><DetailLevel>ReturnSummary</DetailLevel>`;
   const res = await tradingRequest(accessToken, 'GetMyeBaySelling', body, siteId);
@@ -743,6 +762,7 @@ module.exports = {
   getListingItem,
   getItemSummary,
   getItem,
+  getListingState,
   getStoreProfile,
   reviseDescription,
   endListing,

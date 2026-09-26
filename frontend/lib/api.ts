@@ -158,7 +158,8 @@ export interface ResearchDelivery {
 export interface ResearchSummary {
   total: number;
   sampled: number;
-  price: { min: number; max: number; median: number; average: number } | null;
+  // min/max/average leave out listings priced far from the rest (outliers: how many).
+  price: { min: number; max: number; median: number; average: number; outliers?: number } | null;
   // to: null is the top band, everything from `from` up.
   bands: { from: number; to: number | null; count: number }[];
   sellers: number;
@@ -173,7 +174,7 @@ export interface ResearchSummary {
 
 export type ResearchRiskLevel = "ok" | "warn" | "bad" | "unknown";
 export interface ResearchRisk {
-  key: "history" | "words" | "brand" | "safety";
+  key: "removals" | "history" | "words" | "brand" | "safety";
   label: string;
   level: ResearchRiskLevel;
   detail: string;
@@ -218,7 +219,10 @@ export interface ResearchAnalysis {
   breakdown: { brands: { name: string; count: number; unbranded: boolean }[]; categories: { id: string; name: string; count: number }[]; categoryId: string | null } | null;
   risks: ResearchRisk[];
   verdict: ResearchVerdict;
+  // Whether the brand and safety check is in the verdict yet.
+  checked: boolean;
 }
+
 
 export interface ResearchAdvice {
   title: string;
@@ -236,6 +240,36 @@ export interface ResearchBudget {
   resetAt?: string;
 }
 
+// One listing from eBay's sales history for a search (last 90 days).
+// state: 'live', 'ended' the normal way, 'removed' (eBay deleted it: taken
+// down, usually for a policy violation), or null when not known.
+export interface ResearchSale {
+  itemId: string | null;
+  legacyItemId: string | null;
+  title: string | null;
+  image: string | null;
+  url: string | null;
+  price: number | null;
+  shipping: number | null;
+  currency: string | null;
+  sold: number | null;
+  lastSoldAt: string | null;
+  seller: string | null;
+  country: string | null;
+  state: "live" | "ended" | "removed" | null;
+}
+
+export type ResearchSales =
+  | { available: false }
+  | {
+      available: true;
+      failed?: boolean;
+      days: number;
+      total: number;
+      items: ResearchSale[];
+      summary: { listings: number; sold: number; sales: number; averagePrice: number | null; price: { min: number; max: number } | null; sellers: number; removed: number; ended: number };
+    };
+
 export interface ResearchResult {
   query: string;
   market: Marketplace;
@@ -245,6 +279,9 @@ export interface ResearchResult {
   // The AI's reading, when one was written for this search today.
   advice: ResearchAdvice | null;
   items: ResearchItem[];
+  // eBay's sales history for the search (Marketplace Insights), with the
+  // listings eBay removed; { available: false } until eBay grants the API.
+  sales: ResearchSales;
   delivery: ResearchDelivery;
   soldLimited: boolean;
   budget: ResearchBudget;

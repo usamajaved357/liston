@@ -188,11 +188,13 @@ async function exchangeCodeForToken(code) {
 // rather than to any seller. It carries only the public read scope, which is
 // all the Browse/Taxonomy APIs need — reading public listings and category
 // schemas involves no seller's account, so there's nothing to consent to.
-async function requestApplicationToken() {
+// `scope`: the public-data scope unless an API needs its own (Marketplace
+// Insights). eBay refuses a scope the app wasn't granted with invalid_scope.
+async function requestApplicationToken(scope = APP_SCOPE) {
   const data = await requestToken(
     new URLSearchParams({
       grant_type: 'client_credentials',
-      scope: APP_SCOPE,
+      scope,
     })
   );
   return {
