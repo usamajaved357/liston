@@ -70,8 +70,26 @@ function priceBands(prices, bars = 8) {
  * @param country the market's country ("GB"): listings posted from it are
  *                domestic, the rest ship from overseas
  */
+// The prices that describe the product: a £117 bundle or a £0.99 spare
+// part among fifty £9–£13 listings says nothing about what buyers pay, so
+// prices beyond 1.5 × the middle half's spread (Tukey's fences) are left
+// out of the range, the average and the bands. Small samples keep all.
+function typicalPrices(sorted) {
+  if (sorted.length < 5) return sorted;
+  const at = (p) => {
+    const i = (sorted.length - 1) * p;
+    const lo = Math.floor(i);
+    return sorted[lo] + (sorted[Math.ceil(i)] - sorted[lo]) * (i - lo);
+  };
+  const q1 = at(0.25);
+  const q3 = at(0.75);
+  const spread = q3 - q1;
+  return sorted.filter((p) => p >= q1 - 1.5 * spread && p <= q3 + 1.5 * spread);
+}
+
 function summarise(items, { country, total, now = Date.now() } = {}) {
   const prices = items.map(landedPrice).filter((p) => p > 0).sort((a, b) => a - b);
+  const typical = typicalPrices(prices);
   const sellers = new Map();
   for (const item of items) {
     const name = item.seller?.username;
@@ -92,9 +110,16 @@ function summarise(items, { country, total, now = Date.now() } = {}) {
     total: total ?? items.length,
     sampled: items.length,
     price: prices.length
-      ? { min: prices[0], max: prices[prices.length - 1], median: median(prices), average: round2(prices.reduce((a, b) => a + b, 0) / prices.length) }
+      ? {
+          min: typical[0],
+          max: typical[typical.length - 1],
+          median: median(prices),
+          average: round2(typical.reduce((a, b) => a + b, 0) / typical.length),
+          // Listings priced far outside the rest, left out of the range.
+          outliers: prices.length - typical.length,
+        }
       : null,
-    bands: priceBands(prices),
+    bands: priceBands(typical),
     sellers: sellers.size,
     topSellers,
     // The biggest seller's share of the sample: one seller owning half the
@@ -116,4 +141,27 @@ function summarise(items, { country, total, now = Date.now() } = {}) {
   };
 }
 
-module.exports = { summarise, soldPerMonth, revenueOf, daysLive, landedPrice, median, priceBands, round2 };
+/**
+ * eBay's sales history for a search, summed up the way eBay's research
+ * does: { listings, sold, sales, averagePrice (sales ÷ sold), price
+ * { min, max } (outliers left out), sellers, removed (listings eBay took
+ * down), ended }. A listing's sales are its last sold price × how many sold.
+ */
+function summariseSales(items) {
+  const landed = (i) => (i.price || 0) + (i.shipping || 0);
+  const sold = items.reduce((sum, i) => sum + (i.sold || 0), 0);
+  const sales = round2(items.reduce((sum, i) => sum + landed(i) * (i.sold || 0), 0));
+  const prices = typicalPrices(items.map(landed).filter((p) => p > 0).sort((a, b) => a - b));
+  return {
+    listings: items.length,
+    sold,
+    sales,
+    averagePrice: sold ? round2(sales / sold) : null,
+    price: prices.length ? { min: prices[0], max: prices[prices.length - 1] } : null,
+    sellers: new Set(items.map((i) => i.seller).filter(Boolean)).size,
+    removed: items.filter((i) => i.state === 'removed').length,
+    ended: items.filter((i) => i.state === 'ended').length,
+  };
+}
+
+module.exports = { summarise, summariseSales, typicalPrices, soldPerMonth, revenueOf, daysLive, landedPrice, median, priceBands, round2 };

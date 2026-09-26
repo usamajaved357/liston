@@ -9,12 +9,14 @@ export function SegmentedControl<T extends string>({
   onChange,
   size = "md",
   label,
+  disabled = false,
 }: {
   options: { key: T; label: string; title?: string }[];
   value: T;
   onChange: (key: T) => void;
   size?: "sm" | "md";
   label?: string;
+  disabled?: boolean;
 }) {
   const height = size === "sm" ? "h-6 px-2.5 text-[11.5px]" : "h-7 px-3 text-[12px]";
   return (
@@ -28,8 +30,9 @@ export function SegmentedControl<T extends string>({
             role="radio"
             aria-checked={on}
             title={o.title}
-            onClick={() => onChange(o.key)}
-            className={`${height} rounded-full font-medium transition-colors ${
+            disabled={disabled}
+            onClick={() => !on && onChange(o.key)}
+            className={`${height} rounded-full font-medium transition-colors disabled:opacity-60 ${
               on ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
             }`}
           >

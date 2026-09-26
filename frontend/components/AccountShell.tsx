@@ -77,7 +77,7 @@ export function AccountShell({
   return (
     <AccountTimeZoneProvider value={timeZone}>
     <div className="h-screen flex overflow-hidden">
-      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-6">
+      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto overscroll-contain bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-6">
         <div className="flex items-center gap-2.5 px-2">
           <Logo size={30} />
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
@@ -247,7 +247,7 @@ export function AccountShell({
           {subheader && <div className="mt-5">{subheader}</div>}
           </div>
         )}
-        <div data-scroller className={`flex-1 min-h-0 overflow-y-auto px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>
+        <div data-scroller className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>
           {children}
         </div>
         {footer && <div className="flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)]">{footer}</div>}

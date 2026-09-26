@@ -259,6 +259,72 @@ async function getBusinessPolicies(credentials, marketplaceId = 'EBAY_GB') {
   };
 }
 
+// The account's postage policy (the one its drafts use, else its first) and
+// eBay's postage services for the site with their working days — what
+// product research needs to compare delivery times. Kept 6 hours per
+// account; the service list a week per site (one Trading call).
+const postageCache = new Map(); // `${connectionId}:${policyId}` -> { at, value }
+const serviceListCache = new Map(); // siteId -> { at, value }
+const POSTAGE_TTL_MS = 6 * 60 * 60 * 1000;
+const SERVICE_LIST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function shippingServicesFor(accessToken, siteId) {
+  const hit = serviceListCache.get(siteId);
+  if (hit && Date.now() - hit.at < SERVICE_LIST_TTL_MS) return hit.value;
+  const appState = require('../../db/app-state.repository');
+  const key = `ebay-shipping-services:${siteId}`;
+  const kept = await appState.get(key).catch(() => null);
+  if (kept?.at && Date.now() - kept.at < SERVICE_LIST_TTL_MS) {
+    serviceListCache.set(siteId, { at: kept.at, value: kept.services });
+    return kept.services;
+  }
+  const services = await ebayTrading.getShippingServiceDetails(accessToken, siteId);
+  const at = Date.now();
+  serviceListCache.set(siteId, { at, value: services });
+  await appState.set(key, { at, services }).catch(() => {});
+  return services;
+}
+
+/**
+ * What became of other sellers' listings (product research): { [itemId]:
+ * 'live' | 'ended' | 'removed' }, one GetItem each, a few at a time. A
+ * listing that couldn't be read is left out.
+ */
+async function listingStates(credentials, itemIds, marketplaceId) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const siteId = marketplaces.siteIdFor(marketplaceId);
+  const states = {};
+  let next = 0;
+  async function worker() {
+    while (next < itemIds.length) {
+      const itemId = itemIds[next++];
+      try {
+        states[itemId] = (await ebayTrading.getListingState(accessToken, itemId, { siteId })).state;
+      } catch (err) {
+        logger.warn('Research: listing state not read', { itemId, error: err.message });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: 3 }, worker));
+  return { states, credentialsChanged, credentials: refreshedCredentials };
+}
+
+async function postagePolicyDetails(credentials, { connectionId, marketplaceId, fulfillmentPolicyId }) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const key = `${connectionId}:${fulfillmentPolicyId || ''}`;
+  const hit = postageCache.get(key);
+  if (hit && Date.now() - hit.at < POSTAGE_TTL_MS) return { ...hit.value, credentialsChanged, credentials: refreshedCredentials };
+  const [policies, services] = await Promise.all([
+    ebayClient.getFulfillmentPolicies(accessToken, marketplaceId),
+    shippingServicesFor(accessToken, marketplaces.siteIdFor(marketplaceId)).catch(() => []),
+  ]);
+  const list = policies?.fulfillmentPolicies || [];
+  const policy = list.find((p) => String(p.fulfillmentPolicyId) === String(fulfillmentPolicyId)) || list[0] || null;
+  const value = { policy, services };
+  postageCache.set(key, { at: Date.now(), value });
+  return { ...value, credentialsChanged, credentials: refreshedCredentials };
+}
+
 async function getMerchantLocations(credentials) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
   const result = await ebayClient.getInventoryLocations(accessToken);
@@ -1063,7 +1129,7 @@ async function persist(write) {
 }
 
 // Bump when mapOrder gains a field, so every mirrored order is re-read once.
-const ORDER_SHAPE = 6; // 6: each line's eBay site; 5: delivered time; 4: buyer email and sales record number; 3: delivery window and service
+const ORDER_SHAPE = 7; // 7: Global Shipping Programme hub, Ref # and seller-side total; 6: each line's eBay site; 5: delivered time; 4: buyer email and sales record number; 3: delivery window and service
 
 // A delivery is a carrier scan, which doesn't always move an order's
 // modified time, so the incremental read can miss it. Every few hours the
@@ -1397,6 +1463,21 @@ async function bestSellingListings(credentials, connectionId, { exclude, count =
     }));
 
   return { items: rows, credentialsChanged, credentials: refreshedCredentials };
+}
+
+// For the business Overview's sales by day and best sellers: every order of
+// the last 90 days, and the account's live listings' photos and links by
+// item id. Both from the copies Liston keeps, so nothing new is asked of
+// eBay while they're fresh.
+async function overviewSales(credentials, connectionId, { push = false } = {}) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
+  const id = String(connectionId);
+  const [orders, items] = await Promise.all([
+    getOrdersLast90Cached(id, accessToken, siteId, push).catch(() => []),
+    cachedListings(id, 'active', { accessToken, siteId, push }).catch(() => []),
+  ]);
+  const listings = new Map((items || []).map((item) => [String(item.itemId), { imageUrl: item.imageUrl || null, url: item.viewItemUrl || null }]));
+  return { orders: orders || [], listings, credentialsChanged, credentials: refreshedCredentials };
 }
 
 const CURRENCY_SYMBOLS = { GBP: '£', USD: '$', EUR: '€', AUD: 'A$', CAD: 'C$' };
@@ -1879,8 +1960,11 @@ function legacyOrderDetail(o) {
     cancelRequests: [],
     buyer: { username: o.buyerUserId || null },
     buyerCheckoutNotes: null,
-    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: o.buyerEmail || '' } : null,
-    shippingService: (o.lineItems || []).map((li) => li.shippingService).find(Boolean) || null,
+    shipTo: o.shippingAddress ? { ...o.shippingAddress, email: o.shippingProgramme ? '' : o.buyerEmail || '' } : null,
+    shipToReferenceId: o.shippingAddress?.referenceId || null,
+    shippingProgramme: o.shippingProgramme || null,
+    finalDestination: o.finalDestination || null,
+    shippingService: o.gspService || (o.lineItems || []).map((li) => li.shippingService).find(Boolean) || null,
     shippingCarrier: null,
     estimatedDelivery: {
       min: (o.lineItems || []).map((li) => li.estimatedDeliveryMin).filter(Boolean).sort()[0] || null,
@@ -2438,6 +2522,8 @@ function categoryAspectSchema(marketplaceId, categoryId) {
 }
 
 module.exports = {
+  postagePolicyDetails,
+  listingStates,
   searchSimilarListings,
   categoryAspectSchema,
   pushEnabled,
@@ -2475,6 +2561,7 @@ module.exports = {
   getBestReviews,
   listUnsoldListings,
   bestSellingListings,
+  overviewSales,
   listOrders,
   getLiveItem,
   detectMarketplace,

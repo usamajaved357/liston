@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, ApiError, ConnectionPolicies, DescriptionTemplate, EbaySettings, LocationAddress, Marketplace, Policy, PricingSettings, StoreReview, TEMPLATE_FONTS } from "@/lib/api";
+import { api, ApiError, ConnectionPolicies, DescriptionLayout, DescriptionTemplate, EbaySettings, LocationAddress, Marketplace, Policy, PricingSettings, StoreReview, TEMPLATE_FONTS } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { currencySymbol } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -25,7 +25,54 @@ const DEFAULT_PRICING: PricingSettings = {
   followCompetitorPrice: true,
 };
 
+// The description layouts, as the Theme tab offers them. Each card draws a
+// small sketch of the layout in the account's own colours.
+const LAYOUT_OPTIONS: { id: DescriptionLayout; name: string; blurb: string }[] = [
+  { id: "classic", name: "Classic", blurb: "Store header, one description block, trust badges, delivery and returns." },
+  { id: "showcase", name: "Showcase", blurb: "Product first: photo gallery, features grid, specifications, how to use." },
+  { id: "minimal", name: "Minimal", blurb: "Clean white, thin lines, small accent headings." },
+  { id: "bold", name: "Bold", blurb: "Dark hero banner, icon feature cards, strong contrast." },
+  { id: "boutique", name: "Boutique", blurb: "Warm cream, serif headings, centred. Home, fashion, gifts." },
+];
+
+function LayoutSketch({ id, accent, dark }: { id: DescriptionLayout; accent: string; dark: string }) {
+  const bar = (w: string, c: string, h = 4) => <div style={{ width: w, height: h, background: c, borderRadius: 2 }} />;
+  const page = id === "boutique" ? "#faf7f2" : id === "bold" ? "#f3f3f5" : "#ffffff";
+  return (
+    <div className="flex h-[92px] flex-col gap-1.5 overflow-hidden rounded-lg border border-[var(--color-line)] p-2" style={{ background: page }}>
+      {id === "classic" && (
+        <>
+          <div className="rounded" style={{ background: dark, height: 16 }} />
+          <div style={{ background: accent, height: 4, borderRadius: 2 }} />
+          {bar("80%", "#d6d6dd")}
+          {bar("65%", "#e3e3e8")}
+          <div className="mt-auto flex gap-1">{[0, 1, 2, 3].map((i) => <div key={i} className="h-3 flex-1 rounded" style={{ background: dark }} />)}</div>
+        </>
+      )}
+      {id !== "classic" && (
+        <>
+          <div className={`flex flex-col gap-1 ${id === "minimal" ? "items-start" : "items-center"} rounded p-1`} style={id === "bold" ? { background: dark } : undefined}>
+            {bar("55%", id === "bold" ? "#ffffff" : dark, 5)}
+            <div className="flex gap-1">{[0, 1, 2].map((i) => <div key={i} style={{ width: 14, height: 4, borderRadius: 2, background: id === "minimal" ? "#dcdce2" : accent }} />)}</div>
+          </div>
+          <div className="flex flex-1 gap-1">
+            <div className="flex-1 rounded" style={{ background: id === "minimal" ? "#eeeef1" : `${accent}33` }} />
+            {id !== "minimal" && id !== "boutique" && <div className="w-[22%] rounded" style={{ background: `${accent}55` }} />}
+          </div>
+          <div className="flex gap-1">
+            {(id === "bold" || id === "boutique" ? [0, 1, 2] : [0, 1]).map((i) => (
+              <div key={i} className="h-3 flex-1 rounded" style={{ background: id === "bold" ? accent : id === "boutique" ? "#eee5d6" : `${accent}22`, borderTop: id === "showcase" ? `3px solid ${accent}` : undefined }} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 const DEFAULT_TEMPLATE: DescriptionTemplate = {
+  layout: "classic",
+  bannerText: "Top Quality • Fast Dispatch",
   storeName: "",
   tagline: "Official UK Store",
   logoUrl: "",
@@ -798,6 +845,43 @@ export default function AccountSettingsPage() {
           {tab === "template" && (
             <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">
             <div className="space-y-6">
+              <div className="card overflow-hidden">
+                <SectionHead
+                  title="Layout"
+                  blurb="How every description this account publishes is laid out. The preview updates as you pick; nothing changes on eBay until a listing is published or updated."
+                />
+                <div className="grid gap-3 px-6 py-5 sm:grid-cols-2 lg:grid-cols-3">
+                  {LAYOUT_OPTIONS.map((l) => {
+                    const active = (template.layout || "classic") === l.id;
+                    return (
+                      <button
+                        key={l.id}
+                        type="button"
+                        onClick={() => setT({ layout: l.id })}
+                        aria-pressed={active}
+                        className={`rounded-xl border p-3 text-left transition-colors ${active ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/30" : "border-[var(--color-line)] hover:border-[var(--color-line-strong)]"}`}
+                      >
+                        <LayoutSketch id={l.id} accent={template.accentColor} dark={template.darkColor} />
+                        <p className="mt-2 flex items-center justify-between text-[13.5px] font-semibold text-[var(--color-ink)]">
+                          {l.name}
+                          {active && <span className="chip chip-primary !text-[11px]">In use</span>}
+                        </p>
+                        <p className="mt-0.5 text-[12px] leading-snug text-[var(--color-muted)]">{l.blurb}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+                {template.layout && template.layout !== "classic" && (
+                  <Row title="Star line" hint="The line over the product name." last>
+                    <input className="input input-sm" maxLength={60} placeholder="Top Quality • Fast Dispatch" value={template.bannerText} onChange={(e) => setT({ bannerText: e.target.value })} />
+                  </Row>
+                )}
+                {template.customHtml && (
+                  <p className="border-t border-[var(--color-line)] px-6 py-3 text-[12.5px] text-amber-700">
+                    This account uses its own template code, which replaces the layout. Press &ldquo;Built-in&rdquo; above the preview to use a layout here instead.
+                  </p>
+                )}
+              </div>
               <div className="card overflow-hidden">
                 <SectionHead
                   title="Brand"

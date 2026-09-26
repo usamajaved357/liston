@@ -13,6 +13,13 @@ const config = require('../../src/config');
 const analysis = require('../../src/modules/research/research-analysis');
 const advisor = require('../../src/modules/ai-generation/research-advisor.service');
 const listingRepository = require('../../src/modules/listings/listing.repository');
+const salesHistory = require('../../src/modules/ebay/sales-history');
+
+// eBay's sales history is a limited-release API; here it isn't granted
+// unless a test says so.
+test.beforeEach(() => {
+  mock.method(salesHistory, 'soldListings', async () => ({ available: false }));
+});
 
 test.afterEach(() => {
   mock.restoreAll();
@@ -44,7 +51,7 @@ test('a search is summed up: prices with postage, sellers, where it ships from, 
   const s = researchStats.summarise(items, { country: 'GB', total: 812, now: NOW });
   assert.strictEqual(s.total, 812);
   assert.strictEqual(s.sampled, 4);
-  assert.deepStrictEqual(s.price, { min: 5, max: 20, median: 9, average: 10.75 }); // 5, 7, 11 (9 + 2 postage), 20
+  assert.deepStrictEqual(s.price, { min: 5, max: 20, median: 9, average: 10.75, outliers: 0 }); // 5, 7, 11 (9 + 2 postage), 20; too few to trim
   assert.strictEqual(s.sellers, 2);
   assert.deepStrictEqual(s.topSellers[0], { username: 'shop-a', listings: 3, feedbackScore: 100, feedbackPercentage: 99.5, sold: 90, revenue: 450 });
   assert.strictEqual(s.topSellers[1].sold, 0);
@@ -356,4 +363,153 @@ test("research's eBay calls show under research in the Browse usage the admin se
   assert.deepStrictEqual(snap.byKind, { research: 2 }, 'one search, one sold count');
   assert.deepStrictEqual(snap.byCall, { search: 1, getItem: 1 });
   browseUsage._reset();
+});
+
+// ---- delivery next to the account's ------------------------------------------
+
+const delivery = require('../../src/modules/research/delivery');
+const ebayService = require('../../src/modules/ebay/ebay.service');
+
+test('working days skip weekends; a listing window comes from eBay\'s delivery dates', () => {
+  // Fri 25 Sep 2026 → Wed 30 Sep: Mon, Tue, Wed = 3 working days.
+  assert.strictEqual(delivery.workingDaysBetween('2026-09-25T12:00:00Z', '2026-09-30T12:00:00Z'), 3);
+  assert.strictEqual(delivery.workingDaysBetween('2026-09-25T12:00:00Z', '2026-09-24T12:00:00Z'), 0);
+  assert.deepStrictEqual(delivery.listingWindow({ deliveryDates: { min: '2026-09-29T00:00:00Z', max: '2026-10-02T00:00:00Z' } }, NOW), { min: 2, max: 5 });
+  assert.strictEqual(delivery.listingWindow({ deliveryDates: null }, NOW), null);
+});
+
+test("the account's window is its handling time plus its postage service's working days", () => {
+  const policy = {
+    name: 'Standard 5-7',
+    handlingTime: { value: 1, unit: 'DAY' },
+    shippingOptions: [{ optionType: 'DOMESTIC', shippingServices: [{ sortOrder: 2, shippingServiceCode: 'UK_RoyalMailFirstClassStandard' }, { sortOrder: 1, shippingServiceCode: 'UK_OtherCourier5To7Days' }] }],
+  };
+  const fromList = delivery.accountWindow(policy, [{ service: 'UK_OtherCourier5To7Days', description: 'Other courier (5 to 7 days)', min: 5, max: 7 }]);
+  assert.deepStrictEqual([fromList.min, fromList.max, fromList.service, fromList.serviceName], [6, 8, 'UK_OtherCourier5To7Days', 'Other courier (5 to 7 days)']);
+  const fromCode = delivery.accountWindow(policy, []);
+  assert.deepStrictEqual([fromCode.min, fromCode.max], [6, 8], 'read from the service code when eBay\'s list lacks it');
+  assert.deepStrictEqual(delivery.transitFromCode('UK_Parcelforce48'), { min: 2, max: 2 });
+  assert.strictEqual(delivery.accountWindow(null), null);
+
+  const account = { min: 6, max: 8 };
+  assert.strictEqual(delivery.compare({ min: 2, max: 3 }, account), 'faster');
+  assert.strictEqual(delivery.compare({ min: 5, max: 7 }, account), 'similar');
+  assert.strictEqual(delivery.compare({ min: 10, max: 15 }, account), 'slower');
+  assert.strictEqual(delivery.compare(null, account), 'unknown');
+});
+
+test("research compares with listings that deliver like the account by default, and says how many deliver faster or slower", async () => {
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' }, settings: { ebay: { fulfillmentPolicyId: 'p1' } } }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => []);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, owner, action) => action({ accessToken: 't' }));
+  mock.method(ebayService, 'postagePolicyDetails', async (credentials, { fulfillmentPolicyId }) => {
+    assert.strictEqual(fulfillmentPolicyId, 'p1');
+    return { policy: { handlingTime: { value: 1 }, shippingOptions: [{ optionType: 'DOMESTIC', shippingServices: [{ shippingServiceCode: 'UK_OtherCourier5To7Days' }] }] }, services: [] };
+  });
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString();
+  const searchCall = mock.method(ebayBrowse, 'searchItemSummaries', async (params) => {
+    assert.strictEqual(params.deliveryCountry, 'GB', 'eBay estimates delivery for a UK buyer');
+    return {
+      total: 3,
+      itemSummaries: [
+        { itemId: 'v1|1|0', title: 'Fast', price: { value: '9.99', currency: 'GBP' }, shippingOptions: [{ shippingCost: { value: '0' }, minEstimatedDeliveryDate: day(1), maxEstimatedDeliveryDate: day(3) }] },
+        { itemId: 'v1|2|0', title: 'Like us', price: { value: '6.99', currency: 'GBP' }, shippingOptions: [{ shippingCost: { value: '0' }, minEstimatedDeliveryDate: day(8), maxEstimatedDeliveryDate: day(11) }] },
+        { itemId: 'v1|3|0', title: 'No dates', price: { value: '5.99', currency: 'GBP' } },
+      ],
+    };
+  });
+  mock.method(ebayBrowse, 'getItem', async () => ({ estimatedAvailabilities: [{ estimatedSoldQuantity: 1 }] }));
+
+  const like = await researchService.search('owner', 'conn', { q: 'lamp' });
+  assert.deepStrictEqual(like.items.map((i) => i.title), ['Like us']);
+  assert.strictEqual(like.delivery.filter, 'similar');
+  assert.deepStrictEqual(like.delivery.counts, { similar: 1, faster: 1, slower: 0, unknown: 1, all: 3 });
+  assert.deepStrictEqual([like.delivery.account.min, like.delivery.account.max], [6, 8]);
+  assert.strictEqual(like.summary.price.median, 6.99, 'the figures are worked out from those listings only');
+
+  const all = await researchService.search('owner', 'conn', { q: 'lamp', delivery: 'all' });
+  assert.strictEqual(all.items.length, 3);
+  const faster = await researchService.search('owner', 'conn', { q: 'lamp', delivery: 'faster' });
+  assert.deepStrictEqual(faster.items.map((i) => i.title), ['Fast']);
+  assert.strictEqual(searchCall.mock.calls.length, 1, 'switching group re-reads nothing from eBay');
+});
+
+test("eBay's sales history shows what sold in 90 days; a sold listing that isn't live is read once, and eBay deleting it marks it removed", async () => {
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' } }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => []);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, owner, action) => action({ accessToken: 't' }));
+  const live = [browseResearch.mapSummary({ itemId: 'v1|111|0', legacyItemId: '111', title: 'Smart Glasses', price: { value: '9.99', currency: 'GBP' } })];
+  mock.method(browseResearch, 'search', async () => ({ total: 1, items: live, calls: 1 }));
+  mock.method(browseResearch, 'soldCount', async () => ({ sold: 5, calls: 1 }));
+  const sale = (id, sold, price) => ({ itemId: `v1|${id}|0`, legacyItemId: id, title: `Glasses ${id}`, image: null, url: null, price, shipping: 0, currency: 'GBP', sold, lastSoldAt: '2026-09-24T10:00:00Z', seller: `shop-${id}`, country: 'GB' });
+  mock.method(salesHistory, 'soldListings', async () => ({ available: true, total: 4, items: [sale('111', 54, 9.74), sale('222', 22, 13.09), sale('333', 20, 8.67), sale('444', 3, 10)] }));
+  const reads = mock.method(ebayService, 'listingStates', async (credentials, ids) => ({ states: { 222: 'removed', 333: 'ended' } }));
+
+  const result = await researchService.search('owner', 'conn', { q: 'smart glasses' });
+  assert.deepStrictEqual(reads.mock.calls[0].arguments[1], ['222', '333', '444'], 'the live one is not read; best sellers first');
+  const state = Object.fromEntries(result.sales.items.map((i) => [i.legacyItemId, i.state]));
+  assert.deepStrictEqual(state, { 111: 'live', 222: 'removed', 333: 'ended', 444: null }, 'a listing eBay would not answer for stays unknown');
+  assert.strictEqual(result.sales.summary.sold, 99);
+  assert.strictEqual(result.sales.summary.removed, 1);
+  assert.strictEqual(result.sales.summary.averagePrice, Math.round(((9.74 * 54 + 13.09 * 22 + 8.67 * 20 + 10 * 3) / 99) * 100) / 100);
+  const risk = result.analysis.risks.find((r) => r.key === 'removals');
+  assert.strictEqual(risk.level, 'warn');
+  assert.match(risk.detail, /eBay removed 1 of the 4 listings that sold in the last 90 days \(they had sold 22\)/);
+
+  // The answers are kept: the same search reads only the one eBay didn't answer.
+  await researchService.search('owner', 'conn', { q: 'smart glasses' });
+  assert.deepStrictEqual(reads.mock.calls[1].arguments[1], ['444']);
+});
+
+test("until eBay grants the sales history, research says so and doesn't guess", async () => {
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' } }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => []);
+  mock.method(browseResearch, 'search', async () => ({ total: 1, items: [browseResearch.mapSummary({ itemId: 'v1|1|0', legacyItemId: '1', title: 'Glasses', price: { value: '9.99', currency: 'GBP' } })], calls: 1 }));
+  mock.method(browseResearch, 'soldCount', async () => ({ sold: 1, calls: 1 }));
+  const reads = mock.method(ebayService, 'listingStates', async () => ({ states: {} }));
+  const result = await researchService.search('owner', 'conn', { q: 'glasses' });
+  assert.deepStrictEqual(result.sales, { available: false });
+  assert.strictEqual(reads.mock.calls.length, 0);
+  const risk = result.analysis.risks.find((r) => r.key === 'removals');
+  assert.strictEqual(risk.level, 'unknown');
+  assert.match(risk.detail, /Marketplace Insights/);
+});
+
+test('the brand check is one per product: every delivery filter and price range shares it', async () => {
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' } }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => []);
+  mock.method(browseResearch, 'search', async () => ({ total: 1, items: [browseResearch.mapSummary({ itemId: 'v1|1|0', legacyItemId: '1', title: 'Glasses', price: { value: '9.99', currency: 'GBP' } })], calls: 1 }));
+  mock.method(browseResearch, 'soldCount', async () => ({ sold: 1, calls: 1 }));
+  const keys = [];
+  mock.method(advisor, 'advise', async (key) => {
+    keys.push(key);
+    return null;
+  });
+  mock.method(advisor, 'keptAdvice', async (key) => {
+    keys.push(key);
+    return null;
+  });
+  await researchService.advice('owner', 'conn', { q: 'Smart Glasses', condition: 'new', delivery: 'faster' });
+  await researchService.search('owner', 'conn', { q: 'smart  glasses', condition: 'new', delivery: 'all', maxPrice: '20' });
+  assert.strictEqual(new Set(keys).size, 1);
+});
+
+test('the price range leaves out listings priced far from the rest: a £117 bundle among £8–£13 glasses', () => {
+  const prices = [8.22, 8.49, 8.99, 9.49, 9.99, 9.99, 10.49, 11.5, 12.85, 13.14, 117.4];
+  const items = prices.map((p, i) => listing(i, p, { shipping: { cost: 0, free: true } }));
+  const s = researchStats.summarise(items, { country: 'GB', total: 61, now: NOW });
+  assert.strictEqual(s.price.min, 8.22);
+  assert.strictEqual(s.price.max, 13.14);
+  assert.strictEqual(s.price.outliers, 1);
+  assert.strictEqual(s.price.median, 9.99, 'the middle still counts every listing');
+  assert.ok(s.bands.every((b) => b.from < 20), 'no band stretched out to £117');
+  assert.deepStrictEqual(researchStats.typicalPrices([1, 50, 100]), [1, 50, 100], 'too few to judge: all kept');
 });

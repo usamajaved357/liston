@@ -221,6 +221,58 @@ export function Chevron({ open }: { open: boolean }) {
 }
 
 // eBay's own guidance under "Postage", as Seller Hub shows it.
+// eBay's postage service code as Seller Hub words it:
+// "UK_OtherCourier3To5Days" → "Other courier (3 to 5 days)".
+export function postageServiceLabel(code: string | null | undefined) {
+  if (!code) return "—";
+  const words = code
+    .replace(/^[A-Z]{2}_/, "")
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z0-9])/g, "$1 $2")
+    .replace(/(\d)([A-Z])/g, "$1 $2")
+    .trim();
+  const days = /(\d+) To (\d+) Days?$/i.exec(words);
+  const base = (days ? words.slice(0, days.index) : words).trim();
+  const sentence = base.charAt(0).toUpperCase() + base.slice(1).toLowerCase();
+  return days ? `${sentence} (${days[1]} to ${days[2]} days)` : sentence;
+}
+
+// Seller Hub's Global Shipping Programme panel: the parcel goes to eBay's UK
+// hub, labelled with the Ref #, and eBay takes it from there.
+export function GlobalShippingInstructions() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="rounded-xl bg-[var(--color-paper)] p-4">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center justify-between text-left">
+        <span className="flex items-center gap-2 text-[14px] font-bold text-[var(--color-ink)]">
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M3 12h18M12 3c2.5 2.7 3.7 5.7 3.7 9s-1.2 6.3-3.7 9M12 3c-2.5 2.7-3.7 5.7-3.7 9s1.2 6.3 3.7 9" />
+          </svg>
+          Global Shipping Programme
+        </span>
+        <Chevron open={open} />
+      </button>
+      {open && (
+        <div className="mt-3 grid gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
+          <div>
+            <p className="font-bold">Pack it up</p>
+            <p className="mt-1">Secure your item to make sure it arrives exactly as described.</p>
+          </div>
+          <div>
+            <p className="font-bold">Ship to eBay&apos;s UK postage centre</p>
+            <p className="mt-1">Post it to the address below, not the buyer&apos;s. The label must carry the Ref # shown with the address; an eBay label includes it automatically.</p>
+          </div>
+          <div>
+            <p className="font-bold">Drop it off</p>
+            <p className="mt-1">Your job is done once the item reaches the hub. eBay handles international shipping, customs and returns.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PostageInstructions() {
   const [open, setOpen] = useState(true);
   return (

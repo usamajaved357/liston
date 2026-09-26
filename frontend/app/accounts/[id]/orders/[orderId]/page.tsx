@@ -13,6 +13,7 @@ import {
   Chevron,
   Chip,
   CopyIcon,
+  GlobalShippingInstructions,
   Modal,
   MoneyRow,
   PostageInstructions,
@@ -28,6 +29,7 @@ import {
   labelClass,
   money,
   paymentLabel,
+  postageServiceLabel,
 } from "@/components/orders/order-ui";
 import { SourcingCard } from "@/components/orders/SourcingCard";
 import { ActionDialog, type ActionKind } from "@/components/orders/ActionDialog";
@@ -42,6 +44,37 @@ import { AccountPageSkeleton, OrderDetailSkeleton } from "@/components/Skeleton"
 // supplier's tracking, which dispatches the item on eBay when it is saved.
 
 // --- page -----------------------------------------------------------------
+
+// The buyer's own address on a Global Shipping Programme order: eBay
+// delivers there, the seller doesn't post to it. Hidden until asked for, as
+// in Seller Hub.
+function RecipientAddress({ address }: { address: NonNullable<NonNullable<OrderDetailResponse["order"]>["finalDestination"]> }) {
+  const [open, setOpen] = useState(false);
+  const regionName = (code: string) => {
+    try {
+      return new Intl.DisplayNames(["en"], { type: "region" }).of(code) || code;
+    } catch {
+      return code;
+    }
+  };
+  return (
+    <div className="mt-2">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="text-[12.5px] font-medium text-[var(--color-primary)] hover:underline">
+        {open ? "Hide recipient address" : "Show recipient address"}
+      </button>
+      {open && (
+        <div className="mt-1 text-[12.5px] text-[var(--color-muted)]">
+          <p>{address.name}</p>
+          {address.street1 && <p>{address.street1}</p>}
+          {address.street2 && <p>{address.street2}</p>}
+          <p>{[address.city, address.state, address.postalCode].filter(Boolean).join(", ")}</p>
+          <p>{/^[A-Z]{2}$/.test(address.country) ? regionName(address.country) : address.country}</p>
+          <p className="mt-1 italic">eBay delivers here; you post to the address on the left.</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function OrderDetailPage() {
   const params = useParams<{ id: string; orderId: string }>();
@@ -196,7 +229,11 @@ export default function OrderDetailPage() {
   const pay = order ? paymentLabel(order.paymentStatus) : null;
   const ful = order ? fulfillmentLabel(order) : null;
   const a = order?.shipTo || null;
-  const addressText = a ? [a.name, a.street1, a.street2, [a.city, a.state].filter(Boolean).join(", "), a.postalCode, a.country, a.phone].filter(Boolean).join("\n") : "";
+  const gsp = order?.shippingProgramme === "GSP";
+  const refId = order?.shipToReferenceId || null;
+  const addressText = a
+    ? [a.name, a.street1, a.street2, refId ? `Ref #${refId}` : "", [a.city, a.state].filter(Boolean).join(", "), a.postalCode, a.country, a.phone].filter(Boolean).join("\n")
+    : "";
   const earnings = order?.earnings || null;
   const netToSeller = earnings?.earnings || order?.totalDueSeller || null;
   const netVsCost = netToSeller && totalCost !== null ? netToSeller.value - totalCost : null;
@@ -436,9 +473,7 @@ export default function OrderDetailPage() {
               {/* Postage */}
               <div className={cardClass}>
                 <h2 className="text-[20px] font-bold text-[var(--color-ink)]">Postage</h2>
-                <div className="mt-3 print:hidden">
-                  <PostageInstructions />
-                </div>
+                <div className="mt-3 print:hidden">{gsp ? <GlobalShippingInstructions /> : <PostageInstructions />}</div>
                 <div className="mt-4 grid gap-5 sm:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto]">
                   <div className="text-[13px] leading-relaxed text-[var(--color-ink)]">
                     <p className="flex items-center text-[var(--color-muted)]">
@@ -450,6 +485,7 @@ export default function OrderDetailPage() {
                         <p>{a.name}</p>
                         {a.street1 && <p>{a.street1}</p>}
                         {a.street2 && <p>{a.street2}</p>}
+                        {refId && <p className="font-semibold">Ref #{refId}</p>}
                         <p>{[a.city, a.state, a.postalCode].filter(Boolean).join(", ")}</p>
                         <p>{connection.marketplace && a.country === connection.marketplace.country ? connection.marketplace.countryName : a.country}</p>
                         {a.phone && (
@@ -472,7 +508,7 @@ export default function OrderDetailPage() {
                   </div>
                   <div className="text-[13px] leading-relaxed text-[var(--color-ink)]">
                     <p className="text-[var(--color-muted)]">Buyer selected postage service</p>
-                    <p>{order.shippingService ? order.shippingService.replace(/_/g, " ") : "—"}</p>
+                    <p>{postageServiceLabel(order.shippingService)}</p>
                     <p className="mt-3 text-[var(--color-muted)]">Tracking</p>
                     {order.fulfillments.length ? (
                       order.fulfillments.map((f, i) => (
@@ -484,6 +520,13 @@ export default function OrderDetailPage() {
                       ))
                     ) : (
                       <p>--</p>
+                    )}
+                    {gsp && (
+                      <>
+                        <p className="mt-3 text-[var(--color-muted)]">Shipping programme</p>
+                        <p>Global Shipping Programme</p>
+                        {order.finalDestination && <RecipientAddress address={order.finalDestination} />}
+                      </>
                     )}
                   </div>
                   {!cancelled && (

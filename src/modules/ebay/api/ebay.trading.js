@@ -182,6 +182,25 @@ async function getListingItem(accessToken, itemId, { siteId } = {}) {
   return { item: mapped, active: (item.SellingStatus?.ListingStatus || 'Active') === 'Active' };
 }
 
+// What became of another seller's listing, for product research: 'live',
+// 'ended' (it ran its course, sold out or the seller ended it; eBay keeps
+// it readable for about 90 days), or 'removed' — eBay deleted it, which is
+// what happens when eBay takes a listing down for a policy violation.
+// GetItem answers a deleted listing with error 17 ("the listing has been
+// deleted"); anything else it can't answer is an error, not a verdict.
+const DELETED_LISTING = '17';
+async function getListingState(accessToken, itemId, { siteId } = {}) {
+  const body = `<ItemID>${itemId}</ItemID><OutputSelector>Item.SellingStatus.ListingStatus</OutputSelector><OutputSelector>Item.ListingDetails.EndTime</OutputSelector>`;
+  try {
+    const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
+    const status = res.Item?.SellingStatus?.ListingStatus || 'Active';
+    return { state: status === 'Active' ? 'live' : 'ended', endTime: res.Item?.ListingDetails?.EndTime || null };
+  } catch (err) {
+    if (err instanceof EbayTradingError && toArray(err.details).some((e) => String(e.ErrorCode) === DELETED_LISTING)) return { state: 'removed', endTime: null };
+    throw err;
+  }
+}
+
 async function getUnsoldListings(accessToken, { pageNumber = 1, entriesPerPage = 25, siteId } = {}) {
   const body = `<UnsoldList><Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination></UnsoldList><DetailLevel>ReturnSummary</DetailLevel>`;
   const res = await tradingRequest(accessToken, 'GetMyeBaySelling', body, siteId);
@@ -242,6 +261,27 @@ function mapShippingAddress(a) {
   return Object.values(address).some(Boolean) ? address : null;
 }
 
+// eBay's Global Shipping Programme: the buyer is abroad, but the seller
+// posts to eBay's UK hub, which ships it on. ShippingAddress is the buyer's
+// own; where the seller actually posts (with the Ref # that must go on the
+// label), the postage the seller charges for that leg, and its service, are
+// in MultiLegShippingDetails. The buyer's international postage is paid to
+// eBay and isn't the seller's, so the order's total for the seller is the
+// items plus that first leg — what Seller Hub shows.
+function globalShipping(order) {
+  const multi = order.IsMultiLegShipping === true || String(order.IsMultiLegShipping) === 'true';
+  const leg = multi ? order.MultiLegShippingDetails?.SellerShipmentToLogisticsProvider : null;
+  const hub = leg ? mapShippingAddress(leg.ShipToAddress) : null;
+  if (!hub) return null;
+  const ref = leg.ShipToAddress?.ReferenceID;
+  return {
+    hub,
+    referenceId: ref !== undefined && ref !== null ? String(typeof ref === 'object' ? ref['#text'] ?? '' : ref) || null : null,
+    postage: money(leg.ShippingServiceDetails?.TotalShippingCost),
+    service: leg.ShippingServiceDetails?.ShippingService || null,
+  };
+}
+
 function mapOrder(order) {
   const transactions = toArray(order.TransactionArray?.Transaction);
   const firstItem = transactions[0]?.Item;
@@ -251,18 +291,31 @@ function mapOrder(order) {
   // Delivered once every item has arrived: the last arrival.
   const deliveredAt = lineItems.length && lineItems.every((li) => li.deliveredAt) ? lineItems.map((li) => li.deliveredAt).sort().slice(-1)[0] : null;
 
+  const gsp = globalShipping(order);
+  const subtotal = money(order.Subtotal);
+  const sellerTotal =
+    gsp && subtotal ? { amount: Math.round((subtotal.amount + (gsp.postage?.amount || 0)) * 100) / 100, currency: subtotal.currency } : money(order.Total);
+
   return {
     orderId: order.OrderID,
     status: order.OrderStatus,
     createdAt: order.CreatedTime,
-    total: money(order.Total),
-    subtotal: money(order.Subtotal),
+    total: sellerTotal,
+    subtotal,
     buyerName: [buyer?.UserFirstName, buyer?.UserLastName].filter(Boolean).join(' ') || null,
     buyerUserId: order.BuyerUserID || null,
     // eBay's relay address for the buyer, and Seller Hub's sales record no.
     buyerEmail: buyer?.Email && !/invalid request/i.test(String(buyer.Email)) ? String(buyer.Email) : null,
     salesRecordNumber: order.ShippingDetails?.SellingManagerSalesRecordNumber ? String(order.ShippingDetails.SellingManagerSalesRecordNumber) : null,
-    shippingAddress: mapShippingAddress(order.ShippingAddress),
+    // Where the seller posts: eBay's hub for a Global Shipping Programme
+    // order (with its Ref #), the buyer otherwise.
+    shippingAddress: gsp ? { ...gsp.hub, referenceId: gsp.referenceId } : mapShippingAddress(order.ShippingAddress),
+    shippingProgramme: gsp ? 'GSP' : null,
+    // The buyer's own address, when eBay delivers the last leg.
+    finalDestination: gsp ? mapShippingAddress(order.ShippingAddress) : null,
+    // What the buyer paid in all (their international postage included).
+    buyerTotal: gsp ? money(order.Total) : null,
+    gspService: gsp?.service || null,
     itemTitle: firstItem?.Title || null,
     itemId: firstItem?.ItemID ? String(firstItem.ItemID) : null,
     itemCount: transactions.length,
@@ -274,6 +327,21 @@ function mapOrder(order) {
     deliveredAt,
     lineItems,
   };
+}
+
+// eBay's postage services for a site with how many working days each takes
+// ("UK_OtherCourier5To7Days": 5–7): what turns a postage policy into a
+// delivery time. One call per site; the list rarely changes.
+async function getShippingServiceDetails(accessToken, siteId = 0) {
+  const res = await tradingRequest(accessToken, 'GeteBayDetails', '<DetailName>ShippingServiceDetails</DetailName>', siteId);
+  return toArray(res.ShippingServiceDetails)
+    .map((s) => ({
+      service: String(s.ShippingService || ''),
+      description: s.Description ? String(s.Description) : null,
+      min: s.ShippingTimeMin !== undefined ? Number(s.ShippingTimeMin) : null,
+      max: s.ShippingTimeMax !== undefined ? Number(s.ShippingTimeMax) : null,
+    }))
+    .filter((s) => s.service);
 }
 
 // Used to enrich an order's line items with an image + live quantity —
@@ -333,6 +401,8 @@ const GET_ORDERS_FIELDS = [
   'OrderArray.Order.ShippedTime',
   'OrderArray.Order.CancelStatus',
   'OrderArray.Order.ShippingAddress',
+  'OrderArray.Order.IsMultiLegShipping',
+  'OrderArray.Order.MultiLegShippingDetails',
   'OrderArray.Order.TransactionArray.Transaction.Item.ItemID',
   'OrderArray.Order.TransactionArray.Transaction.Item.Title',
   'OrderArray.Order.TransactionArray.Transaction.Item.Site',
@@ -688,9 +758,11 @@ module.exports = {
   getActiveListings,
   getUnsoldListings,
   getOrders,
+  getShippingServiceDetails,
   getListingItem,
   getItemSummary,
   getItem,
+  getListingState,
   getStoreProfile,
   reviseDescription,
   endListing,

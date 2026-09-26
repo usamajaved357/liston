@@ -80,11 +80,15 @@ test('an account\'s money: sales from order totals, fees and earnings from eBay,
   // Profit covers settled orders only: (17 − 6) + 8.5 + (−0.3).
   assert.strictEqual(m.profit, 19.2);
   assert.strictEqual(m.margin, 64, 'profit over the sales it covers (A + B)');
+  // ROI only over orders with eBay's figures and a cost in the currency: A, (17 − 6) ÷ 6.
+  assert.strictEqual(m.roi, 183.3);
 
   const total = moneySummary.addUp([m, m], 'GBP');
   assert.strictEqual(total.sales, 76);
   assert.strictEqual(total.profit, 38.4);
   assert.strictEqual(total.margin, 64);
+  assert.strictEqual(total.roi, 183.3);
+  assert.strictEqual(moneySummary.summarise([order('A', 20)], finances, new Map(), { currency: 'GBP' }).roi, null, 'no costs, no ROI');
 });
 
 test('an account with no finances permission is skipped, not read', async () => {

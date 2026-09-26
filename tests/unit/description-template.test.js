@@ -204,3 +204,142 @@ test('renderDescription sets the template font, and {{fontFamily}} is available 
   const custom = renderDescription({ template: { ...base, fontFamily: 'elegant', customHtml: '<div style="font-family:{{fontFamily}}">{{productName}}</div>' }, productName: 'P', description: 'd' });
   assert.ok(custom.includes("font-family:&#39;Palatino Linotype&#39;") || custom.includes("font-family:'Palatino Linotype'"));
 });
+
+// ---- the card layouts -------------------------------------------------------------
+
+const { readSections } = require('../../src/modules/listings/description-showcase');
+const { LAYOUTS, listItem } = require('../../src/modules/listings/description-template');
+
+const DRAFTED =
+  '**Shockproof Magnetic iPhone Case: MagSafe Charging Rugged Cover**\n' +
+  'Get a distinctive metallic look without the weight of real metal.\n\n' +
+  '**Key Features**\n✨ Metallic Paint Finish: Plated look without the weight.\n🧲 MagSafe Compatible: Aligns with MagSafe chargers.\n\n' +
+  '**Available Models**\niPhone 15 / iPhone 16\n\nPlease select your required model before placing your order.\n\n' +
+  '**Perfect For**\n✓ MagSafe users\n✓ Everyday protection\n\n' +
+  '**How To Use**\n1. Select your model\n2. Fit the case\n\n' +
+  '**Package Includes**\n• 1 × Magnetic Case\n\n' +
+  '**Important:** This is a back case only.\n\n' +
+  'A smart way to protect your phone.';
+
+test("a drafted description is read into the card layouts' sections", () => {
+  const s = readSections(DRAFTED, { listItem, isNoteLine: (l) => /^\*\*important/i.test(l) });
+  assert.strictEqual(s.title, 'Shockproof Magnetic iPhone Case');
+  assert.strictEqual(s.subtitle, 'MagSafe Charging Rugged Cover');
+  assert.deepStrictEqual(s.intro, ['Get a distinctive metallic look without the weight of real metal.']);
+  assert.deepStrictEqual(s.features[0], { icon: '✨', name: 'Metallic Paint Finish', text: 'Plated look without the weight.' });
+  assert.deepStrictEqual(s.options, { heading: 'Available Models', values: ['iPhone 15', 'iPhone 16'], note: 'Please select your required model before placing your order.' });
+  assert.deepStrictEqual(s.perfectFor, ['MagSafe users', 'Everyday protection']);
+  assert.deepStrictEqual(s.steps, ['Select your model', 'Fit the case']);
+  assert.deepStrictEqual(s.includes, ['1 × Magnetic Case']);
+  assert.deepStrictEqual(s.notes, ['This is a back case only.']);
+  assert.deepStrictEqual(s.closing, ['A smart way to protect your phone.']);
+});
+
+test('every layout renders; the card layouts show the photos as a working gallery, the specifics as a table, and the store link', () => {
+  assert.deepStrictEqual(LAYOUTS.map((l) => l.id), ['classic', 'showcase', 'minimal', 'bold', 'boutique']);
+  const images = ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'];
+  const specifics = { Brand: ['Unbranded'], Material: ['PC'], MPN: ['Does not apply'] };
+  for (const { id } of LAYOUTS) {
+    const html = renderDescription({ template: { ...base, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, images, specifics, storeUrl: 'https://www.ebay.co.uk/sch/i.html?_ssn=walexo', recommended: [{ url: 'https://www.ebay.co.uk/itm/1', imageUrl: 'https://i.ebayimg.com/c.jpg', name: 'Other' }] });
+    assert.ok(html.includes('Shockproof Magnetic iPhone Case'), id);
+    assert.doesNotMatch(html, /<script/i, `${id}: no scripts, eBay refuses them`);
+    if (id === 'classic') {
+      assert.match(html, /class="eb"/);
+      continue;
+    }
+    assert.match(html, /id="sxg1" class="sx-r" checked/, `${id}: gallery radios`);
+    assert.match(html, /label for="sxg2"/, `${id}: a thumbnail switches the photo`);
+    assert.match(html, /<td>Material<\/td><td>PC<\/td>/, `${id}: specifics table`);
+    assert.doesNotMatch(html, /MPN/, `${id}: "Does not apply" is left out`);
+    assert.match(html, /_ssn=walexo/, `${id}: visit the store`);
+    assert.match(html, /sx-steps/, `${id}: how to use`);
+    assert.match(html, /Thank you for shopping with <strong>Walexo<\/strong>/);
+  }
+  // The skins differ.
+  const css = (id) => renderDescription({ template: { ...base, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED }).split('</style>')[0];
+  assert.notStrictEqual(css('bold'), css('boutique'));
+  assert.notStrictEqual(css('minimal'), css('showcase'));
+});
+
+test('without a layout saved an account keeps the Classic layout', () => {
+  assert.match(renderDescription({ template: base, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED }), /class="eb"/);
+});
+
+test('every layout takes the same data from the Theme settings as Classic: store, feedback, delivery, returns, reviews, how many store listings, response time', () => {
+  const template = {
+    storeName: 'Walexo',
+    tagline: 'Official UK Store',
+    logoUrl: 'https://i.ebayimg.com/logo.jpg',
+    feedbackPercent: '99.4',
+    dispatchTime: 'Same Day Dispatch',
+    dispatchNote: 'From our Leeds warehouse',
+    carrier: 'Royal Mail Tracked 48',
+    deliveryTime: '2 to 3 Business Days',
+    freePostage: true,
+    returnsDays: 60,
+    responseTime: '6 hours',
+    recommendedCount: 6,
+    reviews: [{ stars: 5, text: 'Arrived next day, great quality', buyer: 'j***n', date: 'Aug 2026' }],
+  };
+  const recommended = Array.from({ length: 10 }, (_, i) => ({ url: `https://www.ebay.co.uk/itm/${i}`, imageUrl: `https://i.ebayimg.com/${i}.jpg`, name: `Item ${i}`, price: '£9.99', sold: 12 }));
+  for (const { id } of LAYOUTS) {
+    const html = renderDescription({ template: { ...template, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended });
+    for (const value of ['Walexo', 'Official UK Store', 'https://i.ebayimg.com/logo.jpg', '99.4% Positive', 'Same Day Dispatch', 'From our Leeds warehouse', 'Royal Mail Tracked 48', '2 to 3 Business Days', '60-day hassle-free return policy', '6 hours', 'Arrived next day, great quality', 'j***n']) {
+      assert.ok(html.includes(value), `${id} shows "${value}"`);
+    }
+    const cards = (html.match(/https:\/\/www\.ebay\.co\.uk\/itm\/\d/g) || []).length;
+    assert.strictEqual(cards, 6, `${id}: the ${template.recommendedCount} store listings Settings asks for`);
+    assert.ok(html.includes('£9.99'), `${id}: store listing prices`);
+  }
+  for (const { id } of LAYOUTS) {
+    const none = renderDescription({ template: { ...template, layout: id, reviews: [], recommendedCount: 0, returnsDays: 0 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended });
+    assert.doesNotMatch(none, /What Customers Say/, `${id}: no reviews, no section`);
+    assert.doesNotMatch(none, /itm\/\d/, `${id}: 0 store listings hides them`);
+    assert.doesNotMatch(none, /return policy/, `${id}: no returns, no returns text`);
+  }
+});
+
+test("every link in every layout opens outside eBay's description frame, and the store's listings sit four to a row", () => {
+  const recommended = Array.from({ length: 8 }, (_, i) => ({ url: `https://www.ebay.co.uk/itm/${i}`, imageUrl: `https://i.ebayimg.com/${i}.jpg`, name: `Item ${i}`, price: '£5' }));
+  for (const { id } of LAYOUTS) {
+    const html = renderDescription({ template: { ...base, layout: id, recommendedCount: 8 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    const links = html.match(/<a [^>]*>/g) || [];
+    assert.ok(links.length >= 8, `${id}: links rendered`);
+    for (const link of links) assert.match(link, /target="_blank" rel="noopener"/, `${id}: ${link}`);
+    if (id !== 'classic') {
+      assert.match(html, /href="https:\/\/www\.ebay\.co\.uk\/str\/walexo"/, `${id}: visit the store`);
+      assert.match(html, /\.sx-shop\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/, `${id}: four to a row`);
+    }
+  }
+});
+
+test('the card layouts show each store listing as a card with its price and a View item button, and the store as one banner link, even with no listings shown', () => {
+  const recommended = [{ url: 'https://www.ebay.co.uk/itm/1', imageUrl: 'https://i.ebayimg.com/1.jpg', name: 'Lamp', price: '£12.99', sold: 40 }];
+  for (const id of ['showcase', 'minimal', 'bold', 'boutique']) {
+    const html = renderDescription({ template: { ...base, layout: id, recommendedCount: 4 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    assert.match(html, /<a class="sx-prod" href="https:\/\/www\.ebay\.co\.uk\/itm\/1"[^>]*><span class="sx-pimg"><img [^>]*\/><span class="sx-sold">40 sold<\/span><\/span><span class="sx-pinfo"><b>Lamp<\/b><em>£12\.99<\/em><span class="sx-view">View item/, id);
+    assert.match(html, /<a class="sx-cta" href="https:\/\/www\.ebay\.co\.uk\/str\/walexo" target="_blank" rel="noopener">.*Visit our eBay store/, id);
+    const none = renderDescription({ template: { ...base, layout: id, recommendedCount: 0 }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    assert.match(none, /<a class="sx-cta sx-alone" href="https:\/\/www\.ebay\.co\.uk\/str\/walexo"/, `${id}: the store banner without listings`);
+    assert.doesNotMatch(none, /sx-prod"/, id);
+  }
+});
+
+test('four features sit two to a row in the three-column layouts', () => {
+  const html = renderDescription({ template: { ...base, layout: 'bold' }, marketplaceId: 'EBAY_GB', productName: 'Case', description: '**Case**\n\n**Key Features**\n• A: a\n• B: b\n• C: c\n• D: d' });
+  assert.match(html, /class="sx-grid sx-even"/);
+  const three = renderDescription({ template: { ...base, layout: 'bold' }, marketplaceId: 'EBAY_GB', productName: 'Case', description: '**Case**\n\n**Key Features**\n• A: a\n• B: b\n• C: c' });
+  assert.match(three, /class="sx-grid"/);
+});
+
+test('the card layouts carry no emoji, not even the ones the drafted features lead with', () => {
+  const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2B50}\u{2B06}\u{21A9}]/u;
+  const recommended = [{ url: 'https://www.ebay.co.uk/itm/1', imageUrl: 'https://i.ebayimg.com/1.jpg', name: 'Lamp', price: '£12.99', sold: 40 }];
+  const template = { ...base, feedbackPercent: '99.4', returnsDays: 30, reviews: [{ stars: 5, text: 'Great', buyer: 'j***n' }] };
+  for (const id of ['showcase', 'minimal', 'bold', 'boutique']) {
+    const html = renderDescription({ template: { ...template, layout: id }, marketplaceId: 'EBAY_GB', productName: 'Case', description: DRAFTED, images: ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'], recommended, storeUrl: 'https://www.ebay.co.uk/str/walexo' });
+    const found = html.replace(/★/g, '').match(emoji); // ★ is the rating star, a text glyph
+    assert.strictEqual(found, null, `${id}: ${found && html.slice(Math.max(0, found.index - 60), found.index + 20)}`);
+    assert.match(html, /Metallic Paint Finish/, `${id}: the feature itself stays`);
+  }
+});

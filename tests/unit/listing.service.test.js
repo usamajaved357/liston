@@ -345,6 +345,46 @@ test('publish retries once with "Does not apply" when the category requires an E
   assert.match(result.warnings[0], /requires a EAN|requires an EAN/);
 });
 
+test("publish uploads every photo again under this account and retries once when eBay calls the photos a mixture", async () => {
+  const imagePipeline = require('../../src/modules/ai-generation/image-pipeline');
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({ marketplaceId: 'EBAY_GB', skuBase: 'AE1', title: 'Pumpkin lantern', imageUrls: ['https://i.ebayimg.com/theirs.jpg', 'https://i.ebayimg.com/ours.jpg'] })
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 't' }));
+  const draftMock = mock.method(ebayService, 'draftListing', async () => ({ offerId: `offer-${draftMock.mock.calls.length}`, status: 'drafted' }));
+  const deleteMock = mock.method(ebayService, 'deleteInventoryObjects', async () => {});
+  let publishes = 0;
+  mock.method(ebayService, 'publishDraft', async () => {
+    publishes += 1;
+    if (publishes === 1) {
+      const err = new Error('The eBay listing associated with the inventory item, or the unpublished offer has invalid pictures. A mixture of Self Hosted and EPS pictures are not allowed.');
+      err.details = [{ errorId: 25016 }];
+      throw err;
+    }
+    return { externalProductId: 'ebay-9', status: 'published' };
+  });
+  const hostMock = mock.method(imagePipeline, 'hostDraftImages', async (draft, opts) => {
+    assert.strictEqual(opts.force, true);
+    assert.strictEqual(opts.account, CONNECTION_ID);
+    const hosted = new Map(draft.imageUrls.map((u, i) => [u, `https://i.ebayimg.com/00/s/mine-${i}.jpg`]));
+    return { draft: { ...draft, imageUrls: [...hosted.values()] }, hosted, dropped: [], changed: true, ok: true };
+  });
+  const updateDataMock = mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+  mock.method(listingRepository, 'setPlatformIds', async () => ({}));
+  mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  const result = await listingService.publish('listing-1', USER_ID);
+
+  assert.strictEqual(result.externalProductId, 'ebay-9');
+  assert.strictEqual(hostMock.mock.calls.length, 1);
+  assert.strictEqual(deleteMock.mock.calls.length, 1, 'the first build is cleared');
+  assert.strictEqual(draftMock.mock.calls.length, 2);
+  assert.deepStrictEqual(draftMock.mock.calls[1].arguments[1].imageUrls, ['https://i.ebayimg.com/00/s/mine-0.jpg', 'https://i.ebayimg.com/00/s/mine-1.jpg']);
+  const saved = updateDataMock.mock.calls.at(-1).arguments[1];
+  assert.deepStrictEqual(saved.imageUrls, ['https://i.ebayimg.com/00/s/mine-0.jpg', 'https://i.ebayimg.com/00/s/mine-1.jpg'], 'kept on the draft');
+});
+
 // --- editing ---------------------------------------------------------------
 
 test('updateDraft applies text edits and persists them', async () => {
@@ -1848,4 +1888,13 @@ test("step two drafts with only the photos the seller kept, in their order; phot
     listingService.generateEbayDraftFromUrls(CONNECTION_ID, USER_ID, { previewId: preview.previewId, imageUrls: ['https://evil.example/x.jpg'] }),
     (err) => err.statusCode === 400 && /Keep at least one/.test(err.message)
   );
+});
+
+test("\"Visit our eBay store\" goes to the seller's eBay Store, else to every item they sell on the account's site", () => {
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: 'https://www.ebay.co.uk/str/flashinggoodsltd' }, 'flashin79', 'EBAY_GB'), 'https://www.ebay.co.uk/str/flashinggoodsltd');
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: 'http://www.ebay.com/str/novaglobalmart' }, null, 'EBAY_US'), 'https://www.ebay.com/str/novaglobalmart');
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: null }, 'selvora-goods', 'EBAY_GB'), 'https://www.ebay.co.uk/sch/i.html?_ssn=selvora-goods');
+  assert.strictEqual(listingService.storeLinkFor({ username: 'minsu-ltd' }, null, 'EBAY_AU'), 'https://www.ebay.com.au/sch/i.html?_ssn=minsu-ltd', "the username from eBay's profile when the account has none saved");
+  assert.strictEqual(listingService.storeLinkFor({ storeUrl: 'javascript:alert(1)' }, null, 'EBAY_GB'), null, 'only an eBay address is used');
+  assert.strictEqual(listingService.storeLinkFor(null, null, 'EBAY_GB'), null);
 });

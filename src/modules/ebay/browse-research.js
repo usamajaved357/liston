@@ -27,6 +27,9 @@ function mapSummary(s) {
     url: s.itemWebUrl || null,
     price: s.price ? { value: money(s.price), currency: s.price.currency } : null,
     shipping: ship ? { cost: shipCost ?? 0, free: shipCost === 0, type: ship.shippingCostType || null } : null,
+    // eBay's delivery window for a buyer on this site (not given for some
+    // sellers posting from abroad).
+    deliveryDates: ship?.minEstimatedDeliveryDate || ship?.maxEstimatedDeliveryDate ? { min: ship.minEstimatedDeliveryDate || ship.maxEstimatedDeliveryDate, max: ship.maxEstimatedDeliveryDate || ship.minEstimatedDeliveryDate } : null,
     seller: s.seller
       ? { username: s.seller.username, feedbackScore: s.seller.feedbackScore ?? null, feedbackPercentage: s.seller.feedbackPercentage ? Number(s.seller.feedbackPercentage) : null, business: s.seller.sellerAccountType === 'BUSINESS' }
       : null,
@@ -49,7 +52,7 @@ function mapSummary(s) {
  * paging through a result or coming back to it spends no call. `calls` is
  * how many eBay calls this spent (0 from the kept copy).
  */
-async function search({ q, marketplaceId, condition, minPrice, maxPrice }) {
+async function search({ q, marketplaceId, condition, minPrice, maxPrice, country }) {
   const filters = ['buyingOptions:{FIXED_PRICE}'];
   if (condition === 'new') filters.push('conditions:{NEW}');
   if (condition === 'used') filters.push('conditions:{USED}');
@@ -60,7 +63,7 @@ async function search({ q, marketplaceId, condition, minPrice, maxPrice }) {
   const key = JSON.stringify([marketplaceId, q.toLowerCase(), filters]);
   const kept = searches.get(key);
   if (kept && Date.now() - kept.at < SEARCH_TTL_MS) return { ...kept.value, calls: 0 };
-  const params = { q, limit: SEARCH_LIMIT, filter: filters.join(',') };
+  const params = { q, limit: SEARCH_LIMIT, filter: filters.join(','), deliveryCountry: country || undefined };
   let res;
   let calls = 1;
   try {

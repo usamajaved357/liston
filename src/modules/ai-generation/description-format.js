@@ -36,6 +36,9 @@ const PROMPT_GUIDANCE =
   `space, no emoji): the pets, people, rooms, uses or occasions it suits. For a part or accessory made to ` +
   `fit particular products, use the heading **Compatible With** and list those products the same way. ` +
   `Leave out if nothing genuine can be listed.\n` +
+  `5b. **How To Use**: ONLY when the product is fitted, set up, installed or used in steps (a phone case, ` +
+  `a tool, a gadget); leave it out for a simple product. 3 to 5 short lines numbered "1. ", "2. " … in the ` +
+  `order a buyer does them, using only what the product data supports.\n` +
   `6. **Package Includes**: one line per item, each starting with "• " (a bullet and a space) in the form ` +
   `"• 1 × Pet Cooling Mat" (use "×"). Use the real contents from the product data; if they aren't given, ` +
   `write "• 1 × " followed by the product name.\n` +

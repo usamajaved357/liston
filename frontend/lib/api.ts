@@ -77,6 +77,8 @@ export interface MoneySummary {
   withCost: number;
   // Profit as a share of the sales it covers.
   margin: number | null;
+  // Profit ÷ supplier cost (%), over orders with eBay's figures and a cost.
+  roi?: number | null;
 }
 
 // Listing work for the Overview: live on eBay now, drafts waiting now, and
@@ -111,6 +113,8 @@ export interface AccountOverview {
   activeListings: number;
   listings: ListingWork;
   money: MoneySummary;
+  // The same dates' orders by state (archived ones left out).
+  queue?: OrderCounts;
   financesPending: boolean;
   financesAccess: boolean;
 }
@@ -138,12 +142,28 @@ export interface ResearchItem {
   // Sold × today's price with postage (eBay gives no sale prices), or null.
   revenue: number | null;
   daysLive: number | null;
+  // eBay's delivery window for a buyer on the site, in working days from
+  // now, next to the account's own delivery ('unknown': eBay gave no dates).
+  delivery: { min: number | null; max: number | null; compared: ResearchDeliveryGroup };
+}
+
+export type ResearchDeliveryGroup = "similar" | "faster" | "slower" | "unknown";
+export type ResearchDeliveryFilter = "similar" | "faster" | "slower" | "all";
+
+export interface ResearchDelivery {
+  // Which listings the figures are worked out from.
+  filter: ResearchDeliveryFilter;
+  counts: Record<ResearchDeliveryGroup | "all", number>;
+  // The account's delivery from its postage policy, in working days; null
+  // when the policy couldn't be read (then every listing is compared).
+  account: { min: number; max: number; handling: number | null; service: string | null; serviceName: string | null; policyName: string | null } | null;
 }
 
 export interface ResearchSummary {
   total: number;
   sampled: number;
-  price: { min: number; max: number; median: number; average: number } | null;
+  // min/max/average leave out listings priced far from the rest (outliers: how many).
+  price: { min: number; max: number; median: number; average: number; outliers?: number } | null;
   // to: null is the top band, everything from `from` up.
   bands: { from: number; to: number | null; count: number }[];
   sellers: number;
@@ -158,7 +178,7 @@ export interface ResearchSummary {
 
 export type ResearchRiskLevel = "ok" | "warn" | "bad" | "unknown";
 export interface ResearchRisk {
-  key: "history" | "words" | "brand" | "safety";
+  key: "removals" | "history" | "words" | "brand" | "safety";
   label: string;
   level: ResearchRiskLevel;
   detail: string;
@@ -203,7 +223,10 @@ export interface ResearchAnalysis {
   breakdown: { brands: { name: string; count: number; unbranded: boolean }[]; categories: { id: string; name: string; count: number }[]; categoryId: string | null } | null;
   risks: ResearchRisk[];
   verdict: ResearchVerdict;
+  // Whether the brand and safety check is in the verdict yet.
+  checked: boolean;
 }
+
 
 export interface ResearchAdvice {
   title: string;
@@ -221,6 +244,36 @@ export interface ResearchBudget {
   resetAt?: string;
 }
 
+// One listing from eBay's sales history for a search (last 90 days).
+// state: 'live', 'ended' the normal way, 'removed' (eBay deleted it: taken
+// down, usually for a policy violation), or null when not known.
+export interface ResearchSale {
+  itemId: string | null;
+  legacyItemId: string | null;
+  title: string | null;
+  image: string | null;
+  url: string | null;
+  price: number | null;
+  shipping: number | null;
+  currency: string | null;
+  sold: number | null;
+  lastSoldAt: string | null;
+  seller: string | null;
+  country: string | null;
+  state: "live" | "ended" | "removed" | null;
+}
+
+export type ResearchSales =
+  | { available: false }
+  | {
+      available: true;
+      failed?: boolean;
+      days: number;
+      total: number;
+      items: ResearchSale[];
+      summary: { listings: number; sold: number; sales: number; averagePrice: number | null; price: { min: number; max: number } | null; sellers: number; removed: number; ended: number };
+    };
+
 export interface ResearchResult {
   query: string;
   market: Marketplace;
@@ -230,8 +283,39 @@ export interface ResearchResult {
   // The AI's reading, when one was written for this search today.
   advice: ResearchAdvice | null;
   items: ResearchItem[];
+  // eBay's sales history for the search (Marketplace Insights), with the
+  // listings eBay removed; { available: false } until eBay grants the API.
+  sales: ResearchSales;
+  delivery: ResearchDelivery;
   soldLimited: boolean;
   budget: ResearchBudget;
+}
+
+// Sales by day under the business Overview's cards: what buyers paid each
+// day, the same day of the previous stretch alongside (null when older than
+// the 90 days Liston keeps), today still running.
+export interface OverviewTrendPoint {
+  day: string;
+  value: number;
+  previous: number | null;
+  previousDay: string | null;
+  partial: boolean;
+}
+
+// A listing that sold most in the dates: units, orders and item sales
+// (postage apart) in its own currency, its photo and link, and the account.
+export interface OverviewBestSeller {
+  itemId: string;
+  title: string | null;
+  units: number;
+  orders: number;
+  sales: number;
+  currency: string | null;
+  image: string | null;
+  url: string;
+  live: boolean;
+  account: string;
+  marketplaceId: string;
 }
 
 export interface OverviewMarket {
@@ -244,6 +328,8 @@ export interface OverviewMarket {
   activeListings: number;
   listings: ListingWork;
   money: MoneySummary;
+  trend?: OverviewTrendPoint[];
+  bestSellers?: OverviewBestSeller[];
 }
 
 export interface Overview {
@@ -258,7 +344,7 @@ export interface Overview {
   // Every market as one figure in the busiest market's currency, the others
   // converted at the day's ECB rate (rates: how many of each currency 1 of
   // it buys). Null when no rate could be had.
-  combined: { money: MoneySummary; rates: Record<string, number>; ratesDate: string | null } | null;
+  combined: { money: MoneySummary; trend?: OverviewTrendPoint[]; bestSellers?: OverviewBestSeller[]; rates: Record<string, number>; ratesDate: string | null } | null;
   // Some accounts' fees and earnings were still being read from eBay.
   financesPending: boolean;
   perAccount: OverviewAccount[];
@@ -642,6 +728,11 @@ export interface OrderDetail {
   buyer: { username: string | null; feedbackScore?: number | null; feedbackPercent?: string | null; repeatBuyer?: boolean };
   buyerCheckoutNotes: string | null;
   shipTo: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string; phone: string; email: string } | null;
+  // Global Shipping Programme: shipTo is eBay's UK hub (the Ref # goes on
+  // the label) and finalDestination the buyer's own address.
+  shipToReferenceId?: string | null;
+  shippingProgramme?: "GSP" | null;
+  finalDestination?: { name: string; street1: string; street2: string; city: string; state: string; postalCode: string; country: string } | null;
   shippingService: string | null;
   shippingCarrier: string | null;
   // When the carrier confirmed delivery (from the account's order copy).
@@ -1021,7 +1112,13 @@ export const TEMPLATE_FONTS: { id: string; name: string; stack: string; note: st
   { id: "elegant", name: "Elegant Serif", stack: "'Palatino Linotype',Palatino,'Book Antiqua',Georgia,serif", note: "Refined, boutique" },
 ];
 
+// The description layouts an account can pick (the server's LAYOUTS).
+export type DescriptionLayout = "classic" | "showcase" | "minimal" | "bold" | "boutique";
+
 export interface DescriptionTemplate {
+  layout: DescriptionLayout;
+  // The card layouts' star line ("Top Quality • Fast Dispatch").
+  bannerText: string;
   storeName: string;
   tagline: string;
   logoUrl: string;
@@ -1637,18 +1734,20 @@ export const api = {
   checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
     request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
 
-  researchSearch: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+  researchSearch: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string; delivery?: ResearchDeliveryFilter }) => {
     const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
     if (params.minPrice) query.set("minPrice", params.minPrice);
     if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    if (params.delivery) query.set("delivery", params.delivery);
     return request<ResearchResult>(`/api/connections/${id}/research?${query.toString()}`);
   },
   // The AI's reading of a search (title, keywords, brand and safety risk) and
   // the analysis redone with it; reuses the search's kept eBay reads.
-  researchAdvice: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string }) => {
+  researchAdvice: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string; delivery?: ResearchDeliveryFilter }) => {
     const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
     if (params.minPrice) query.set("minPrice", params.minPrice);
     if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+    if (params.delivery) query.set("delivery", params.delivery);
     return request<{ advice: ResearchAdvice | null; analysis: ResearchAnalysis; budget: ResearchBudget }>(`/api/connections/${id}/research/advice?${query.toString()}`);
   },
   // Sold counts for more listings of a search (up to 20 at a time).

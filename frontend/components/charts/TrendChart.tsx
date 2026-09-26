@@ -24,7 +24,7 @@ export interface TrendPoint {
   partial?: boolean;
 }
 
-const HEIGHT = 248;
+const HEIGHT = 248; // the default; a compact card passes its own
 // The plot runs to the box's right edge and its axis labels start at the
 // left edge, so a chart lines up with its card's heading on both sides.
 // The left margin fits the widest axis label.
@@ -43,6 +43,7 @@ export function TrendChart({
   variant = "area",
   showPrevious = true,
   legend = true,
+  height = HEIGHT,
 }: {
   points: TrendPoint[];
   format: (v: number | null) => string;
@@ -53,6 +54,7 @@ export function TrendChart({
   variant?: "area" | "bars";
   showPrevious?: boolean;
   legend?: boolean; // false when the card shows a ChartLegend in its heading
+  height?: number;
 }) {
   const [boxRef, measured] = useWidth<HTMLDivElement>();
   const width = Math.max(240, measured || 640);
@@ -60,7 +62,7 @@ export function TrendChart({
   const gradientId = useId().replace(/:/g, "");
 
   const hasPrevious = showPrevious && points.some((p) => p.previous != null);
-  const innerH = HEIGHT - M.top - M.bottom;
+  const innerH = height - M.top - M.bottom;
   const n = points.length;
 
   const { ticks, yMax } = useMemo(() => {
@@ -147,8 +149,8 @@ export function TrendChart({
       {/* Fills its box: the measured width only sets the drawing's own
           coordinates, so the chart never props its container open. */}
       <svg
-        height={HEIGHT}
-        viewBox={`0 0 ${width} ${HEIGHT}`}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
         style={{ width: "100%" }}
         role="img"
@@ -175,7 +177,7 @@ export function TrendChart({
           </g>
         ))}
         {xLabels.map(({ i, day }) => (
-          <text key={day} x={x(i)} y={HEIGHT - 8} textAnchor={i === 0 && variant !== "bars" ? "start" : i === n - 1 && variant !== "bars" ? "end" : "middle"} className="fill-[var(--color-muted)] text-[11px]">
+          <text key={day} x={x(i)} y={height - 8} textAnchor={i === 0 && variant !== "bars" ? "start" : i === n - 1 && variant !== "bars" ? "end" : "middle"} className="fill-[var(--color-muted)] text-[11px]">
             {dayLabel(day)}
           </text>
         ))}

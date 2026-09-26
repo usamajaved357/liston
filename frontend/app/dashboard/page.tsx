@@ -7,16 +7,19 @@ import { api, ApiError, Overview, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { ListingCards, MetricCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
+import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
+import { BestSellersCard, SalesTrendCard } from "@/components/overview/OverviewSales";
+import { useAmounts } from "@/lib/useAmounts";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { currencySymbol } from "@/lib/format";
 import { ebayConnectError } from "@/lib/connect-errors";
 
 // The business Overview: the money across every connected account for a
-// range, one eBay market at a time (each has its own currency). A tab per
-// figure — sales, fees, earnings, source cost, profit — and four cards
-// breaking the chosen one down. Per-account figures live on each account's
-// own Overview; here an account only appears when it needs attention.
+// range, one eBay market at a time (each has its own currency). A Sales tab
+// with a card per money figure, then sales by day and the best sellers; a
+// Listings tab with the listing pipeline. Amounts start hidden (the eye
+// shows them). Per-account figures live on each account's own Overview;
+// here an account only appears when it needs attention.
 
 const RANGES: { key: string; label: string; phrase: string }[] = [
   { key: "today", label: "Today", phrase: "today" },
@@ -60,6 +63,7 @@ export default function DashboardPage() {
   // "all", or one eBay site (EBAY_GB…): the busiest one until the viewer picks.
   const [market, setMarket] = useState<string | null>(null);
   const [metric, setMetric] = useState<Metric>("sales");
+  const amounts = useAmounts();
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
@@ -185,6 +189,21 @@ export default function DashboardPage() {
         .join(" · ")}. Pick a market for its exact figures.`
     : null;
 
+  // Sales by day and best sellers for what's in view: all markets as one
+  // (in the main currency), or one market's own. Several currencies with no
+  // exchange rate can't share one chart.
+  const trendInView = combined ? combined.trend ?? null : inView.length === 1 ? inView[0].trend ?? null : null;
+  const trendCurrency = combined ? combined.money.currency : inView[0]?.currency ?? "GBP";
+  const trendNote =
+    !combined && inView.length > 1 ? "Your markets sell in different currencies and no exchange rate could be had just now. Pick a market to see its sales by day." : null;
+  const trendCaption = range === "today" ? "Last 7 days" : range === "this_month" ? "This month" : `Last ${rangeLabel}`;
+  const bestInView = combined
+    ? combined.bestSellers ?? []
+    : inView
+        .flatMap((m) => m.bestSellers ?? [])
+        .sort((a, b) => b.units - a.units || b.sales - a.sales)
+        .slice(0, 6);
+
   // The markets in view's listing work, added up (counts, not money).
   const listingWork = inView.length
     ? inView.reduce(
@@ -254,9 +273,9 @@ export default function DashboardPage() {
             <div className="h-8 w-72 animate-pulse rounded-full bg-[var(--color-line)]" />
             <div className="h-8 w-80 animate-pulse rounded-full bg-[var(--color-line)]" />
           </div>
-          <MetricTabs metric={metric} onMetric={setMetric} />
+          <MetricTabs metric={metric} onMetric={setMetric} trailing={metric === "sales" ? <AmountsToggle hidden={amounts.hidden} onToggle={amounts.toggle} /> : undefined} />
           <div className="mt-5">
-            {metric === "listings" ? <ListingCards work={null} loading /> : <MetricCards metric={metric} summaries={[]} loading />}
+            {metric === "listings" ? <ListingCards work={null} loading /> : <SalesCards summaries={[]} loading hidden={amounts.hidden} />}
           </div>
         </>
       ) : o.accounts.total === 0 ? (
@@ -319,9 +338,9 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <MetricTabs metric={metric} onMetric={setMetric} />
+          <MetricTabs metric={metric} onMetric={setMetric} trailing={metric === "sales" ? <AmountsToggle hidden={amounts.hidden} onToggle={amounts.toggle} /> : undefined} />
           <div className="mt-5">
-            {metric === "listings" ? <ListingCards work={listingWork} /> : <MetricCards metric={metric} summaries={moneyInView} />}
+            {metric === "listings" ? <ListingCards work={listingWork} /> : <SalesCards summaries={moneyInView} hidden={amounts.hidden} />}
           </div>
           {converted && metric !== "listings" && (
             <p className="mt-3 text-[12px] text-[var(--color-muted)]">{converted}</p>
@@ -352,6 +371,15 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {/* How sales moved, and what sold most. */}
+          {metric === "sales" && (
+            <div className="mt-4 grid gap-4 lg:grid-cols-3">
+              <div className="min-w-0 lg:col-span-2">
+                <SalesTrendCard points={trendInView} currency={trendCurrency} hidden={amounts.hidden} caption={trendCaption} note={trendNote} />
+              </div>
+              <BestSellersCard items={bestInView} hidden={amounts.hidden} showMarket={current === "all" && markets.length > 1} flagOf={(id) => markets.find((m) => m.id === id)?.flag ?? ""} />
+            </div>
+          )}
         </>
       )}
 

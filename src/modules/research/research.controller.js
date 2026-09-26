@@ -6,6 +6,9 @@ const searchSchema = z.object({
   condition: z.enum(['any', 'new', 'used']).default('any'),
   minPrice: z.coerce.number().min(0).optional(),
   maxPrice: z.coerce.number().min(0).optional(),
+  // Which listings to compare with, by delivery time next to the account's
+  // postage policy; left out: those like the account's, when it's known.
+  delivery: z.enum(['similar', 'faster', 'slower', 'all']).optional(),
 });
 
 async function search(req, res, next) {
