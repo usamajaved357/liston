@@ -6,9 +6,8 @@ import { useIsPhone } from "@/lib/useIsPhone";
 
 // One compact button for how a list is shown ("Last 7 days · Newest"),
 // opening a small menu with a section per choice (period, sort…). Keeps a
-// page's toolbar to one control instead of a dropdown per setting. The menu
-// stays open while choosing, so both can be set in one go; a click outside
-// or Escape closes it. On a phone it rises from the bottom of the screen
+// page's toolbar to one control instead of a dropdown per setting. Picking
+// an option closes the menu, as do a click outside and Escape. On a phone it rises from the bottom of the screen
 // instead, where a dropdown beside the button would run off the edge.
 
 export interface ViewMenuSection {
@@ -76,11 +75,11 @@ export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSecti
       </button>
       {open && !phone && (
         <div role="menu" className="absolute right-0 top-full z-30 mt-1.5 w-60 overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 shadow-lg">
-          <Sections sections={sections} />
+          <Sections sections={sections} onPicked={close} />
         </div>
       )}
       <BottomSheet open={open && phone} title={title} onClose={close}>
-        <Sections sections={sections} large />
+        <Sections sections={sections} large onPicked={close} />
       </BottomSheet>
     </div>
   );
@@ -88,7 +87,7 @@ export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSecti
 
 // The choices, section by section: small in the dropdown, finger-sized in
 // the phone's sheet.
-function Sections({ sections, large = false }: { sections: ViewMenuSection[]; large?: boolean }) {
+function Sections({ sections, large = false, onPicked }: { sections: ViewMenuSection[]; large?: boolean; onPicked: () => void }) {
   return (
     <>
       {sections.map((s, i) => (
@@ -102,7 +101,10 @@ function Sections({ sections, large = false }: { sections: ViewMenuSection[]; la
                 type="button"
                 role="menuitemradio"
                 aria-checked={active}
-                onClick={() => s.onChange(o.key)}
+                onClick={() => {
+                  s.onChange(o.key);
+                  onPicked();
+                }}
                 className={`flex w-full items-center justify-between text-left transition-colors hover:bg-[var(--color-paper)] ${large ? "px-4 py-3 text-[15px]" : "px-3 py-1.5 text-[12.5px]"} ${
                   active ? "font-semibold text-[var(--color-primary)]" : "text-[var(--color-ink)]"
                 }`}
