@@ -23,3 +23,24 @@ export function landingPathForConnection(connection: Connection): string {
   const granted = FEATURE_PRIORITY.find((feature) => connection.permissions?.[feature]);
   return granted ? `${base}${FEATURE_PATHS[granted]}` : base;
 }
+
+// Whether the viewer can open a section of an account ("" is its Overview):
+// an owner (no permissions) every one; a member what their access allows,
+// as the account sidebar shows it.
+const SECTION_FEATURES: Record<string, string[]> = {
+  "": ["orders"],
+  orders: ["orders"],
+  listings: ["listings"],
+  research: ["listings"],
+  hunting: ["hunting", "hunting_review", "listings"],
+  analytics: ["analytics"],
+  inbox: ["inbox"],
+  campaigns: ["campaigns"],
+  settings: [],
+};
+
+export function sectionAllowed(connection: Connection, section: string): boolean {
+  if (!connection.permissions) return true;
+  const features = SECTION_FEATURES[section] ?? [];
+  return features.some((f) => connection.permissions?.[f]);
+}

@@ -45,7 +45,7 @@ const SearchIcon = (
   </svg>
 );
 
-function AccountCard({ connection, href, siblings, actions }: { connection: Connection; href: string; siblings: Connection[]; actions?: ReactNode }) {
+function AccountCard({ connection, href, hrefFor, siblings, actions, extra }: { connection: Connection; href: string; hrefFor: (c: Connection) => string; siblings: Connection[]; actions?: ReactNode; extra?: ReactNode }) {
   const m = connection.marketplace;
   return (
     // The whole card opens the account: the name's link is stretched over it
@@ -98,7 +98,7 @@ function AccountCard({ connection, href, siblings, actions }: { connection: Conn
         {siblings.map((s) => (
           <Link
             key={s.id}
-            href={`/accounts/${s.id}`}
+            href={hrefFor(s)}
             className="relative z-10 inline-flex items-center gap-1 rounded-full bg-[var(--color-panel)] px-2 py-1 text-[11px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)] hover:text-[var(--color-ink)] hover:ring-[var(--color-line-strong)]"
             title={`The same eBay account on ${s.marketplace?.name ?? "another site"}`}
           >
@@ -107,6 +107,7 @@ function AccountCard({ connection, href, siblings, actions }: { connection: Conn
         ))}
       </div>
 
+      {extra}
     </li>
   );
 }
@@ -115,12 +116,14 @@ interface AccountCardsProps {
   connections: Connection[];
   hrefFor?: (c: Connection) => string;
   actionsFor?: (c: Connection) => ReactNode;
+  // More under a card's market (a team member's access, say).
+  extraFor?: (c: Connection) => ReactNode;
   // Shown at the right of the search row (the owner's "Add account").
   toolbarEnd?: ReactNode;
   summary?: ReactNode;
 }
 
-export function AccountCards({ connections, hrefFor = (c) => `/accounts/${c.id}`, actionsFor, toolbarEnd, summary }: AccountCardsProps) {
+export function AccountCards({ connections, hrefFor = (c) => `/accounts/${c.id}`, actionsFor, extraFor, toolbarEnd, summary }: AccountCardsProps) {
   const [query, setQuery] = useState("");
   const [market, setMarket] = useState<string>("all");
 
@@ -211,7 +214,7 @@ export function AccountCards({ connections, hrefFor = (c) => `/accounts/${c.id}`
         // space the page has rather than the window, since the sidebar takes some.
         <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-4">
           {shown.map((c) => (
-            <AccountCard key={c.id} connection={c} href={hrefFor(c)} siblings={siblingsOf(c)} actions={actionsFor?.(c)} />
+            <AccountCard key={c.id} connection={c} href={hrefFor(c)} hrefFor={hrefFor} siblings={siblingsOf(c)} actions={actionsFor?.(c)} extra={extraFor?.(c)} />
           ))}
         </ul>
       )}

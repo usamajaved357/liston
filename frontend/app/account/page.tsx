@@ -6,6 +6,8 @@ import { api, ApiError, User } from "@/lib/api";
 import { PasswordField } from "@/components/PasswordField";
 import { PasswordInput } from "@/components/PasswordInput";
 import { AppShell } from "@/components/AppShell";
+import { MemberSidebarFooter } from "@/components/MemberSidebarFooter";
+import { NotificationBell } from "@/components/NotificationBell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { AccountMenu } from "@/components/AccountMenu";
@@ -28,8 +30,9 @@ function SettingRow({ title, description, children, last }: { title: string; des
   );
 }
 
-// The owner's name: what their team sees on approvals, notifications and
-// product histories. A member's name is set by the owner, in Team.
+// Your name: what your team sees on approvals, notifications, product
+// histories and the Team pages. Owners and members alike (the owner can
+// also set a member's, in Team).
 function NameForm({ name, onSaved }: { name: string | null; onSaved: (name: string) => void }) {
   const [value, setValue] = useState(name || "");
   const [busy, setBusy] = useState(false);
@@ -263,19 +266,20 @@ export default function AccountPage() {
       planName={planName}
       role={user.role}
       isAdmin={user.is_admin}
+      // A member's Log out is at the sidebar's foot, as on their Dashboard.
+      sidebarFooter={isOwner ? undefined : <MemberSidebarFooter user={user} onLogout={() => setConfirmAction("logout")} />}
       header={
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Account</h1>
+            <h1 className="text-lg font-semibold text-[var(--color-ink)]">{isOwner ? "Account" : "Profile"}</h1>
             <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Your login and how you appear in Liston.</p>
           </div>
           <div className="page-header-controls">
-            <AccountMenu
-              email={user.email}
-              subtitle={`${planName} plan`}
-              avatarUrl={user.avatar_url}
-              onLogout={() => setConfirmAction("logout")}
-            />
+            {isOwner ? (
+              <AccountMenu email={user.email} subtitle={`${planName} plan`} avatarUrl={user.avatar_url} onLogout={() => setConfirmAction("logout")} />
+            ) : (
+              <NotificationBell />
+            )}
           </div>
         </div>
       }
@@ -323,22 +327,16 @@ export default function AccountPage() {
 
           <SettingRow
             title="Your name"
-            description={isOwner ? "What your team sees on approvals, rejections, notifications and product histories." : "What the team sees on your work. The account owner sets it, in Team."}
+            description={isOwner ? "What your team sees on approvals, rejections, notifications and product histories." : "What your team sees on your work, notifications and product histories."}
           >
-            {isOwner ? (
-              <NameForm
-                name={user.name ?? null}
-                onSaved={(name) => {
-                  const next = { ...user, name };
-                  setUser(next);
-                  cacheUser(next);
-                }}
-              />
-            ) : (
-              <div className="input flex items-center bg-[var(--color-paper)] text-[var(--color-muted)]">
-                <span className="truncate">{user.name || "Not set yet"}</span>
-              </div>
-            )}
+            <NameForm
+              name={user.name ?? null}
+              onSaved={(name) => {
+                const next = { ...user, name };
+                setUser(next);
+                cacheUser(next);
+              }}
+            />
           </SettingRow>
 
           <SettingRow title="Login email" description="The address you sign in with. It's fixed to the account. Contact us if it needs to change." last>
@@ -360,18 +358,18 @@ export default function AccountPage() {
 
         <div className="card border-rose-200">
           <SettingRow
-            title={isOwner ? "Delete account" : "Remove my login"}
+            title="Delete account"
             description={
               isOwner
                 ? "Permanently deletes your account, every connected marketplace, team members and all listing data."
-                : "Removes only your own login. The accounts and data you had access to are unaffected."
+                : "Permanently deletes your team member account, and you can't log in again. The eBay accounts you worked on stay with your team."
             }
             last
           >
             <div className="flex items-center justify-between gap-4">
               <p className="text-[13px] text-[var(--color-muted)]">This can&apos;t be undone.</p>
               <button type="button" onClick={() => setConfirmAction("delete")} className="btn btn-secondary btn-sm text-[var(--color-danger)]">
-                {isOwner ? "Delete account" : "Remove login"}
+                Delete account
               </button>
             </div>
           </SettingRow>
@@ -388,13 +386,13 @@ export default function AccountPage() {
       />
       <ConfirmDialog
         open={confirmAction === "delete"}
-        title={isOwner ? "Delete your account?" : "Remove your login?"}
+        title="Delete your account?"
         description={
           isOwner
             ? "This permanently deletes your account, connections, and listing data. This action cannot be undone."
-            : "This removes your own team-member login. It doesn't affect the accounts or data owned by whoever gave you access."
+            : "This permanently deletes your team member account and you won't be able to log in again. This action cannot be undone."
         }
-        confirmLabel={isOwner ? "Delete account" : "Remove login"}
+        confirmLabel="Delete account"
         danger
         loading={actionLoading}
         onCancel={() => setConfirmAction(null)}

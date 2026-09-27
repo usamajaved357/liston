@@ -418,8 +418,11 @@ test('only a reviewer removes a hunted product, at any stage; the hunter is told
   assert.strictEqual((await request('PATCH', '/api/users/me/name', { name: 'Usama Javed' }, t.ownerToken)).status, 200);
   const renamed = await request('GET', '/api/notifications', undefined, t.hunter.token);
   assert.strictEqual(renamed.data.items[0].detail.by, 'Usama Javed');
-  // A member's name is the owner's to set.
-  assert.strictEqual((await request('PATCH', '/api/users/me/name', { name: 'Me' }, t.hunter.token)).status, 403);
+  // A member names themselves too, and the owner's Team page shows it.
+  assert.strictEqual((await request('PATCH', '/api/users/me/name', { name: 'Ali Hunter' }, t.hunter.token)).status, 200);
+  assert.strictEqual((await request('GET', '/api/users/me', undefined, t.hunter.token)).data.user.name, 'Ali Hunter');
+  const members = await request('GET', '/api/team/members', undefined, t.ownerToken);
+  assert.ok(members.data.members.some((m) => m.name === 'Ali Hunter'));
   assert.strictEqual((await request('PATCH', '/api/users/me/name', { name: '   ' }, t.ownerToken)).status, 400);
 });
 

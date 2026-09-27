@@ -19,11 +19,13 @@ interface AppShellProps {
   role?: "owner" | "member";
   // Access requests are reviewed only by the addresses in ADMIN_EMAILS.
   isAdmin?: boolean;
+  // Pinned to the sidebar's foot (a member's name and Log out).
+  sidebarFooter?: React.ReactNode;
 }
 
 // connectionsUsed / maxConnections / planName are accepted for compatibility
 // with existing pages; the sidebar no longer shows plan usage.
-export function AppShell({ children, header, subheader, role, isAdmin }: AppShellProps) {
+export function AppShell({ children, header, subheader, role, isAdmin, sidebarFooter }: AppShellProps) {
   const pathname = usePathname();
 
   return (
@@ -61,14 +63,36 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
           <NavItem
             href="/connections"
             active={pathname === "/connections"}
-            label={role === "member" ? "Accounts" : "Connections"}
+            label={role === "member" ? "Dashboard" : "Connections"}
             icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
-                <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18M3 12h18" stroke="currentColor" strokeWidth="1.4" />
-              </svg>
+              role === "member" ? (
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18M3 12h18" stroke="currentColor" strokeWidth="1.4" />
+                </svg>
+              )
             }
           />
+          {role === "member" && (
+            <NavItem
+              href="/account"
+              active={pathname === "/account"}
+              label="Profile"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="12" cy="8.5" r="3.5" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M5 19.5c0-3.3 3.1-5.5 7-5.5s7 2.2 7 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
           {role === "owner" && (
             <NavItem
               href="/team"
@@ -111,6 +135,8 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
             />
           )}
         </nav>
+
+        {sidebarFooter && <div className="mt-auto border-t border-[var(--color-line)] pt-3">{sidebarFooter}</div>}
       </>
       }
     >
@@ -126,3 +152,4 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
     </ShellFrame>
   );
 }
+

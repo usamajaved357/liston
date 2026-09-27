@@ -257,9 +257,12 @@ export function AccountShell({
           <div className="mt-auto space-y-1 border-t border-[var(--color-line)] pt-3">
             <Link href="/connections" className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
               </svg>
-              Your accounts
+              Dashboard
             </Link>
             <button type="button" onClick={() => setConfirmLogout(true)} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
