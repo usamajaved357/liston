@@ -262,11 +262,12 @@ async function eventsSince(connectionId, since) {
 }
 
 /** One hunter's products approved or rejected in [start, end), by when decided (for their chart). */
-async function outcomesBetween(ownerId, { start, end, hunterId }) {
+async function outcomesBetween(ownerId, { start, end, hunterId, connectionId = null }) {
   const { rows } = await query(
     `SELECT status, decided_at FROM hunted_products
-      WHERE owner_user_id = $1 AND hunter_user_id = $4 AND status IN ('approved', 'rejected') AND decided_at >= $2 AND decided_at < $3`,
-    [ownerId, start, end, hunterId]
+      WHERE owner_user_id = $1 AND hunter_user_id = $4 AND status IN ('approved', 'rejected') AND decided_at >= $2 AND decided_at < $3
+        AND ($5::uuid IS NULL OR connection_id = $5)`,
+    [ownerId, start, end, hunterId, connectionId]
   );
   return rows;
 }

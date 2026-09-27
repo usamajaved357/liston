@@ -7,6 +7,7 @@ import { AccountOverview, api, ApiError, EbaySite, OrderCounts, OrderRange, Orde
 import { useConnection } from "@/lib/useConnection";
 import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric } from "@/components/overview/OverviewMoney";
 import { ListingTrendCard, RecentListingsCard } from "@/components/overview/OverviewListings";
+import { MemberWorkOverview } from "@/components/overview/MemberWorkOverview";
 import { useAmounts } from "@/lib/useAmounts";
 import { AccountShell } from "@/components/AccountShell";
 import { useAccountEvents } from "@/lib/useAccountEvents";
@@ -362,7 +363,8 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
 }
 
 // A team member granted Orders is doing fulfilment work — revenue isn't
-// theirs to see, so they get what needs doing and the queue, nothing else.
+// theirs to see, so under their own work they get what needs doing and the
+// queue, nothing else.
 function MemberDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
   const queue = useOrderQueue(connectionId, reloadKey, 0, onSynced);
   return <OrderQueue connectionId={connectionId} counts={queue.counts} attention={queue.attention} loading={!queue.counts && !queue.error} error={queue.error} />;
@@ -494,13 +496,11 @@ export default function AccountOverviewPage() {
       {isOwner && connection.platform_key === "ebay" && <OtherSitesNotice connectionId={connection.id} label={connection.label} onAdded={reload} />}
       {isOwner ? (
         <OwnerDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
-      ) : connection.permissions?.orders ? (
-        <MemberDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
       ) : (
-        <div className="card px-6 py-12 text-center">
-          <p className="text-sm font-medium text-[var(--color-ink)]">Nothing to show here yet</p>
-          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Use the sections in the sidebar you have access to.</p>
-        </div>
+        // A member: their own work here (never money), then the order queue with Orders access.
+        <MemberWorkOverview connectionId={connection.id}>
+          {connection.permissions?.orders && <MemberDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />}
+        </MemberWorkOverview>
       )}
     </AccountShell>
   );

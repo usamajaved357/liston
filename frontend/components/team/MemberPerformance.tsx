@@ -2,7 +2,7 @@
 
 import { ReactNode, useState } from "react";
 import { ViewMenu } from "@/components/ViewMenu";
-import { MemberOverview, TeamMetricKey } from "@/lib/api";
+import { TeamMetricKey, WorkOverview } from "@/lib/api";
 import { DeltaBadge } from "@/components/charts/DeltaBadge";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
@@ -14,6 +14,11 @@ import { hoursText } from "@/components/hunting/HuntBits";
 // period), each with its headline against the period before and the
 // details behind it; then one chart of any measure, day by day against the
 // period before; then the same by eBay account.
+//
+// `self`: the member's own Overview on one account — "you" and "your",
+// no log links (the log is the owner's), no by-account table, and never any
+// money (sales from their finds are units and orders; the server sends no
+// amounts).
 
 const change = (now: number, before: number) => (before > 0 ? (now - before) / before : null);
 
@@ -48,7 +53,7 @@ function AreaCard({
   compared: string;
   note: ReactNode;
   rows: Row[];
-  onOpenLog: (kind: TeamMetricKey) => void;
+  onOpenLog?: (kind: TeamMetricKey) => void;
   headlineMetric?: TeamMetricKey;
 }) {
   return (
@@ -58,7 +63,7 @@ function AreaCard({
           <span className={`h-2 w-2 rounded-full ${accent}`} aria-hidden />
           {title}
         </span>
-        {headlineMetric && (
+        {headlineMetric && onOpenLog && (
           <button type="button" onClick={() => onOpenLog(headlineMetric)} className="text-[11.5px] font-medium text-[var(--color-primary)] hover:underline">
             Log
           </button>
@@ -82,7 +87,7 @@ function AreaCard({
               <dd className={`flex-shrink-0 text-[12.5px] font-semibold tabular-nums ${TONE[r.tone || "plain"]}`}>{r.value}</dd>
             </>
           );
-          return r.metric ? (
+          return r.metric && onOpenLog ? (
             <button
               key={r.label}
               type="button"
@@ -103,7 +108,10 @@ function AreaCard({
   );
 }
 
-export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (kind: TeamMetricKey) => void }) {
+export function MemberPerformance({ data, onOpenLog, self = false }: { data: WorkOverview; onOpenLog?: (kind: TeamMetricKey) => void; self?: boolean }) {
+  // Their words, or yours.
+  const they = self ? "you" : "they";
+  const Their = self ? "Your" : "Their";
   const compared = `vs ${dayRangeLabel(data.range.previous.from, data.range.previous.to)}`;
   const t = data.totals;
   const p = data.previous;
@@ -166,11 +174,11 @@ export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; o
           unit={`of ${data.range.days} day${data.range.days === 1 ? "" : "s"}`}
           delta={change(t.active_days, p.active_days)}
           compared={compared}
-          note="Days with work done in Liston"
+          note={self ? "Days you worked on this account in Liston" : "Days with work done in Liston"}
           onOpenLog={onOpenLog}
           rows={[
-            { label: "Actions", value: fullNumber(data.actions), hint: "Everything they did in Liston in this period" },
-            { label: "eBay accounts worked on", value: fullNumber(data.accounts.filter((a) => a.actions > 0).length) },
+            { label: "Actions", value: fullNumber(data.actions), hint: `Everything ${they} did in Liston in this period` },
+            ...(self ? [] : [{ label: "eBay accounts worked on", value: fullNumber(data.accounts.filter((a) => a.actions > 0).length) }]),
             { label: "A day, on days worked", value: t.active_days ? String(Math.round((data.actions / t.active_days) * 10) / 10) : "—", hint: "Actions per day worked" },
           ]}
         />
@@ -218,7 +226,7 @@ export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; o
             unit="products hunted"
             delta={h ? change(h.hunter.hunted, h.previousHunter.hunted) : change(t.hunted, p.hunted)}
             compared={compared}
-            note={h?.hunter.approvalRate !== null && h?.hunter.approvalRate !== undefined ? `${h.hunter.approvalRate}% approved of those decided` : "Their finds, by when hunted"}
+            note={h?.hunter.approvalRate !== null && h?.hunter.approvalRate !== undefined ? `${h.hunter.approvalRate}% approved of those decided` : `${Their} finds, by when hunted`}
             headlineMetric="hunted"
             onOpenLog={onOpenLog}
             rows={[
@@ -226,12 +234,19 @@ export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; o
               { label: "Rejected", value: fullNumber(h?.hunter.rejected ?? 0), tone: h?.hunter.rejected ? "bad" : "plain" },
               { label: "Sent back · waiting", value: `${fullNumber(h?.hunter.sentBack ?? 0)} · ${fullNumber(h?.hunter.waiting ?? 0)}`, tone: h?.hunter.sentBack ? "warn" : "plain" },
               { label: "Drafted · listed", value: `${fullNumber(h?.hunter.drafted ?? 0)} · ${fullNumber(h?.hunter.listed ?? 0)}`, tone: h?.hunter.listed ? "info" : "plain" },
-              {
-                label: "Sales from their finds",
-                value: sales ? money(sales.sales, sales.currency || "GBP") : "—",
-                tone: sales?.sales ? "good" : "plain",
-                hint: prevSales ? `${money(prevSales.sales, prevSales.currency || "GBP")} ${compared}` : "Sales in this period from listings made from their finds",
-              },
+              self
+                ? {
+                    label: "Sold from your finds",
+                    value: sales?.units ? `${fullNumber(sales.units)} sold` : "—",
+                    tone: sales?.units ? "good" : "plain",
+                    hint: prevSales?.units ? `${fullNumber(prevSales.units)} sold ${compared}` : "Units sold in this period from listings made from your finds",
+                  }
+                : {
+                    label: "Sales from their finds",
+                    value: sales?.sales !== undefined ? money(sales.sales, sales.currency || "GBP") : "—",
+                    tone: sales?.sales ? "good" : "plain",
+                    hint: prevSales?.sales !== undefined ? `${money(prevSales.sales, prevSales.currency || "GBP")} ${compared}` : "Sales in this period from listings made from their finds",
+                  },
             ]}
           />
         )}
@@ -243,7 +258,7 @@ export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; o
             unit="decisions"
             delta={h ? change(h.reviewer.reviewed, h.previousReviewer.reviewed) : change(t.hunts_reviewed, p.hunts_reviewed)}
             compared={compared}
-            note="Other people's finds they decided on"
+            note={`Other people's finds ${they} decided on`}
             headlineMetric="hunts_reviewed"
             onOpenLog={onOpenLog}
             rows={[
@@ -258,7 +273,7 @@ export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; o
 
       {h && h.reasons.length > 0 && (
         <p className="text-[12px] text-[var(--color-muted)]">
-          Their finds were rejected for: <span className="text-[var(--color-ink)]">{h.reasons.map((r) => `${r.label} (${r.count})`).join(", ")}</span>
+          {Their} finds were rejected for: <span className="text-[var(--color-ink)]">{h.reasons.map((r) => `${r.label} (${r.count})`).join(", ")}</span>
         </p>
       )}
 
@@ -310,9 +325,9 @@ export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; o
                 height={220}
               />
             </div>
-            {chosen.log && (
+            {chosen.log && onOpenLog && (
               <div className="mt-1 text-right">
-                <button type="button" onClick={() => onOpenLog(chosen.log!)} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
+                <button type="button" onClick={() => onOpenLog?.(chosen.log!)} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
                   See each one in the log
                 </button>
               </div>
@@ -321,7 +336,7 @@ export function MemberPerformance({ data, onOpenLog }: { data: MemberOverview; o
         )
       )}
 
-      {data.accounts.some((a) => a.actions > 0) && (
+      {!self && data.accounts.some((a) => a.actions > 0) && (
         <section className="card overflow-hidden">
           <div className="flex items-baseline justify-between gap-2 px-4 py-3">
             <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By eBay account</h2>

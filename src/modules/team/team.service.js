@@ -55,27 +55,34 @@ async function listMembers(ownerId, { timeZone = null } = {}) {
  * A member's page for a range: who they are, their access, their figures
  * against the period before, day by day and per eBay account.
  */
-async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone = null } = {}) {
+// `connectionId`: one eBay account's work only (a member's own Overview there).
+async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone = null, connectionId = null } = {}) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
   if (!member) throw new TeamError('Team member not found', 404);
   const connections = await connectionRepository.findAllByUser(ownerId);
-  const win = activity.rangeWindow(range, { from, to, timeZone: await zoneFor(ownerId, timeZone, connections) });
-  const [rows, prevRows, permissions, lastActive, recordingSince, hunting] = await Promise.all([
+  // One account's days are that account's site's, as on its Overview.
+  const scoped = connectionId ? connections.find((c) => c.id === connectionId) : null;
+  const scopedZone = scoped ? analyticsDays.timeZoneFor(scoped.settings?.ebay?.marketplaceId || 'EBAY_GB') : null;
+  const win = activity.rangeWindow(range, { from, to, timeZone: timeZone || scopedZone || (await zoneFor(ownerId, null, connections)) });
+  const onAccount = (list) => (connectionId ? list.filter((r) => r.connection_id === connectionId) : list);
+  const [allRows, allPrevRows, permissions, lastActive, recordingSince, hunting] = await Promise.all([
     activityRepository.rowsFor(ownerId, memberId, win.startsAt, win.endsAt),
     activityRepository.rowsFor(ownerId, memberId, win.previous.startsAt, win.previous.endsAt),
     teamRepository.getPermissions(memberId),
     activityRepository.lastActiveAt(ownerId, memberId),
     activityRepository.recordingSince(),
     // Their hunted products' results and their reviews (hunting/hunting-stats.js).
-    huntingService.memberFigures(ownerId, memberId, win),
+    huntingService.memberFigures(ownerId, memberId, win, { connectionId }),
   ]);
+  const rows = onAccount(allRows);
+  const prevRows = onAccount(allPrevRows);
   // Their products approved and rejected, day by day on the day each was decided (a reviewer's action, not theirs).
   // And their converting products: finds that sold, how many different ones a day.
   const [outcomes, prevOutcomes, converting, prevConverting] = await Promise.all([
-    huntingRepository.outcomesBetween(ownerId, { start: win.startsAt, end: win.endsAt, hunterId: memberId }),
-    huntingRepository.outcomesBetween(ownerId, { start: win.previous.startsAt, end: win.previous.endsAt, hunterId: memberId }),
-    huntingService.convertingByDay(ownerId, memberId, { startsAt: win.startsAt, endsAt: win.endsAt, timeZone: win.timeZone }).catch(() => ({ byDay: new Map(), total: 0 })),
-    huntingService.convertingByDay(ownerId, memberId, { startsAt: win.previous.startsAt, endsAt: win.previous.endsAt, timeZone: win.timeZone }).catch(() => ({ byDay: new Map(), total: 0 })),
+    huntingRepository.outcomesBetween(ownerId, { start: win.startsAt, end: win.endsAt, hunterId: memberId, connectionId }),
+    huntingRepository.outcomesBetween(ownerId, { start: win.previous.startsAt, end: win.previous.endsAt, hunterId: memberId, connectionId }),
+    huntingService.convertingByDay(ownerId, memberId, { startsAt: win.startsAt, endsAt: win.endsAt, timeZone: win.timeZone, connectionId }).catch(() => ({ byDay: new Map(), total: 0 })),
+    huntingService.convertingByDay(ownerId, memberId, { startsAt: win.previous.startsAt, endsAt: win.previous.endsAt, timeZone: win.timeZone, connectionId }).catch(() => ({ byDay: new Map(), total: 0 })),
   ]);
   const outcomeDays = (list, sold, from, to) => {
     const days = new Map(analyticsDays.daysBetween(from, to).map((d) => [d, { day: d, approved: 0, rejected: 0, converting: sold.byDay.get(d) || 0 }]));
@@ -129,6 +136,34 @@ async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone 
     huntOutcomes,
     connections: connections.filter((c) => c.platform_key === 'ebay').map((c) => ({ id: c.id, label: c.label })),
     knownFeatures: teamRepository.KNOWN_FEATURES,
+  };
+}
+
+/**
+ * A team member's own work on one eBay account, for their Overview there:
+ * the same figures their owner sees on their Team page, for that account
+ * only, and never any money — sales from their finds come as orders and
+ * units, no amounts. Members only; an owner's account Overview has the rest.
+ */
+async function getOwnWork(viewer, connectionId, { range, from, to, timeZone = null } = {}) {
+  if (viewer.role !== 'member') throw new TeamError('This shows a team member their own work.', 403);
+  const data = await getMemberOverview(viewer.ownerId, viewer.userId, { range, from, to, timeZone, connectionId });
+  const resolved = await teamRepository.getResolvedPermissions(viewer.userId, connectionId);
+  const counts = (list) => (list || []).map(({ orders, units, lastAt }) => ({ orders, units, lastAt }));
+  return {
+    recordingSince: data.recordingSince,
+    range: data.range,
+    metrics: data.metrics,
+    totals: data.totals,
+    previous: data.previous,
+    actions: data.actions,
+    series: data.series,
+    previousSeries: data.previousSeries,
+    accounts: [],
+    // What they can do on this account.
+    permissions: Object.entries(resolved).map(([feature, allowed]) => ({ feature, connectionId, allowed })),
+    hunting: data.hunting && { ...data.hunting, sales: counts(data.hunting.sales), previousSales: counts(data.hunting.previousSales) },
+    huntOutcomes: data.huntOutcomes,
   };
 }
 
@@ -260,6 +295,7 @@ module.exports = {
   removeMember,
   restoreMember,
   getMemberOverview,
+  getOwnWork,
   getMemberActivity,
   setMemberPassword,
   getMemberPermissions,

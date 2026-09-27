@@ -24,6 +24,8 @@ router.use('/:id/orders', require('../orders/order.routes'));
 router.get('/:id/earnings', requireAuth, requireFeature('orders'), connectionController.getEarnings);
 // The account's Overview money (sales, fees, earnings, source cost, profit) and listing work: owner-only, like the business Overview.
 router.get('/:id/overview', requireAuth, requireOwner, require('../overview/overview.controller').getAccountOverview);
+// A team member's own Overview there: their work on the account, no money (team.service.getOwnWork).
+router.get('/:id/my-work', requireAuth, requireAnyFeature(KNOWN_FEATURES), require('../team/team.controller').getOwnWork);
 router.use('/:id/analytics', require('../analytics/analytics.routes'));
 router.post('/:id/refresh', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.refresh);
 router.get('/:id/events', requireAuth, requireAnyFeature(['listings', 'orders', 'analytics']), connectionController.events);

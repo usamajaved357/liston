@@ -513,8 +513,8 @@ async function draftStart(auth, huntId) {
  * A member's hunting for their page, across the owner's accounts, for a
  * range window and the one before it (team/activity.rangeWindow).
  */
-async function memberFigures(ownerId, memberId, win) {
-  const span = (w) => ({ start: w.startsAt, end: w.endsAt });
+async function memberFigures(ownerId, memberId, win, { connectionId = null } = {}) {
+  const span = (w) => ({ start: w.startsAt, end: w.endsAt, connectionId });
   const [hunted, prevHunted, decisions, prevDecisions, decided, prevDecided, listed] = await Promise.all([
     huntingRepository.huntedBetween(ownerId, { ...span(win), hunterId: memberId }),
     huntingRepository.huntedBetween(ownerId, { ...span(win.previous), hunterId: memberId }),
@@ -522,7 +522,7 @@ async function memberFigures(ownerId, memberId, win) {
     huntingRepository.decisionsBetween(ownerId, { ...span(win.previous), actorId: memberId }),
     huntingRepository.decidedBetween(ownerId, { ...span(win), reviewerId: memberId }),
     huntingRepository.decidedBetween(ownerId, { ...span(win.previous), reviewerId: memberId }),
-    huntingRepository.listedHunts(ownerId, { hunterId: memberId }),
+    huntingRepository.listedHunts(ownerId, { hunterId: memberId, connectionId }),
   ]);
   const accounts = [...new Set(listed.map((h) => h.connection_id))];
   const items = listed.flatMap((h) => h.item_ids);
@@ -546,8 +546,8 @@ async function memberFigures(ownerId, memberId, win) {
  * different products from their finds had an order that day (cancelled
  * orders left out), and how many in the whole window.
  */
-async function convertingByDay(ownerId, hunterId, { startsAt, endsAt, timeZone }) {
-  const listed = await huntingRepository.listedHunts(ownerId, { hunterId });
+async function convertingByDay(ownerId, hunterId, { startsAt, endsAt, timeZone, connectionId = null }) {
+  const listed = await huntingRepository.listedHunts(ownerId, { hunterId, connectionId });
   const huntOf = new Map();
   for (const h of listed) for (const id of h.item_ids || []) huntOf.set(String(id), h.id);
   if (!huntOf.size) return { byDay: new Map(), total: 0 };

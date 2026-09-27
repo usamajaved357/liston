@@ -87,6 +87,15 @@ async function getMemberOverview(req, res, next) {
   }
 }
 
+// A member's own work on the account in the URL (their Overview there).
+async function getOwnWork(req, res, next) {
+  try {
+    res.status(200).json(await teamService.getOwnWork({ role: req.role, userId: req.userId, ownerId: req.ownerId }, req.params.id, rangeQuery(req.query)));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getMemberActivity(req, res, next) {
   try {
     const q = req.query;
@@ -122,4 +131,4 @@ async function updateMemberPermissions(req, res, next) {
   }
 }
 
-module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, getMemberPermissions, updateMemberPermissions, getMemberOverview, getMemberActivity };
+module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity };

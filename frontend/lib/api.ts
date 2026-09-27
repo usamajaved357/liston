@@ -596,6 +596,14 @@ export interface MemberOverview {
   knownFeatures: string[];
 }
 
+// A team member's own work on one account (their Overview there): the same
+// figures as their Team page, for that account only and with no money —
+// sales from their finds are orders and units.
+export type HuntSalesCount = { orders: number; units: number; lastAt: string | null; sales?: number; currency?: string | null };
+export type WorkOverview = Omit<MemberOverview, "member" | "connections" | "knownFeatures" | "hunting"> & {
+  hunting?: Omit<MemberHunting, "sales" | "previousSales"> & { sales: HuntSalesCount[]; previousSales: HuntSalesCount[] };
+};
+
 export interface MemberActivityItem {
   id: string;
   kind: string;
@@ -2402,6 +2410,9 @@ export const api = {
   restoreTeamMember: (id: string) => request<void>(`/api/team/members/${id}/restore`, { method: "POST" }),
 
   // A member's page: figures for a range (the viewer's own days), per day and account.
+  myWork: (connectionId: string, range: TeamRange) =>
+    // In the account's own site days, as its Overview (no viewer time zone).
+    request<WorkOverview>(`/api/connections/${connectionId}/my-work?range=${range}`),
   getMemberOverview: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
     const q = new URLSearchParams({ range, tz: viewerTimeZone() });
     if (range === "custom" && custom) {

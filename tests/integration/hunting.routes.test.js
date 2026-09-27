@@ -385,6 +385,24 @@ test('a lister sees only approved products, drafts them, and the listing and its
   assert.strictEqual(page.data.huntOutcomes.series.length, page.data.series.length);
   const reviewerPage = await request('GET', `/api/team/members/${t.reviewer.id}/overview?range=7d`, undefined, t.ownerToken);
   assert.strictEqual(reviewerPage.data.hunting.reviewer.approved, 1);
+  // A member sees their own work on each account, on that account's Overview: that account only, and no money.
+  await hunt(t.otherId, t.hunter.token);
+  const own = await request('GET', `/api/connections/${t.connectionId}/my-work?range=7d`, undefined, t.hunter.token);
+  assert.strictEqual(own.status, 200);
+  assert.strictEqual(own.data.totals.hunted, 2, 'the other account\'s find is not counted here');
+  assert.strictEqual(own.data.hunting.hunter.hunted, 2);
+  assert.deepStrictEqual(own.data.hunting.sales, [{ orders: 1, units: 2, lastAt: own.data.hunting.sales[0].lastAt }]);
+  assert.ok(!JSON.stringify(own.data).includes('25.98'), 'no sales amount anywhere');
+  assert.strictEqual(own.data.huntOutcomes.totals.converting, 1);
+  assert.deepStrictEqual(Object.fromEntries(own.data.permissions.map((x) => [x.feature, x.allowed])).hunting, true);
+  assert.strictEqual(own.data.permissions.find((x) => x.feature === 'orders').allowed, false);
+  const elsewhere = await request('GET', `/api/connections/${t.otherId}/my-work?range=7d`, undefined, t.hunter.token);
+  assert.strictEqual(elsewhere.data.totals.hunted, 1);
+  // Owners have the account Overview; a member without access to the account gets nothing.
+  assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/my-work?range=7d`, undefined, t.ownerToken)).status, 403);
+  await request('PUT', `/api/team/members/${t.nobody.id}/permissions`, { permissions: [{ connectionId: t.connectionId, feature: 'orders', allowed: false }] }, t.ownerToken);
+  assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/my-work?range=7d`, undefined, t.nobody.token)).status, 403);
+
   // Only the owner sees a member's page; the Hunting page has no team view any more.
   assert.strictEqual((await request('GET', `/api/team/members/${t.hunter.id}/overview?range=7d`, undefined, t.reviewer.token)).status, 403);
   assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/hunting/team`, undefined, t.reviewer.token)).status, 404);

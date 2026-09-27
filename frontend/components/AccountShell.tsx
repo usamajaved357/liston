@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { Marketplace, User } from "@/lib/api";
 import { AccountTimeZoneProvider } from "@/lib/timezone";
 import { SyncStatus } from "@/components/SyncStatus";
@@ -11,7 +11,6 @@ import { SITE_TIMEZONES } from "@/components/orders/order-ui";
 import { Logo } from "@/components/Logo";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ShellFrame } from "@/components/ShellFrame";
 import { NotificationBell } from "@/components/NotificationBell";
 
@@ -48,8 +47,7 @@ interface AccountShellProps {
   // same gate on each route independently (see requireFeature), so this is
   // a UX nicety, not the security boundary.
   permissions?: Record<string, boolean>;
-  // A member has no other shell: their sidebar carries their identity, a way
-  // back to their account list and the only logout they get.
+  // Who's viewing (a member's Log out is on their Dashboard and Profile).
   user: User;
 }
 
@@ -90,22 +88,15 @@ export function AccountShell({
   platformName,
   marketplace,
   permissions,
-  user,
   sync,
 }: AccountShellProps) {
   const timeZone = marketplace?.timeZone || (marketplace?.id ? SITE_TIMEZONES[marketplace.id] : undefined);
-  const router = useRouter();
   const canShow = (feature: string) => permissions === undefined || permissions[feature];
   const pathname = usePathname();
   const base = `/accounts/${connectionId}`;
-  const [confirmLogout, setConfirmLogout] = useState(false);
   const huntingAccess = canShow("hunting") || canShow("hunting_review") || canShow("listings");
   const huntBadge = useHuntBadge(connectionId, huntingAccess, permissions);
 
-  function handleLogout() {
-    localStorage.removeItem("token");
-    router.push("/login");
-  }
 
   return (
     <AccountTimeZoneProvider value={timeZone}>
@@ -121,25 +112,21 @@ export function AccountShell({
         <AccountSwitcher connectionId={connectionId} label={label} platformKey={platformKey} platformName={platformName} marketplace={marketplace} />
 
         <nav className="flex flex-col gap-0.5">
-          {/* Overview's only content today is the Earnings widget, which is
-              orders-derived — showing it (or landing a member here at all)
-              when they have no Orders access just means an empty page, so
-              gate it the same as the Orders tab itself. */}
-          {canShow("orders") && (
-            <NavItem
-              href={base}
-              active={pathname === base}
-              label="Overview"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="13" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                </svg>
-              }
-            />
-          )}
+          {/* Every member has an Overview: their own work on the account
+              (and the order queue with Orders access); an owner's has the money. */}
+          <NavItem
+            href={base}
+            active={pathname === base}
+            label="Overview"
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                <rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                <rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                <rect x="13" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+              </svg>
+            }
+          />
           {huntingAccess && (
             <NavItem
               href={`${base}/hunting`}
@@ -253,26 +240,6 @@ export function AccountShell({
           )}
         </nav>
 
-        {permissions !== undefined && (
-          <div className="mt-auto space-y-1 border-t border-[var(--color-line)] pt-3">
-            <Link href="/connections" className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
-                <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
-              </svg>
-              Dashboard
-            </Link>
-            <button type="button" onClick={() => setConfirmLogout(true)} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path d="M10 4H6a2 2 0 00-2 2v12a2 2 0 002 2h4M15 8l4 4-4 4M19 12H9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Log out
-            </button>
-            <p className="truncate px-2.5 pt-1 text-[11px] text-[var(--color-muted)]">{user.email}</p>
-          </div>
-        )}
       </>
       }
     >
@@ -290,13 +257,12 @@ export function AccountShell({
               {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
               <NotificationBell />
-              {/* Owners came from the main dashboard; members have no dashboard,
-                  their way out is the sidebar footer. A dashboard mark, not an
-                  arrow, so it never reads as a page's own Back button. */}
-              {permissions === undefined && (
-                <Link
-                  href="/dashboard"
-                  title="All accounts' Dashboard"
+              {/* Back to the Dashboard: an owner's of all accounts, a member's
+                  of the accounts they work on. A dashboard mark, not an arrow,
+                  so it never reads as a page's own Back button. */}
+              <Link
+                  href={permissions === undefined ? "/dashboard" : "/connections"}
+                  title={permissions === undefined ? "All accounts' Dashboard" : "Your Dashboard"}
                   className="btn btn-sm flex-shrink-0 gap-1.5 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white max-sm:order-first max-sm:mr-auto"
                 >
                   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
@@ -307,7 +273,6 @@ export function AccountShell({
                   </svg>
                   Dashboard
                 </Link>
-              )}
             </div>
           </div>
           {subheader && <div className="mt-5">{subheader}</div>}
@@ -326,14 +291,6 @@ export function AccountShell({
         )}
       </div>
 
-      <ConfirmDialog
-        open={confirmLogout}
-        title="Log out?"
-        description="You'll need to log in again to get back here."
-        confirmLabel="Log out"
-        onCancel={() => setConfirmLogout(false)}
-        onConfirm={handleLogout}
-      />
     </ShellFrame>
     </AccountTimeZoneProvider>
   );
