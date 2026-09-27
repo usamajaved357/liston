@@ -151,4 +151,36 @@ function fromTraffic(rows, { limit = 30 } = {}) {
     .slice(0, limit);
 }
 
-module.exports = { fromListings, fromTraffic, termsOf };
+/**
+ * The account's own traffic and sales on one keyword: its listings whose
+ * titles have every word of it (singular or plural), added up — sales from
+ * all of them, impressions and views from the measured ones. Null when
+ * none of its listings has the keyword.
+ */
+function trafficFor(rows, keyword) {
+  const stem = (w) => w.replace(/(?<=\w{3})s$/, '');
+  const wanted = [...new Set(wordsOf(keyword).map(stem))];
+  if (!wanted.length) return null;
+  const t = { listings: 0, measured: 0, impressions: 0, views: 0, sold: 0, measuredSold: 0 };
+  for (const r of rows) {
+    const have = new Set(wordsOf(r.title || '').map(stem));
+    if (!wanted.every((w) => have.has(w))) continue;
+    t.listings += 1;
+    t.sold += Number(r.sold) || 0;
+    if (r.impressions !== null && r.impressions !== undefined) {
+      t.measured += 1;
+      t.impressions += Number(r.impressions) || 0;
+      t.views += Number(r.views) || 0;
+      t.measuredSold += Number(r.sold) || 0;
+    }
+  }
+  if (!t.listings) return null;
+  const { measuredSold, ...out } = t;
+  return {
+    ...out,
+    ctr: t.impressions ? Math.round((t.views / t.impressions) * 10000) / 100 : null,
+    conversion: t.views ? Math.round((measuredSold / t.views) * 10000) / 100 : null,
+  };
+}
+
+module.exports = { fromListings, fromTraffic, trafficFor, termsOf };

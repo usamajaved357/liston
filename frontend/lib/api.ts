@@ -1956,7 +1956,7 @@ export interface DiscoverOpportunity {
 export interface DiscoverFigures {
   total: number;
   sample: number;
-  demand: { read: number; selling: number; medianPerMonth: number | null; topPerMonth: number | null; soldTotal: number };
+  demand: { read: number; selling: number; monthlySales: number; sellThrough: number | null; medianPerMonth: number | null; topPerMonth: number | null; soldTotal: number };
   competition: { sellers: number; topSeller: { username: string; share: number } | null };
   price: { low: number; median: number; high: number } | null;
   fit: { sellers: number; canMatch: number; share: number; overseas: number } | null;
@@ -1996,7 +1996,35 @@ export interface DiscoverSubjectRef {
   categoryId?: string;
   q?: string;
 }
+export interface DiscoverGroup {
+  key: string;
+  label?: string;
+  listings: number;
+  perMonth: number;
+  domestic?: boolean;
+}
+export interface DiscoverCharts {
+  priceBands: { from: number; to: number | null; listings: number; perMonth: number }[];
+  delivery: DiscoverGroup[];
+  countries: DiscoverGroup[];
+  sellers: DiscoverGroup[];
+  demandCurve: { itemId: string; title: string; perMonth: number }[];
+}
+// Your own listings with a keyword: their traffic (measured ones) and sales (all), last 30 days.
+export interface DiscoverYourTraffic {
+  listings: number;
+  measured?: number;
+  impressions?: number;
+  views?: number;
+  sold?: number;
+  ctr?: number | null;
+  conversion?: number | null;
+  range?: { from: string; to: string };
+}
 export interface DiscoverExplore {
+  charts: DiscoverCharts;
+  trend: { day: string; value: number | null }[] | null;
+  yourTraffic: DiscoverYourTraffic | null;
   subject: { kind: "category" | "keyword"; categoryId: string | null; q: string | null; name: string; path: { id: string; name: string }[]; leaf: boolean; takenAt: string; stale: boolean };
   figures: DiscoverFigures;
   opportunity: DiscoverOpportunity;
@@ -2028,6 +2056,7 @@ export interface DiscoverStart {
   yourCategories: DiscoverCategoryCard[];
   topCategories: DiscoverCategoryCard[];
   watches: number;
+  watchPreview: DiscoverWatch[];
   budget: DiscoverBudget;
 }
 export interface DiscoverWatch {
@@ -2351,6 +2380,8 @@ export const api = {
     if (reads) q.set("reads", String(reads));
     return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
   },
+  discoverSuggest: (connectionId: string, q: string) =>
+    request<{ categories: { id: string; name: string; path: string[]; leaf: boolean }[] }>(`/api/connections/${connectionId}/discover/suggest?q=${encodeURIComponent(q)}`),
   discoverRank: (connectionId: string, categoryId: string) =>
     request<{ total: number; done: number }>(`/api/connections/${connectionId}/discover/rank`, { method: "POST", body: JSON.stringify({ categoryId }) }),
   discoverWatches: (connectionId: string) => request<DiscoverWatchList>(`/api/connections/${connectionId}/discover/watches`),

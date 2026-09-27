@@ -302,22 +302,41 @@ async function childRows(ctx, info, parentScan) {
  * children (subcategories, ranked once scanned), watch, account, budget }.
  * `reads`: how many leading listings' sold counts to read (25 a step).
  */
-function explore(ownerId, connectionId, input, { reads: wantedReads = READS_FIRST } = {}) {
+function explore(ownerId, connectionId, input, { reads: wantedReads = READS_FIRST, canSeeTraffic = false } = {}) {
   const subject = subjectOf(input);
   const max = Math.min(READS_MAX, Math.max(READS_FIRST, Number(wantedReads) || READS_FIRST));
-  return once(`explore:${connectionId}:${subject.key}:${max}`, () => exploreNow(ownerId, connectionId, subject, max));
+  return once(`explore:${connectionId}:${subject.key}:${max}:${canSeeTraffic}`, () => exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }));
 }
 
-async function exploreNow(ownerId, connectionId, subject, max) {
+// The account's own traffic and sales on a keyword (its Analytics figures,
+// last 30 days), for whoever sees its analytics; null when there's none or
+// it takes too long (the rest of the page doesn't wait on it).
+const TRAFFIC_WAIT_MS = 8000;
+async function ownTraffic(ownerId, connectionId, keyword) {
+  try {
+    const read = require('../analytics/analytics.service')
+      .getAnalytics(connectionId, ownerId, { range: '30d' })
+      .then(({ data }) => (data.status === 'ok' ? { ...keywords.trafficFor(data.listings || [], keyword), range: data.range } : null));
+    const result = await Promise.race([read, new Promise((resolve) => setTimeout(() => resolve(null), TRAFFIC_WAIT_MS))]);
+    return result && result.listings ? result : result ? { listings: 0, range: result.range } : null;
+  } catch (err) {
+    logger.warn('Discover: own traffic not read', { connectionId, error: err.message });
+    return null;
+  }
+}
+
+async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }) {
   const ctx = await context(ownerId, connectionId);
   const info = await subjectInfo(ctx.site, subject);
+  const traffic = canSeeTraffic && subject.kind === 'keyword' ? ownTraffic(ownerId, connectionId, subject.q) : Promise.resolve(null);
   const scanRow = await scan(ctx.site, subject);
   const sold = await readSold(ownerId, connectionId, ctx, scanRow.listings, { max });
   const listings = scoring.withPace(placed(scanRow, ctx, sold.reads));
 
   const f = scoring.figures(listings, { total: scanRow.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
-  const since = analyticsDays.addDays(ctx.day, -(trends.WEEK + 1));
-  const recent = trends.recentSales(await repo.readsSince(ctx.site.id, listings.map(idOf), since));
+  // Two weeks of readings: recent sales per listing, and the subject's sales day by day.
+  const history = await repo.readsSince(ctx.site.id, listings.map(idOf), analyticsDays.addDays(ctx.day, -15));
+  const recent = trends.recentSales(history);
   const summary = trends.summarise(scoring.sellingNow(listings), recent);
   const [children, watch] = await Promise.all([childRows(ctx, info, scanRow), repo.findWatch(connectionId, subject.kind, subject.value)]);
 
@@ -334,6 +353,11 @@ async function exploreNow(ownerId, connectionId, subject, max) {
     },
     figures: f,
     opportunity: scoring.opportunity(f, { currency: ctx.site.currency }),
+    charts: scoring.charts(listings, { country: ctx.site.country }),
+    // Sales day by day from Discover's daily readings (null until two days are known).
+    trend: trends.dailySales(history, { today: ctx.day, days: 14 }),
+    // A keyword: your own listings with it, their traffic and sales (Analytics, 30 days).
+    yourTraffic: await traffic,
     recent: summary.recent,
     rising: summary.rising.map((l) => shown(l, ctx.site.country)),
     listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => shown(l, ctx.site.country)),
@@ -406,6 +430,15 @@ async function rankChildren(ownerId, connectionId, categoryId) {
   return { total: job.total, done: job.done };
 }
 
+/** Categories matching what's typed in Discover's search box, with their paths. */
+async function suggest(ownerId, connectionId, q) {
+  const text = String(q || '').trim();
+  if (text.length < 2) return { categories: [] };
+  const ctx = await context(ownerId, connectionId);
+  const found = await taxonomy.searchCategories(ctx.site.id, text).catch(() => []);
+  return { categories: found.slice(0, 6).map((c) => ({ id: String(c.id), name: c.name, path: (c.path || []).slice(0, -1), leaf: c.leaf })) };
+}
+
 // ---- where to start ------------------------------------------------------------------
 
 /**
@@ -433,12 +466,15 @@ async function start(ownerId, connectionId) {
     const f = scoring.figures(placed(s, ctx, reads), { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
     return f.demand.read ? { ...scoring.opportunity(f, { currency: ctx.site.currency }), parts: undefined, total: s.total } : null;
   };
+  // The first few watches with their figures, for the start screen.
+  const preview = watched ? (await watches(ownerId, connectionId)).items.slice(0, 4) : [];
   return {
     market: marketplaces.summary(ctx.site.id),
     account: ctx.account ? { min: ctx.account.min, max: ctx.account.max, policyName: ctx.account.policyName, serviceName: ctx.account.serviceName } : null,
     yourCategories: ownRows.map((c) => ({ ...c, scanned: badge(c.id) })),
     topCategories: top.map((c) => ({ id: c.id, name: c.name, leaf: c.leaf, scanned: badge(c.id) })),
     watches: watched,
+    watchPreview: preview,
     budget: await budget.left(),
   };
 }
@@ -562,6 +598,7 @@ module.exports = {
   explore,
   rankChildren,
   rankingOf,
+  suggest,
   start,
   watches,
   addWatch,

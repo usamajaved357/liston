@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, DiscoverExplore, DiscoverOwnKeywords as OwnKeywords, DiscoverStart, DiscoverSubjectRef, DiscoverWatchList } from "@/lib/api";
 import { Alert } from "@/components/Alert";
+import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { DiscoverSearch } from "./DiscoverSearch";
 import { DiscoverStartView } from "./DiscoverStartView";
 import { DiscoverSubjectView } from "./DiscoverSubjectView";
 import { DiscoverWatchlist } from "./DiscoverWatchlist";
@@ -167,45 +169,44 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   }
 
   const watchCount = start?.data?.watches ?? watchlist?.data?.items.length ?? null;
-  const tabs: { key: Section; label: string }[] = [
+  const sections: { key: Section; label: string }[] = [
     { key: "explore", label: "Explore" },
     { key: "watchlist", label: watchCount ? `Watchlist · ${watchCount}` : "Watchlist" },
     ...(canSeeTraffic ? [{ key: "keywords" as Section, label: "Your keywords" }] : []),
   ];
+  // Back goes up one level: a category to the one above it, anything else to Discover's start.
+  const path = shown?.data?.subject.kind === "category" ? shown.data.subject.path : [];
+  const parent = path.length > 1 ? path[path.length - 2] : null;
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div role="tablist" aria-label="Discover" className="inline-flex max-w-full rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              role="tab"
-              aria-selected={section === t.key}
-              onClick={() => setSection(t.key)}
-              className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${section === t.key ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"}`}
-            >
-              {t.label}
-            </button>
-          ))}
+      {/* On every Discover screen: the search box and the sections. */}
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <DiscoverSearch key={key} connectionId={connectionId} onOpen={open} initial={subject?.q || ""} />
+        <div className="flex flex-wrap items-center gap-2">
+          <SegmentedControl
+            label="Discover"
+            value={section}
+            onChange={(next) => {
+              // Explore again from inside a category or keyword: back to the start.
+              if (next === "explore" && section === "explore" && subject) open(null);
+              setSection(next);
+            }}
+            options={sections}
+          />
+          {section === "keywords" && (
+            <SegmentedControl
+              label="Dates"
+              value={range}
+              onChange={setRange}
+              options={[
+                { key: "7d", label: "7 days" },
+                { key: "30d", label: "30 days" },
+                { key: "90d", label: "90 days" },
+              ]}
+            />
+          )}
         </div>
-        {section === "keywords" && (
-          <div role="radiogroup" aria-label="Dates" className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-            {(["7d", "30d", "90d"] as const).map((r) => (
-              <button
-                key={r}
-                type="button"
-                role="radio"
-                aria-checked={range === r}
-                onClick={() => setRange(r)}
-                className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${range === r ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"}`}
-              >
-                {r === "7d" ? "7 days" : r === "30d" ? "30 days" : "90 days"}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {section === "explore" &&
@@ -223,7 +224,8 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
               <DiscoverSubjectView
                 data={shown.data}
                 onOpen={open}
-                onBack={() => open(null)}
+                onBack={() => open(parent ? { categoryId: parent.id } : null)}
+                backLabel={parent ? parent.name : "Discover"}
                 onHunt={onHunt}
                 onReadMore={() => setReads({ key, n: readsWanted + READS_STEP })}
                 readingMore={!answered && readsWanted > (shown.data.reads.asked || 0)}
@@ -238,7 +240,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
         ) : start?.error ? (
           <Alert>{start.error}</Alert>
         ) : start?.data ? (
-          <DiscoverStartView data={start.data} onOpen={open} />
+          <DiscoverStartView data={start.data} onOpen={open} onWatchlist={() => setSection("watchlist")} />
         ) : (
           <Loading first={false} />
         ))}

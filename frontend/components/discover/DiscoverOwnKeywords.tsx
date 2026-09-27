@@ -2,6 +2,7 @@
 
 import { DiscoverOwnKeywords as OwnKeywords, DiscoverSubjectRef } from "@/lib/api";
 import { count } from "@/components/research/format";
+import { CardHeader } from "./discover-ui";
 
 // Which words in the account's own titles bring impressions, clicks and
 // sales, from its stored traffic (the Analytics tab's figures). No eBay
@@ -27,11 +28,11 @@ export function DiscoverOwnKeywords({ data, onOpen }: { data: OwnKeywords; onOpe
   const top = Math.max(1, ...data.keywords.map((k) => k.sold));
   return (
     <section className="card overflow-hidden">
-      <div className="px-4 pb-2.5 pt-3.5">
-        <h3 className="text-[13.5px] font-semibold text-[var(--color-ink)]">Your keywords</h3>
-        <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">
-          The words in your own titles: what their listings sold (all {data.listings}), and the traffic of the {data.measured} eBay measured. Click one to explore it on eBay.
-        </p>
+      <div className="p-4 pb-3">
+        <CardHeader
+          title="Your keywords"
+          note={`The words in your own titles: what their listings sold (all ${data.listings}), and the traffic of the ${data.measured} eBay measured. Open one to see it on eBay.`}
+        />
       </div>
       <div className="overflow-x-auto border-t border-[var(--color-line)]">
         <table className="w-full min-w-[620px] table-fixed text-[12.5px]">

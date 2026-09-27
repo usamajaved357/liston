@@ -2,13 +2,14 @@
 
 import { DiscoverAccount, DiscoverBudget, DiscoverListing, DiscoverOpportunity } from "@/lib/api";
 
-// Small pieces Discover's views share: the opportunity badge, delivery next
-// to the account's, and what's left of the day's eBay reads.
+// Pieces Discover's views share, in the Analytics page's style: card
+// headers, quiet empty text, thumbnails, the opportunity badge, delivery
+// next to the account's, and what's left of the day's eBay reads.
 
-export const BAND: Record<DiscoverOpportunity["band"], { label: string; chip: string; ink: string; bar: string }> = {
-  strong: { label: "Strong", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200", ink: "text-emerald-700", bar: "bg-emerald-500" },
-  fair: { label: "Fair", chip: "bg-amber-50 text-amber-800 ring-amber-200", ink: "text-amber-700", bar: "bg-amber-500" },
-  weak: { label: "Weak", chip: "bg-rose-50 text-rose-700 ring-rose-200", ink: "text-rose-700", bar: "bg-rose-400" },
+export const BAND: Record<DiscoverOpportunity["band"], { label: string; chip: string; ink: string; bar: string; soft: string }> = {
+  strong: { label: "Strong", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200", ink: "text-emerald-700", bar: "bg-emerald-500", soft: "bg-emerald-50" },
+  fair: { label: "Fair", chip: "bg-amber-50 text-amber-800 ring-amber-200", ink: "text-amber-700", bar: "bg-amber-500", soft: "bg-amber-50" },
+  weak: { label: "Weak", chip: "bg-rose-50 text-rose-700 ring-rose-200", ink: "text-rose-700", bar: "bg-rose-400", soft: "bg-rose-50" },
 };
 
 export function ScoreBadge({ score, band, size = "md" }: { score: number; band: DiscoverOpportunity["band"]; size?: "sm" | "md" }) {
@@ -24,17 +25,44 @@ export function ScoreBadge({ score, band, size = "md" }: { score: number; band: 
   );
 }
 
-export const perMonth = (n: number | null | undefined) => (n === null || n === undefined ? "—" : `${n >= 100 ? Math.round(n) : n}/mo`);
+export function CardHeader({ title, aside, note }: { title: string; aside?: React.ReactNode; note?: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+      <div className="min-w-0">
+        <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">{title}</h2>
+        {note && <p className="mt-0.5 text-[11.5px] leading-snug text-[var(--color-muted)]">{note}</p>}
+      </div>
+      {aside}
+    </div>
+  );
+}
+
+export function Quiet({ children }: { children: React.ReactNode }) {
+  return <p className="py-6 text-center text-[12.5px] leading-relaxed text-[var(--color-muted)]">{children}</p>;
+}
+
+export function Thumb({ src, size = 36 }: { src: string | null; size?: number }) {
+  const cls = "flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-contain";
+  return src ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={src} alt="" width={size} height={size} style={{ width: size, height: size }} className={cls} loading="lazy" />
+  ) : (
+    <span style={{ width: size, height: size }} className={`${cls} bg-[var(--color-paper)]`} />
+  );
+}
+
+export const perMonth = (n: number | null | undefined) =>
+  n === null || n === undefined ? "—" : `${n >= 100 ? Math.round(n).toLocaleString("en-GB") : Math.round(n * 10) / 10}/mo`;
 
 /** Working days until it arrives, coloured by how it sits next to the account's delivery. */
-export function DeliveryText({ delivery }: { delivery: DiscoverListing["delivery"] }) {
-  if (delivery.max === null || delivery.max === undefined) return <span className="text-[var(--color-muted)]">Delivery not given</span>;
+export function DeliveryText({ delivery, short = false }: { delivery: DiscoverListing["delivery"]; short?: boolean }) {
+  if (delivery.max === null || delivery.max === undefined) return <span className="text-[var(--color-muted)]">Not given</span>;
   const days = delivery.min === delivery.max ? `${delivery.max}` : `${delivery.min}–${delivery.max}`;
   const tone = delivery.compared === "faster" ? "text-amber-700" : delivery.compared === "similar" || delivery.compared === "slower" ? "text-emerald-700" : "text-[var(--color-muted)]";
   const note = delivery.compared === "faster" ? "faster than you" : delivery.compared === "slower" ? "slower than you" : delivery.compared === "similar" ? "like you" : "";
   return (
     <span className={tone} title="Working days until it arrives, per eBay">
-      {days} days{note && ` · ${note}`}
+      {days} days{note && !short && ` · ${note}`}
     </span>
   );
 }
@@ -43,7 +71,7 @@ export function AccountDelivery({ account }: { account: DiscoverAccount | null }
   if (!account) return <span>Your postage policy couldn&apos;t be read, so delivery isn&apos;t compared.</span>;
   return (
     <span>
-      Compared with your delivery: <span className="font-medium text-[var(--color-ink)]">{account.min === account.max ? account.max : `${account.min}–${account.max}`} working days</span>
+      Your delivery: <span className="font-medium text-[var(--color-ink)]">{account.min === account.max ? account.max : `${account.min}–${account.max}`} working days</span>
       {account.policyName && <> ({account.policyName})</>}
     </span>
   );
@@ -53,23 +81,11 @@ export function AccountDelivery({ account }: { account: DiscoverAccount | null }
 export function BudgetLine({ budget }: { budget: DiscoverBudget }) {
   const reset = budget.resetAt ? new Date(budget.resetAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : null;
   return (
-    <p className="text-[11.5px] text-[var(--color-muted)]">
-      Today: {budget.used.trading.toLocaleString("en-GB")} of {budget.limits.trading.toLocaleString("en-GB")} sold-count reads · {budget.used.browse} of {budget.limits.browse} searches
+    <p className="text-[11px] text-[var(--color-muted)]">
+      eBay reads today: {budget.used.trading.toLocaleString("en-GB")} of {budget.limits.trading.toLocaleString("en-GB")} sold counts · {budget.used.browse} of {budget.limits.browse} searches
       {reset && <> · resets at {reset}</>}
       {budget.tradingPaused && <span className="text-amber-700"> · sold counts paused so orders keep eBay&apos;s last calls today</span>}
     </p>
-  );
-}
-
-export function SectionTitle({ title, note, right }: { title: string; note?: React.ReactNode; right?: React.ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1 px-4 pb-2.5 pt-3.5">
-      <div className="min-w-0">
-        <h3 className="text-[13.5px] font-semibold text-[var(--color-ink)]">{title}</h3>
-        {note && <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">{note}</p>}
-      </div>
-      {right}
-    </div>
   );
 }
 
@@ -84,5 +100,11 @@ export const HuntIcon = ({ className = "h-3.5 w-3.5" }: { className?: string }) 
     <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.9" />
     <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.9" />
     <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+  </svg>
+);
+
+export const Chevron = ({ className = "h-4 w-4" }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+    <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );

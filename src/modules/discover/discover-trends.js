@@ -69,4 +69,39 @@ function summarise(listings, recent) {
   return { recent: measured ? { sold, days, listings: measured } : null, rising, listings: withRecent };
 }
 
-module.exports = { recentSales, summarise, WEEK };
+/**
+ * Sales day by day over the last `days` days, from the daily readings: a
+ * listing's sales between two readings land on the days between them
+ * (spread evenly over a gap). A day no two readings span is null (not
+ * known). Null altogether until at least two days are known.
+ *
+ * @returns [{ day, value }] | null
+ */
+function dailySales(reads, { today, days = 14 } = {}) {
+  const from = analyticsDays.addDays(today, -(days - 1));
+  const totals = new Map();
+  const byItem = new Map();
+  for (const r of reads) {
+    const list = byItem.get(r.item_id) || [];
+    list.push({ day: String(r.day).slice(0, 10), sold: Number(r.sold) || 0 });
+    byItem.set(r.item_id, list);
+  }
+  for (const list of byItem.values()) {
+    list.sort((a, b) => (a.day < b.day ? -1 : 1));
+    for (let i = 1; i < list.length; i += 1) {
+      const a = list[i - 1];
+      const b = list[i];
+      const gap = daysApart(a.day, b.day);
+      if (gap <= 0) continue;
+      const each = Math.max(0, b.sold - a.sold) / gap;
+      for (let k = 1; k <= gap; k += 1) {
+        const day = analyticsDays.addDays(a.day, k);
+        if (day >= from && day <= today) totals.set(day, (totals.get(day) || 0) + each);
+      }
+    }
+  }
+  if (totals.size < 2) return null;
+  return analyticsDays.daysBetween(from, today).map((day) => ({ day, value: totals.has(day) ? Math.round(totals.get(day) * 10) / 10 : null }));
+}
+
+module.exports = { recentSales, summarise, dailySales, WEEK };

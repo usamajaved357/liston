@@ -28,7 +28,7 @@ test('a subject is judged on how fast its leading listings sell, how crowded it 
     listing('Fountain pump', { sold: null, seller: 'd', price: 3, ship: 1 }), // not read
   ];
   const f = scoring.figures(listings, { total: 1800, country: 'GB', now: NOW });
-  assert.deepStrictEqual(f.demand, { read: 4, selling: 3, medianPerMonth: 5.5, topPerMonth: 60, soldTotal: 154 });
+  assert.deepStrictEqual(f.demand, { read: 4, selling: 3, monthlySales: 71, sellThrough: 75, medianPerMonth: 5.5, topPerMonth: 60, soldTotal: 154 });
   assert.deepStrictEqual(f.competition, { sellers: 4, topSeller: { username: 'a', share: 40 } });
   assert.deepStrictEqual(f.price, { low: 10, median: 10, high: 10 });
   // Of the three that sell: one faster than you, one like you, one slower → two you can match; one abroad.
@@ -52,6 +52,14 @@ test('a subject is judged on how fast its leading listings sell, how crowded it 
   // Without the account's delivery known, fit earns half its points.
   const unknown = scoring.opportunity(scoring.figures(listings, { total: 1800, country: 'GB', accountKnown: false, now: NOW }));
   assert.strictEqual(unknown.parts.find((p) => p.key === 'fit').points, 7);
+
+  // Where the sales are: by delivery next to yours, by country, by seller, and the leading listings in order.
+  const c = scoring.charts(listings, { country: 'GB', now: NOW });
+  assert.deepStrictEqual(c.delivery.map((d) => [d.key, d.listings, d.perMonth]), [['faster', 1, 60], ['similar', 2, 10], ['slower', 1, 1], ['unknown', 1, 0]]);
+  assert.deepStrictEqual(c.countries.map((g) => [g.key, g.perMonth, g.domestic]), [['GB', 70, true], ['CN', 1, false]]);
+  assert.deepStrictEqual(c.sellers.map((g) => [g.key, g.perMonth]), [['a', 60], ['b', 10], ['c', 1]]);
+  assert.deepStrictEqual(c.demandCurve.map((d) => d.perMonth), [60, 10, 1, 0]);
+  assert.strictEqual(c.priceBands.reduce((n, b) => n + b.listings, 0), 5, 'every listing in a price band');
 
   // Selling now: the read ones fastest first, then the unread.
   assert.deepStrictEqual(
@@ -99,6 +107,9 @@ test('your keywords add up the traffic and sales of your listings by the words i
     { listings: 2, impressions: 1600, views: 70, sold: 6, ctr: 4.38, conversion: 8.57 }
   );
   // Sales count every listing (they come from orders); traffic only the measured ones.
+  // One keyword's traffic: the listings with every word of it, singular or plural.
+  assert.deepStrictEqual(keywords.trafficFor(rows, 'cat water fountains'), { listings: 2, measured: 2, impressions: 1600, views: 70, sold: 6, ctr: 4.38, conversion: 8.57 });
+  assert.strictEqual(keywords.trafficFor(rows, 'parrot cage'), null);
   const bowl = found.find((k) => k.term === 'dog bowl');
   assert.deepStrictEqual([bowl.listings, bowl.measured, bowl.impressions, bowl.sold, bowl.conversion], [2, 1, 300, 2, 0]);
   assert.strictEqual(found[0].sold, 6, 'most sales first');
@@ -126,4 +137,23 @@ test("a watched listing's recent sales are the difference between its readings a
   const summary = trends.summarise(listings, recent);
   assert.deepStrictEqual(summary.recent, { sold: 32, days: 7, listings: 2 });
   assert.deepStrictEqual(summary.rising.map((l) => [l.title, l.lift]), [['Taking off', 4]]);
+});
+
+test('sales day by day come from the daily readings, spread over a gap, unknown days left empty', () => {
+  const reads = [
+    { item_id: '1', day: '2026-09-25', sold: 10 },
+    { item_id: '1', day: '2026-09-26', sold: 14 },
+    { item_id: '1', day: '2026-09-28', sold: 20 }, // 6 over two days: 3 each
+    { item_id: '2', day: '2026-09-27', sold: 5 },
+    { item_id: '2', day: '2026-09-28', sold: 7 },
+  ];
+  const days = trends.dailySales(reads, { today: '2026-09-28', days: 5 });
+  assert.deepStrictEqual(days, [
+    { day: '2026-09-24', value: null },
+    { day: '2026-09-25', value: null },
+    { day: '2026-09-26', value: 4 },
+    { day: '2026-09-27', value: 3 },
+    { day: '2026-09-28', value: 5 },
+  ]);
+  assert.strictEqual(trends.dailySales([{ item_id: '1', day: '2026-09-28', sold: 3 }], { today: '2026-09-28' }), null, 'one reading: nothing to chart');
 });

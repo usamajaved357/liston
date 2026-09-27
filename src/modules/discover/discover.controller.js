@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const discoverService = require('./discover.service');
+const teamRepository = require('../team/team.repository');
 
 // Discover's requests (mounted under /api/connections/:id/discover):
 // checked here, handed to the service with the account and who's asking.
@@ -38,7 +39,14 @@ const start = handle(async (req, res) => {
 const explore = handle(async (req, res) => {
   const input = parse(exploreSchema, req.query, res);
   if (!input) return;
-  res.status(200).json(await discoverService.explore(req.ownerId, req.params.id, input, { reads: input.reads }));
+  // Your own traffic on a keyword is the account's analytics: owners, and members with Analytics.
+  const canSeeTraffic = req.role === 'owner' || (await teamRepository.resolvePermission(req.userId, req.params.id, 'analytics'));
+  res.status(200).json(await discoverService.explore(req.ownerId, req.params.id, input, { reads: input.reads, canSeeTraffic }));
+});
+
+const suggest = handle(async (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '';
+  res.status(200).json(await discoverService.suggest(req.ownerId, req.params.id, q));
 });
 
 const rank = handle(async (req, res) => {
@@ -69,4 +77,4 @@ const yourKeywords = handle(async (req, res) => {
   res.status(200).json(await discoverService.yourKeywords(req.ownerId, req.params.id, input));
 });
 
-module.exports = { start, explore, rank, watches, addWatch, removeWatch, yourKeywords };
+module.exports = { start, explore, suggest, rank, watches, addWatch, removeWatch, yourKeywords };

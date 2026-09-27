@@ -93,7 +93,7 @@ test.before(async () => {
 test.after(async () => {
   mock.restoreAll();
   await new Promise((resolve) => server.close(resolve));
-  await pool.query(`DELETE FROM discover_scans WHERE subject = ANY($1)`, [[`c:${PARENT}`, ...CHILDREN.map((c) => `c:${c}`), `q:${KEYWORD}`]]);
+  await pool.query(`DELETE FROM discover_scans WHERE subject = ANY($1)`, [[`c:${PARENT}`, ...CHILDREN.map((c) => `c:${c}`), `q:${KEYWORD}`, `q:parrot cage ${run}`, 'q:night light motion sensor']]);
   await pool.query(`DELETE FROM discover_listing_reads WHERE item_id LIKE $1 OR item_id LIKE $2 OR item_id LIKE $3`, [`9${run}%`, `8${run}%`, `7${run}%`]);
   await pool.end();
 });
@@ -235,4 +235,19 @@ test("your keywords come from the account's own traffic, for whoever sees its an
   assert.strictEqual(mine.status, 200);
   const top = mine.data.keywords.find((k) => k.term === 'night light motion');
   assert.deepStrictEqual([top.listings, top.impressions, top.sold], [2, 1400, 8]);
+
+  // A keyword searched in Discover shows your own traffic and sales on it, to whoever sees the analytics.
+  const searched = await request('GET', `${base}/explore?q=${encodeURIComponent(`parrot cage ${run}`)}`, undefined, t.ownerToken);
+  assert.strictEqual(searched.status, 200);
+  assert.strictEqual(searched.data.yourTraffic.listings, 0, 'none of your listings has it: a gap');
+  const known = await request('GET', `${base}/explore?q=${encodeURIComponent('night light motion sensor')}`, undefined, t.ownerToken);
+  assert.deepStrictEqual([known.data.yourTraffic.listings, known.data.yourTraffic.impressions, known.data.yourTraffic.sold, known.data.yourTraffic.conversion], [2, 1400, 8, 13.33]);
+  assert.ok(known.data.charts.priceBands.length > 0 && known.data.charts.demandCurve.length === 25);
+  const hunterView = await request('GET', `${base}/explore?q=${encodeURIComponent('night light motion sensor')}`, undefined, t.hunter);
+  assert.strictEqual(hunterView.data.yourTraffic, null, "hunting alone doesn't show the account's traffic");
+
+  // The search box suggests categories for what's typed.
+  mock.method(taxonomy, 'searchCategories', async () => [{ id: '123', name: 'Night Lights', leaf: true, path: ['Home', 'Lighting', 'Night Lights'] }]);
+  const suggested = await request('GET', `${base}/suggest?q=night`, undefined, t.hunter);
+  assert.deepStrictEqual(suggested.data.categories, [{ id: '123', name: 'Night Lights', path: ['Home', 'Lighting'], leaf: true }]);
 });

@@ -161,6 +161,11 @@ function HuntingBody() {
     const qs = new URLSearchParams(search.toString());
     if (next === "discover") qs.set("tab", "discover");
     else qs.delete("tab");
+    // Discover pressed again from inside a category or keyword: back to its start.
+    if (next === "discover" && tab === "discover") {
+      qs.delete("dc");
+      qs.delete("dq");
+    }
     qs.delete("competitor");
     router.push(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
   }

@@ -1,84 +1,115 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { DiscoverCategoryCard, DiscoverStart, DiscoverSubjectRef } from "@/lib/api";
+import { DiscoverCategoryCard, DiscoverStart, DiscoverSubjectRef, DiscoverWatch } from "@/lib/api";
 import { count } from "@/components/research/format";
-import { AccountDelivery, BudgetLine, ScoreBadge } from "./discover-ui";
+import { AccountDelivery, BudgetLine, CardHeader, Chevron, perMonth, Quiet, ScoreBadge } from "./discover-ui";
 
-// Where Discover starts: a keyword to explore, the account's own categories
-// (from the listings Liston made for it) and eBay's top-level categories,
-// each with its opportunity once read.
+// Where Discover starts (the search box above is on every screen): what the
+// team watches, the account's own categories, and eBay's top-level
+// categories to browse — each with its opportunity once read.
 
-function CategoryCard({ category, onOpen, note }: { category: DiscoverCategoryCard; onOpen: () => void; note?: string }) {
+function CategoryRow({ category, note, onOpen }: { category: DiscoverCategoryCard; note?: string; onOpen: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="card group flex min-w-0 items-center gap-3 px-3.5 py-3 text-left transition-[box-shadow,border-color] hover:border-[var(--color-line-strong)] hover:shadow-md"
-    >
-      <span className="min-w-0 flex-1">
-        {category.path && category.path.length > 0 && <span className="block truncate text-[11px] text-[var(--color-muted)]">{category.path.join(" › ")}</span>}
-        <span className="block truncate text-[13px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{category.name}</span>
-        <span className="block text-[11.5px] text-[var(--color-muted)]">{category.scanned ? `${count(category.scanned.total)} live` : note || "Not read yet"}</span>
-      </span>
-      {category.scanned ? <ScoreBadge score={category.scanned.score} band={category.scanned.band} size="sm" /> : null}
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 shrink-0 text-[var(--color-muted)] group-hover:text-[var(--color-primary)]" aria-hidden>
-        <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </button>
+    <li>
+      <button type="button" onClick={onOpen} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--color-paper)]">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[12.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{category.name}</span>
+          <span className="block truncate text-[11px] text-[var(--color-muted)]">
+            {category.path && category.path.length > 0 ? `${category.path.join(" › ")} · ` : ""}
+            {category.scanned ? `${count(category.scanned.total)} live` : note || "Not read yet"}
+          </span>
+        </span>
+        {category.scanned && <ScoreBadge score={category.scanned.score} band={category.scanned.band} size="sm" />}
+        <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-primary)]" />
+      </button>
+    </li>
   );
 }
 
-export function DiscoverStartView({ data, onOpen }: { data: DiscoverStart; onOpen: (subject: DiscoverSubjectRef) => void }) {
-  const [q, setQ] = useState("");
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    if (q.trim().length >= 2) onOpen({ q: q.trim() });
-  }
+function WatchRow({ watch, onOpen }: { watch: DiscoverWatch; onOpen: () => void }) {
+  return (
+    <li>
+      <button type="button" onClick={onOpen} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--color-paper)]">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[12.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{watch.kind === "keyword" ? `“${watch.label}”` : watch.label}</span>
+          <span className="block truncate text-[11px] text-[var(--color-muted)]">
+            {watch.recent ? (
+              <span className="font-medium text-emerald-700">
+                {count(watch.recent.sold)} sold in {watch.recent.days} day{watch.recent.days === 1 ? "" : "s"}
+              </span>
+            ) : watch.figures ? (
+              `${perMonth(watch.figures.medianPerMonth)} · ${count(watch.figures.total)} live`
+            ) : (
+              "Read tonight"
+            )}
+          </span>
+        </span>
+        {watch.opportunity && <ScoreBadge score={watch.opportunity.score} band={watch.opportunity.band} size="sm" />}
+        <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
+      </button>
+    </li>
+  );
+}
+
+export function DiscoverStartView({ data, onOpen, onWatchlist }: { data: DiscoverStart; onOpen: (subject: DiscoverSubjectRef) => void; onWatchlist: () => void }) {
+  const subjectOf = (w: DiscoverWatch): DiscoverSubjectRef => (w.kind === "category" ? { categoryId: w.value } : { q: w.value });
   return (
     <div className="space-y-5">
-      <section className="card px-4 py-4">
-        <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Find what to hunt on {data.market.name}</h2>
-        <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-          Explore a keyword or a category: Liston reads its leading listings on eBay and how many each has sold, then shows how fast it sells, how crowded it is,
-          what buyers pay, whether you can match the sellers&apos; delivery, and the keywords of the titles that sell.
-        </p>
-        <form onSubmit={submit} className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <label className="relative min-w-0 flex-1">
-            <span className="sr-only">Keyword</span>
-            <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
-              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
-              <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-            <input value={q} onChange={(e) => setQ(e.target.value)} maxLength={80} placeholder="A keyword, e.g. cat water fountain" className="input input-sm !pl-9" />
-          </label>
-          <button type="submit" disabled={q.trim().length < 2} className="btn btn-primary btn-sm">
-            Explore
-          </button>
-        </form>
-        <p className="mt-2 text-[11.5px] text-[var(--color-muted)]">
-          <AccountDelivery account={data.account} />
-        </p>
+      <section className="card flex flex-col gap-3 p-4 md:flex-row md:items-center md:gap-5">
+        <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)]">
+          <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
+            <path d="M4 19V9M10 19V5M16 19v-6M22 19H2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Find what to hunt on {data.market.name}</h2>
+          <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+            Search a product or keyword, or open a category. Liston reads its leading listings and how many each has sold, then shows its monthly sales, competition,
+            prices, whether you can match the sellers&apos; delivery, the keywords that sell, and your own traffic on it.
+          </p>
+          <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">
+            <AccountDelivery account={data.account} />
+          </p>
+        </div>
       </section>
 
-      {data.yourCategories.length > 0 && (
-        <section>
-          <h3 className="mb-2 text-[12.5px] font-semibold text-[var(--color-ink)]">Your categories</h3>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-2.5">
-            {data.yourCategories.map((c) => (
-              <CategoryCard key={c.id} category={c} onOpen={() => onOpen({ categoryId: c.id })} note={`${c.listings} of your listings`} />
-            ))}
-          </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section className="card flex flex-col p-4">
+          <CardHeader
+            title="Your watchlist"
+            note="Read again every night"
+            aside={
+              data.watches > 0 ? (
+                <button type="button" onClick={onWatchlist} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
+                  See all {data.watches}
+                </button>
+              ) : undefined
+            }
+          />
+          {data.watchPreview.length ? (
+            <ul className="-mx-2 mt-2">{data.watchPreview.map((w) => <WatchRow key={w.id} watch={w} onOpen={() => onOpen(subjectOf(w))} />)}</ul>
+          ) : (
+            <Quiet>Open a category or keyword and press Watch: Liston reads it every night and charts its sales day by day.</Quiet>
+          )}
         </section>
-      )}
 
-      <section>
-        <h3 className="mb-2 text-[12.5px] font-semibold text-[var(--color-ink)]">All categories</h3>
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,260px),1fr))] gap-2.5">
+        <section className="card flex flex-col p-4">
+          <CardHeader title="Your categories" note="Where the listings Liston made for this account sit" />
+          {data.yourCategories.length ? (
+            <ul className="-mx-2 mt-2">{data.yourCategories.slice(0, 6).map((c) => <CategoryRow key={c.id} category={c} note={`${c.listings} of your listings`} onOpen={() => onOpen({ categoryId: c.id })} />)}</ul>
+          ) : (
+            <Quiet>Your categories show here once Liston has made listings for this account.</Quiet>
+          )}
+        </section>
+      </div>
+
+      <section className="card p-4">
+        <CardHeader title="Browse eBay categories" note="Open one to see it as a whole, then rank its subcategories" />
+        <ul className="-mx-2 mt-2 grid grid-cols-1 gap-x-4 sm:grid-cols-2 xl:grid-cols-3">
           {data.topCategories.map((c) => (
-            <CategoryCard key={c.id} category={c} onOpen={() => onOpen({ categoryId: c.id })} />
+            <CategoryRow key={c.id} category={c} onOpen={() => onOpen({ categoryId: c.id })} />
           ))}
-        </div>
+        </ul>
       </section>
 
       <BudgetLine budget={data.budget} />

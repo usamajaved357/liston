@@ -1,4 +1,4 @@
-const { soldPerMonth, landedPrice, median, round2 } = require('../research/research-stats');
+const { soldPerMonth, landedPrice, median, round2, priceBands, typicalPrices } = require('../research/research-stats');
 const { lowPriceFor } = require('../research/research-analysis');
 
 // How good a category or keyword is to hunt in, from its leading listings
@@ -55,6 +55,9 @@ function figures(listings, { total, country, accountKnown = true, now = Date.now
     demand: {
       read: read.length,
       selling: selling.length,
+      // What the leading listings read sell between them a month, and the share that sell at all.
+      monthlySales: Math.round(paces.reduce((sum, p) => sum + p, 0) * 10) / 10,
+      sellThrough: read.length ? pct(selling.length, read.length) : null,
       medianPerMonth: paces.length ? median(paces) : null,
       topPerMonth: paces.length ? paces[paces.length - 1] : null,
       soldTotal: read.reduce((sum, l) => sum + (l.sold || 0), 0),
@@ -144,4 +147,66 @@ function sellingNow(listings, now = Date.now()) {
   return [...read, ...all.filter((l) => l.soldPerMonth === null)];
 }
 
-module.exports = { figures, opportunity, sellingNow, withPace };
+const DELIVERY = [
+  { key: 'faster', label: 'Faster than you' },
+  { key: 'similar', label: 'Like you' },
+  { key: 'slower', label: 'Slower than you' },
+  { key: 'unknown', label: 'Not given' },
+];
+const round1 = (n) => Math.round(n * 10) / 10;
+
+/**
+ * Where the sales are, for the subject's charts: by price band (with
+ * postage; listings counted from all, sales a month from the ones read),
+ * by delivery next to the account's, by where listings ship from, by
+ * seller, and the leading listings' sales a month in order (the demand
+ * curve). Pure.
+ */
+function charts(listings, { country, now = Date.now() } = {}) {
+  const all = withPace(listings, now);
+  const prices = all.map((l) => l.landed).filter((p) => p !== null && p > 0).sort((a, b) => a - b);
+  const bands = priceBands(typicalPrices(prices)).map((b) => ({ from: b.from, to: b.to, listings: 0, perMonth: 0 }));
+  const bandOf = (price) => bands.find((b) => price >= b.from && (b.to === null || price < b.to)) || (price < (bands[0]?.from ?? 0) ? bands[0] : bands[bands.length - 1]);
+  const group = (keyOf) => {
+    const map = new Map();
+    for (const l of all) {
+      const key = keyOf(l);
+      if (key === null || key === undefined) continue;
+      const g = map.get(key) || { key, listings: 0, perMonth: 0 };
+      g.listings += 1;
+      g.perMonth += l.soldPerMonth || 0;
+      map.set(key, g);
+    }
+    return map;
+  };
+  for (const l of all) {
+    if (!l.landed || !bands.length) continue;
+    const band = bandOf(l.landed);
+    band.listings += 1;
+    band.perMonth += l.soldPerMonth || 0;
+  }
+  const delivery = group((l) => l.delivery?.compared || 'unknown');
+  const countries = group((l) => l.location?.country || null);
+  const sellers = group((l) => l.seller?.username || null);
+  const tidy = (g) => ({ ...g, perMonth: round1(g.perMonth) });
+  return {
+    priceBands: bands.map(tidy),
+    delivery: DELIVERY.map((d) => ({ ...tidy(delivery.get(d.key) || { key: d.key, listings: 0, perMonth: 0 }), label: d.label })).filter((d) => d.listings),
+    countries: [...countries.values()]
+      .map((g) => ({ ...tidy(g), domestic: g.key === country }))
+      .sort((a, b) => b.perMonth - a.perMonth || b.listings - a.listings)
+      .slice(0, 6),
+    sellers: [...sellers.values()]
+      .filter((g) => g.perMonth > 0)
+      .map(tidy)
+      .sort((a, b) => b.perMonth - a.perMonth)
+      .slice(0, 6),
+    demandCurve: all
+      .filter((l) => l.soldPerMonth !== null)
+      .sort((a, b) => b.soldPerMonth - a.soldPerMonth)
+      .slice(0, 25)
+      .map((l) => ({ itemId: String(l.legacyItemId || l.itemId), title: l.title, perMonth: l.soldPerMonth })),
+  };
+}
+
+module.exports = { figures, opportunity, sellingNow, withPace, charts };
