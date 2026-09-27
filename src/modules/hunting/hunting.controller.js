@@ -67,10 +67,6 @@ module.exports = {
   badge: handle(async (req, res) => {
     res.json(await huntingService.badge(auth(req), req.params.id));
   }),
-  team: handle(async (req, res) => {
-    const { range, from, to } = req.query;
-    res.json(await huntingService.team(auth(req), req.params.id, { range, from, to }));
-  }),
   detail: handle(async (req, res) => {
     res.json(await huntingService.detail(auth(req), req.params.huntId));
   }),
@@ -89,8 +85,8 @@ module.exports = {
     const input = parse(decisionSchema, req.body, res);
     if (input) res.json(await huntingService.decide(auth(req), req.params.huntId, input));
   }),
-  withdraw: handle(async (req, res) => {
-    await huntingService.withdraw(auth(req), req.params.huntId);
+  remove: handle(async (req, res) => {
+    await huntingService.remove(auth(req), req.params.huntId);
     res.status(204).send();
   }),
   draftStart: handle(async (req, res) => {

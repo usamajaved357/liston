@@ -19,7 +19,7 @@ const guard = [requireAuth, requireAnyFeature(HUNTING_ACCESS, { resolveConnectio
 
 router.get('/:huntId', ...guard, huntingController.detail);
 router.patch('/:huntId', ...guard, huntingController.update);
-router.delete('/:huntId', ...guard, huntingController.withdraw);
+router.delete('/:huntId', ...guard, huntingController.remove);
 router.post('/:huntId/recheck', ...guard, huntingController.recheck);
 router.post('/:huntId/resubmit', ...guard, huntingController.resubmit);
 router.post('/:huntId/decision', ...guard, huntingController.decide);

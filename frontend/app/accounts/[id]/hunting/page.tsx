@@ -7,21 +7,20 @@ import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton } from "@/components/Skeleton";
-import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { HuntAddBar, HuntCheck, HuntForm } from "@/components/hunting/HuntForm";
 import { HuntRows, PipelineTabs, SORT_LABELS } from "@/components/hunting/HuntList";
 import { HuntPanel } from "@/components/hunting/HuntPanel";
-import { HuntTeam } from "@/components/hunting/HuntTeam";
 import { DecisionDialog, Decision } from "@/components/hunting/DecisionDialog";
 import { announceHuntingChange } from "@/components/hunting/HuntBits";
+import { PushPrompt } from "@/components/NotificationBell";
 
 // Product hunting on one eBay account: team members find products (a
 // competitor's listing and the AliExpress product to supply it), Liston
 // works out the profit on every option, and each product waits for a
-// reviewer before anyone may draft it. Reviewers see the queue and the
-// team's figures; listers see what's approved, ready to draft.
+// reviewer before anyone may draft it. Reviewers see the queue; listers
+// see what's approved, ready to draft. Each team member's hunting figures
+// are on their own page in the owner's Team area, not here.
 
-type Tab = "products" | "team";
 const VIEWS: HuntView[] = ["review", "sent_back", "approved", "listed", "rejected", "all"];
 
 // Where a person starts: reviewers on the queue, listers on what's approved, hunters on everything.
@@ -38,7 +37,6 @@ function HuntingBody() {
   const router = useRouter();
   const { connection, user, loading, error } = useConnection(params.id);
   const askedView = VIEWS.includes(search.get("view") as HuntView) ? (search.get("view") as HuntView) : null;
-  const [tab, setTab] = useState<Tab>(search.get("tab") === "team" ? "team" : "products");
   const [view, setView] = useState<HuntView | null>(askedView);
   const [mine, setMine] = useState(false);
   const [hunter, setHunter] = useState("");
@@ -62,7 +60,7 @@ function HuntingBody() {
 
   // The page's place in the URL, so a shared or reopened link lands the same.
   const writeUrl = useCallback(
-    (next: { view?: HuntView | null; open?: string | null; tab?: Tab }) => {
+    (next: { view?: HuntView | null; open?: string | null }) => {
       const qs = new URLSearchParams(search.toString());
       const put = (key: string, value: string | null) => {
         if (value) qs.set(key, value);
@@ -70,7 +68,7 @@ function HuntingBody() {
       };
       if (next.view !== undefined) put("view", next.view);
       if (next.open !== undefined) put("open", next.open);
-      if (next.tab !== undefined) put("tab", next.tab === "team" ? "team" : null);
+      qs.delete("tab");
       qs.delete("competitor");
       router.replace(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
     },
@@ -134,10 +132,6 @@ function HuntingBody() {
     },
     [writeUrl]
   );
-  function changeTab(next: Tab) {
-    setTab(next);
-    writeUrl({ tab: next });
-  }
   const refresh = useCallback(() => setReload((n) => n + 1), []);
 
   function onChecked(next: HuntCheck | null) {
@@ -201,45 +195,33 @@ function HuntingBody() {
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Find products worth listing on {market?.name ?? "eBay"}. Each one is checked for profit and approved before it&apos;s drafted.</p>
         </div>
       }
-      footer={checked && tab === "products" ? <HuntAddBar key={checked.checkId} connectionId={connection.id} checked={checked} onDiscard={() => setChecked(null)} onAdded={onAdded} /> : undefined}
+      footer={checked ? <HuntAddBar key={checked.checkId} connectionId={connection.id} checked={checked} onDiscard={() => setChecked(null)} onAdded={onAdded} /> : undefined}
       pinFooter
-      actions={
-        canReview ? (
-          <SegmentedControl
-            label="Show"
-            value={tab}
-            onChange={changeTab}
-            options={[
-              { key: "products", label: "Products" },
-              { key: "team", label: "Team" },
-            ]}
-          />
-        ) : undefined
-      }
     >
-      {tab === "team" && canReview ? (
-        <HuntTeam connectionId={connection.id} you={user.id} />
-      ) : (
-        <div className="space-y-5">
-          {added && !checked && (
-            <div className="notice notice-success">
-              <span className="flex-1">{added}</span>
-              <button type="button" onClick={() => setAdded(null)} className="text-[12.5px] font-semibold hover:underline">
-                Dismiss
-              </button>
-            </div>
-          )}
-          {canHunt && (
-            <HuntForm
-              key={formKey}
-              connectionId={connection.id}
-              marketName={market?.name ?? "eBay"}
-              initialCompetitor={formKey === 0 ? search.get("competitor") : null}
-              checked={checked}
-              onChecked={onChecked}
-            />
-          )}
+      <div className="space-y-5">
+        {added && !checked && (
+          <div className="notice notice-success">
+            <span className="flex-1">{added}</span>
+            {/* Waiting for a reviewer: the moment to offer being told of the decision. */}
+            {added.includes("waiting for a reviewer") && <PushPrompt />}
+            <button type="button" onClick={() => setAdded(null)} className="text-[12.5px] font-semibold hover:underline">
+              Dismiss
+            </button>
+          </div>
+        )}
+        {canHunt && (
+          <HuntForm
+            key={formKey}
+            connectionId={connection.id}
+            marketName={market?.name ?? "eBay"}
+            initialCompetitor={formKey === 0 ? search.get("competitor") : null}
+            checked={checked}
+            onChecked={onChecked}
+          />
+        )}
 
+        {/* The list steps aside while a checked product is on screen; it's back after Add or Discard. */}
+        {!checked && (
           <section className="card overflow-hidden">
             <div className="border-b border-[var(--color-line)] px-2 sm:px-3">
               <PipelineTabs views={views} counts={data?.counts || ({} as HuntList["counts"])} value={effectiveView || "all"} onChange={changeView} />
@@ -303,8 +285,8 @@ function HuntingBody() {
               />
             )}
           </section>
-        </div>
-      )}
+        )}
+      </div>
 
       {openId && <HuntPanel key={openId} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} />}
       <DecisionDialog decision={quick ? "approve" : null} reasons={data?.reasons || []} title={quick?.title || ""} onClose={() => setQuick(null)} onSubmit={quickApprove} />

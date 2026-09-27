@@ -262,12 +262,12 @@ async function listedHunts(ownerId, { connectionId = null, hunterId = null } = {
   return rows;
 }
 
-/** The people behind these ids: id -> { name, email, role }. */
-async function people(ids) {
-  const list = [...new Set(ids.filter(Boolean))];
-  if (!list.length) return new Map();
-  const { rows } = await query('SELECT id, name, email, role, deactivated_at FROM users WHERE id = ANY($1)', [list]);
-  return new Map(rows.map((r) => [r.id, r]));
+/** What to call someone in a notification: their name, or their email's name part. */
+async function personName(userId) {
+  if (!userId) return null;
+  const { rows } = await query('SELECT name, email FROM users WHERE id = $1', [userId]);
+  const u = rows[0];
+  return u ? u.name || (u.email ? u.email.split('@')[0] : null) : null;
 }
 
 /** A product's history from the activity record, oldest first. */
@@ -321,6 +321,7 @@ async function dueForReading({ limit = 20, hours = 20, days = 90, ownerId = null
 // ---- a competitor's dated sales, pasted from eBay (migration 029) -------------------
 
 module.exports = {
+  personName,
   addReading,
   readings,
   setSalesScore,
@@ -346,6 +347,5 @@ module.exports = {
   decidedBetween,
   decisionsBetween,
   listedHunts,
-  people,
   history,
 };

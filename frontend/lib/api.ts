@@ -1721,14 +1721,15 @@ export interface HuntSalesScore {
   band: HuntSalesBand;
   label: string;
   estimate: boolean;
-  parts: { key: string; label: string; points: number; max: number; detail: string }[];
+  // value: the figure behind the points ("9 sold"); full: what earns all of them ("500+ sold").
+  parts: { key: string; label: string; points: number; max: number; detail: string; value?: string; full?: string }[];
 }
 
 export interface HuntPermissions {
   canDecide: boolean;
   canEdit: boolean;
   canResubmit: boolean;
-  canWithdraw: boolean;
+  canRemove: boolean;
   canRecheck: boolean;
   canDraft: boolean;
 }
@@ -1847,14 +1848,6 @@ export interface HuntReviewerFigures {
   avgHoursToDecide: number | null;
 }
 
-export interface HuntTeam {
-  range: { key: TeamRange; from: string; to: string; days: number; timeZone: string };
-  people: { person: HuntPerson & { isOwner: boolean; removed: boolean }; hunter: HuntHunterFigures; reviewer: HuntReviewerFigures; sales: HuntSales | null }[];
-  totals: { hunter: HuntHunterFigures; reviewer: HuntReviewerFigures; sales: HuntSales | null };
-  reasons: (HuntReason & { count: number })[];
-  currency: string;
-}
-
 export interface MemberHunting {
   hunter: HuntHunterFigures;
   previousHunter: HuntHunterFigures;
@@ -1863,6 +1856,23 @@ export interface MemberHunting {
   sales: HuntSales[];
   previousSales: HuntSales[];
   reasons: (HuntReason & { count: number })[];
+}
+
+export interface AppNotification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string | null;
+  url: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface NotificationList {
+  items: AppNotification[];
+  unread: number;
+  // Whether this server sends browser push, and the key a browser subscribes with.
+  push: { available: boolean; publicKey: string | null };
 }
 
 export interface HuntBadge {
@@ -2120,7 +2130,6 @@ export const api = {
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },
   huntBadge: (connectionId: string) => request<HuntBadge>(`/api/connections/${connectionId}/hunting/badge`),
-  huntTeam: (connectionId: string, range: TeamRange) => request<HuntTeam>(`/api/connections/${connectionId}/hunting/team?range=${range}`),
   huntDetail: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}`),
   huntRecheck: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}/recheck`, { method: "POST" }),
   // competitorUrl: null takes the competitor away; left out, it stays.
@@ -2129,7 +2138,16 @@ export const api = {
   huntResubmit: (huntId: string, note?: string) => request<HuntDetail>(`/api/hunting/${huntId}/resubmit`, { method: "POST", body: JSON.stringify(note === undefined ? {} : { note }) }),
   huntDecide: (huntId: string, input: { decision: "approve" | "reject" | "send_back"; reason?: string; note?: string }) =>
     request<HuntDetail>(`/api/hunting/${huntId}/decision`, { method: "POST", body: JSON.stringify(input) }),
-  huntWithdraw: (huntId: string) => request<Record<string, never>>(`/api/hunting/${huntId}`, { method: "DELETE" }),
+  // Only reviewers (the owner included) remove a hunted product.
+  huntRemove: (huntId: string) => request<Record<string, never>>(`/api/hunting/${huntId}`, { method: "DELETE" }),
+
+  // The bell: a person's notifications, and browser push for this browser.
+  notifications: () => request<NotificationList>("/api/notifications"),
+  notificationsTest: () => request<NotificationList>("/api/notifications/test", { method: "POST" }),
+  notificationsRead: (ids?: string[]) => request<NotificationList>("/api/notifications/read", { method: "POST", body: JSON.stringify(ids ? { ids } : {}) }),
+  pushSubscribe: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<Record<string, never>>("/api/notifications/push", { method: "POST", body: JSON.stringify(subscription) }),
+  pushUnsubscribe: (endpoint: string) => request<Record<string, never>>("/api/notifications/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
   huntDraftStart: (huntId: string) => request<HuntDraftStart>(`/api/hunting/${huntId}/draft`, { method: "POST" }),
 
   getAccountOverview: (id: string, range: string) => request<AccountOverview>(`/api/connections/${id}/overview?range=${range}`),

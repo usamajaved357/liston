@@ -193,7 +193,7 @@ test('stageOf follows the draft and the eBay item after the review', () => {
   assert.strictEqual(rules.stageOf({ status: 'approved', listing_id: null, item_ids: ['1'] }), 'listed');
 });
 
-test('nobody but the owner decides on their own find; hunters edit and withdraw only their own waiting ones', () => {
+test('nobody but the owner decides on their own find; hunters edit their own waiting ones and never remove one', () => {
   const byReviewer = { status: 'pending', hunter_user_id: 'r', listing_id: null, item_ids: [] };
   const byHunter = { status: 'pending', hunter_user_id: 'h', listing_id: null, item_ids: [] };
   assert.strictEqual(rules.rules.canDecide(byReviewer, REVIEWER), false);
@@ -202,8 +202,14 @@ test('nobody but the owner decides on their own find; hunters edit and withdraw 
   assert.strictEqual(rules.rules.canDecide(byHunter, HUNTER), false);
   assert.strictEqual(rules.rules.canEdit(byHunter, HUNTER), true);
   assert.strictEqual(rules.rules.canEdit(byHunter, REVIEWER), false);
-  assert.strictEqual(rules.rules.canWithdraw(byHunter, HUNTER), true);
-  assert.strictEqual(rules.rules.canWithdraw({ ...byHunter, status: 'approved' }, HUNTER), false);
+  // Only a reviewer removes a product, at any stage, the owner included.
+  for (const stage of [{ status: 'pending' }, { status: 'sent_back' }, { status: 'approved' }, { status: 'rejected' }, { status: 'approved', listing_id: 'x' }, { status: 'approved', item_ids: ['1'] }]) {
+    const product = { ...byHunter, ...stage };
+    assert.strictEqual(rules.rules.canRemove(product, HUNTER), false);
+    assert.strictEqual(rules.rules.canRemove(product, LISTER), false);
+    assert.strictEqual(rules.rules.canRemove(product, REVIEWER), true);
+    assert.strictEqual(rules.rules.canRemove(product, OWNER), true);
+  }
   assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, HUNTER), true);
 });
 
@@ -406,4 +412,45 @@ test("a dip in eBay's sold count doesn't cancel the sales read before it", () =>
     { now: Date.parse(at(27)) + 3600000 }
   );
   assert.strictEqual(h.soldLast7, 8);
+});
+
+test('each part of the sales score carries its figure and what earns full points', () => {
+  // The STEM kit: 6.3 a month, 9 sold, no readings yet, a single listing.
+  const score = huntSales.salesScore({ demand: { sold: 9, soldPerMonth: 6.3 }, variations: [] });
+  assert.strictEqual(score.score, 54);
+  assert.deepStrictEqual(
+    score.parts.map((p) => [p.key, p.points, p.max, p.value, p.full]),
+    [
+      ['velocity', 22, 45, '6.3 a month', '60+ a month'],
+      ['proven', 7, 20, '9 sold', '500+ sold'],
+      ['trend', 10, 20, 'Not read yet: half points', 'rising sales'],
+      ['breadth', 15, 15, 'Selling', 'any sale'],
+    ]
+  );
+});
+
+// ---- notifications ------------------------------------------------------------------------
+
+const { noticeFor } = require('../../src/modules/hunting/hunt-notice');
+const push = require('../../src/modules/notifications/push');
+
+test('the hunter is told what the reviewer did, with the reason and the note', () => {
+  assert.deepStrictEqual(noticeFor('hunt.approved', { title: 'Wireless earbuds', by: 'Sara' }), { title: 'Approved: Wireless earbuds', body: "Sara approved your product. It's ready to draft." });
+  assert.deepStrictEqual(noticeFor('hunt.rejected', { title: 'Wireless earbuds', by: 'Sara', reason: 'Low demand', note: 'Too few sales' }), { title: 'Rejected: Wireless earbuds', body: 'Sara rejected it: Low demand. “Too few sales”' });
+  assert.match(noticeFor('hunt.sent_back', { title: 'Earbuds', by: null, note: 'Find a cheaper supplier' }).body, /^A reviewer sent it back for you to improve\. “Find a cheaper supplier”$/);
+  assert.strictEqual(noticeFor('hunt.removed', { title: 'Earbuds', by: 'Sam' }).body, 'Sam removed your hunted product.');
+  // Long titles are cut to fit a notification.
+  assert.ok(noticeFor('hunt.approved', { title: 'x'.repeat(200), by: 'Sam' }).title.length <= 70);
+  assert.strictEqual(noticeFor('hunt.updated', { title: 'Earbuds' }), null);
+});
+
+test('a push the browser no longer has is reported gone, so it is forgotten', async () => {
+  if (!push.configured()) return; // no VAPID keys on this machine
+  const sub = { endpoint: 'https://push.example.com/abc', p256dh: 'k', auth: 'a' };
+  let sent = null;
+  assert.deepStrictEqual(await push.send(sub, { title: 'Hi' }, { sendImpl: async (s, body) => { sent = { s, body }; } }), { sent: true });
+  assert.strictEqual(JSON.parse(sent.body).title, 'Hi');
+  assert.deepStrictEqual(sent.s.keys, { p256dh: 'k', auth: 'a' });
+  assert.deepStrictEqual(await push.send(sub, {}, { sendImpl: async () => { throw Object.assign(new Error('Gone'), { statusCode: 410 }); } }), { gone: true });
+  await assert.rejects(push.send(sub, {}, { sendImpl: async () => { throw Object.assign(new Error('Boom'), { statusCode: 500 }); } }));
 });

@@ -4,8 +4,10 @@
 // added. A member with "Review hunted products" access reviews the account's
 // products and can hunt too, but never decides on their own finds (their
 // figures would be their own to write). A member with Hunting access adds
-// products and, while one waits or has been sent back, can change or
-// withdraw their own. Drafting an approved product needs Listings access.
+// products and, while one waits or has been sent back, can change and
+// improve their own, but never remove one: only a reviewer (the owner
+// included) removes a hunted product, at any stage. Drafting an approved
+// product needs Listings access.
 
 const REJECT_REASONS = [
   { key: 'low_profit', label: 'Low profit' },
@@ -35,7 +37,7 @@ const rules = {
   canDecide: (hunt, viewer) => viewer.canReview && beforeDraft(hunt) && (viewer.isOwner || !isHunter(hunt, viewer)),
   canEdit: (hunt, viewer) => ['pending', 'sent_back'].includes(stageOf(hunt)) && (isHunter(hunt, viewer) || viewer.isOwner),
   canResubmit: (hunt, viewer) => stageOf(hunt) === 'sent_back' && (isHunter(hunt, viewer) || viewer.isOwner),
-  canWithdraw: (hunt, viewer) => (isHunter(hunt, viewer) && ['pending', 'sent_back'].includes(stageOf(hunt))) || (viewer.isOwner && beforeDraft(hunt)),
+  canRemove: (hunt, viewer) => Boolean(viewer.canReview),
   canRecheck: (hunt, viewer) => stageOf(hunt) !== 'listed' && (viewer.canHunt || viewer.canReview),
   canDraft: (hunt, viewer) => viewer.canDraft && ['approved', 'drafted', 'listed'].includes(stageOf(hunt)),
 };

@@ -12,7 +12,7 @@ import { Person, StageChip, Thumb, ago, announceHuntingChange, profitInk, roiTex
 
 // One hunted product, opened from the list: where it stands and why, the
 // hunter's note, the full profit check, its history, and what the viewer
-// can do with it (decide, fix and resubmit, draft, withdraw).
+// can do with it (decide, fix and resubmit, draft; a reviewer can remove it).
 
 function Banner({ tone, children }: { tone: "indigo" | "amber" | "rose" | "emerald" | "sky" | "teal"; children: ReactNode }) {
   const tones = {
@@ -225,8 +225,8 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
   const [hunt, setHunt] = useState<HuntDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [decision, setDecision] = useState<Decision | null>(null);
-  const [busy, setBusy] = useState<"recheck" | "resubmit" | "withdraw" | "draft" | null>(null);
-  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const [busy, setBusy] = useState<"recheck" | "resubmit" | "remove" | "draft" | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [moved, setMoved] = useState<string | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -288,23 +288,23 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
     }
   }
 
-  async function withdraw() {
-    setBusy("withdraw");
+  async function remove() {
+    setBusy("remove");
     try {
-      await api.huntWithdraw(huntId);
+      await api.huntRemove(huntId);
       announceHuntingChange();
       onChanged(null);
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't withdraw it.");
+      setError(err instanceof ApiError ? err.message : "Couldn't remove it.");
       setBusy(null);
-      setConfirmWithdraw(false);
+      setConfirmRemove(false);
     }
   }
 
   const p = hunt?.permissions;
   const decisionsOffered: Decision[] = hunt && p?.canDecide ? (["send_back", "reject", "approve"] as Decision[]).filter((d) => !(d === "approve" && hunt.stage === "approved") && !(d === "reject" && hunt.stage === "rejected") && !(d === "send_back" && hunt.stage === "sent_back")) : [];
-  const hasActions = Boolean(hunt && (decisionsOffered.length || p?.canResubmit || p?.canDraft || p?.canWithdraw));
+  const hasActions = Boolean(hunt && (decisionsOffered.length || p?.canResubmit || p?.canDraft || p?.canRemove));
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Hunted product">
@@ -382,17 +382,17 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
         {hunt && hasActions && (
           <footer className="flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-18px_rgba(15,23,42,0.3)] sm:px-6">
             <div className="flex flex-col-reverse gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-              {/* Taking it off the list: quiet until pointed at. */}
+              {/* Taking it off the list (reviewers only): quiet until pointed at. */}
               <div className="flex justify-center sm:justify-start">
-                {p?.canWithdraw && (
+                {p?.canRemove && (
                   <button
                     type="button"
-                    onClick={() => setConfirmWithdraw(true)}
+                    onClick={() => setConfirmRemove(true)}
                     disabled={busy !== null}
                     className="inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-[var(--color-muted)] transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
                   >
                     <ActionIcon kind="remove" />
-                    {hunt.hunter?.id === you ? "Withdraw" : "Remove"}
+                    Remove
                   </button>
                 )}
               </div>
@@ -460,14 +460,18 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
 
       <DecisionDialog decision={decision} reasons={hunt?.reasons || []} title={hunt?.title || ""} onClose={() => setDecision(null)} onSubmit={decide} />
       <ConfirmDialog
-        open={confirmWithdraw}
-        title={hunt?.hunter?.id === you ? "Withdraw this product?" : "Remove this product?"}
-        description={hunt?.hunter?.id === you ? "It comes off the hunting list and out of review. You can hunt it again later." : "It comes off the hunting list. Its history stays in the team's activity."}
-        confirmLabel={hunt?.hunter?.id === you ? "Withdraw" : "Remove"}
+        open={confirmRemove}
+        title="Remove this product?"
+        description={
+          hunt?.hunter && hunt.hunter.id !== you
+            ? `It comes off the hunting list, whatever its stage, and ${hunt.hunter.name} is notified. Its history stays in the team's activity.`
+            : "It comes off the hunting list, whatever its stage. Its history stays in the team's activity."
+        }
+        confirmLabel="Remove"
         danger
-        loading={busy === "withdraw"}
-        onConfirm={withdraw}
-        onCancel={() => setConfirmWithdraw(false)}
+        loading={busy === "remove"}
+        onConfirm={remove}
+        onCancel={() => setConfirmRemove(false)}
       />
     </div>
   );

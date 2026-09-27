@@ -33,6 +33,7 @@ const KINDS = {
   'hunt.resubmitted': 'Resubmitted a hunted product',
   'hunt.updated': 'Changed a hunted product',
   'hunt.withdrawn': 'Withdrew a hunted product',
+  'hunt.removed': 'Removed a hunted product',
   'account.store_category_added': 'Added a Shop category',
   'account.source_account_saved': 'Saved a supplier account',
   'session.login': 'Logged in',

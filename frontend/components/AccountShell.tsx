@@ -13,6 +13,7 @@ import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ShellFrame } from "@/components/ShellFrame";
+import { NotificationBell } from "@/components/NotificationBell";
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -285,6 +286,7 @@ export function AccountShell({
             <div className="page-header-controls max-sm:w-full max-sm:justify-end">
               {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
+              <NotificationBell />
               {/* Owners came from the main dashboard; members have no dashboard,
                   their way out is the sidebar footer. A dashboard mark, not an
                   arrow, so it never reads as a page's own Back button. */}

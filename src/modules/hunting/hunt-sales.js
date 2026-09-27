@@ -87,14 +87,18 @@ function salesScore({ demand, variations = [], history: h = null }) {
   const proven = Math.round(20 * logShare(demand.sold, 500));
   let trend;
   let trendDetail;
+  let trendValue;
   if (h && h.coveredDays >= 7 && h.soldLast7 === 0) {
     trend = 0;
+    trendValue = 'None sold in 7 days';
     trendDetail = 'None sold in the last 7 days of Liston’s readings.';
   } else if (h && h.trend) {
     trend = { up: 20, flat: 12, down: 4 }[h.trend];
+    trendValue = { up: 'Rising', flat: 'Steady', down: 'Slowing' }[h.trend];
     trendDetail = { up: 'Selling faster lately than its average.', flat: 'Selling at its usual pace.', down: 'Selling slower lately than its average.' }[h.trend];
   } else {
     trend = 10;
+    trendValue = 'Not read yet: half points';
     trendDetail = 'Liston reads its sales daily; the trend shows after 3 days.';
   }
   const withVariations = (variations || []).filter((v) => v.label);
@@ -108,14 +112,17 @@ function salesScore({ demand, variations = [], history: h = null }) {
     label,
     estimate: !(h && h.trend),
     parts: [
-      { key: 'velocity', label: 'Sells a month', points: velocity, max: 45, detail: `${spm} a month on the competitor's listing.` },
-      { key: 'proven', label: 'Sold in all', points: proven, max: 20, detail: `${demand.sold} sold since it was listed.` },
-      { key: 'trend', label: 'Trend', points: trend, max: 20, detail: trendDetail },
+      // value: the figure behind the points; full: what earns all of them.
+      { key: 'velocity', label: 'Sells a month', points: velocity, max: 45, value: `${spm} a month`, full: '60+ a month', detail: `${spm} a month on the competitor's listing.` },
+      { key: 'proven', label: 'Sold in all', points: proven, max: 20, value: `${Number(demand.sold).toLocaleString('en-GB')} sold`, full: '500+ sold', detail: `${demand.sold} sold since it was listed.` },
+      { key: 'trend', label: 'Trend', points: trend, max: 20, value: trendValue, full: 'rising sales', detail: trendDetail },
       {
         key: 'breadth',
         label: 'Options selling',
         points: breadth,
         max: 15,
+        value: withVariations.length > 1 ? `${selling} of ${withVariations.length} options` : demand.sold > 0 ? 'Selling' : 'None yet',
+        full: withVariations.length > 1 ? 'every option selling' : 'any sale',
         detail: withVariations.length > 1 ? `${selling} of ${withVariations.length} options have sold.` : demand.sold > 0 ? 'The listing sells.' : 'Nothing sold yet.',
       },
     ],

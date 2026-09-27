@@ -46,6 +46,7 @@ const EXTRA_KINDS: { key: string; label: string }[] = [
   { key: "hunt.resubmitted", label: "Hunted products resubmitted" },
   { key: "hunt.updated", label: "Hunted products changed" },
   { key: "hunt.withdrawn", label: "Hunted products withdrawn" },
+  { key: "hunt.removed", label: "Hunted products removed" },
   { key: "session.login", label: "Logins" },
 ];
 
@@ -265,7 +266,7 @@ function subjectLink(item: MemberActivityItem): string | null {
   if (!item.connectionId) return null;
   if (item.subjectType === "order") return `/accounts/${item.connectionId}/orders/${encodeURIComponent(item.subjectId)}`;
   if (item.subjectType === "listing") return `/accounts/${item.connectionId}/listings?q=${encodeURIComponent(item.subjectId)}`;
-  if (item.subjectType === "hunt" && item.kind !== "hunt.withdrawn") return `/accounts/${item.connectionId}/hunting?open=${encodeURIComponent(item.subjectId)}`;
+  if (item.subjectType === "hunt" && item.kind !== "hunt.withdrawn" && item.kind !== "hunt.removed") return `/accounts/${item.connectionId}/hunting?open=${encodeURIComponent(item.subjectId)}`;
   return null;
 }
 

@@ -284,6 +284,9 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
   }, [result.options, summary.headline.optionIndex]);
   const shown = all ? ordered : ordered.slice(0, OPTIONS_SHOWN);
   const isBestSeller = (index: number) => summary.bestSeller?.optionIndex === index;
+  // The option the product is judged on has its breakdown in the profit card above, so only the others open here.
+  const opens = (index: number) => index !== summary.headline.optionIndex && result.options[index].sellPrice !== null;
+  const anyOpens = result.options.some((_, i) => opens(i));
   const single = result.options.length === 1 && !result.options[0].label;
 
   // A marker under an option's name: the one matching the competitor's best
@@ -311,14 +314,14 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
       <SectionHead
         icon="options"
         title={single ? "Profit per sale" : `Every option (${result.options.length})`}
-        meta={`${result.competitor ? "At the competitor's price, postage included." : `At your price: cost and postage marked up to your ${targetRoiPercent}% target return.`} Tap a row for the breakdown.`}
+        meta={`${result.competitor ? "At the competitor's price, postage included." : `At your price: cost and postage marked up to your ${targetRoiPercent}% target return.`}${anyOpens ? " Tap an option for its breakdown." : ""}`}
       />
 
       {/* Phones: a card per option. */}
       <ul className="divide-y divide-[var(--color-line)] border-t border-[var(--color-line)] md:hidden">
         {shown.map(({ option, index }) => (
           <li key={index} className={option.stock === 0 ? "opacity-60" : ""}>
-            <button type="button" onClick={() => setOpen(open === index ? null : index)} className="flex w-full items-start gap-3 px-4 py-3 text-left">
+            <button type="button" onClick={() => opens(index) && setOpen(open === index ? null : index)} className={`flex w-full items-start gap-3 px-4 py-3 text-left ${opens(index) ? "" : "cursor-default"}`}>
               <Thumb src={option.imageUrl} size={44} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13.5px] font-medium text-[var(--color-ink)]">{option.label || "The product"}</span>
@@ -340,7 +343,7 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
                 <span className="block text-[11.5px] tabular-nums text-[var(--color-muted)]">{roiText(option.roi)}</span>
               </span>
             </button>
-            {open === index && (
+            {open === index && opens(index) && (
               <div className="bg-[var(--color-paper)]/60 px-4 pb-4 pt-1">
                 {option.match && (
                   <p className="mb-3 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-muted)]">
@@ -373,12 +376,12 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
           </thead>
           <tbody className="divide-y divide-[var(--color-line)]">
             {shown.map(({ option, index }) => {
-              const expanded = open === index;
+              const expanded = open === index && opens(index);
               return (
                 <Fragment key={index}>
                   <tr
-                    onClick={() => setOpen(expanded ? null : index)}
-                    className={`cursor-pointer transition-colors hover:bg-[var(--color-paper)]/70 ${expanded ? "bg-[var(--color-primary-soft)]/40" : ""} ${option.stock === 0 ? "opacity-55" : ""}`}
+                    onClick={() => opens(index) && setOpen(expanded ? null : index)}
+                    className={`transition-colors ${opens(index) ? "cursor-pointer hover:bg-[var(--color-paper)]/70" : ""} ${expanded ? "bg-[var(--color-primary-soft)]/40" : ""} ${option.stock === 0 ? "opacity-55" : ""}`}
                   >
                     <td className="px-4 py-2.5">
                       <span className="flex min-w-0 items-center gap-2.5">

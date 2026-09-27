@@ -7,11 +7,11 @@ const salesHistory = require('../ebay/sales-history');
 const logger = require('../../utils/logger');
 const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, HuntError, rules } = require('./hunt-rules');
 const stats = require('./hunting-stats');
+const { noticeFor } = require('./hunt-notice');
+const notificationsService = require('../notifications/notifications.service');
 const connectionService = require('../connections/connection.service');
 const teamRepository = require('../team/team.repository');
 const activityRepository = require('../team/activity.repository');
-const activity = require('../team/activity');
-const analyticsDays = require('../analytics/analytics-days');
 const listingRepository = require('../listings/listing.repository');
 const ebaySource = require('../sourcing/ebay-listing.source');
 const aliexpressSource = require('../sourcing/aliexpress');
@@ -448,15 +448,25 @@ async function decide(auth, huntId, input) {
     title: hunt.title,
     detail: { reason: fields.reject_reason, note: fields.decision_note, from: stageOf(hunt) },
   });
+  await tellHunter(auth, hunt, kind, { reason: reasonLabel(fields.reject_reason), note: fields.decision_note, url: `/accounts/${hunt.connection_id}/hunting?open=${hunt.id}` });
   return detail(auth, huntId);
 }
 
-/** The hunter withdraws a product still waiting (or sent back); the owner can remove any not yet drafted. */
-async function withdraw(auth, huntId) {
+/** Tells the hunter what a reviewer did to their product (never themselves: the owner's own finds). */
+async function tellHunter(auth, hunt, kind, { reason = null, note = null, url }) {
+  if (!hunt.hunter_user_id || hunt.hunter_user_id === auth.userId) return;
+  const notice = noticeFor(kind, { title: hunt.title, by: await huntingRepository.personName(auth.userId).catch(() => null), reason, note });
+  if (!notice) return;
+  await notificationsService.notify({ userId: hunt.hunter_user_id, actorUserId: auth.userId, kind, ...notice, url, subjectType: 'hunt', subjectId: hunt.id });
+}
+
+/** Only a reviewer (the owner included) removes a hunted product, whatever its stage; hunters edit theirs instead. */
+async function remove(auth, huntId) {
   const { hunt, viewer } = await loadHunt(auth, huntId);
-  if (!rules.canWithdraw(hunt, viewer)) refuse('It can only be withdrawn by its hunter while it waits for review, or removed by the owner before it is drafted.');
+  if (!rules.canRemove(hunt, viewer)) refuse("Only a reviewer can remove a hunted product. You can edit and improve yours instead.");
   await huntingRepository.deleteById(hunt.id);
-  await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.withdrawn', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { stage: stageOf(hunt) } });
+  await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.removed', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { stage: stageOf(hunt) } });
+  await tellHunter(auth, hunt, 'hunt.removed', { url: `/accounts/${hunt.connection_id}/hunting` });
 }
 
 /** The side menu's badge. */
@@ -496,58 +506,6 @@ async function draftStart(auth, huntId) {
 }
 
 // ---- figures ---------------------------------------------------------------------------
-
-function accountZone(connection) {
-  return analyticsDays.timeZoneFor(connection.marketplace?.id || connection.settings?.ebay?.marketplaceId || 'EBAY_GB') || 'Europe/London';
-}
-
-/**
- * The Hunting page's team table for a range: each person who hunted or
- * reviewed on this account, their results and decisions, and the sales of
- * the listings their products became. Owner and reviewers only.
- */
-async function team(auth, connectionId, { range, from, to } = {}) {
-  const viewer = await viewerFor(auth, connectionId);
-  if (!viewer.canReview) refuse('Only reviewers see the team figures.');
-  const connection = await connectionService.getConnectionSummary(connectionId, auth.ownerId);
-  const win = activity.rangeWindow(range, { from, to, timeZone: accountZone(connection) });
-  const span = { start: win.startsAt, end: win.endsAt, connectionId };
-  const [hunted, decided, decisions, listed] = await Promise.all([
-    huntingRepository.huntedBetween(auth.ownerId, span),
-    huntingRepository.decidedBetween(auth.ownerId, span),
-    huntingRepository.decisionsBetween(auth.ownerId, span),
-    huntingRepository.listedHunts(auth.ownerId, { connectionId }),
-  ]);
-  const orders = await mirror.ordersForItems([connectionId], listed.flatMap((h) => h.item_ids), win.startsAt, win.endsAt);
-  const byItem = stats.salesByItem(orders, { isCancelled });
-  const ids = [...new Set([...hunted.map((h) => h.hunter_user_id), ...decisions.map((d) => d.actor_user_id)].filter(Boolean))];
-  const people = await huntingRepository.people(ids);
-  const rows = ids
-    .map((id) => {
-      const person = people.get(id);
-      return {
-        person: { id, name: person?.name || (person?.email ? person.email.split('@')[0] : 'Someone'), isOwner: person?.role === 'owner', removed: Boolean(person?.deactivated_at) },
-        hunter: stats.hunterFigures(hunted.filter((h) => h.hunter_user_id === id)),
-        reviewer: stats.reviewerFigures(
-          decisions.filter((d) => d.actor_user_id === id),
-          decided.filter((d) => d.reviewer_user_id === id)
-        ),
-        sales: stats.salesFor(listed.filter((h) => h.hunter_user_id === id).flatMap((h) => h.item_ids), byItem)[0] || null,
-      };
-    })
-    .sort((a, b) => b.hunter.hunted - a.hunter.hunted || b.reviewer.reviewed - a.reviewer.reviewed);
-  return {
-    range: { key: win.key, from: win.from, to: win.to, days: win.days, timeZone: win.timeZone },
-    people: rows,
-    totals: {
-      hunter: stats.hunterFigures(hunted),
-      reviewer: stats.reviewerFigures(decisions, decided),
-      sales: stats.salesFor(listed.flatMap((h) => h.item_ids), byItem)[0] || null,
-    },
-    reasons: stats.reasonCounts(hunted),
-    currency: marketplaces.currencyFor(connection.marketplace?.id || connection.settings?.ebay?.marketplaceId),
-  };
-}
 
 /**
  * A member's hunting for their page, across the owner's accounts, for a
@@ -653,4 +611,4 @@ function forgetChecks() {
   checks.clear();
 }
 
-module.exports = { readDueSales, check, add, list, detail, recheck, update, resubmit, decide, withdraw, badge, draftStart, team, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };
+module.exports = { readDueSales, check, add, list, detail, recheck, update, resubmit, decide, remove, badge, draftStart, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };
