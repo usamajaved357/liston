@@ -34,7 +34,7 @@ export function DiscoverWatchlist({
       ) : (
         <div className="overflow-x-auto border-t border-[var(--color-line)]">
           <table className="w-full min-w-[820px] table-fixed text-[12.5px]">
-            <thead className="bg-[var(--color-paper)] text-left text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            <thead className="whitespace-nowrap bg-[var(--color-paper)] text-left text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               <tr>
                 <th className="w-[28%] px-4 py-2">Watching</th>
                 <th className="px-3 py-2">Opportunity</th>

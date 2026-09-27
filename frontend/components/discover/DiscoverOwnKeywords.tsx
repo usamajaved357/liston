@@ -36,7 +36,7 @@ export function DiscoverOwnKeywords({ data, onOpen }: { data: OwnKeywords; onOpe
       </div>
       <div className="overflow-x-auto border-t border-[var(--color-line)]">
         <table className="w-full min-w-[620px] table-fixed text-[12.5px]">
-          <thead className="bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <tr>
               <th className="w-[34%] px-4 py-2 text-left">Keyword</th>
               <th className="px-3 py-2 text-right">Listings</th>

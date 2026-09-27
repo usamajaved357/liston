@@ -39,7 +39,8 @@ function listingsFor({ categoryId, q }) {
   return Array.from({ length: 30 }, (_, i) => ({
     itemId: `v1|${base}${String(i).padStart(2, '0')}|0`,
     legacyItemId: `${base}${String(i).padStart(2, '0')}`,
-    title: q ? `Cat water fountain ${i % 3 === 0 ? 'stainless steel' : 'led light'} ${i}` : `Night light plug in ${i % 2 ? 'warm white' : 'motion sensor'} ${i}`,
+    // The last one names a restricted item: Discover hides it and doesn't read it.
+    title: i === 29 ? `Pocket knife night light ${i}` : q ? `Cat water fountain ${i % 3 === 0 ? 'stainless steel' : 'led light'} ${i}` : `Night light plug in ${i % 2 ? 'warm white' : 'motion sensor'} ${i}`,
     price: { value: 12 + i, currency: 'GBP' },
     shipping: { cost: 0, free: true },
     deliveryDates: null,
@@ -156,6 +157,11 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.ok(d.listings.some((l) => l.overseas), 'where each ships from');
   assert.strictEqual(d.opportunity.score, d.opportunity.parts.reduce((sum, p) => sum + p.points, 0));
   assert.ok(d.keywords.some((k) => k.term === 'motion sensor'), JSON.stringify(d.keywords.map((k) => k.term)));
+  assert.ok(d.keywords.every((k) => typeof k.sold === 'number'), 'each keyword with what its listings sold');
+  // A listing that would break eBay's rules is hidden, never pointed at, and counted in Before you hunt.
+  assert.ok(!d.listings.some((l) => /knife/i.test(l.title)));
+  assert.deepStrictEqual([d.compliance.hidden.count, d.compliance.hidden.restricted], [1, 1]);
+  assert.ok(d.bestBets.length > 0 && d.bestBets[0].bet.reasons.length === 3, 'the best products to hunt, with why');
   // Subcategories, busiest first, not ranked yet.
   assert.deepStrictEqual(d.children.map((c) => [c.id, c.listings, c.scanned]), [[CHILDREN[0], 500, null], [CHILDREN[1], 400, null]]);
 
@@ -165,7 +171,7 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.deepStrictEqual([calls.search, calls.sold], [searches, 25]);
   // Read more: the next listings only.
   const more = await request('GET', `${base}/explore?categoryId=${PARENT}&reads=50`, undefined, t.hunter);
-  assert.deepStrictEqual([more.data.reads.read, calls.sold], [30, 30]);
+  assert.deepStrictEqual([more.data.reads.read, calls.sold], [29, 29], 'every listing but the hidden one');
 
   // Ranking the subcategories answers at once and runs on; explore shows how far it has got.
   const rank = await request('POST', `${base}/rank`, { categoryId: PARENT }, t.hunter);
@@ -182,6 +188,7 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.deepStrictEqual([best.id, worst.id], CHILDREN, 'the one that sells ranks first');
   assert.ok(best.scanned.score > worst.scanned.score);
   assert.strictEqual(worst.scanned.selling, 0);
+  assert.ok(best.scanned.monthlySales > 0 && Array.isArray(best.keywords), 'each with its sales a month and its keywords');
 });
 
 test('a keyword explores the same way, reads stop when the day’s share is used, and the team watches categories and keywords', async () => {

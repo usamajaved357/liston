@@ -1938,6 +1938,7 @@ export interface DiscoverListing {
   recent: { sold: number; days: number; from: string; to: string } | null; // sold between two readings
   lift?: number | null; // rising: selling this many times faster lately than over its life
   flag?: DiscoverFlag | null;
+  bet?: { score: number; reasons: string[] }; // a best bet: why
 }
 
 export interface DiscoverScorePart {
@@ -1971,6 +1972,7 @@ export interface DiscoverKeyword {
   salesShare: number;
   lift: number | null;
   perMonth: number;
+  sold: number; // eBay's total for the listings read with it
   flag?: DiscoverFlag | null;
 }
 export interface DiscoverChild {
@@ -1979,7 +1981,22 @@ export interface DiscoverChild {
   name: string;
   leaf: boolean;
   listings: number | null;
-  scanned: { score: number; band: DiscoverOpportunity["band"]; medianPerMonth: number | null; selling: number; read: number; price: number | null; fit: number | null; topSeller: number | null; takenAt: string } | null;
+  restricted: { kind: "prohibited" | "restricted"; label: string } | null;
+  keywords: { term: string; perMonth: number; sold: number }[];
+  scanned: {
+    score: number;
+    band: DiscoverOpportunity["band"];
+    medianPerMonth: number | null;
+    monthlySales: number;
+    soldTotal: number;
+    selling: number;
+    read: number;
+    price: number | null;
+    fit: number | null;
+    topSeller: number | null;
+    hidden: number;
+    takenAt: string;
+  } | null;
 }
 export interface DiscoverBudget {
   trading: number;
@@ -2040,6 +2057,8 @@ export interface DiscoverCompliance {
   };
   brands: { branded: number | null; top: { name: string; count: number; share: number | null }[] };
   ai: { brand: DiscoverRisk | null; safety: DiscoverRisk | null; summary: string | null } | null;
+  // The leading listings hidden because they'd break eBay's rules: a restricted item, or a VeRO brand as the product.
+  hidden: { count: number; restricted: number; brand: number; brands: string[] };
 }
 export interface DiscoverPrice {
   recommended: number;
@@ -2063,6 +2082,7 @@ export interface DiscoverExplore {
   opportunity: DiscoverOpportunity;
   recent: { sold: number; days: number; listings: number } | null;
   rising: DiscoverListing[];
+  bestBets: DiscoverListing[];
   listings: DiscoverListing[];
   keywords: DiscoverKeyword[];
   brands: { name: string; count: number; unbranded: boolean }[];
@@ -2419,7 +2439,7 @@ export const api = {
     const q = new URLSearchParams();
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
-    return request<{ compliance: DiscoverCompliance; checked: boolean }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
+    return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
   },
   discoverSuggest: (connectionId: string, q: string) =>
     request<{ categories: { id: string; name: string; path: string[]; leaf: boolean }[] }>(`/api/connections/${connectionId}/discover/suggest?q=${encodeURIComponent(q)}`),

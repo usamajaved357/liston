@@ -23,7 +23,8 @@ function termsOf(title) {
 
 /**
  * Keywords from a scan's listings: [{ term, words, listings, selling,
- * listingShare, salesShare, lift, perMonth }], strongest first. Only
+ * listingShare, salesShare, lift, perMonth, sold (eBay's total, the
+ * listings read) }], strongest first. Only
  * listings whose sold count was read carry sales; every listing counts for
  * how common a term is. Left out: words of the subject itself (its name or
  * search), words nearly every title has (they don't set a listing apart), a
@@ -43,8 +44,9 @@ function fromListings(listings, { query = '', limit = 24, now = Date.now() } = {
     salesTotal += pace;
     if (soldPerMonth(l, now) !== null) read += 1;
     for (const term of termsOf(l.title || '')) {
-      const t = terms.get(term) || { listings: 0, selling: 0, sales: 0, top: 0, sellers: new Set() };
+      const t = terms.get(term) || { listings: 0, selling: 0, sales: 0, sold: 0, top: 0, sellers: new Set() };
       t.listings += 1;
+      t.sold += Number(l.sold) || 0;
       if (pace >= 1) {
         t.selling += 1;
         t.sellers.add(index);
@@ -70,6 +72,7 @@ function fromListings(listings, { query = '', limit = 24, now = Date.now() } = {
         salesShare,
         lift: listingShare ? Math.round((salesShare / listingShare) * 10) / 10 : null,
         perMonth: Math.round(t.sales * 10) / 10,
+        sold: t.sold,
         oneListing: t.sales ? t.top / t.sales : 1,
         sellers: t.sellers,
         inQuery: term.split(' ').every((w) => inQuery.has(stem(w))),

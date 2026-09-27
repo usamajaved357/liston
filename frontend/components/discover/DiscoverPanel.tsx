@@ -55,7 +55,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   const [removing, setRemoving] = useState<string | null>(null);
   const [range, setRange] = useState<"7d" | "30d" | "90d">("30d");
   // The AI's brand/VeRO reading, asked for once a subject is on screen without today's.
-  const [review, setReview] = useState<{ key: string; compliance?: DiscoverExplore["compliance"]; checked?: boolean; failed?: boolean } | null>(null);
+  const [review, setReview] = useState<{ key: string; compliance?: DiscoverExplore["compliance"]; checked?: boolean; failed?: boolean; hidden?: number } | null>(null);
   const [own, setOwn] = useState<{ range: string; data?: OwnKeywords; error?: string } | null>(null);
 
   const open = useCallback(
@@ -109,7 +109,15 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     const forKey = key;
     api
       .discoverReview(connectionId, subject)
-      .then((d) => setReview({ key: forKey, compliance: d.compliance, checked: d.checked, failed: !d.checked }))
+      .then((d) => {
+        setReview({ key: forKey, compliance: d.compliance, checked: d.checked, failed: !d.checked, hidden: d.hidden });
+        // The AI named brands that hide more listings: open the subject again (no eBay call) so
+        // the figures, keywords and Selling now leave them out too.
+        setResult((r) => {
+          if (r && r.key === forKey && r.data && r.data.compliance.hidden.count !== d.hidden) setPoll((n) => n + 1);
+          return r;
+        });
+      })
       .catch(() => setReview({ key: forKey, failed: true }));
     // `subject` is rebuilt each render from the address; its key stands for it.
     // eslint-disable-next-line react-hooks/exhaustive-deps

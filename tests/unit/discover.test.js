@@ -188,3 +188,29 @@ test("a subject's checks: eBay's word filter in its titles, restricted items by 
   assert.deepStrictEqual(compliance.flagOf('lithium battery pack').hazmat, 'lithium');
   assert.strictEqual(compliance.flagOf('magnetic phone mount'), null, '"magnetic" passes eBay\'s filter; "magnet" doesn\'t');
 });
+
+test('listings that would break eBay\'s rules are hidden: a restricted item, or a VeRO brand named as the product (not as what it fits)', () => {
+  assert.strictEqual(compliance.veroBrandIn('Silicone case for iPhone 15 Pro'), null, 'what it fits is allowed');
+  assert.strictEqual(compliance.veroBrandIn('Screen protector compatible with Samsung Galaxy S24'), null);
+  assert.ok(['apple', 'iphone'].includes(compliance.veroBrandIn('Apple iPhone 15 Pro 256GB unlocked')));
+  assert.strictEqual(compliance.veroBrandIn('Cat fountain filters', ['Catit']), null);
+  assert.strictEqual(compliance.veroBrandIn('Catit flower fountain filters', ['Catit']), 'Catit', "the AI's brand, as it named it");
+  assert.deepStrictEqual(compliance.violationOf('Butterfly knife trainer'), { kind: 'restricted', label: 'Weapons and knives', prohibited: false });
+  assert.strictEqual(compliance.violationOf('Fairy lights battery powered'), null, "a filtered word is a wording problem, not a violation");
+
+  const split = compliance.partition([{ title: 'Nike running socks' }, { title: 'Plain running socks' }, { title: 'Replica football shirt' }, { title: 'Socks for Nike trainers' }], []);
+  assert.deepStrictEqual(split.kept.map((l) => l.title), ['Plain running socks', 'Socks for Nike trainers']);
+  assert.deepStrictEqual(split.hidden, { count: 2, restricted: 1, brand: 1, brands: ['nike'] });
+  assert.deepStrictEqual(compliance.check({ name: 'socks', listings: [], hidden: split.hidden }).hidden, split.hidden);
+});
+
+test('the best bets are the listings that sell, that you can match on delivery and that leave price room; one per seller', () => {
+  const l = (title, sold, compared, price, seller) => ({ title, sold, createdAt: daysAgo(60), price: { value: price, currency: 'GBP' }, shipping: { cost: 0 }, seller: { username: seller }, delivery: { compared } });
+  const bets = scoring.bestBets(
+    [l('Fast but faster than you', 120, 'faster', 12, 'x'), l('Steady, like you', 40, 'similar', 15, 'y'), l('Too cheap', 40, 'similar', 3, 'z'), l('Same seller again', 30, 'similar', 20, 'y'), l('Not read', null, 'similar', 20, 'w')],
+    { now: NOW }
+  );
+  assert.deepStrictEqual(bets.map((b) => b.title), ['Steady, like you', 'Fast but faster than you', 'Too cheap']);
+  assert.deepStrictEqual(bets[0].bet.reasons, ['Sells 20 a month', 'Delivers like you', 'Price leaves room after fees']);
+  assert.strictEqual(bets[2].bet.reasons[2], 'Little left after fees');
+});

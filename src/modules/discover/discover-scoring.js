@@ -209,4 +209,42 @@ function charts(listings, { country, now = Date.now() } = {}) {
   };
 }
 
-module.exports = { figures, opportunity, sellingNow, withPace, charts };
+const DELIVERY_FIT = { similar: 1, slower: 1, unknown: 0.75, faster: 0.45 };
+
+/**
+ * The best products to hunt among the leading listings: the ones that sell
+ * every month, weighed by whether a seller delivering like the account can
+ * match them and whether the price leaves room after fees. Each with why.
+ * Pure: the listings should already be the ones Discover may show.
+ * [{ ...listing, bet: { score, reasons: [text] } }], best first.
+ */
+function bestBets(listings, { currency = 'GBP', limit = 4, now = Date.now() } = {}) {
+  const floor = lowPriceFor(currency);
+  const scored = withPace(listings, now)
+    .filter((l) => l.soldPerMonth !== null && l.soldPerMonth >= 1 && l.landed)
+    .map((l) => {
+      const compared = l.delivery?.compared || 'unknown';
+      const fit = DELIVERY_FIT[compared] ?? 0.75;
+      const room = l.landed >= floor * 3 ? 1 : l.landed >= floor * 1.5 ? 0.8 : l.landed >= floor ? 0.5 : 0.2;
+      const reasons = [
+        `Sells ${l.soldPerMonth >= 100 ? count(Math.round(l.soldPerMonth)) : Math.round(l.soldPerMonth * 10) / 10} a month`,
+        compared === 'similar' ? 'Delivers like you' : compared === 'slower' ? 'Slower than you: you can beat it' : compared === 'faster' ? 'Faster than you' : 'Delivery not given',
+        room >= 0.8 ? 'Price leaves room after fees' : room >= 0.5 ? 'Price is tight' : 'Little left after fees',
+      ];
+      return { ...l, bet: { score: Math.round(Math.log10(1 + l.soldPerMonth) * fit * room * 1000) / 1000, reasons } };
+    })
+    .sort((a, b) => b.bet.score - a.bet.score || b.soldPerMonth - a.soldPerMonth);
+  // One per seller, so a strip isn't one shop's range.
+  const sellers = new Set();
+  const out = [];
+  for (const l of scored) {
+    const seller = l.seller?.username || l.itemId;
+    if (sellers.has(seller)) continue;
+    sellers.add(seller);
+    out.push(l);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+module.exports = { figures, opportunity, sellingNow, withPace, charts, bestBets };

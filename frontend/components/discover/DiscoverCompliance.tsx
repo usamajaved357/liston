@@ -71,6 +71,23 @@ export function DiscoverCompliance({ data, checking, onCheck, aiUnavailable }: {
           </span>
         }
       />
+      {data.hidden.count > 0 && (
+        <p className="mt-3 flex items-start gap-2 rounded-lg bg-[var(--color-paper)] px-3 py-2 text-[12px] leading-snug text-[var(--color-ink)]">
+          <svg viewBox="0 0 24 24" fill="none" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>
+            <path d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 5.1A10.5 10.5 0 0112 5c5 0 9 4 10 7a11.7 11.7 0 01-3.2 4.3M6.2 6.2C3.9 7.7 2.5 10 2 12c1 3 5 7 10 7 1.5 0 3-.4 4.3-1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>
+            <span className="font-semibold">
+              {data.hidden.count} of the leading listings {data.hidden.count === 1 ? "is" : "are"} hidden
+            </span>{" "}
+            and left out of every figure here:{" "}
+            {[data.hidden.restricted ? `${data.hidden.restricted} ${data.hidden.restricted === 1 ? "names" : "name"} an item eBay restricts` : null, data.hidden.brand ? `${data.hidden.brand} ${data.hidden.brand === 1 ? "sells" : "sell"} a VeRO brand${data.hidden.brands.length ? ` (${data.hidden.brands.slice(0, 4).join(", ")})` : ""}` : null]
+              .filter(Boolean)
+              .join("; ")}
+            . Discover never points anyone at a product that would break eBay&apos;s rules.
+          </span>
+        </p>
+      )}
       <div className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-3">
         <Column title="Brands and VeRO" tone={brandTone}>
           {data.ai?.brand ? (

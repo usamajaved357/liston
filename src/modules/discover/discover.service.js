@@ -37,7 +37,11 @@ const SCAN_SIZE = 100;
 const READS_FIRST = 25; // sold counts read when a subject opens
 const READS_STEP = 25; // "Read more"
 const READS_MAX = 100;
-const CHILD_READS = 5; // per subcategory when ranking them
+const CHILD_READS = 8; // per subcategory when ranking them (enough for its keywords)
+const CHILD_KEYWORDS = 4; // shown under each ranked subcategory
+const KEYWORDS_TOP = 24; // keywords on a top-level category or a keyword
+const KEYWORDS_MAX = 48; // deeper in, more: a leaf category shows the most
+const BEST_BETS = 4;
 const MAX_CHILDREN = 12; // subcategories ranked at once, busiest first
 const READ_CONCURRENCY = 4;
 const LISTINGS_SHOWN = 60;
@@ -266,9 +270,25 @@ async function subjectInfo(site, subject) {
   return { name: path[path.length - 1].name, path, children, leaf: children.length === 0 };
 }
 
+// The brands worth hiding a listing for: the ones the AI names as a VeRO
+// risk (on top of the known ones in discover-compliance).
+const veroBrands = (advice) => (advice?.brandRisk && advice.brandRisk.level !== 'none' ? advice.brandRisk.brands || [] : []);
+
+// A category or keyword whose own name is a restricted item: nothing in it is worth hunting.
+const restrictedName = (name) => compliance.termsIn(name).restricted[0] || null;
+
+// How many keywords a subject shows: more the deeper the category (a leaf
+// category is one kind of product, so its phrases are the most useful).
+function keywordLimit(info) {
+  if (info.leaf) return KEYWORDS_MAX;
+  return Math.min(KEYWORDS_MAX, KEYWORDS_TOP + 8 * Math.max(0, (info.path?.length || 1) - 1));
+}
+
 // A subcategory's row: its listing count from the parent's breakdown, and
-// its figures when it has been scanned.
-async function childRows(ctx, info, parentScan) {
+// its figures and the keywords of its titles that sell once it has been
+// scanned. Listings that would break eBay's rules don't count, and a
+// subcategory that is itself a restricted item sorts last.
+async function childRows(ctx, info, parentScan, brandNames = []) {
   if (!info.children.length) return [];
   const counts = new Map((parentScan.breakdown?.categories || []).map((c) => [String(c.id), c.count]));
   const scans = await repo.getScans(ctx.site.id, info.children.map((c) => `c:${c.id}`));
@@ -276,9 +296,11 @@ async function childRows(ctx, info, parentScan) {
   const reads = await repo.latestReads(ctx.site.id, ids, analyticsDays.addDays(ctx.day, -READ_FALLBACK_DAYS));
   const rows = info.children.map((c) => {
     const s = scans.get(`c:${c.id}`);
-    const row = { id: c.id, name: c.name, leaf: c.leaf, listings: s ? s.total : counts.get(String(c.id)) ?? null, scanned: null };
-    if (s) {
-      const listings = placed(s, ctx, reads);
+    const restricted = restrictedName(c.name);
+    const row = { id: c.id, name: c.name, leaf: c.leaf, listings: s ? s.total : counts.get(String(c.id)) ?? null, scanned: null, keywords: [], restricted: restricted ? { kind: restricted.kind, label: restricted.label } : null };
+    if (s && !restricted) {
+      const { kept, hidden } = compliance.partition(s.listings, brandNames);
+      const listings = scoring.withPace(placed({ ...s, listings: kept }, ctx, reads));
       const f = scoring.figures(listings, { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
       if (f.demand.read) {
         const o = scoring.opportunity(f, { currency: ctx.site.currency });
@@ -286,18 +308,22 @@ async function childRows(ctx, info, parentScan) {
           score: o.score,
           band: o.band,
           medianPerMonth: f.demand.medianPerMonth,
+          monthlySales: f.demand.monthlySales,
+          soldTotal: f.demand.soldTotal,
           selling: f.demand.selling,
           read: f.demand.read,
           price: f.price?.median ?? null,
           fit: f.fit?.share ?? null,
           topSeller: f.competition.topSeller?.share ?? null,
+          hidden: hidden.count,
           takenAt: s.taken_at,
         };
+        row.keywords = keywords.fromListings(listings, { query: c.name, limit: CHILD_KEYWORDS }).map((k) => ({ term: k.term, perMonth: k.perMonth, sold: k.sold }));
       }
     }
     return row;
   });
-  return rows.sort((a, b) => (b.scanned?.score ?? -1) - (a.scanned?.score ?? -1) || (b.listings ?? -1) - (a.listings ?? -1));
+  return rows.sort((a, b) => Number(Boolean(a.restricted)) - Number(Boolean(b.restricted)) || (b.scanned?.score ?? -1) - (a.scanned?.score ?? -1) || (b.listings ?? -1) - (a.listings ?? -1));
 }
 
 /**
@@ -336,26 +362,28 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
   const scanRow = await scan(ctx.site, subject);
   // Opened: it's in the nightly shared refresh for a few days, read with this account.
   await repo.touchScan(ctx.site.id, subject.key, connectionId).catch(() => {});
-  const sold = await readSold(ownerId, connectionId, ctx, scanRow.listings, { max });
-  const listings = scoring.withPace(placed(scanRow, ctx, sold.reads));
+  // The AI's brand/VeRO and restricted reading, when today's is kept (else the page asks for it).
+  const advice = await advisor.keptAdvice(adviceKey(ctx.site, subject)).catch(() => null);
+  // Listings that would break eBay's rules (a restricted item, a VeRO brand as the product) are
+  // hidden, not read, and not counted: Discover never points anyone at them.
+  const brandNames = veroBrands(advice);
+  const { kept, hidden } = compliance.partition(scanRow.listings, brandNames);
+  const sold = await readSold(ownerId, connectionId, ctx, kept, { max });
+  const listings = scoring.withPace(placed({ ...scanRow, listings: kept }, ctx, sold.reads));
 
   const f = scoring.figures(listings, { total: scanRow.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
   // Two weeks of readings: recent sales per listing, and the subject's sales day by day.
   const history = await repo.readsSince(ctx.site.id, listings.map(idOf), analyticsDays.addDays(ctx.day, -15));
   const recent = trends.recentSales(history);
   const summary = trends.summarise(scoring.sellingNow(listings), recent);
-  const [children, watch, advice] = await Promise.all([
-    childRows(ctx, info, scanRow),
-    repo.findWatch(connectionId, subject.kind, subject.value),
-    // The AI's brand/VeRO and restricted reading, when today's is kept (else the page asks for it).
-    advisor.keptAdvice(adviceKey(ctx.site, subject)).catch(() => null),
-  ]);
+  const [children, watch] = await Promise.all([childRows(ctx, info, scanRow, brandNames), repo.findWatch(connectionId, subject.kind, subject.value)]);
   const brands = scanRow.breakdown?.brands || [];
-  // Brands worth flagging in a keyword: the ones the AI names as a VeRO risk, and brands on at
-  // least 5% of the listings (sellers type all sorts into eBay's brand field, "Kitchen" included).
+  // Brands worth flagging in a keyword: the VeRO ones, and brands on at least 5% of the listings
+  // (sellers type all sorts into eBay's brand field, "Kitchen" included).
   const brandTotal = brands.reduce((sum, b) => sum + b.count, 0) || scanRow.total || 1;
-  const brandNames = [...(advice?.brandRisk?.level !== 'none' ? advice?.brandRisk?.brands || [] : []), ...brands.filter((b) => !b.unbranded && b.count / brandTotal >= 0.05).map((b) => b.name)];
-  const flagged = (text) => compliance.flagOf(text, brandNames);
+  const flagNames = [...brandNames, ...brands.filter((b) => !b.unbranded && b.count / brandTotal >= 0.05).map((b) => b.name)];
+  const flagged = (text) => compliance.flagOf(text, flagNames);
+  const country = ctx.site.country;
 
   return {
     subject: {
@@ -376,13 +404,16 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
     // A keyword: your own listings with it, their traffic and sales (Analytics, 30 days).
     yourTraffic: await traffic,
     recent: summary.recent,
-    rising: summary.rising.map((l) => shown(l, ctx.site.country)),
-    listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => ({ ...shown(l, ctx.site.country), flag: flagged(l.title) })),
-    // The subject's own words (its category name, or the keyword) aren't news.
-    keywords: keywords.fromListings(listings, { query: subject.q || info.name }).map((k) => ({ ...k, flag: flagged(k.term) })),
+    rising: summary.rising.map((l) => shown(l, country)),
+    // The best products to hunt among them, with why.
+    bestBets: scoring.bestBets(listings, { currency: ctx.site.currency, limit: BEST_BETS }).map((l) => ({ ...shown(l, country), flag: flagged(l.title), bet: l.bet })),
+    listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => ({ ...shown(l, country), flag: flagged(l.title) })),
+    // The subject's own words (its category name, or the keyword) aren't news. More the deeper in.
+    keywords: keywords.fromListings(listings, { query: subject.q || info.name, limit: keywordLimit(info) }).map((k) => ({ ...k, flag: flagged(k.term) })),
     brands: brands.slice(0, 8),
-    // Before hunting: eBay's word filter, restricted items, brands and VeRO.
-    compliance: compliance.check({ name: info.name, listings, brands, total: scanRow.total, advice }),
+    // Before hunting: eBay's word filter, restricted items, brands and VeRO — over every leading
+    // listing, the hidden ones included, so it says what was hidden and why.
+    compliance: compliance.check({ name: info.name, listings: scanRow.listings, brands, total: scanRow.total, advice, hidden }),
     // What you'd sell at and the most a supplier may cost for your target return (your pricing settings).
     price: researchAnalysis.priceAdvice(listings, { pricing: ctx.pricing }),
     // A keyword: the categories its listings sit in, to explore next.
@@ -423,7 +454,9 @@ async function review(ownerId, connectionId, input) {
     breakdown: scanRow.breakdown,
     keywords: keywords.fromListings(listings, { query: subject.q || info.name }),
   });
-  return { compliance: compliance.check({ name: info.name, listings, brands, total: scanRow.total, advice }), checked: Boolean(advice) };
+  // With the AI's brands known, more listings may be hidden: the page opens the subject again.
+  const { hidden } = compliance.partition(scanRow.listings, veroBrands(advice));
+  return { compliance: compliance.check({ name: info.name, listings: scanRow.listings, brands, total: scanRow.total, advice, hidden }), checked: Boolean(advice), hidden: hidden.count };
 }
 
 /**
@@ -444,6 +477,8 @@ async function refreshRecent({ limit = 10 } = {}) {
       done += 1;
     } catch (err) {
       logger.warn('Discover: shared refresh skipped a subject', { subject: row.subject, error: err.message });
+      // A category eBay no longer has: out of the refresh, not tried again every hour.
+      if (err.statusCode === 404) await repo.forgetOpened(row.marketplace_id, row.subject).catch(() => {});
       if (err.statusCode === 429) break;
     }
   }
@@ -476,7 +511,12 @@ async function rankChildren(ownerId, connectionId, categoryId) {
   if (!info.children.length) throw new DiscoverError('This category has no subcategories to rank.', 400);
   const parent = await scan(ctx.site, subject);
   const counts = new Map((parent.breakdown?.categories || []).map((c) => [String(c.id), c.count]));
-  const chosen = [...info.children].sort((a, b) => (counts.get(String(b.id)) ?? 0) - (counts.get(String(a.id)) ?? 0)).slice(0, MAX_CHILDREN);
+  // Restricted subcategories (knives, vapes…) aren't worth the reads: nothing in them is hunted.
+  const chosen = info.children
+    .filter((c) => !restrictedName(c.name))
+    .sort((a, b) => (counts.get(String(b.id)) ?? 0) - (counts.get(String(a.id)) ?? 0))
+    .slice(0, MAX_CHILDREN);
+  if (!chosen.length) throw new DiscoverError('Every subcategory here is a restricted item on eBay: nothing to rank.', 400);
   const key = rankingKey(connectionId, subject.categoryId);
   const job = { total: chosen.length, done: 0, startedAt: Date.now() };
   rankings.set(key, job);
@@ -488,7 +528,10 @@ async function rankChildren(ownerId, connectionId, categoryId) {
       const child = chosen[next++];
       try {
         const s = await scan(ctx.site, subjectOf({ categoryId: child.id }));
-        await readSold(ownerId, connectionId, ctx, s.listings, { max: CHILD_READS });
+        const { kept } = compliance.partition(s.listings);
+        const sold = await readSold(ownerId, connectionId, ctx, kept, { max: CHILD_READS });
+        // This account's eBay sign-in fails: no subcategory can be read today, so stop asking.
+        if (sold.signInFailed) outOfSearches = true;
       } catch (err) {
         if (err.statusCode === 429) outOfSearches = true; // the day's searches are used up
         else logger.warn('Discover: subcategory not scanned', { categoryId: child.id, error: err.message });
@@ -660,6 +703,8 @@ async function readDueWatches({ limit = 5 } = {}) {
       read += 1;
     } catch (err) {
       logger.warn('Discover: watch not read', { watchId: w.id, error: err.message });
+      // A category eBay no longer has: counted as read, so it's tried once a day, not every hour.
+      if (err.statusCode === 404) await repo.markWatchRead(w.id).catch(() => {});
       if (err.statusCode === 429) break;
     }
   }

@@ -124,7 +124,7 @@ export function DiscoverListings({ listings, currency, risingIds, onHunt }: { li
       {/* A laptop: a table. */}
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[820px] table-fixed text-[12.5px]">
-          <thead className="bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <tr>
               <th className="w-[38%] px-4 py-2 text-left">Listing</th>
               <th className="px-3 py-2 text-right">Price</th>

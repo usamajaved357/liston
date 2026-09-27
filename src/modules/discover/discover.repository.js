@@ -29,6 +29,11 @@ async function touchScan(marketplaceId, subject, connectionId) {
   await query(`UPDATE discover_scans SET opened_at = now(), opened_connection_id = $3 WHERE marketplace_id = $1 AND subject = $2`, [marketplaceId, subject, connectionId]);
 }
 
+/** A subject eBay no longer knows: out of the nightly shared refresh. */
+async function forgetOpened(marketplaceId, subject) {
+  await query(`UPDATE discover_scans SET opened_at = NULL, opened_connection_id = NULL WHERE marketplace_id = $1 AND subject = $2`, [marketplaceId, subject]);
+}
+
 /** A site's subjects opened since `since`, most recent first (shared: anyone on the site). */
 async function recentlyOpened(marketplaceId, since, limit) {
   const { rows } = await query(
@@ -161,6 +166,7 @@ async function ownCategories(connectionId, limit = 12) {
 module.exports = {
   getScan,
   touchScan,
+  forgetOpened,
   dueForRefresh,
   recentlyOpened,
   getScans,
