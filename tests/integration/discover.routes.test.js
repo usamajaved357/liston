@@ -161,7 +161,18 @@ test('Discover explores a category: its leading listings, their sold counts read
   // A listing that would break eBay's rules is hidden, never pointed at, and counted in Before you hunt.
   assert.ok(!d.listings.some((l) => /knife/i.test(l.title)));
   assert.deepStrictEqual([d.compliance.hidden.count, d.compliance.hidden.restricted], [1, 1]);
-  assert.ok(d.bestBets.length > 0 && d.bestBets[0].bet.reasons.length === 3, 'the best products to hunt, with why');
+  assert.ok(d.products.length > 0 && d.products[0].reasons.length >= 3, 'the products here, best to hunt first, with why');
+  assert.ok(d.products[0].perMonth > 0 && d.products[0].itemIds.length >= 1);
+
+  // Winners: the best products across everything explored on the site, with a hunter's filters.
+  const winners = await request('GET', `${base}/winners?sort=sales&minSales=10`, undefined, t.hunter);
+  assert.strictEqual(winners.status, 200, JSON.stringify(winners.data));
+  assert.ok(winners.data.pool.subjects >= 1 && winners.data.products.length > 0);
+  assert.ok(winners.data.products.every((p) => p.perMonth >= 10 && p.from && p.from.name));
+  assert.ok(winners.data.products.some((p) => p.from.name === 'Test Lighting'));
+  const priced = await request('GET', `${base}/winners?price=25plus`, undefined, t.hunter);
+  assert.ok(priced.data.products.every((p) => p.price.median >= 25));
+  assert.strictEqual((await request('GET', `${base}/winners?sort=sideways`, undefined, t.hunter)).status, 400);
   // Subcategories, busiest first, not ranked yet.
   assert.deepStrictEqual(d.children.map((c) => [c.id, c.listings, c.scanned]), [[CHILDREN[0], 500, null], [CHILDREN[1], 400, null]]);
 

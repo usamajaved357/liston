@@ -22,7 +22,7 @@ const { HAZMAT_TRIGGERS, REPLACEMENTS } = require('../listings/policy-words');
 const RESTRICTED = [
   { key: 'replica', kind: 'prohibited', label: 'Replicas and counterfeits', words: ['replica', 'replicas', 'counterfeit', 'fake', 'knockoff', 'knock-off', 'knock off'] },
   { key: 'weapons', kind: 'restricted', label: 'Weapons and knives', words: ['knife', 'knives', 'dagger', 'daggers', 'sword', 'swords', 'machete', 'butterfly knife', 'flick knife', 'knuckle duster', 'knuckleduster', 'taser', 'stun gun', 'pepper spray', 'crossbow', 'catapult', 'slingshot', 'air rifle', 'bb gun', 'firearm', 'firearms', 'baton', 'nunchucks'] },
-  { key: 'vapes', kind: 'restricted', label: 'Vapes, tobacco and nicotine', words: ['vape', 'vapes', 'e-cigarette', 'e-cigarettes', 'e-liquid', 'nicotine', 'tobacco', 'cigarette', 'cigarettes', 'shisha'] },
+  { key: 'vapes', kind: 'restricted', label: 'Vapes, tobacco and nicotine', words: ['vape', 'vapes', 'vaping', 'e-cigarette', 'e-cigarettes', 'e-cig', 'e-cigs', 'ecig', 'e-liquid', 'e-liquids', 'eliquid', 'nicotine', 'nic salt', 'nic salts', 'tobacco', 'cigarette', 'cigarettes', 'shisha', 'hookah', 'electronic smoking', 'smoking', 'puffs', 'refill pods', 'pod kit', 'prefilled pods', 'disposable vape', 'rolling tobacco'] },
   { key: 'medical', kind: 'restricted', label: 'Medicines, medical devices and health claims', words: ['prescription', 'medicine', 'medicines', 'medical device', 'pharmaceutical', 'antibiotic', 'antibiotics', 'hearing aid', 'hearing aids', 'contact lens', 'contact lenses', 'blood pressure monitor', 'covid', 'cure', 'cures'] },
   { key: 'supplements', kind: 'restricted', label: 'Supplements, CBD and drugs', words: ['cbd', 'thc', 'cannabis', 'kratom', 'steroid', 'steroids', 'diet pills', 'weight loss pills', 'poppers', 'nitrous'] },
   { key: 'paraphernalia', kind: 'prohibited', label: 'Drug paraphernalia', words: ['bong', 'bongs', 'dab rig', 'rolling papers'] },
@@ -100,13 +100,13 @@ function flagOf(text, brandNames = []) {
 }
 
 /**
- * Why a listing can't be pointed at, or null: it names a restricted or
- * prohibited item ({ kind: 'restricted', label }) or a VeRO brand as the
+ * Why a listing can't be pointed at, or null: it (or its eBay category)
+ * names a restricted or prohibited item ({ kind: 'restricted', label }) or a VeRO brand as the
  * product ({ kind: 'brand', label: the brand }). eBay's word filter isn't a
  * violation of the product, only of its wording, so it doesn't hide one.
  */
-function violationOf(title, brandNames = []) {
-  const { restricted } = termsIn(title);
+function violationOf(title, brandNames = [], category = '') {
+  const { restricted } = termsIn(`${title} ${category || ''}`);
   if (restricted[0]) return { kind: 'restricted', label: restricted[0].label, prohibited: restricted[0].kind === 'prohibited' };
   const brand = veroBrandIn(title, brandNames);
   return brand ? { kind: 'brand', label: brand } : null;
@@ -121,7 +121,7 @@ function partition(listings, brandNames = []) {
   const hidden = { count: 0, restricted: 0, brand: 0, brands: [] };
   const brands = new Map();
   for (const l of listings) {
-    const v = violationOf(l.title, brandNames);
+    const v = violationOf(l.title, brandNames, l.category);
     if (!v) {
       kept.push(l);
       continue;

@@ -1938,7 +1938,51 @@ export interface DiscoverListing {
   recent: { sold: number; days: number; from: string; to: string } | null; // sold between two readings
   lift?: number | null; // rising: selling this many times faster lately than over its life
   flag?: DiscoverFlag | null;
-  bet?: { score: number; reasons: string[] }; // a best bet: why
+}
+// A product: the same thing sold by several sellers, grouped, judged the way a hunter judges it.
+export interface DiscoverProduct {
+  key: string;
+  name: string;
+  image: string | null;
+  url: string | null;
+  category: string | null;
+  categoryId: string | null;
+  listings: number;
+  itemIds: string[];
+  read: number;
+  sellers: number;
+  selling: number; // sellers selling it every month
+  perMonth: number;
+  sold: number;
+  price: { low: number; median: number; high: number } | null;
+  delivery: { known: boolean; share: number | null; sellers: number; perMonth: number | null }; // sales from sellers delivering like you or slower
+  leaderShare: number | null;
+  momentum: "rising" | "new" | "steady" | "quiet";
+  lift: number | null;
+  newestDays: number | null;
+  recent: { sold: number; days: number } | null;
+  score: number;
+  band: DiscoverOpportunity["band"];
+  parts: { demand: number; proven: number; fit: number; room: number; momentum: number; spread: number };
+  reasons: { good: boolean | null; text: string }[];
+  flag: DiscoverFlag | null;
+  from?: { kind: "category" | "keyword"; value: string; name: string; path: string[] };
+}
+export interface DiscoverWinnersFilters {
+  q?: string;
+  fit?: boolean;
+  price?: "under10" | "10to25" | "25plus" | null;
+  minSales?: number;
+  newOnly?: boolean;
+  sort?: "score" | "sales" | "rising" | "new" | "price";
+}
+export interface DiscoverWinners {
+  products: DiscoverProduct[];
+  matched: number;
+  pool: { subjects: number; listings: number; read: number };
+  market: { id: string; name: string; currency: string };
+  account: { min: number; max: number } | null;
+  at: string;
 }
 
 export interface DiscoverScorePart {
@@ -2082,7 +2126,7 @@ export interface DiscoverExplore {
   opportunity: DiscoverOpportunity;
   recent: { sold: number; days: number; listings: number } | null;
   rising: DiscoverListing[];
-  bestBets: DiscoverListing[];
+  products: DiscoverProduct[];
   listings: DiscoverListing[];
   keywords: DiscoverKeyword[];
   brands: { name: string; count: number; unbranded: boolean }[];
@@ -2440,6 +2484,16 @@ export const api = {
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
     return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
+  },
+  discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}) => {
+    const q = new URLSearchParams();
+    if (f.q) q.set("q", f.q);
+    if (f.fit) q.set("fit", "1");
+    if (f.price) q.set("price", f.price);
+    if (f.minSales) q.set("minSales", String(f.minSales));
+    if (f.newOnly) q.set("newOnly", "1");
+    if (f.sort) q.set("sort", f.sort);
+    return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
   },
   discoverSuggest: (connectionId: string, q: string) =>
     request<{ categories: { id: string; name: string; path: string[]; leaf: boolean }[] }>(`/api/connections/${connectionId}/discover/suggest?q=${encodeURIComponent(q)}`),

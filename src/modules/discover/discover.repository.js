@@ -29,6 +29,12 @@ async function touchScan(marketplaceId, subject, connectionId) {
   await query(`UPDATE discover_scans SET opened_at = now(), opened_connection_id = $3 WHERE marketplace_id = $1 AND subject = $2`, [marketplaceId, subject, connectionId]);
 }
 
+/** Every scan on a site taken since `since`, newest first: the pool for Winners. */
+async function scansForSite(marketplaceId, since, limit) {
+  const { rows } = await query(`SELECT subject, total, listings, taken_at FROM discover_scans WHERE marketplace_id = $1 AND taken_at >= $2 ORDER BY taken_at DESC LIMIT $3`, [marketplaceId, since, limit]);
+  return rows;
+}
+
 /** A subject eBay no longer knows: out of the nightly shared refresh. */
 async function forgetOpened(marketplaceId, subject) {
   await query(`UPDATE discover_scans SET opened_at = NULL, opened_connection_id = NULL WHERE marketplace_id = $1 AND subject = $2`, [marketplaceId, subject]);
@@ -167,6 +173,7 @@ module.exports = {
   getScan,
   touchScan,
   forgetOpened,
+  scansForSite,
   dueForRefresh,
   recentlyOpened,
   getScans,

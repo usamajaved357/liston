@@ -17,6 +17,7 @@ const scoring = require('./discover-scoring');
 const keywords = require('./discover-keywords');
 const trends = require('./discover-trends');
 const compliance = require('./discover-compliance');
+const products = require('./discover-products');
 const advisor = require('../ai-generation/research-advisor.service');
 const researchAnalysis = require('../research/research-analysis');
 
@@ -41,7 +42,12 @@ const CHILD_READS = 8; // per subcategory when ranking them (enough for its keyw
 const CHILD_KEYWORDS = 4; // shown under each ranked subcategory
 const KEYWORDS_TOP = 24; // keywords on a top-level category or a keyword
 const KEYWORDS_MAX = 48; // deeper in, more: a leaf category shows the most
-const BEST_BETS = 4;
+const PRODUCTS_SHOWN = 12; // products on a subject's page
+const WINNERS_SCANS = 200; // scans in the Winners pool (newest first)
+const WINNERS_DAYS = 30; // a scan older than this is out of the pool
+const WINNERS_PER_SCAN = 8;
+const WINNERS_SHOWN = 60;
+const WINNERS_CACHE_MS = 5 * 60 * 1000;
 const MAX_CHILDREN = 12; // subcategories ranked at once, busiest first
 const READ_CONCURRENCY = 4;
 const LISTINGS_SHOWN = 60;
@@ -405,8 +411,8 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
     yourTraffic: await traffic,
     recent: summary.recent,
     rising: summary.rising.map((l) => shown(l, country)),
-    // The best products to hunt among them, with why.
-    bestBets: scoring.bestBets(listings, { currency: ctx.site.currency, limit: BEST_BETS }).map((l) => ({ ...shown(l, country), flag: flagged(l.title), bet: l.bet })),
+    // Its products (the same product under several sellers grouped), best to hunt first, with why.
+    products: products.productsOf(summary.listings, { subject: subject.q || info.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: PRODUCTS_SHOWN }),
     listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => ({ ...shown(l, country), flag: flagged(l.title) })),
     // The subject's own words (its category name, or the keyword) aren't news. More the deeper in.
     keywords: keywords.fromListings(listings, { query: subject.q || info.name, limit: keywordLimit(info) }).map((k) => ({ ...k, flag: flagged(k.term) })),
@@ -458,6 +464,93 @@ async function review(ownerId, connectionId, input) {
   const { hidden } = compliance.partition(scanRow.listings, veroBrands(advice));
   return { compliance: compliance.check({ name: info.name, listings: scanRow.listings, brands, total: scanRow.total, advice, hidden }), checked: Boolean(advice), hidden: hidden.count };
 }
+
+// ---- winners: the best products across everything explored on the site ----------------
+
+const winnersCache = new Map();
+
+/**
+ * The product pool for an account: every scan on its site from the last
+ * month (shared: anyone's), its listings that may be shown, grouped into
+ * products and scored for this account, best first. Kept five minutes.
+ */
+async function winnersPool(ownerId, connectionId) {
+  const ctx = await context(ownerId, connectionId);
+  const cacheKey = `${ctx.site.id}:${connectionId}`;
+  const hit = winnersCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < WINNERS_CACHE_MS) return hit.value;
+  const scans = await repo.scansForSite(ctx.site.id, new Date(Date.now() - WINNERS_DAYS * 86400000), WINNERS_SCANS);
+  const ids = [...new Set(scans.flatMap((s) => s.listings.map(idOf)))];
+  const [reads, history] = await Promise.all([
+    repo.latestReads(ctx.site.id, ids, analyticsDays.addDays(ctx.day, -READ_FALLBACK_DAYS)),
+    repo.readsSince(ctx.site.id, ids, analyticsDays.addDays(ctx.day, -(trends.WEEK + 1))),
+  ]);
+  const recent = trends.recentSales(history);
+  const seen = new Set();
+  const pool = [];
+  let read = 0;
+  for (const s of scans) {
+    const isCategory = s.subject.startsWith('c:');
+    const value = s.subject.slice(2);
+    const path = isCategory ? await taxonomy.getCategoryPath(ctx.site.id, value).catch(() => []) : [];
+    if (isCategory && !path.length) continue;
+    const name = isCategory ? path[path.length - 1].name : value;
+    // A restricted subject, or one under a restricted category (Electronic Smoking…): out.
+    if (compliance.termsIn(isCategory ? path.map((p) => p.name).join(' ') : name).restricted.length) continue;
+    const { kept } = compliance.partition(s.listings);
+    const listings = trends.summarise(scoring.withPace(placed({ ...s, listings: kept }, ctx, reads)), recent).listings;
+    read += listings.filter((l) => l.soldPerMonth !== null).length;
+    const from = { kind: isCategory ? 'category' : 'keyword', value, name, path: isCategory ? path.slice(0, -1).map((p) => p.name) : [] };
+    for (const p of products.productsOf(listings, { subject: name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: WINNERS_PER_SCAN })) {
+      // The same product found under two subjects: once, where it scored best.
+      if (p.read === 0 || p.itemIds.some((id) => seen.has(id))) continue;
+      p.itemIds.forEach((id) => seen.add(id));
+      pool.push({ ...p, from });
+    }
+  }
+  pool.sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
+  const value = { products: pool, pool: { subjects: scans.length, listings: ids.length, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
+  winnersCache.set(cacheKey, { at: Date.now(), value });
+  return value;
+}
+
+const PRICE_BANDS = { under10: [0, 10], '10to25': [10, 25], '25plus': [25, Infinity] };
+
+/**
+ * Winners: the best products across everything explored on the site, for
+ * this account, filtered the way a hunter filters — delivery it can match,
+ * a price band, a minimum of sales a month, new lately — and sorted.
+ */
+async function winners(ownerId, connectionId, { q = '', fit = false, price = null, minSales = 0, newOnly = false, sort = 'score' } = {}) {
+  const all = await winnersPool(ownerId, connectionId);
+  const words = wordsOfQuery(q);
+  const band = price && PRICE_BANDS[price];
+  let list = all.products.filter((p) => {
+    if (words.length && !words.every((w) => p.name.toLowerCase().includes(w))) return false;
+    if (fit && p.delivery.known && p.delivery.share < 40) return false;
+    if (band && (!p.price || p.price.median < band[0] || p.price.median >= band[1])) return false;
+    if (minSales && p.perMonth < minSales) return false;
+    if (newOnly && p.momentum !== 'new' && p.momentum !== 'rising') return false;
+    return true;
+  });
+  const by = {
+    score: (a, b) => b.score - a.score || b.perMonth - a.perMonth,
+    sales: (a, b) => b.perMonth - a.perMonth,
+    rising: (a, b) => (b.lift ?? 0) - (a.lift ?? 0) || b.perMonth - a.perMonth,
+    new: (a, b) => (a.newestDays ?? 1e9) - (b.newestDays ?? 1e9) || b.perMonth - a.perMonth,
+    price: (a, b) => (b.price?.median ?? 0) - (a.price?.median ?? 0),
+  };
+  list = [...list].sort(by[sort] || by.score);
+  return { products: list.slice(0, WINNERS_SHOWN), matched: list.length, pool: all.pool, market: all.market, account: all.account, at: all.at };
+}
+
+const wordsOfQuery = (q) =>
+  String(q || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length > 1)
+    .slice(0, 6);
 
 /**
  * The nightly shared refresh (discover.scheduler): subjects anyone opened in
@@ -739,6 +832,7 @@ async function yourKeywords(ownerId, connectionId, { range = '30d' } = {}) {
 
 module.exports = {
   explore,
+  winners,
   rankChildren,
   rankingOf,
   review,

@@ -38,9 +38,9 @@ export function DiscoverWatchlist({
               <tr>
                 <th className="w-[28%] px-4 py-2">Watching</th>
                 <th className="px-3 py-2">Opportunity</th>
-                <th className="px-3 py-2 text-right">Monthly sales</th>
-                <th className="px-3 py-2 text-right">Lately</th>
-                <th className="px-3 py-2 text-right">Live</th>
+                <th className="px-3 py-2 text-center">Monthly sales</th>
+                <th className="px-3 py-2 text-center">Lately</th>
+                <th className="px-3 py-2 text-center">Live</th>
                 <th className="w-[20%] px-3 py-2">Rising</th>
                 <th className="w-[52px] px-4 py-2">
                   <span className="sr-only">Remove</span>
@@ -65,7 +65,7 @@ export function DiscoverWatchlist({
                       </button>
                     </td>
                     <td className="px-3 py-2.5">{w.opportunity ? <ScoreBadge score={w.opportunity.score} band={w.opportunity.band} size="sm" /> : <span className="text-[11.5px] text-[var(--color-muted)]">Read tonight</span>}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">
+                    <td className="px-3 py-2.5 text-center tabular-nums">
                       {w.figures ? (
                         <>
                           <span className="font-semibold text-[var(--color-ink)]">{perMonth(w.figures.medianPerMonth)}</span>
@@ -77,7 +77,7 @@ export function DiscoverWatchlist({
                         "—"
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">
+                    <td className="px-3 py-2.5 text-center tabular-nums">
                       {w.recent ? (
                         <>
                           <span className="font-semibold text-emerald-700">{count(w.recent.sold)} sold</span>
@@ -89,7 +89,7 @@ export function DiscoverWatchlist({
                         <span className="text-[11.5px] text-[var(--color-muted)]">After 2 readings</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{w.figures ? count(w.figures.total) : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{w.figures ? count(w.figures.total) : "—"}</td>
                     <td className="px-3 py-2.5">
                       {w.rising && w.rising.length ? (
                         <span className="flex items-center gap-1">
@@ -103,7 +103,7 @@ export function DiscoverWatchlist({
                         <span className="text-[11.5px] text-[var(--color-muted)]">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-right">
+                    <td className="px-4 py-2.5 text-center">
                       <button
                         type="button"
                         onClick={() => onRemove(w.id)}

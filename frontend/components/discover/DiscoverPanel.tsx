@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, DiscoverExplore, DiscoverOwnKeywords as OwnKeywords, DiscoverStart, DiscoverSubjectRef, DiscoverWatchList } from "@/lib/api";
+import { api, ApiError, DiscoverExplore, DiscoverOwnKeywords as OwnKeywords, DiscoverStart, DiscoverSubjectRef, DiscoverWatchList, DiscoverWinners, DiscoverWinnersFilters } from "@/lib/api";
 import { Alert } from "@/components/Alert";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { DiscoverSearch } from "./DiscoverSearch";
 import { DiscoverStartView } from "./DiscoverStartView";
 import { DiscoverSubjectView } from "./DiscoverSubjectView";
 import { DiscoverWatchlist } from "./DiscoverWatchlist";
+import { DiscoverWinnersView } from "./DiscoverWinners";
 import { DiscoverOwnKeywords } from "./DiscoverOwnKeywords";
 
 // The Hunting page's Discover tab: Explore (a category or keyword, from
@@ -17,7 +18,7 @@ import { DiscoverOwnKeywords } from "./DiscoverOwnKeywords";
 // analytics). The category or keyword open is in the address (?dc= or
 // ?dq=), so Back and a shared link land on it.
 
-type Section = "explore" | "watchlist" | "keywords";
+type Section = "explore" | "winners" | "watchlist" | "keywords";
 const RANK_POLL_MS = 2500;
 const READS_STEP = 25;
 
@@ -57,6 +58,9 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   // The AI's brand/VeRO reading, asked for once a subject is on screen without today's.
   const [review, setReview] = useState<{ key: string; compliance?: DiscoverExplore["compliance"]; checked?: boolean; failed?: boolean; hidden?: number } | null>(null);
   const [own, setOwn] = useState<{ range: string; data?: OwnKeywords; error?: string } | null>(null);
+  const [winnersFilters, setWinnersFilters] = useState<DiscoverWinnersFilters>({ sort: "score" });
+  const [winners, setWinners] = useState<{ key: string; data?: DiscoverWinners; error?: string } | null>(null);
+  const winnersKey = JSON.stringify(winnersFilters);
 
   const open = useCallback(
     (next: DiscoverSubjectRef | null) => {
@@ -101,7 +105,8 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
 
   const shown = result && result.key === key ? result : null;
   const answered = result?.requestKey === requestKey;
-  const needsReview = Boolean(shown?.data && !shown.data.compliance.ai);
+  // The AI's reading is for a keyword or a subcategory ("Before you hunt" isn't shown on a top-level category).
+  const needsReview = Boolean(shown?.data && !shown.data.compliance.ai && (shown.data.subject.kind === "keyword" || shown.data.subject.path.length > 1));
   const reviewed = review?.key === key ? review : null;
 
   const runReview = useCallback(() => {
@@ -135,6 +140,27 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     const timer = setTimeout(() => setPoll((n) => n + 1), RANK_POLL_MS);
     return () => clearTimeout(timer);
   }, [ranking, answered]);
+
+  // Winners, when shown: asked again as the filters change (typing waits a moment).
+  useEffect(() => {
+    if (section !== "winners") return;
+    let cancelled = false;
+    const timer = setTimeout(
+      () => {
+        api
+          .discoverWinners(connectionId, winnersFilters)
+          .then((data) => !cancelled && setWinners({ key: winnersKey, data }))
+          .catch((err) => !cancelled && setWinners({ key: winnersKey, error: err instanceof ApiError ? err.message : "Couldn't load the winning products." }));
+      },
+      winners ? 250 : 0
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // `winnersFilters` is what `winnersKey` stands for; `winners` only decides the wait.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, section, winnersKey]);
 
   // The watchlist and your keywords, when shown.
   useEffect(() => {
@@ -199,6 +225,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   const watchCount = start?.data?.watches ?? watchlist?.data?.items.length ?? null;
   const sections: { key: Section; label: string }[] = [
     { key: "explore", label: "Explore" },
+    { key: "winners", label: "Winners" },
     { key: "watchlist", label: watchCount ? `Watchlist · ${watchCount}` : "Watchlist" },
     ...(canSeeTraffic ? [{ key: "keywords" as Section, label: "Your keywords" }] : []),
   ];
@@ -271,9 +298,16 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
         ) : start?.error ? (
           <Alert>{start.error}</Alert>
         ) : start?.data ? (
-          <DiscoverStartView data={start.data} onOpen={open} onWatchlist={() => setSection("watchlist")} />
+          <DiscoverStartView data={start.data} onOpen={open} onWatchlist={() => setSection("watchlist")} onWinners={() => setSection("winners")} />
         ) : (
           <Loading first={false} />
+        ))}
+
+      {section === "winners" &&
+        (winners?.error && !winners.data ? (
+          <Alert>{winners.error}</Alert>
+        ) : (
+          <DiscoverWinnersView data={winners?.data || null} filters={winnersFilters} onFilters={setWinnersFilters} loading={Boolean(winners) && winners?.key !== winnersKey} onHunt={onHunt} onOpen={open} />
         ))}
 
       {section === "watchlist" &&

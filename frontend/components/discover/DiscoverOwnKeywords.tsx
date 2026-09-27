@@ -39,14 +39,14 @@ export function DiscoverOwnKeywords({ data, onOpen }: { data: OwnKeywords; onOpe
           <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <tr>
               <th className="w-[34%] px-4 py-2 text-left">Keyword</th>
-              <th className="px-3 py-2 text-right">Listings</th>
-              <th className="px-3 py-2 text-right">Impressions</th>
-              <th className="px-3 py-2 text-right">Clicks</th>
-              <th className="px-3 py-2 text-right" title="Clicks (listing views) over impressions">
+              <th className="px-3 py-2 text-center">Listings</th>
+              <th className="px-3 py-2 text-center">Impressions</th>
+              <th className="px-3 py-2 text-center">Clicks</th>
+              <th className="px-3 py-2 text-center" title="Clicks (listing views) over impressions">
                 Click rate
               </th>
-              <th className="px-3 py-2 text-right">Sold</th>
-              <th className="px-4 py-2 text-right" title="Sold over clicks">
+              <th className="px-3 py-2 text-center">Sold</th>
+              <th className="px-4 py-2 text-center" title="Sold over clicks">
                 Converts
               </th>
             </tr>
@@ -62,12 +62,12 @@ export function DiscoverOwnKeywords({ data, onOpen }: { data: OwnKeywords; onOpe
                     <span className="block h-full rounded-full bg-[var(--color-primary)]/70" style={{ width: `${(k.sold / top) * 100}%` }} />
                   </span>
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums">{k.listings}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{k.measured ? count(k.impressions) : "—"}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{k.measured ? count(k.views) : "—"}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{k.ctr === null ? "—" : `${k.ctr}%`}</td>
-                <td className={`px-3 py-2 text-right font-semibold tabular-nums ${k.sold ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{count(k.sold)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{k.conversion === null ? "—" : `${k.conversion}%`}</td>
+                <td className="px-3 py-2 text-center tabular-nums">{k.listings}</td>
+                <td className="px-3 py-2 text-center tabular-nums">{k.measured ? count(k.impressions) : "—"}</td>
+                <td className="px-3 py-2 text-center tabular-nums">{k.measured ? count(k.views) : "—"}</td>
+                <td className="px-3 py-2 text-center tabular-nums">{k.ctr === null ? "—" : `${k.ctr}%`}</td>
+                <td className={`px-3 py-2 text-center font-semibold tabular-nums ${k.sold ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{count(k.sold)}</td>
+                <td className="px-4 py-2 text-center tabular-nums">{k.conversion === null ? "—" : `${k.conversion}%`}</td>
               </tr>
             ))}
           </tbody>

@@ -1,15 +1,15 @@
 "use client";
 
 import { useMemo } from "react";
-import { DiscoverExplore, DiscoverListing, DiscoverSubjectRef, DiscoverYourTraffic } from "@/lib/api";
-import { KpiTile } from "@/components/charts/KpiTile";
+import { DiscoverExplore, DiscoverSubjectRef, DiscoverYourTraffic } from "@/lib/api";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { ShareBar, ShareTone } from "@/components/charts/ShareBar";
 import { count, flag, money } from "@/components/research/format";
 import { ago } from "@/components/hunting/HuntBits";
 import { DiscoverListings } from "./DiscoverListings";
+import { DiscoverProducts } from "./DiscoverProducts";
 import { DiscoverCompliance } from "./DiscoverCompliance";
-import { AccountDelivery, BAND, BudgetLine, CardHeader, Chevron, FlagTag, HuntIcon, perMonth, Quiet, ScoreBadge, StarIcon, Thumb } from "./discover-ui";
+import { AccountDelivery, BAND, BudgetLine, CardHeader, Chevron, FlagTag, perMonth, Quiet, ScoreBadge, StarIcon, StatTile } from "./discover-ui";
 
 // One category or keyword in Discover, laid out like the Analytics page:
 // the headline figures as tiles (with what a supplier may cost at the
@@ -97,61 +97,6 @@ function ScoreCard({ data }: { data: DiscoverExplore }) {
   );
 }
 
-// The best products to hunt here: the leading listings that sell, that a
-// seller delivering like this account can match, with price room, one per
-// seller, each with why. Only listings Discover may show (none that would
-// break eBay's rules).
-function BestBets({ bets, currency, onHunt }: { bets: DiscoverListing[]; currency: string; onHunt: (url: string) => void }) {
-  if (!bets.length) return null;
-  return (
-    <section className="card p-4">
-      <CardHeader title="Best products to hunt here" note="Sell every month, a delivery you can match, and a price with room after fees. One per seller. Nothing that would break eBay's rules." />
-      <ul className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {bets.map((l, i) => (
-          <li key={l.itemId} className="flex flex-col rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3">
-            <div className="flex items-start gap-3">
-              <span className="relative flex-shrink-0">
-                <Thumb src={l.image} size={56} />
-                <span className="absolute -left-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-primary)] text-[10.5px] font-semibold text-white">{i + 1}</span>
-              </span>
-              <div className="min-w-0 flex-1">
-                {l.url ? (
-                  <a href={l.url} target="_blank" rel="noreferrer" className="line-clamp-2 text-[12.5px] font-medium leading-snug text-[var(--color-ink)] hover:text-[var(--color-primary)] hover:underline" title="Open on eBay">
-                    {l.title}
-                  </a>
-                ) : (
-                  <p className="line-clamp-2 text-[12.5px] font-medium leading-snug text-[var(--color-ink)]">{l.title}</p>
-                )}
-                <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">
-                  <span className="font-semibold tabular-nums text-[var(--color-ink)]">{money(l.landed ?? l.price?.value, currency)}</span> with postage
-                  {l.seller?.username && <> · {l.seller.username}</>}
-                </p>
-              </div>
-            </div>
-            <ul className="mt-2.5 flex-1 space-y-1">
-              {(l.bet?.reasons || []).map((r, j) => (
-                <li key={r} className="flex items-center gap-1.5 text-[11.5px] text-[var(--color-muted)]">
-                  <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${j === 0 ? "bg-emerald-500" : r.startsWith("Faster") || r.startsWith("Little") || r.startsWith("Price is") ? "bg-amber-500" : "bg-emerald-500"}`} aria-hidden />
-                  {r}
-                </li>
-              ))}
-            </ul>
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <span className="text-[12px] font-semibold tabular-nums text-[var(--color-ink)]">{perMonth(l.soldPerMonth)}</span>
-              {l.url && (
-                <button type="button" onClick={() => onHunt(l.url!)} className="btn btn-primary btn-sm !h-8 gap-1.5 !text-[12px]" title="Hunt this product: check it against an AliExpress supplier">
-                  <HuntIcon />
-                  Hunt
-                </button>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 export function DiscoverSubjectView({
   data,
   onOpen,
@@ -186,6 +131,8 @@ export function DiscoverSubjectView({
   const risingIds = useMemo(() => new Set(data.rising.map((l) => l.itemId)), [data.rising]);
   const unranked = data.children.filter((c) => !c.scanned && !c.restricted).length;
   const read = f.demand.read;
+  // A top-level category is too broad for "Before you hunt": it shows on a keyword or a subcategory.
+  const specific = subject.kind === "keyword" || subject.path.length > 1;
   const hidden = data.compliance.hidden;
   const hiddenText = hidden.count
     ? `${hidden.count} of the leading listings ${hidden.count === 1 ? "is" : "are"} hidden: ${[hidden.restricted ? `${hidden.restricted} restricted on eBay` : null, hidden.brand ? `${hidden.brand} ${hidden.brands.length ? `branded (${hidden.brands.slice(0, 3).join(", ")})` : "a VeRO brand"}` : null].filter(Boolean).join(", ")}. Nothing here counts them.`
@@ -215,9 +162,9 @@ export function DiscoverSubjectView({
             <Chevron className="h-3.5 w-3.5 rotate-180" />
             {backLabel}
           </button>
-          {subject.kind === "category" && subject.path.length > 1 && (
+          {subject.kind === "category" && subject.path.length > 2 && (
             <nav aria-label="Category path" className="flex min-w-0 flex-wrap items-center gap-x-1">
-              {subject.path.slice(0, -1).map((p, i) => (
+              {subject.path.slice(0, -2).map((p, i) => (
                 <span key={p.id} className="inline-flex items-center gap-x-1">
                   {i > 0 && <span aria-hidden>›</span>}
                   <button type="button" onClick={() => onOpen({ categoryId: p.id })} className="hover:text-[var(--color-primary)] hover:underline">
@@ -251,7 +198,7 @@ export function DiscoverSubjectView({
         </div>
       </div>
 
-      {data.compliance.level === "risky" && (
+      {specific && data.compliance.level === "risky" && (
         <div className="notice notice-danger">
           <span className="flex-1">
             <span className="font-semibold">Risky to hunt.</span>{" "}
@@ -266,22 +213,55 @@ export function DiscoverSubjectView({
 
       {/* The headline figures. */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <KpiTile label={`Opportunity · ${BAND[data.opportunity.band].label}`} value={`${data.opportunity.score} / 100`} info="Demand, how many listings sell, competition, whether you can match the sellers' delivery, and price room. See how it's made below." />
-        <KpiTile
+        <StatTile
+          icon="target"
+          label="Opportunity"
+          value={`${data.opportunity.score} / 100`}
+          chip={BAND[data.opportunity.band].label}
+          tone={data.opportunity.band === "strong" ? "emerald" : data.opportunity.band === "fair" ? "amber" : "rose"}
+          gauge={data.opportunity.score}
+          sub="Demand to price room, out of 100"
+          info="Demand, how many listings sell, competition, whether you can match the sellers' delivery, and price room. See how it's made below."
+        />
+        <StatTile
+          icon="trend"
           label="Monthly sales"
           value={read ? count(Math.round(f.demand.monthlySales)) : "—"}
+          tone="primary"
+          sub={read ? `${read} leading listings read` : "Once sold counts are read"}
           info={`What the ${read} leading listings sell between them a month: each one's eBay sold count over the time it has been live. eBay doesn't share buyers' search volume with apps, so demand is measured from the sales themselves.`}
         />
-        <KpiTile label="Live listings" value={count(f.total)} info={`Every listing on ${market.name} for it right now: the competition. ${f.competition.sellers} sellers among the top ${f.sample}.`} />
-        <KpiTile
+        <StatTile
+          icon="layers"
+          label="Live listings"
+          value={count(f.total)}
+          tone="sky"
+          sub={`${f.competition.sellers} sellers in the top ${f.sample}`}
+          info={`Every listing on ${market.name} for it right now: the competition. ${f.competition.sellers} sellers among the top ${f.sample}.`}
+        />
+        <StatTile
+          icon="check"
           label="Sell-through"
           value={f.demand.sellThrough === null ? "—" : `${f.demand.sellThrough}%`}
+          tone={f.demand.sellThrough === null ? "slate" : f.demand.sellThrough >= 60 ? "emerald" : f.demand.sellThrough >= 30 ? "amber" : "rose"}
+          gauge={f.demand.sellThrough}
+          sub={read ? `${f.demand.selling} of ${read} sell every month` : "Once sold counts are read"}
           info={`Of the ${read} leading listings read, how many sell at least one a month. The middle one sells ${perMonth(f.demand.medianPerMonth)}; the best ${perMonth(f.demand.topPerMonth)}.`}
         />
-        <KpiTile label="Typical price" value={f.price ? money(f.price.median, currency) : "—"} info={f.price ? `What buyers pay with postage; most listings between ${money(f.price.low, currency)} and ${money(f.price.high, currency)}.` : undefined} />
-        <KpiTile
+        <StatTile
+          icon="tag"
+          label="Typical price"
+          value={f.price ? money(f.price.median, currency) : "—"}
+          tone="amber"
+          sub={f.price ? `Most ${money(f.price.low, currency)}–${money(f.price.high, currency)}` : "No prices"}
+          info={f.price ? `What buyers pay with postage; most listings between ${money(f.price.low, currency)} and ${money(f.price.high, currency)}.` : undefined}
+        />
+        <StatTile
+          icon="wallet"
           label="Supplier budget"
           value={data.price ? money(data.price.maxCost, currency) : "—"}
+          tone="emerald"
+          sub={data.price ? `Sell at ${money(data.price.recommended, currency)} · ${data.price.targetRoiPercent}% return` : "Set your pricing to see it"}
           info={
             data.price
               ? `The most a supplier (with postage) may cost for your ${data.price.targetRoiPercent}% target return, selling at ${money(data.price.recommended, currency)} (just under what the sales centre on) after eBay's fees and ads in your pricing settings.`
@@ -292,7 +272,7 @@ export function DiscoverSubjectView({
 
       {subject.kind === "keyword" && data.yourTraffic && <YourTraffic data={data.yourTraffic} />}
 
-      <DiscoverCompliance data={data.compliance} checking={checking} onCheck={onCheck} aiUnavailable={aiUnavailable} />
+      {specific && <DiscoverCompliance data={data.compliance} checking={checking} onCheck={onCheck} aiUnavailable={aiUnavailable} />}
 
       {/* Where the sales are, in the app's charts. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -399,21 +379,21 @@ export function DiscoverSubjectView({
         </section>
       </div>
 
-      {/* Subcategories, ranked once read. */}
+      {/* Subcategories: each one's data fetched on request, then ranked. */}
       {data.children.length > 0 && (
         <section className="card overflow-hidden">
           <div className="p-4 pb-3">
             <CardHeader
               title="Subcategories"
-              note="Ranked once read (its leading listings and the sold counts of its top 8), each with the phrases its selling titles share. The deeper you go, the more keywords a category shows."
+              note="Fetch their data to see each one's sales, price and the phrases its selling titles share, best first (its leading listings and the sold counts of its top 8). The deeper you go, the more keywords a category shows."
               aside={
                 data.ranking ? (
                   <span className="text-[12px] font-medium text-[var(--color-primary)]">
-                    Reading {data.ranking.done} of {data.ranking.total}…
+                    Fetching {data.ranking.done} of {data.ranking.total}…
                   </span>
                 ) : unranked > 0 ? (
                   <button type="button" onClick={onRank} className="btn btn-secondary btn-sm !h-8 !text-[12.5px]">
-                    Rank {unranked > 12 ? "the busiest 12" : unranked === data.children.length ? "them" : `the other ${unranked}`}
+                    Fetch data{unranked > 12 ? " for the busiest 12" : unranked === data.children.length ? "" : ` for the other ${unranked}`}
                   </button>
                 ) : undefined
               }
@@ -424,19 +404,19 @@ export function DiscoverSubjectView({
               <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                 <tr>
                   <th className="w-[34%] px-4 py-2 text-left">Subcategory and its keywords</th>
-                  <th className="w-[12%] px-3 py-2 text-left">Opportunity</th>
-                  <th className="px-3 py-2 text-right" title="What its leading listings sell between them a month">
+                  <th className="w-[12%] px-3 py-2 text-center">Opportunity</th>
+                  <th className="px-3 py-2 text-center" title="What its leading listings sell between them a month">
                     Sales a month
                   </th>
-                  <th className="px-3 py-2 text-right" title="eBay's sold counts of the leading listings read, in total">
+                  <th className="px-3 py-2 text-center" title="eBay's sold counts of the leading listings read, in total">
                     Sold
                   </th>
-                  <th className="px-3 py-2 text-right" title="Of the leading listings read, how many sell at least one a month">
+                  <th className="px-3 py-2 text-center" title="Of the leading listings read, how many sell at least one a month">
                     Selling
                   </th>
-                  <th className="px-3 py-2 text-right">Live</th>
-                  <th className="px-3 py-2 text-right">Price</th>
-                  <th className="px-4 py-2 text-right">Fits you</th>
+                  <th className="px-3 py-2 text-center">Live</th>
+                  <th className="px-3 py-2 text-center">Price</th>
+                  <th className="px-4 py-2 text-center">Fits you</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-line)]">
@@ -449,7 +429,7 @@ export function DiscoverSubjectView({
                         <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
                       </span>
                       {c.restricted ? (
-                        <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">{c.restricted.label}: eBay {c.restricted.kind === "prohibited" ? "doesn't allow these" : "restricts these"}. Not ranked.</span>
+                        <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">{c.restricted.label}: eBay {c.restricted.kind === "prohibited" ? "doesn't allow these" : "restricts these"}. Not fetched.</span>
                       ) : c.keywords.length > 0 ? (
                         <span className="mt-1 flex flex-wrap gap-1">
                           {c.keywords.map((k) => (
@@ -472,13 +452,13 @@ export function DiscoverSubjectView({
                         <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">No phrase stands out yet</span>
                       ) : null}
                     </td>
-                    <td className="px-3 py-2.5 text-left">{c.scanned ? <ScoreBadge score={c.scanned.score} band={c.scanned.band} size="sm" /> : <span className="text-[11.5px] text-[var(--color-muted)]">{c.restricted ? "—" : "Not ranked"}</span>}</td>
-                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-[var(--color-ink)]">{c.scanned ? count(Math.round(c.scanned.monthlySales)) : "—"}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{c.scanned ? count(c.scanned.soldTotal) : "—"}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{c.scanned ? `${c.scanned.selling} of ${c.scanned.read}` : "—"}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{c.listings !== null ? count(c.listings) : "—"}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{c.scanned?.price !== null && c.scanned?.price !== undefined ? money(c.scanned.price, currency) : "—"}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums">{c.scanned?.fit !== null && c.scanned?.fit !== undefined ? `${c.scanned.fit}%` : "—"}</td>
+                    <td className="px-3 py-2.5 text-center">{c.scanned ? <ScoreBadge score={c.scanned.score} band={c.scanned.band} size="sm" /> : <span className="text-[11.5px] text-[var(--color-muted)]">{c.restricted ? "—" : "Not fetched"}</span>}</td>
+                    <td className="px-3 py-2.5 text-center font-semibold tabular-nums text-[var(--color-ink)]">{c.scanned ? count(Math.round(c.scanned.monthlySales)) : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned ? count(c.scanned.soldTotal) : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned ? `${c.scanned.selling} of ${c.scanned.read}` : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.listings !== null ? count(c.listings) : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned?.price !== null && c.scanned?.price !== undefined ? money(c.scanned.price, currency) : "—"}</td>
+                    <td className="px-4 py-2.5 text-center tabular-nums">{c.scanned?.fit !== null && c.scanned?.fit !== undefined ? `${c.scanned.fit}%` : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -502,19 +482,19 @@ export function DiscoverSubjectView({
                 <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                   <tr>
                     <th className="w-[36%] px-4 py-2 text-left">Keyword</th>
-                    <th className="px-3 py-2 text-right" title="Sales a month of the leading listings with it">
+                    <th className="px-3 py-2 text-center" title="Sales a month of the leading listings with it">
                       Sales a month
                     </th>
-                    <th className="px-3 py-2 text-right" title="eBay's sold counts of the leading listings with it, in total">
+                    <th className="px-3 py-2 text-center" title="eBay's sold counts of the leading listings with it, in total">
                       Sold
                     </th>
-                    <th className="px-3 py-2 text-right" title="Its share of the leading listings' sales">
+                    <th className="px-3 py-2 text-center" title="Its share of the leading listings' sales">
                       Share
                     </th>
-                    <th className="px-3 py-2 text-right" title="How many of the leading listings' titles use it">
+                    <th className="px-3 py-2 text-center" title="How many of the leading listings' titles use it">
                       In titles
                     </th>
-                    <th className="px-4 py-2 text-right" title="Its share of the sales over its share of the listings">
+                    <th className="px-4 py-2 text-center" title="Its share of the sales over its share of the listings">
                       Lift
                     </th>
                   </tr>
@@ -528,11 +508,11 @@ export function DiscoverSubjectView({
                           <FlagTag flag={k.flag} />
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-right font-semibold tabular-nums text-[var(--color-ink)]">{count(Math.round(k.perMonth))}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{count(k.sold)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{k.salesShare}%</td>
-                      <td className="px-3 py-2 text-right tabular-nums text-[var(--color-muted)]">{k.listingShare}%</td>
-                      <td className={`px-4 py-2 text-right font-semibold tabular-nums ${k.lift !== null && k.lift >= 1.3 ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{k.lift !== null ? `${k.lift}×` : "—"}</td>
+                      <td className="px-3 py-2 text-center font-semibold tabular-nums text-[var(--color-ink)]">{count(Math.round(k.perMonth))}</td>
+                      <td className="px-3 py-2 text-center tabular-nums">{count(k.sold)}</td>
+                      <td className="px-3 py-2 text-center tabular-nums">{k.salesShare}%</td>
+                      <td className="px-3 py-2 text-center tabular-nums text-[var(--color-muted)]">{k.listingShare}%</td>
+                      <td className={`px-4 py-2 text-center font-semibold tabular-nums ${k.lift !== null && k.lift >= 1.3 ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{k.lift !== null ? `${k.lift}×` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -550,7 +530,7 @@ export function DiscoverSubjectView({
                   <li key={c.id}>
                     <button type="button" onClick={() => onOpen({ categoryId: c.id })} className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--color-paper)]">
                       <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{c.name}</span>
-                      <span className="text-right text-[11.5px] tabular-nums text-[var(--color-muted)]">{count(c.count)}</span>
+                      <span className="text-center text-[11.5px] tabular-nums text-[var(--color-muted)]">{count(c.count)}</span>
                       <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
                     </button>
                   </li>
@@ -570,11 +550,22 @@ export function DiscoverSubjectView({
         </section>
       </div>
 
-      <BestBets bets={data.bestBets} currency={currency} onHunt={onHunt} />
+      {/* The products here, the way a hunter reads them. */}
+      <section className="card min-w-0 overflow-hidden">
+        <div className="p-4 pb-3">
+          <CardHeader
+            title="Products here, best to hunt first"
+            note={`The same product under several sellers is one row: its sales a month together, how many sellers make a living from it, what buyers pay, how much of its sales come from sellers delivering like you (whether you can compete), and whether it's rising or new. Each says why.${hiddenText ? ` ${hiddenText}` : ""}`}
+          />
+        </div>
+        <div className="border-t border-[var(--color-line)]">
+          <DiscoverProducts products={data.products} currency={currency} onHunt={onHunt} empty={read ? "No product here sells yet." : "Products show once sold counts are read."} />
+        </div>
+      </section>
 
       <section className="card min-w-0 overflow-hidden">
         <div className="p-4 pb-3">
-          <CardHeader title="Selling now" note={`The leading listings, fastest-selling first: ${read} read of ${data.listings.length}. Sales a month are over the time each has been live.${hiddenText ? ` ${hiddenText}` : ""}`} />
+          <CardHeader title="Every leading listing" note={`Fastest-selling first: ${read} read of ${data.listings.length}. Sales a month are over the time each has been live.`} />
         </div>
         <div className="border-t border-[var(--color-line)]">
           <DiscoverListings listings={data.listings} currency={currency} risingIds={risingIds} onHunt={onHunt} />

@@ -28,7 +28,7 @@ function BestOption({ listing }: { listing: DiscoverListing }) {
 function Pace({ l, top }: { l: DiscoverListing; top: number }) {
   if (l.sold === null) return <span className="text-[12px] text-[var(--color-muted)]">Not read</span>;
   return (
-    <div className="ml-auto w-[96px] text-right">
+    <div className="ml-auto w-[96px] text-center md:mx-auto">
       <p className="text-[13px] font-semibold tabular-nums text-[var(--color-ink)]">{perMonth(l.soldPerMonth)}</p>
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--color-paper)]">
         <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.max(l.soldPerMonth ? 4 : 0, ((l.soldPerMonth || 0) / top) * 100)}%` }} />
@@ -127,11 +127,11 @@ export function DiscoverListings({ listings, currency, risingIds, onHunt }: { li
           <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <tr>
               <th className="w-[38%] px-4 py-2 text-left">Listing</th>
-              <th className="px-3 py-2 text-right">Price</th>
+              <th className="px-3 py-2 text-center">Price</th>
               <th className="px-3 py-2 text-left">Delivery</th>
               <th className="w-[18%] px-3 py-2 text-left">Best option</th>
-              <th className="px-3 py-2 text-right">Sales</th>
-              <th className="w-[104px] px-4 py-2 text-right">
+              <th className="px-3 py-2 text-center">Sales</th>
+              <th className="w-[104px] px-4 py-2 text-center">
                 <span className="sr-only">Hunt</span>
               </th>
             </tr>
@@ -148,7 +148,7 @@ export function DiscoverListings({ listings, currency, risingIds, onHunt }: { li
                     </div>
                   </div>
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums">
+                <td className="px-3 py-2.5 text-center tabular-nums">
                   <span className="font-semibold text-[var(--color-ink)]">{money(l.price?.value, l.price?.currency ?? currency)}</span>
                   <span className="block text-[11px] text-[var(--color-muted)]">{l.shipping?.free ? "Free postage" : l.shipping ? `+ ${money(l.shipping.cost, currency)}` : ""}</span>
                 </td>
@@ -161,10 +161,10 @@ export function DiscoverListings({ listings, currency, risingIds, onHunt }: { li
                 <td className="px-3 py-2.5 text-[12px]">
                   <BestOption listing={l} />
                 </td>
-                <td className="px-3 py-2.5 text-right">
+                <td className="px-3 py-2.5 text-center">
                   <Pace l={l} top={top} />
                 </td>
-                <td className="px-4 py-2.5 text-right">{onHunt && l.url && <HuntButton url={l.url} onHunt={onHunt} />}</td>
+                <td className="px-4 py-2.5 text-center">{onHunt && l.url && <HuntButton url={l.url} onHunt={onHunt} />}</td>
               </tr>
             ))}
           </tbody>

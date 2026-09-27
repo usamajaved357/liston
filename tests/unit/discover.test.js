@@ -197,6 +197,7 @@ test('listings that would break eBay\'s rules are hidden: a restricted item, or 
   assert.strictEqual(compliance.veroBrandIn('Catit flower fountain filters', ['Catit']), 'Catit', "the AI's brand, as it named it");
   assert.deepStrictEqual(compliance.violationOf('Butterfly knife trainer'), { kind: 'restricted', label: 'Weapons and knives', prohibited: false });
   assert.strictEqual(compliance.violationOf('Fairy lights battery powered'), null, "a filtered word is a wording problem, not a violation");
+  assert.deepStrictEqual(compliance.violationOf('IVG Pro refill pods 20mg 10k puffs', [], 'E-Liquids & E-Cig Cartridges').label, 'Vapes, tobacco and nicotine', 'a restricted eBay category hides its listings too');
 
   const split = compliance.partition([{ title: 'Nike running socks' }, { title: 'Plain running socks' }, { title: 'Replica football shirt' }, { title: 'Socks for Nike trainers' }], []);
   assert.deepStrictEqual(split.kept.map((l) => l.title), ['Plain running socks', 'Socks for Nike trainers']);
@@ -204,13 +205,52 @@ test('listings that would break eBay\'s rules are hidden: a restricted item, or 
   assert.deepStrictEqual(compliance.check({ name: 'socks', listings: [], hidden: split.hidden }).hidden, split.hidden);
 });
 
-test('the best bets are the listings that sell, that you can match on delivery and that leave price room; one per seller', () => {
-  const l = (title, sold, compared, price, seller) => ({ title, sold, createdAt: daysAgo(60), price: { value: price, currency: 'GBP' }, shipping: { cost: 0 }, seller: { username: seller }, delivery: { compared } });
-  const bets = scoring.bestBets(
-    [l('Fast but faster than you', 120, 'faster', 12, 'x'), l('Steady, like you', 40, 'similar', 15, 'y'), l('Too cheap', 40, 'similar', 3, 'z'), l('Same seller again', 30, 'similar', 20, 'y'), l('Not read', null, 'similar', 20, 'w')],
-    { now: NOW }
+const products = require('../../src/modules/discover/discover-products');
+
+test('products: the same thing under several sellers is one product, judged on demand, proven sellers, delivery you can match, price room and momentum', () => {
+  const l = (title, sold, seller, { compared = 'similar', price = 12, days = 60, recent = null } = {}) => ({
+    legacyItemId: `${seller}-${sold}`,
+    title,
+    sold,
+    createdAt: daysAgo(days),
+    price: { value: price, currency: 'GBP' },
+    shipping: { cost: 0 },
+    seller: { username: seller },
+    delivery: { compared },
+    recent,
+  });
+  const listings = [
+    l('Cat Water Fountain 2L Automatic Pet Drinking Dispenser Filter', 120, 'a', { compared: 'faster' }),
+    l('2.5L Automatic Cat Water Fountain Pet Drinking Dispenser LED', 60, 'b', { compared: 'similar' }),
+    l('Pet Cat Water Fountain Automatic Dispenser 3L Quiet Pump', 30, 'c', { compared: 'slower' }),
+    l('Cat Fountain Filters Replacement 8 Pack Carbon', 40, 'd'),
+    l('Cat Fountain Filters Replacement 4pcs', 10, 'e', { days: 20, recent: { sold: 12, days: 3, from: '', to: '' } }),
+    l('Dog Bowl Slow Feeder Stainless', 3, 'f', { price: 3 }),
+    l('Dog bowl slow feeder', null, 'g', { price: 3 }),
+  ];
+  const found = products.productsOf(listings, { subject: 'cat water fountain', currency: 'GBP', now: NOW });
+  assert.deepStrictEqual(
+    found.map((p) => [p.name.slice(0, 20), p.listings, p.sellers, p.selling, p.perMonth]),
+    [
+      ['Cat Water Fountain 2', 3, 3, 3, 105],
+      ['Cat Fountain Filters', 2, 2, 2, 30],
+      ['Dog Bowl Slow Feeder', 2, 2, 1, 1.5],
+    ]
   );
-  assert.deepStrictEqual(bets.map((b) => b.title), ['Steady, like you', 'Fast but faster than you', 'Too cheap']);
-  assert.deepStrictEqual(bets[0].bet.reasons, ['Sells 20 a month', 'Delivers like you', 'Price leaves room after fees']);
-  assert.strictEqual(bets[2].bet.reasons[2], 'Little left after fees');
+  const fountain = found[0];
+  // Of its sales, the share from sellers delivering like you or slower: b and c, not a.
+  assert.deepStrictEqual([fountain.delivery.known, fountain.delivery.share], [true, 43]);
+  assert.strictEqual(fountain.price.median, 12);
+  assert.ok(fountain.reasons.some((r) => r.good && /3 sellers sell it every month/.test(r.text)));
+  assert.ok(fountain.reasons.some((r) => r.good && /43% of its sales/.test(r.text)));
+  assert.ok(fountain.score > found[2].score);
+  // The filters: rising (12 in 3 days against a lifetime pace) and a new listing already selling.
+  const filters = found[1];
+  assert.strictEqual(filters.momentum, 'rising');
+  assert.ok(filters.reasons.some((r) => /Rising/.test(r.text)));
+  // A cheap product with one seller: little room, not proven.
+  const bowl = found[2];
+  assert.ok(bowl.reasons.some((r) => r.good === false && /One seller/.test(r.text)));
+  assert.ok(bowl.reasons.some((r) => r.good === false && /little left/.test(r.text)));
+  assert.strictEqual(bowl.band, 'weak');
 });

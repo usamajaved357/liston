@@ -25,6 +25,77 @@ export function ScoreBadge({ score, band, size = "md" }: { score: number; band: 
   );
 }
 
+// Discover's headline tiles: an icon in a tinted disc, the figure, one
+// line of what's behind it, and (for a share or a score) a thin gauge.
+export type StatTone = "primary" | "emerald" | "amber" | "rose" | "sky" | "slate";
+const STAT_TONE: Record<StatTone, { disc: string; bar: string }> = {
+  primary: { disc: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]", bar: "bg-[var(--color-primary)]" },
+  emerald: { disc: "bg-emerald-50 text-emerald-600", bar: "bg-emerald-500" },
+  amber: { disc: "bg-amber-50 text-amber-600", bar: "bg-amber-500" },
+  rose: { disc: "bg-rose-50 text-rose-600", bar: "bg-rose-500" },
+  sky: { disc: "bg-sky-50 text-sky-600", bar: "bg-sky-500" },
+  slate: { disc: "bg-slate-100 text-slate-500", bar: "bg-slate-400" },
+};
+export const STAT_ICONS = {
+  target: "M12 3.5a8.5 8.5 0 108.5 8.5M12 7.5a4.5 4.5 0 104.5 4.5M12 12l7.5-7.5M17 3v3.5h3.5",
+  trend: "M3.5 17.5l5.5-6 4 3.5 7.5-8M15.5 7h5v5",
+  layers: "M12 4l8.5 4.5L12 13 3.5 8.5 12 4zM3.5 12.5L12 17l8.5-4.5M3.5 16.5L12 21l8.5-4.5",
+  check: "M12 21a9 9 0 100-18 9 9 0 000 18zM8.5 12.5l2.5 2.5 4.5-5",
+  tag: "M3.5 12.5v-8a1 1 0 011-1h8l8 8-9 9-8-8zM8 8h.01",
+  wallet: "M3.5 7.5A2 2 0 015.5 5.5h12a2 2 0 012 2v10a2 2 0 01-2 2h-12a2 2 0 01-2-2v-10zM15 12.5h4.5v3H15a1.5 1.5 0 010-3z",
+};
+export function StatTile({
+  icon,
+  label,
+  value,
+  sub,
+  tone = "primary",
+  gauge,
+  chip,
+  info,
+}: {
+  icon: keyof typeof STAT_ICONS;
+  label: string;
+  value: string;
+  sub?: React.ReactNode;
+  tone?: StatTone;
+  gauge?: number | null; // 0–100
+  chip?: string;
+  info?: string;
+}) {
+  const t = STAT_TONE[tone];
+  return (
+    <div className="relative flex min-w-0 flex-col overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 pb-3 pt-3 shadow-[var(--shadow-card)]">
+      <div className="flex items-start justify-between gap-2">
+        <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${t.disc}`}>
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+            <path d={STAT_ICONS[icon]} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </span>
+        {chip && <span className={`inline-flex h-5 items-center rounded-full px-2 text-[10.5px] font-semibold ${t.disc}`}>{chip}</span>}
+      </div>
+      <span className="mt-2.5 flex min-w-0 items-center gap-1 text-[12px] font-medium text-[var(--color-muted)]">
+        <span className="truncate">{label}</span>
+        {info && (
+          <span title={info} className="flex-shrink-0 cursor-help text-[var(--color-line-strong)] hover:text-[var(--color-muted)]" aria-label={info}>
+            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden>
+              <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M8 7.25v3.5M8 5.2v.05" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </span>
+        )}
+      </span>
+      <p className="mt-0.5 truncate text-[23px] font-semibold leading-tight tracking-tight tabular-nums text-[var(--color-ink)]">{value}</p>
+      {sub && <p className="mt-1 line-clamp-2 text-[11.5px] leading-snug text-[var(--color-muted)]">{sub}</p>}
+      {gauge !== undefined && gauge !== null && (
+        <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-[var(--color-paper)]" aria-hidden>
+          <div className={`h-full rounded-full ${t.bar}`} style={{ width: `${Math.max(2, Math.min(100, gauge))}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CardHeader({ title, aside, note }: { title: string; aside?: React.ReactNode; note?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">

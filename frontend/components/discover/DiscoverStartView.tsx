@@ -51,7 +51,7 @@ function WatchRow({ watch, onOpen }: { watch: DiscoverWatch; onOpen: () => void 
   );
 }
 
-export function DiscoverStartView({ data, onOpen, onWatchlist }: { data: DiscoverStart; onOpen: (subject: DiscoverSubjectRef) => void; onWatchlist: () => void }) {
+export function DiscoverStartView({ data, onOpen, onWatchlist, onWinners }: { data: DiscoverStart; onOpen: (subject: DiscoverSubjectRef) => void; onWatchlist: () => void; onWinners: () => void }) {
   const subjectOf = (w: DiscoverWatch): DiscoverSubjectRef => (w.kind === "category" ? { categoryId: w.value } : { q: w.value });
   return (
     <div className="space-y-5">
@@ -71,6 +71,12 @@ export function DiscoverStartView({ data, onOpen, onWatchlist }: { data: Discove
             <AccountDelivery account={data.account} />
           </p>
         </div>
+        <button type="button" onClick={onWinners} className="btn btn-primary btn-sm !h-9 flex-shrink-0 gap-1.5 !text-[12.5px]" title="The best products across everything explored on this site, with a hunter's filters">
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+            <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          </svg>
+          Winning products
+        </button>
       </section>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
