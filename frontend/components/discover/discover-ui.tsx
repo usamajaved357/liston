@@ -108,3 +108,28 @@ export const Chevron = ({ className = "h-4 w-4" }: { className?: string }) => (
     <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
+
+/** A small tag for a flagged keyword, category or listing: restricted item, eBay's word filter, or a brand. */
+export function FlagTag({ flag }: { flag: import("@/lib/api").DiscoverFlag | null | undefined }) {
+  if (!flag) return null;
+  if (flag.restricted) {
+    const banned = flag.restricted.kind === "prohibited";
+    return (
+      <span className={`inline-flex shrink-0 items-center rounded px-1.5 text-[10.5px] font-semibold ${banned ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-800"}`} title={`${flag.restricted.label}: eBay ${banned ? "doesn't allow these" : "restricts these"}`}>
+        {banned ? "Not allowed" : "Restricted"}
+      </span>
+    );
+  }
+  if (flag.brand) {
+    return (
+      <span className="inline-flex shrink-0 items-center rounded bg-violet-50 px-1.5 text-[10.5px] font-semibold text-violet-700" title={`Names the brand ${flag.brand}: check it isn't VeRO-protected before using it`}>
+        Brand
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex shrink-0 items-center rounded bg-slate-100 px-1.5 text-[10.5px] font-semibold text-slate-600" title={`“${flag.hazmat}” trips eBay's hazardous-materials filter: word it differently in your listing`}>
+      Filtered word
+    </span>
+  );
+}

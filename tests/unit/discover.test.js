@@ -157,3 +157,34 @@ test('sales day by day come from the daily readings, spread over a gap, unknown 
   ]);
   assert.strictEqual(trends.dailySales([{ item_id: '1', day: '2026-09-28', sold: 3 }], { today: '2026-09-28' }), null, 'one reading: nothing to chart');
 });
+
+const compliance = require('../../src/modules/discover/discover-compliance');
+
+test("a subject's checks: eBay's word filter in its titles, restricted items by name, how branded it is, and the AI's reading", () => {
+  const titles = (list) => list.map((title) => ({ title }));
+  const fairy = compliance.check({
+    name: 'Fairy Lights',
+    listings: titles(['Fairy lights battery warm white', 'Fairy lights battery copper', 'Solar fairy lights', 'USB fairy lights', 'Plug in fairy lights']),
+    brands: [
+      { name: 'Unbranded', count: 90, unbranded: true },
+      { name: 'Lumineo', count: 10, unbranded: false },
+    ],
+  });
+  assert.strictEqual(fairy.level, 'check', 'two in five titles use a word the filter reacts to');
+  assert.deepStrictEqual(fairy.titles.hazmat[0], { word: 'battery', listings: 2, share: 40, safer: 'power cell' });
+  assert.deepStrictEqual(fairy.brands, { branded: 10, top: [{ name: 'Lumineo', count: 10, share: 10 }] });
+
+  const knives = compliance.check({ name: 'pocket knife', listings: titles(['Folding pocket knife', 'Pocket knife sharpener']) });
+  assert.strictEqual(knives.level, 'risky');
+  assert.deepStrictEqual(knives.subject.restricted.map((r) => r.label), ['Weapons and knives']);
+
+  const branded = compliance.check({ name: 'phone case', listings: titles(['Case for phone']), advice: { brandRisk: { level: 'high', brands: ['MagSafe'], reason: 'Apple takes down MagSafe listings.' }, safetyRisk: { level: 'none', reason: '' } } });
+  assert.strictEqual(branded.level, 'risky', 'the AI names a VeRO brand');
+  assert.strictEqual(branded.ai.brand.brands[0], 'MagSafe');
+
+  assert.strictEqual(compliance.check({ name: 'cat water fountain', listings: titles(['Cat water fountain 2L']) }).level, 'clear');
+  // A keyword row's flag: a restricted item, a filtered word, or a brand named.
+  assert.deepStrictEqual(compliance.flagOf('magsafe phone case', ['MagSafe']), { restricted: null, hazmat: null, brand: 'MagSafe' });
+  assert.deepStrictEqual(compliance.flagOf('lithium battery pack').hazmat, 'lithium');
+  assert.strictEqual(compliance.flagOf('magnetic phone mount'), null, '"magnetic" passes eBay\'s filter; "magnet" doesn\'t');
+});

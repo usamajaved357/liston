@@ -44,6 +44,12 @@ const explore = handle(async (req, res) => {
   res.status(200).json(await discoverService.explore(req.ownerId, req.params.id, input, { reads: input.reads, canSeeTraffic }));
 });
 
+const review = handle(async (req, res) => {
+  const input = parse(subjectSchema, req.query, res);
+  if (!input) return;
+  res.status(200).json(await discoverService.review(req.ownerId, req.params.id, input));
+});
+
 const suggest = handle(async (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 80) : '';
   res.status(200).json(await discoverService.suggest(req.ownerId, req.params.id, q));
@@ -77,4 +83,4 @@ const yourKeywords = handle(async (req, res) => {
   res.status(200).json(await discoverService.yourKeywords(req.ownerId, req.params.id, input));
 });
 
-module.exports = { start, explore, suggest, rank, watches, addWatch, removeWatch, yourKeywords };
+module.exports = { start, explore, review, suggest, rank, watches, addWatch, removeWatch, yourKeywords };

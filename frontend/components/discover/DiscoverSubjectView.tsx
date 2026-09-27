@@ -4,20 +4,23 @@ import { useMemo } from "react";
 import { DiscoverExplore, DiscoverSubjectRef, DiscoverYourTraffic } from "@/lib/api";
 import { KpiTile } from "@/components/charts/KpiTile";
 import { TrendChart } from "@/components/charts/TrendChart";
-import { BarList } from "@/components/charts/BarList";
-import { ColumnChart } from "@/components/charts/ColumnChart";
+import { ShareBar, ShareTone } from "@/components/charts/ShareBar";
 import { count, flag, money } from "@/components/research/format";
 import { ago } from "@/components/hunting/HuntBits";
 import { DiscoverListings } from "./DiscoverListings";
-import { AccountDelivery, BAND, BudgetLine, CardHeader, Chevron, perMonth, Quiet, ScoreBadge, StarIcon } from "./discover-ui";
+import { DiscoverCompliance } from "./DiscoverCompliance";
+import { AccountDelivery, BAND, BudgetLine, CardHeader, Chevron, FlagTag, perMonth, Quiet, ScoreBadge, StarIcon } from "./discover-ui";
 
 // One category or keyword in Discover, laid out like the Analytics page:
-// the headline figures as tiles, your own traffic on a keyword, charts of
-// where the sales are (day by day, by price, across the leading listings,
-// by seller and delivery), how the opportunity score is made up, the
-// subcategories ranked, what's selling now and the keywords that sell.
+// the headline figures as tiles (with what a supplier may cost at the
+// account's target return), your own traffic on a keyword, "Before you
+// hunt" (brands and VeRO, restricted items, eBay's word filter), the app's
+// own charts of where the sales are, the subcategories ranked, the keywords
+// that sell with the brand split, and what's selling now.
 
 const intAxis = (v: number) => (Number.isInteger(v) ? count(v) : "");
+const pctText = (v: number | null) => (v === null ? "—" : `${Math.round(v * 10) / 10}%`);
+const SELLER_TONES: ShareTone[] = ["indigo", "indigoSoft", "sky", "emerald", "amber", "rose"];
 
 function YourTraffic({ data }: { data: DiscoverYourTraffic }) {
   if (!data.listings) {
@@ -43,7 +46,7 @@ function YourTraffic({ data }: { data: DiscoverYourTraffic }) {
     { label: "Conversion", value: data.conversion === null || data.conversion === undefined ? "—" : `${data.conversion}%` },
   ];
   return (
-    <section aria-label="Your listings with this keyword" className="card flex flex-col gap-3 px-4 py-3 xl:flex-row xl:items-center xl:gap-6">
+    <section aria-label="Your traffic on this keyword" className="card flex flex-col gap-3 px-4 py-3 xl:flex-row xl:items-center xl:gap-6">
       <div className="flex-shrink-0 xl:w-48">
         <p className="text-[12px] font-semibold text-[var(--color-ink)]">Your traffic on this keyword</p>
         <p className="text-[11.5px] text-[var(--color-muted)]">
@@ -68,21 +71,25 @@ function ScoreCard({ data }: { data: DiscoverExplore }) {
   return (
     <section className="card flex flex-col p-4">
       <CardHeader title="How the score is made" aside={<ScoreBadge score={o.score} band={o.band} size="sm" />} />
-      <ul className="mt-3 space-y-2.5">
+      <ul className="mt-3 divide-y divide-[var(--color-line)]">
         {o.parts.map((p) => (
-          <li key={p.key} title={p.detail}>
-            <div className="flex items-baseline justify-between gap-2 text-[12px]">
-              <span className="font-medium text-[var(--color-ink)]">{p.label}</span>
-              <span className="tabular-nums text-[var(--color-muted)]">
-                {p.points} / {p.max}
-              </span>
+          <li key={p.key} title={p.detail} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
+            {/* A small ring per part: how much of its points it earned. */}
+            <svg viewBox="0 0 36 36" className="h-8 w-8 flex-shrink-0 -rotate-90" aria-hidden>
+              <circle cx="18" cy="18" r="14" fill="none" stroke="var(--color-paper)" strokeWidth="4" />
+              <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeDasharray={`${(p.points / p.max) * 88} 88`} className={b.ink} />
+            </svg>
+            <div className="min-w-0 flex-1">
+              <p className="flex items-baseline justify-between gap-2 text-[12px]">
+                <span className="font-medium text-[var(--color-ink)]">{p.label}</span>
+                <span className="tabular-nums text-[var(--color-muted)]">
+                  {p.points} / {p.max}
+                </span>
+              </p>
+              <p className="truncate text-[11px] text-[var(--color-muted)]">
+                {p.value} · full at {p.full}
+              </p>
             </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-paper)]">
-              <div className={`h-full rounded-full ${b.bar}`} style={{ width: `${(p.points / p.max) * 100}%` }} />
-            </div>
-            <p className="mt-0.5 truncate text-[11px] text-[var(--color-muted)]">
-              {p.value} · full at {p.full}
-            </p>
           </li>
         ))}
       </ul>
@@ -101,6 +108,9 @@ export function DiscoverSubjectView({
   onRank,
   onToggleWatch,
   watchBusy,
+  checking,
+  onCheck,
+  aiUnavailable,
 }: {
   data: DiscoverExplore;
   onOpen: (subject: DiscoverSubjectRef) => void;
@@ -112,18 +122,30 @@ export function DiscoverSubjectView({
   onRank: () => void;
   onToggleWatch: () => void;
   watchBusy: boolean;
+  checking: boolean;
+  onCheck: () => void;
+  aiUnavailable: boolean;
 }) {
   const { subject, figures: f, market, charts } = data;
   const currency = market.currency;
   const risingIds = useMemo(() => new Set(data.rising.map((l) => l.itemId)), [data.rising]);
   const unranked = data.children.filter((c) => !c.scanned).length;
   const read = f.demand.read;
-  const priceItems = charts.priceBands.map((b) => ({
-    key: String(b.from),
-    label: `${b.to === null ? `${money(b.from, currency)} and up` : `${money(b.from, currency)}–${money(b.to, currency)}`} · ${b.listings} listing${b.listings === 1 ? "" : "s"}`,
-    axis: b.to === null ? `${money(b.from, currency, 0)}+` : money(b.from, currency, 0),
-    value: b.perMonth,
+
+  // Sales by price: each band's share of the sales (solid) against its share of the listings (dashed).
+  const bandSales = charts.priceBands.reduce((n, b) => n + b.perMonth, 0);
+  const bandListings = charts.priceBands.reduce((n, b) => n + b.listings, 0);
+  const bandKey = (b: { from: number; to: number | null }) => (b.to === null ? `${money(b.from, currency, 0)}+` : `${money(b.from, currency, 0)}–${money(b.to, currency, 0)}`);
+  const pricePoints = charts.priceBands.map((b) => ({
+    day: bandKey(b),
+    value: bandSales ? Math.round((b.perMonth / bandSales) * 1000) / 10 : 0,
+    previous: bandListings ? Math.round((b.listings / bandListings) * 1000) / 10 : 0,
   }));
+  const titles = new Map(charts.demandCurve.map((d, i) => [`#${i + 1}`, d.title]));
+  const curvePoints = charts.demandCurve.map((d, i) => ({ day: `#${i + 1}`, value: d.perMonth, previous: null }));
+  const sellerSales = charts.sellers.reduce((n, s) => n + s.perMonth, 0);
+  const otherSellers = Math.max(0, f.demand.monthlySales - sellerSales);
+  const deliveryTone: Record<string, ShareTone> = { faster: "amber", similar: "emerald", slower: "sky", unknown: "slate" };
 
   return (
     <div className="space-y-5">
@@ -170,8 +192,21 @@ export function DiscoverSubjectView({
         </div>
       </div>
 
+      {data.compliance.level === "risky" && (
+        <div className="notice notice-danger">
+          <span className="flex-1">
+            <span className="font-semibold">Risky to hunt.</span>{" "}
+            {data.compliance.subject.restricted.length
+              ? `${data.compliance.subject.restricted.map((r) => r.label).join(", ")}: eBay ${data.compliance.subject.restricted.some((r) => r.kind === "prohibited") ? "doesn't allow these" : "restricts these, and some need approval"}.`
+              : data.compliance.ai?.brand?.level === "high"
+                ? `${data.compliance.ai.brand.brands?.join(", ") || "A brand"} can have listings taken down (VeRO). ${data.compliance.ai.brand.reason}`
+                : data.compliance.ai?.safety?.reason || "See Before you hunt below."}
+          </span>
+        </div>
+      )}
+
       {/* The headline figures. */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <KpiTile label={`Opportunity · ${BAND[data.opportunity.band].label}`} value={`${data.opportunity.score} / 100`} info="Demand, how many listings sell, competition, whether you can match the sellers' delivery, and price room. See how it's made below." />
         <KpiTile
           label="Monthly sales"
@@ -185,14 +220,25 @@ export function DiscoverSubjectView({
           info={`Of the ${read} leading listings read, how many sell at least one a month. The middle one sells ${perMonth(f.demand.medianPerMonth)}; the best ${perMonth(f.demand.topPerMonth)}.`}
         />
         <KpiTile label="Typical price" value={f.price ? money(f.price.median, currency) : "—"} info={f.price ? `What buyers pay with postage; most listings between ${money(f.price.low, currency)} and ${money(f.price.high, currency)}.` : undefined} />
+        <KpiTile
+          label="Supplier budget"
+          value={data.price ? money(data.price.maxCost, currency) : "—"}
+          info={
+            data.price
+              ? `The most a supplier (with postage) may cost for your ${data.price.targetRoiPercent}% target return, selling at ${money(data.price.recommended, currency)} (just under what the sales centre on) after eBay's fees and ads in your pricing settings.`
+              : undefined
+          }
+        />
       </div>
 
       {subject.kind === "keyword" && data.yourTraffic && <YourTraffic data={data.yourTraffic} />}
 
-      {/* Where the sales are. */}
+      <DiscoverCompliance data={data.compliance} checking={checking} onCheck={onCheck} aiUnavailable={aiUnavailable} />
+
+      {/* Where the sales are, in the app's charts. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <section className="card flex flex-col p-4">
-          <CardHeader title="Sales by day" note={data.trend ? "The leading listings' sales, from Discover's daily readings" : undefined} />
+          <CardHeader title="Sales by day" note={data.trend ? "The leading listings' sales, from Discover's daily readings" : "Builds from Discover's daily readings"} />
           {data.trend ? (
             <div className="mt-2">
               <TrendChart
@@ -203,14 +249,12 @@ export function DiscoverSubjectView({
                 currentLabel="Sold"
                 showPrevious={false}
                 legend={false}
-                height={170}
+                height={180}
               />
             </div>
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center py-6 text-center">
-              <p className="max-w-[260px] text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-                The day-by-day chart builds from Discover&apos;s daily readings of these listings. Watch it and Liston reads it every night.
-              </p>
+              <p className="max-w-[260px] text-[12.5px] leading-relaxed text-[var(--color-muted)]">Liston reads these listings once a day. The chart appears after the second reading; watch it to read it every night.</p>
               {!data.watch && (
                 <button type="button" onClick={onToggleWatch} disabled={watchBusy} className="btn btn-secondary btn-sm mt-3 !h-8 gap-1.5 !text-[12.5px]">
                   <StarIcon />
@@ -222,15 +266,43 @@ export function DiscoverSubjectView({
         </section>
 
         <section className="card flex flex-col p-4">
-          <CardHeader title="Sales by price" note="Sales a month at each price, postage included" />
-          <div className="mt-3">{read && priceItems.length ? <ColumnChart items={priceItems} format={(v) => `${count(Math.round(v))}/mo`} label="Sales by price band" /> : <Quiet>Shows once sold counts are read.</Quiet>}</div>
+          <CardHeader title="Sales by price" note="Share of the sales at each price (solid) against share of the listings (dashed), postage included" />
+          <div className="mt-2">
+            {read && pricePoints.length > 1 ? (
+              <TrendChart
+                points={pricePoints}
+                format={pctText}
+                axisFormat={(v) => `${v}%`}
+                label="Sales and listings by price"
+                currentLabel="Share of sales"
+                previousLabel="Share of listings"
+                legend={false}
+                height={180}
+                xLabel={(k) => k.split("–")[0]}
+                xTitle={(k) => `Buyers pay ${k}`}
+              />
+            ) : (
+              <Quiet>Shows once sold counts are read.</Quiet>
+            )}
+          </div>
         </section>
 
         <section className="card flex flex-col p-4">
-          <CardHeader title="Sales across the leading listings" note={read ? `From the best seller down: ${charts.demandCurve.length} listings read` : undefined} />
-          <div className="mt-3">
-            {charts.demandCurve.length ? (
-              <ColumnChart items={charts.demandCurve.map((d) => ({ key: d.itemId, label: d.title, value: d.perMonth }))} format={(v) => `${count(Math.round(v))}/mo`} label="Sales a month of each leading listing" />
+          <CardHeader title="Sales across the leading listings" note={read ? `Sales a month from the best seller down, ${charts.demandCurve.length} read: a steep drop means a few listings take most of it` : undefined} />
+          <div className="mt-2">
+            {curvePoints.length > 1 ? (
+              <TrendChart
+                points={curvePoints}
+                format={(v) => (v === null ? "—" : `${count(Math.round(v))} a month`)}
+                axisFormat={intAxis}
+                label="Sales a month of each leading listing"
+                currentLabel="Sales a month"
+                showPrevious={false}
+                legend={false}
+                height={180}
+                xLabel={(k) => k}
+                xTitle={(k) => `${k} · ${(titles.get(k) || "").slice(0, 60)}`}
+              />
             ) : (
               <Quiet>Shows once sold counts are read.</Quiet>
             )}
@@ -240,24 +312,29 @@ export function DiscoverSubjectView({
         <ScoreCard data={data} />
 
         <section className="card flex flex-col p-4">
-          <CardHeader title="Who's selling" note="The sellers of the leading listings, by sales a month" />
+          <CardHeader title="Who's selling" note="The leading listings' sales a month, by seller" />
           <div className="mt-3">
-            <BarList items={charts.sellers.map((s) => ({ key: s.key, label: `${s.key}${s.listings > 1 ? ` · ${s.listings} listings` : ""}`, value: s.perMonth }))} format={(v) => `${count(Math.round(v))}/mo`} empty="Shows once sold counts are read." />
+            <ShareBar
+              items={[
+                ...charts.sellers.slice(0, 5).map((s, i) => ({ key: s.key, label: s.key, value: s.perMonth, tone: SELLER_TONES[i], note: s.listings > 1 ? `${s.listings} listings` : undefined })),
+                { key: "others", label: "Everyone else", value: otherSellers, tone: "slate" as ShareTone },
+              ]}
+              format={(v) => `${count(Math.round(v))}/mo`}
+              empty="Shows once sold counts are read."
+            />
           </div>
         </section>
 
         <section className="card flex flex-col p-4">
           <CardHeader title="Delivery and where it ships from" note="Sales a month by delivery next to yours, then by country" />
-          <div className="mt-3 space-y-4">
-            <BarList items={charts.delivery.map((d) => ({ key: d.key, label: `${d.label} · ${d.listings}`, value: d.perMonth }))} format={(v) => `${count(Math.round(v))}/mo`} empty="Shows once sold counts are read." />
-            {charts.countries.length > 0 && (
-              <p className="flex flex-wrap gap-x-3 gap-y-1 border-t border-[var(--color-line)] pt-3 text-[11.5px] text-[var(--color-muted)]">
-                {charts.countries.map((c) => (
-                  <span key={c.key} className="tabular-nums">
-                    {flag(c.key)} {c.key} <span className="font-semibold text-[var(--color-ink)]">{count(Math.round(c.perMonth))}/mo</span> · {c.listings}
-                  </span>
-                ))}
-              </p>
+          <div className="mt-3 space-y-5">
+            <ShareBar items={charts.delivery.map((d) => ({ key: d.key, label: d.label || d.key, value: d.perMonth, tone: deliveryTone[d.key] || "slate", note: `${d.listings} listings` }))} format={(v) => `${count(Math.round(v))}/mo`} empty="Shows once sold counts are read." />
+            {charts.countries.some((c) => c.perMonth > 0) && (
+              <ShareBar
+                columns={3}
+                items={charts.countries.map((c, i) => ({ key: c.key, label: `${flag(c.key)} ${c.key}`, value: c.perMonth, tone: (c.domestic ? "indigo" : (["sky", "amber", "rose", "emerald", "slate"] as ShareTone[])[i % 5]) as ShareTone }))}
+                format={(v) => `${count(Math.round(v))}/mo`}
+              />
             )}
           </div>
         </section>
@@ -284,12 +361,12 @@ export function DiscoverSubjectView({
             />
           </div>
           <div className="overflow-x-auto border-t border-[var(--color-line)]">
-            <table className="w-full min-w-[680px] table-fixed text-[12.5px]">
-              <thead className="bg-[var(--color-paper)] text-left text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            <table className="w-full min-w-[720px] table-fixed text-[12.5px]">
+              <thead className="bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                 <tr>
-                  <th className="w-[30%] px-4 py-2">Subcategory</th>
-                  <th className="px-3 py-2">Opportunity</th>
-                  <th className="px-3 py-2 text-right">Sales a month</th>
+                  <th className="w-[32%] px-4 py-2 text-left">Subcategory</th>
+                  <th className="px-3 py-2 text-left">Opportunity</th>
+                  <th className="px-3 py-2 text-right">Middle listing</th>
                   <th className="px-3 py-2 text-right">Sell-through</th>
                   <th className="px-3 py-2 text-right">Live</th>
                   <th className="px-3 py-2 text-right">Price</th>
@@ -299,13 +376,14 @@ export function DiscoverSubjectView({
               <tbody className="divide-y divide-[var(--color-line)]">
                 {data.children.map((c) => (
                   <tr key={c.id} onClick={() => onOpen({ categoryId: c.id })} className="cursor-pointer hover:bg-[var(--color-paper)]/60">
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-2.5 text-left">
                       <span className="flex items-center gap-1.5 font-medium text-[var(--color-ink)]">
                         <span className="truncate">{c.name}</span>
+                        <FlagTag flag={c.flag} />
                         <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
                       </span>
                     </td>
-                    <td className="px-3 py-2.5">{c.scanned ? <ScoreBadge score={c.scanned.score} band={c.scanned.band} size="sm" /> : <span className="text-[11.5px] text-[var(--color-muted)]">Not ranked</span>}</td>
+                    <td className="px-3 py-2.5 text-left">{c.scanned ? <ScoreBadge score={c.scanned.score} band={c.scanned.band} size="sm" /> : <span className="text-[11.5px] text-[var(--color-muted)]">Not ranked</span>}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{c.scanned ? perMonth(c.scanned.medianPerMonth) : "—"}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{c.scanned ? `${c.scanned.selling} of ${c.scanned.read}` : "—"}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">{c.listings !== null ? count(c.listings) : "—"}</td>
@@ -322,98 +400,102 @@ export function DiscoverSubjectView({
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <section className="card min-w-0 overflow-hidden xl:col-span-2">
           <div className="p-4 pb-3">
-            <CardHeader title="Keywords that sell" note="Phrases in the titles that sell. Open one to see its own figures." />
+            <CardHeader title="Keywords that sell" note="Phrases in the titles that sell, their sales a month and share. Open one to see its own figures." />
           </div>
           {data.keywords.length === 0 ? (
             <div className="border-t border-[var(--color-line)] px-4">
               <Quiet>{read ? "No phrase stands out across the listings that sell." : "Keywords show once sold counts are read."}</Quiet>
             </div>
           ) : (
-            <table className="w-full table-fixed border-t border-[var(--color-line)] text-[12.5px]">
-              <thead className="bg-[var(--color-paper)] text-left text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                <tr>
-                  <th className="w-[46%] px-4 py-2">Keyword</th>
-                  <th className="px-2 py-2 text-right" title="Sales a month of the leading listings with it">
-                    Sales/mo
-                  </th>
-                  <th className="px-4 py-2 text-right" title="Its share of the sales, next to its share of the listings">
-                    Share
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-line)]">
-                {data.keywords.map((k) => (
-                  <tr key={k.term} onClick={() => onOpen({ q: k.term })} className="group cursor-pointer hover:bg-[var(--color-paper)]/60" title={`Open “${k.term}”`}>
-                    <td className="px-4 py-2">
-                      <span className="block truncate font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{k.term}</span>
-                      <span className="mt-1 block h-1 overflow-hidden rounded-full bg-[var(--color-paper)]">
-                        <span className="block h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.min(100, k.salesShare)}%` }} />
-                      </span>
-                    </td>
-                    <td className="px-2 py-2 text-right font-semibold tabular-nums text-[var(--color-ink)]">{count(Math.round(k.perMonth))}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">
-                      <span className="text-[var(--color-ink)]">{k.salesShare}%</span>
-                      <span className="block text-[10.5px] text-[var(--color-muted)]">
-                        of {k.listingShare}% listings{k.lift !== null && k.lift >= 1.3 ? ` · ${k.lift}×` : ""}
-                      </span>
-                    </td>
+            <div className="overflow-x-auto border-t border-[var(--color-line)]">
+              <table className="w-full min-w-[560px] table-fixed text-[12.5px]">
+                <thead className="bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                  <tr>
+                    <th className="w-[44%] px-4 py-2 text-left">Keyword</th>
+                    <th className="px-3 py-2 text-right" title="Sales a month of the leading listings with it">
+                      Sales a month
+                    </th>
+                    <th className="px-3 py-2 text-right">Share of sales</th>
+                    <th className="px-3 py-2 text-right">Of listings</th>
+                    <th className="px-4 py-2 text-right" title="Its share of the sales over its share of the listings">
+                      Lift
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-line)]">
+                  {data.keywords.map((k) => (
+                    <tr key={k.term} onClick={() => onOpen({ q: k.term })} className="group cursor-pointer hover:bg-[var(--color-paper)]/60" title={`Open “${k.term}”`}>
+                      <td className="px-4 py-2 text-left">
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{k.term}</span>
+                          <FlagTag flag={k.flag} />
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold tabular-nums text-[var(--color-ink)]">{count(Math.round(k.perMonth))}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{k.salesShare}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-[var(--color-muted)]">{k.listingShare}%</td>
+                      <td className={`px-4 py-2 text-right font-semibold tabular-nums ${k.lift !== null && k.lift >= 1.3 ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{k.lift !== null ? `${k.lift}×` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
+
         <section className="card flex min-w-0 flex-col p-4">
           {data.categories.length > 0 && (
-            <>
-              <CardHeader title="Listed in" note="The eBay categories its listings sit in: open one to see it as a whole." />
+            <div className="mb-5">
+              <CardHeader title="Listed in" note="The eBay categories its listings sit in" />
               <ul className="-mx-2 mt-2">
                 {data.categories.slice(0, 6).map((c) => (
                   <li key={c.id}>
                     <button type="button" onClick={() => onOpen({ categoryId: c.id })} className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--color-paper)]">
                       <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{c.name}</span>
-                      <span className="text-[11.5px] tabular-nums text-[var(--color-muted)]">{count(c.count)}</span>
+                      <span className="text-right text-[11.5px] tabular-nums text-[var(--color-muted)]">{count(c.count)}</span>
                       <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
                     </button>
                   </li>
                 ))}
               </ul>
-            </>
-          )}
-          <div className={data.categories.length > 0 ? "mt-4 border-t border-[var(--color-line)] pt-4" : ""}>
-            <CardHeader title="Brands" note="How the live listings split by brand: unbranded means room for a generic product." />
-            <div className="mt-3">
-              <BarList items={data.brands.slice(0, 6).map((b) => ({ key: b.name, label: b.unbranded ? `${b.name} (no brand)` : b.name, value: b.count }))} format={(v) => count(v)} empty="eBay gave no brand split." />
             </div>
+          )}
+          <CardHeader title="Brands" note="How the live listings split by brand: unbranded means room for a generic product" />
+          <div className="mt-3">
+            <ShareBar
+              columns={1}
+              items={data.brands.slice(0, 6).map((b, i) => ({ key: b.name, label: b.unbranded ? `${b.name} (no brand)` : b.name, value: b.count, tone: b.unbranded ? "slate" : SELLER_TONES[i % SELLER_TONES.length] }))}
+              format={(v) => count(v)}
+              empty="eBay gave no brand split."
+            />
           </div>
         </section>
       </div>
 
-        <section className="card min-w-0 overflow-hidden">
-          <div className="p-4 pb-3">
-            <CardHeader title="Selling now" note={`The leading listings, fastest-selling first: ${read} read of ${data.listings.length}. Sales a month are over the time each has been live.`} />
+      <section className="card min-w-0 overflow-hidden">
+        <div className="p-4 pb-3">
+          <CardHeader title="Selling now" note={`The leading listings, fastest-selling first: ${read} read of ${data.listings.length}. Sales a month are over the time each has been live.`} />
+        </div>
+        <div className="border-t border-[var(--color-line)]">
+          <DiscoverListings listings={data.listings} currency={currency} risingIds={risingIds} onHunt={onHunt} />
+        </div>
+        {(data.reads.more || data.reads.stopped) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] px-4 py-2.5">
+            <p className="text-[11.5px] text-[var(--color-muted)]">
+              {data.reads.signInFailed
+                ? "Sold counts need this account's eBay sign-in, which didn't work: reconnect the account, or ask the owner to."
+                : data.reads.stopped
+                  ? "Today's sold-count reads ran out before every listing was read."
+                  : `Sold counts read for the top ${data.reads.asked}.`}
+            </p>
+            {data.reads.more && !data.reads.stopped && (
+              <button type="button" onClick={onReadMore} disabled={readingMore} className="btn btn-secondary btn-sm !h-8 !text-[12.5px]">
+                {readingMore ? "Reading…" : "Read 25 more"}
+              </button>
+            )}
           </div>
-          <div className="border-t border-[var(--color-line)]">
-            <DiscoverListings listings={data.listings} currency={currency} risingIds={risingIds} onHunt={onHunt} />
-          </div>
-          {(data.reads.more || data.reads.stopped) && (
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] px-4 py-2.5">
-              <p className="text-[11.5px] text-[var(--color-muted)]">
-                {data.reads.signInFailed
-                  ? "Sold counts need this account's eBay sign-in, which didn't work: reconnect the account, or ask the owner to."
-                  : data.reads.stopped
-                    ? "Today's sold-count reads ran out before every listing was read."
-                    : `Sold counts read for the top ${data.reads.asked}.`}
-              </p>
-              {data.reads.more && !data.reads.stopped && (
-                <button type="button" onClick={onReadMore} disabled={readingMore} className="btn btn-secondary btn-sm !h-8 !text-[12.5px]">
-                  {readingMore ? "Reading…" : "Read 25 more"}
-                </button>
-              )}
-            </div>
-          )}
-        </section>
-
+        )}
+      </section>
 
       <BudgetLine budget={data.budget} />
     </div>

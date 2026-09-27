@@ -54,6 +54,8 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   const [watchTick, setWatchTick] = useState(0);
   const [removing, setRemoving] = useState<string | null>(null);
   const [range, setRange] = useState<"7d" | "30d" | "90d">("30d");
+  // The AI's brand/VeRO reading, asked for once a subject is on screen without today's.
+  const [review, setReview] = useState<{ key: string; compliance?: DiscoverExplore["compliance"]; checked?: boolean; failed?: boolean } | null>(null);
   const [own, setOwn] = useState<{ range: string; data?: OwnKeywords; error?: string } | null>(null);
 
   const open = useCallback(
@@ -99,6 +101,24 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
 
   const shown = result && result.key === key ? result : null;
   const answered = result?.requestKey === requestKey;
+  const needsReview = Boolean(shown?.data && !shown.data.compliance.ai);
+  const reviewed = review?.key === key ? review : null;
+
+  const runReview = useCallback(() => {
+    if (!subject) return;
+    const forKey = key;
+    api
+      .discoverReview(connectionId, subject)
+      .then((d) => setReview({ key: forKey, compliance: d.compliance, checked: d.checked, failed: !d.checked }))
+      .catch(() => setReview({ key: forKey, failed: true }));
+    // `subject` is rebuilt each render from the address; its key stands for it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, key]);
+  useEffect(() => {
+    if (!needsReview || review?.key === key) return;
+    const timer = setTimeout(runReview, 0);
+    return () => clearTimeout(timer);
+  }, [needsReview, review?.key, key, runReview]);
 
   // A ranking under way: ask again until it's done.
   const ranking = shown?.data?.ranking;
@@ -222,7 +242,10 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
             <>
               {shown.error && <Alert>{shown.error}</Alert>}
               <DiscoverSubjectView
-                data={shown.data}
+                data={reviewed?.compliance ? { ...shown.data, compliance: reviewed.compliance } : shown.data}
+                checking={needsReview && !reviewed}
+                onCheck={runReview}
+                aiUnavailable={Boolean(reviewed?.failed)}
                 onOpen={open}
                 onBack={() => open(parent ? { categoryId: parent.id } : null)}
                 backLabel={parent ? parent.name : "Discover"}

@@ -24,6 +24,33 @@ async function saveScan(marketplaceId, subject, { total, listings, breakdown }) 
   );
 }
 
+/** A subject was opened through this account: it's in the nightly shared refresh for a few days. */
+async function touchScan(marketplaceId, subject, connectionId) {
+  await query(`UPDATE discover_scans SET opened_at = now(), opened_connection_id = $3 WHERE marketplace_id = $1 AND subject = $2`, [marketplaceId, subject, connectionId]);
+}
+
+/** A site's subjects opened since `since`, most recent first (shared: anyone on the site). */
+async function recentlyOpened(marketplaceId, since, limit) {
+  const { rows } = await query(
+    `SELECT subject, total, listings, breakdown, taken_at, opened_at FROM discover_scans
+      WHERE marketplace_id = $1 AND opened_at >= $2 ORDER BY opened_at DESC LIMIT $3`,
+    [marketplaceId, since, limit]
+  );
+  return rows;
+}
+
+/** Subjects opened since `since` whose scan is older than `before`, most recently opened first, with the account that opened them. */
+async function dueForRefresh(since, before, limit) {
+  const { rows } = await query(
+    `SELECT s.marketplace_id, s.subject, s.opened_connection_id AS connection_id, c.user_id AS owner_id
+       FROM discover_scans s JOIN connections c ON c.id = s.opened_connection_id
+      WHERE s.opened_at >= $1 AND s.taken_at < $2 AND c.status = 'active'
+      ORDER BY s.opened_at DESC LIMIT $3`,
+    [since, before, limit]
+  );
+  return rows;
+}
+
 // ---- listing reads -----------------------------------------------------------------
 
 /** Each listing's latest reading on or after `since` (a day), by item id. */
@@ -133,6 +160,9 @@ async function ownCategories(connectionId, limit = 12) {
 
 module.exports = {
   getScan,
+  touchScan,
+  dueForRefresh,
+  recentlyOpened,
   getScans,
   saveScan,
   latestReads,

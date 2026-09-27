@@ -15,6 +15,8 @@ const ebayService = require('../../src/modules/ebay/ebay.service');
 const researchService = require('../../src/modules/research/research.service');
 const analyticsService = require('../../src/modules/analytics/analytics.service');
 const discoverBudget = require('../../src/modules/discover/discover-budget');
+const discoverService = require('../../src/modules/discover/discover.service');
+const advisor = require('../../src/modules/ai-generation/research-advisor.service');
 
 // Discover end to end against the local database: scans kept a day and
 // shared, each listing's sold count read once a day, subcategories ranked
@@ -202,6 +204,25 @@ test('a keyword explores the same way, reads stop when the day’s share is used
   assert.strictEqual(kw.data.reads.read, 25);
   assert.strictEqual(kw.data.subject.kind, 'keyword');
   assert.ok(!kw.data.keywords.some((k) => k.term === 'fountain'), "the keyword's own words aren't news");
+
+  // Before hunting: the checks come with it, and the AI's brand/VeRO reading on request (kept a day, shared).
+  assert.strictEqual(kw.data.compliance.level, 'clear');
+  assert.ok(kw.data.price && kw.data.price.maxCost > 0, 'the most a supplier may cost at the target return');
+  const kept = mock.method(advisor, 'keptAdvice', async () => null);
+  const asked = mock.method(advisor, 'advise', async () => ({ brandRisk: { level: 'high', brands: ['Catit'], reason: 'Catit enforces VeRO.' }, safetyRisk: { level: 'none', reason: 'Fine.' }, summary: 'x', title: 't', keywords: [] }));
+  const reviewed = await request('GET', `${base}/review?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter);
+  assert.strictEqual(reviewed.status, 200);
+  assert.deepStrictEqual([reviewed.data.checked, reviewed.data.compliance.level, reviewed.data.compliance.ai.brand.brands], [true, 'risky', ['Catit']]);
+  kept.mock.restore();
+  asked.mock.restore();
+
+  // The nightly shared refresh reads what was opened lately again, once its scan is a day old.
+  await pool.query(`UPDATE discover_scans SET taken_at = now() - interval '2 days' WHERE subject = $1`, [`q:${KEYWORD}`]);
+  const searchesBefore = calls.search;
+  assert.ok((await discoverService.refreshRecent({ limit: 50 })) >= 1);
+  assert.ok(calls.search > searchesBefore, 'scanned again');
+  const { rows: fresh } = await pool.query(`SELECT taken_at > now() - interval '1 minute' AS fresh, opened_connection_id FROM discover_scans WHERE subject = $1`, [`q:${KEYWORD}`]);
+  assert.deepStrictEqual([fresh[0].fresh, fresh[0].opened_connection_id], [true, t.connectionId]);
 
   const added = await request('POST', `${base}/watches`, { q: KEYWORD }, t.hunter);
   assert.strictEqual(added.status, 201);

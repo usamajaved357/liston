@@ -2,7 +2,7 @@
 
 import { DiscoverListing } from "@/lib/api";
 import { age, count, flag, money } from "@/components/research/format";
-import { DeliveryText, HuntIcon, perMonth, Thumb } from "./discover-ui";
+import { DeliveryText, FlagTag, HuntIcon, perMonth, Thumb } from "./discover-ui";
 
 // "Selling now": a category's or keyword's leading listings, the ones whose
 // sold count was read fastest first. A table on a laptop (like Analytics'
@@ -28,7 +28,7 @@ function BestOption({ listing }: { listing: DiscoverListing }) {
 function Pace({ l, top }: { l: DiscoverListing; top: number }) {
   if (l.sold === null) return <span className="text-[12px] text-[var(--color-muted)]">Not read</span>;
   return (
-    <div className="ml-auto w-[96px]">
+    <div className="ml-auto w-[96px] text-right">
       <p className="text-[13px] font-semibold tabular-nums text-[var(--color-ink)]">{perMonth(l.soldPerMonth)}</p>
       <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--color-paper)]">
         <div className="h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.max(l.soldPerMonth ? 4 : 0, ((l.soldPerMonth || 0) / top) * 100)}%` }} />
@@ -69,6 +69,7 @@ export function DiscoverListings({ listings, currency, risingIds, onHunt }: { li
         </span>
       )}
       {l.daysLive !== null && <span>· {age(l.daysLive)} live</span>}
+      {l.flag && <FlagTag flag={l.flag} />}
       {risingIds.has(l.itemId) && (
         <span className="rounded bg-emerald-50 px-1.5 font-semibold text-emerald-700" title="Selling faster lately than over its life">
           Rising{l.lift ? ` ${l.lift}×` : ""}
@@ -123,14 +124,14 @@ export function DiscoverListings({ listings, currency, risingIds, onHunt }: { li
       {/* A laptop: a table. */}
       <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[820px] table-fixed text-[12.5px]">
-          <thead className="bg-[var(--color-paper)] text-left text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          <thead className="bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <tr>
-              <th className="w-[38%] px-4 py-2">Listing</th>
+              <th className="w-[38%] px-4 py-2 text-left">Listing</th>
               <th className="px-3 py-2 text-right">Price</th>
-              <th className="px-3 py-2">Delivery</th>
-              <th className="w-[18%] px-3 py-2">Best option</th>
+              <th className="px-3 py-2 text-left">Delivery</th>
+              <th className="w-[18%] px-3 py-2 text-left">Best option</th>
               <th className="px-3 py-2 text-right">Sales</th>
-              <th className="w-[104px] px-4 py-2">
+              <th className="w-[104px] px-4 py-2 text-right">
                 <span className="sr-only">Hunt</span>
               </th>
             </tr>

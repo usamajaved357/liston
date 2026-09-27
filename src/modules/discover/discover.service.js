@@ -16,6 +16,9 @@ const budget = require('./discover-budget');
 const scoring = require('./discover-scoring');
 const keywords = require('./discover-keywords');
 const trends = require('./discover-trends');
+const compliance = require('./discover-compliance');
+const advisor = require('../ai-generation/research-advisor.service');
+const researchAnalysis = require('../research/research-analysis');
 
 // Discover: finding what to hunt, on the Hunting page. A category or a
 // keyword is scanned (one Browse search for its leading live listings,
@@ -41,6 +44,7 @@ const LISTINGS_SHOWN = 60;
 const WATCH_LIMIT = 30;
 const READ_FALLBACK_DAYS = 7; // an older read stands in when today's can't be made
 const READS_KEPT_DAYS = 40;
+const REFRESH_DAYS = 3; // opened this recently: read again nightly, shown as recently explored
 
 class DiscoverError extends Error {
   constructor(message, statusCode = 400) {
@@ -70,7 +74,7 @@ async function context(ownerId, connectionId) {
   const site = marketplaces.byId(connection.marketplace?.id) || marketplaces.byId(connection.settings?.ebay?.marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
   const account = await researchService.accountDelivery(ownerId, connectionId, site, connection.settings?.ebay?.fulfillmentPolicyId || null);
   const timeZone = marketplaces.timeZoneOf(site.id);
-  return { site, account, timeZone, day: analyticsDays.today(timeZone) };
+  return { site, account, timeZone, day: analyticsDays.today(timeZone), pricing: connection.settings?.pricing || {} };
 }
 
 // ---- subjects -----------------------------------------------------------------------
@@ -330,6 +334,8 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
   const info = await subjectInfo(ctx.site, subject);
   const traffic = canSeeTraffic && subject.kind === 'keyword' ? ownTraffic(ownerId, connectionId, subject.q) : Promise.resolve(null);
   const scanRow = await scan(ctx.site, subject);
+  // Opened: it's in the nightly shared refresh for a few days, read with this account.
+  await repo.touchScan(ctx.site.id, subject.key, connectionId).catch(() => {});
   const sold = await readSold(ownerId, connectionId, ctx, scanRow.listings, { max });
   const listings = scoring.withPace(placed(scanRow, ctx, sold.reads));
 
@@ -338,7 +344,18 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
   const history = await repo.readsSince(ctx.site.id, listings.map(idOf), analyticsDays.addDays(ctx.day, -15));
   const recent = trends.recentSales(history);
   const summary = trends.summarise(scoring.sellingNow(listings), recent);
-  const [children, watch] = await Promise.all([childRows(ctx, info, scanRow), repo.findWatch(connectionId, subject.kind, subject.value)]);
+  const [children, watch, advice] = await Promise.all([
+    childRows(ctx, info, scanRow),
+    repo.findWatch(connectionId, subject.kind, subject.value),
+    // The AI's brand/VeRO and restricted reading, when today's is kept (else the page asks for it).
+    advisor.keptAdvice(adviceKey(ctx.site, subject)).catch(() => null),
+  ]);
+  const brands = scanRow.breakdown?.brands || [];
+  // Brands worth flagging in a keyword: the ones the AI names as a VeRO risk, and brands on at
+  // least 5% of the listings (sellers type all sorts into eBay's brand field, "Kitchen" included).
+  const brandTotal = brands.reduce((sum, b) => sum + b.count, 0) || scanRow.total || 1;
+  const brandNames = [...(advice?.brandRisk?.level !== 'none' ? advice?.brandRisk?.brands || [] : []), ...brands.filter((b) => !b.unbranded && b.count / brandTotal >= 0.05).map((b) => b.name)];
+  const flagged = (text) => compliance.flagOf(text, brandNames);
 
   return {
     subject: {
@@ -360,13 +377,17 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
     yourTraffic: await traffic,
     recent: summary.recent,
     rising: summary.rising.map((l) => shown(l, ctx.site.country)),
-    listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => shown(l, ctx.site.country)),
+    listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => ({ ...shown(l, ctx.site.country), flag: flagged(l.title) })),
     // The subject's own words (its category name, or the keyword) aren't news.
-    keywords: keywords.fromListings(listings, { query: subject.q || info.name }),
-    brands: (scanRow.breakdown?.brands || []).slice(0, 8),
+    keywords: keywords.fromListings(listings, { query: subject.q || info.name }).map((k) => ({ ...k, flag: flagged(k.term) })),
+    brands: brands.slice(0, 8),
+    // Before hunting: eBay's word filter, restricted items, brands and VeRO.
+    compliance: compliance.check({ name: info.name, listings, brands, total: scanRow.total, advice }),
+    // What you'd sell at and the most a supplier may cost for your target return (your pricing settings).
+    price: researchAnalysis.priceAdvice(listings, { pricing: ctx.pricing }),
     // A keyword: the categories its listings sit in, to explore next.
     categories: subject.kind === 'keyword' ? (scanRow.breakdown?.categories || []).slice(0, 8) : [],
-    children,
+    children: children.map((c) => ({ ...c, flag: flagged(c.name) })),
     reads: { asked: max, read: f.demand.read, more: max < READS_MAX && listings.length > max, stopped: sold.stopped, signInFailed: Boolean(sold.signInFailed) },
     watch: watch ? { id: watch.id } : null,
     // Subcategories being ranked right now: the page asks again until done.
@@ -375,6 +396,58 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
     account: ctx.account ? { min: ctx.account.min, max: ctx.account.max, policyName: ctx.account.policyName, serviceName: ctx.account.serviceName } : null,
     budget: await budget.left(),
   };
+}
+
+// One AI reading a day per site and subject, shared by every account on the site.
+const adviceKey = (site, subject) => `discover:${site.id}:${subject.key}`;
+
+/**
+ * The AI's brand/VeRO and restricted-product reading of a subject (one
+ * model call, kept a day for everyone on the site), with the checks redone:
+ * { compliance }. From the kept scan and readings: no eBay call.
+ */
+async function review(ownerId, connectionId, input) {
+  const subject = subjectOf(input);
+  const ctx = await context(ownerId, connectionId);
+  const info = await subjectInfo(ctx.site, subject);
+  const scanRow = await repo.getScan(ctx.site.id, subject.key);
+  if (!scanRow) throw new DiscoverError('Open it first.', 400);
+  const reads = await repo.latestReads(ctx.site.id, scanRow.listings.map(idOf), analyticsDays.addDays(ctx.day, -READ_FALLBACK_DAYS));
+  const listings = scoring.withPace(placed(scanRow, ctx, reads));
+  const brands = scanRow.breakdown?.brands || [];
+  const advice = await advisor.advise(adviceKey(ctx.site, subject), {
+    query: info.name,
+    market: ctx.site.name,
+    currency: ctx.site.currency,
+    items: listings,
+    breakdown: scanRow.breakdown,
+    keywords: keywords.fromListings(listings, { query: subject.q || info.name }),
+  });
+  return { compliance: compliance.check({ name: info.name, listings, brands, total: scanRow.total, advice }), checked: Boolean(advice) };
+}
+
+/**
+ * The nightly shared refresh (discover.scheduler): subjects anyone opened in
+ * the last 3 days whose scan is a day old are scanned again and their top
+ * listings read, through the account that last opened each — as long as
+ * Discover keeps a third of its day for people using it. Returns how many.
+ */
+async function refreshRecent({ limit = 10 } = {}) {
+  const due = await repo.dueForRefresh(new Date(Date.now() - REFRESH_DAYS * 86400000), new Date(Date.now() - SCAN_TTL_MS), limit);
+  let done = 0;
+  for (const row of due) {
+    const left = await budget.left();
+    if (left.tradingPaused || left.trading < left.limits.trading / 3 || left.browse < left.limits.browse / 3) break;
+    const subject = row.subject.startsWith('c:') ? { categoryId: row.subject.slice(2) } : { q: row.subject.slice(2) };
+    try {
+      await explore(row.owner_id, row.connection_id, subject);
+      done += 1;
+    } catch (err) {
+      logger.warn('Discover: shared refresh skipped a subject', { subject: row.subject, error: err.message });
+      if (err.statusCode === 429) break;
+    }
+  }
+  return done;
 }
 
 // Subcategory rankings under way, by account and category: { total, done, startedAt }.
@@ -468,6 +541,30 @@ async function start(ownerId, connectionId) {
   };
   // The first few watches with their figures, for the start screen.
   const preview = watched ? (await watches(ownerId, connectionId)).items.slice(0, 4) : [];
+  // What anyone on the site explored lately (shared, refreshed nightly), with its opportunity.
+  const opened = await repo.recentlyOpened(ctx.site.id, new Date(Date.now() - REFRESH_DAYS * 86400000), 8);
+  const openedReads = await repo.latestReads(ctx.site.id, opened.flatMap((s) => s.listings.map(idOf)), analyticsDays.addDays(ctx.day, -READ_FALLBACK_DAYS));
+  const recent = (
+    await Promise.all(
+      opened.map(async (s) => {
+        const isCategory = s.subject.startsWith('c:');
+        const value = s.subject.slice(2);
+        const path = isCategory ? await taxonomy.getCategoryPath(ctx.site.id, value).catch(() => []) : [];
+        if (isCategory && !path.length) return null;
+        const f = scoring.figures(placed(s, ctx, openedReads), { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
+        const o = f.demand.read ? scoring.opportunity(f, { currency: ctx.site.currency }) : null;
+        return {
+          kind: isCategory ? 'category' : 'keyword',
+          value,
+          name: isCategory ? path[path.length - 1].name : value,
+          path: isCategory ? path.slice(0, -1).map((p) => p.name) : [],
+          openedAt: s.opened_at,
+          flag: compliance.flagOf(isCategory ? path[path.length - 1].name : value),
+          scanned: o ? { score: o.score, band: o.band, total: s.total, monthlySales: f.demand.monthlySales } : null,
+        };
+      })
+    )
+  ).filter(Boolean);
   return {
     market: marketplaces.summary(ctx.site.id),
     account: ctx.account ? { min: ctx.account.min, max: ctx.account.max, policyName: ctx.account.policyName, serviceName: ctx.account.serviceName } : null,
@@ -475,6 +572,7 @@ async function start(ownerId, connectionId) {
     topCategories: top.map((c) => ({ id: c.id, name: c.name, leaf: c.leaf, scanned: badge(c.id) })),
     watches: watched,
     watchPreview: preview,
+    recent,
     budget: await budget.left(),
   };
 }
@@ -598,6 +696,8 @@ module.exports = {
   explore,
   rankChildren,
   rankingOf,
+  review,
+  refreshRecent,
   suggest,
   start,
   watches,

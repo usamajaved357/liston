@@ -1937,6 +1937,7 @@ export interface DiscoverListing {
   readDay: string | null;
   recent: { sold: number; days: number; from: string; to: string } | null; // sold between two readings
   lift?: number | null; // rising: selling this many times faster lately than over its life
+  flag?: DiscoverFlag | null;
 }
 
 export interface DiscoverScorePart {
@@ -1970,8 +1971,10 @@ export interface DiscoverKeyword {
   salesShare: number;
   lift: number | null;
   perMonth: number;
+  flag?: DiscoverFlag | null;
 }
 export interface DiscoverChild {
+  flag?: DiscoverFlag | null;
   id: string;
   name: string;
   leaf: boolean;
@@ -2021,7 +2024,37 @@ export interface DiscoverYourTraffic {
   conversion?: number | null;
   range?: { from: string; to: string };
 }
+// A flag on a keyword, category or listing title: an eBay-restricted item, a word eBay's filter reacts to, or a brand.
+export interface DiscoverFlag {
+  restricted: { kind: "prohibited" | "restricted"; label: string } | null;
+  hazmat: string | null;
+  brand: string | null;
+}
+export type DiscoverRisk = { level: "none" | "low" | "high"; reason: string; brands?: string[] };
+export interface DiscoverCompliance {
+  level: "clear" | "check" | "risky";
+  subject: { hazmat: string[]; restricted: { key: string; kind: "prohibited" | "restricted"; label: string; words: string[] }[] };
+  titles: {
+    hazmat: { word: string; listings: number; share: number; safer: string | null }[];
+    restricted: { key: string; kind: "prohibited" | "restricted"; label: string; words: string[]; listings: number; share: number }[];
+  };
+  brands: { branded: number | null; top: { name: string; count: number; share: number | null }[] };
+  ai: { brand: DiscoverRisk | null; safety: DiscoverRisk | null; summary: string | null } | null;
+}
+export interface DiscoverPrice {
+  recommended: number;
+  low: number;
+  high: number;
+  salesMiddle: number;
+  basis: "sales" | "listings";
+  confidence: "high" | "medium" | "low";
+  afterFees: number;
+  maxCost: number;
+  targetRoiPercent: number;
+}
 export interface DiscoverExplore {
+  compliance: DiscoverCompliance;
+  price: DiscoverPrice | null;
   charts: DiscoverCharts;
   trend: { day: string; value: number | null }[] | null;
   yourTraffic: DiscoverYourTraffic | null;
@@ -2057,6 +2090,8 @@ export interface DiscoverStart {
   topCategories: DiscoverCategoryCard[];
   watches: number;
   watchPreview: DiscoverWatch[];
+  // What anyone on the site explored in the last few days (shared across accounts).
+  recent: { kind: "category" | "keyword"; value: string; name: string; path: string[]; openedAt: string; flag?: DiscoverFlag | null; scanned: { score: number; band: DiscoverOpportunity["band"]; total: number; monthlySales: number } | null }[];
   budget: DiscoverBudget;
 }
 export interface DiscoverWatch {
@@ -2379,6 +2414,12 @@ export const api = {
     if (subject.q) q.set("q", subject.q);
     if (reads) q.set("reads", String(reads));
     return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
+  },
+  discoverReview: (connectionId: string, subject: DiscoverSubjectRef) => {
+    const q = new URLSearchParams();
+    if (subject.categoryId) q.set("categoryId", subject.categoryId);
+    if (subject.q) q.set("q", subject.q);
+    return request<{ compliance: DiscoverCompliance; checked: boolean }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
   },
   discoverSuggest: (connectionId: string, q: string) =>
     request<{ categories: { id: string; name: string; path: string[]; leaf: boolean }[] }>(`/api/connections/${connectionId}/discover/suggest?q=${encodeURIComponent(q)}`),

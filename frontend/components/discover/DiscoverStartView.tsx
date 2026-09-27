@@ -2,7 +2,7 @@
 
 import { DiscoverCategoryCard, DiscoverStart, DiscoverSubjectRef, DiscoverWatch } from "@/lib/api";
 import { count } from "@/components/research/format";
-import { AccountDelivery, BudgetLine, CardHeader, Chevron, perMonth, Quiet, ScoreBadge } from "./discover-ui";
+import { AccountDelivery, BudgetLine, CardHeader, Chevron, FlagTag, perMonth, Quiet, ScoreBadge } from "./discover-ui";
 
 // Where Discover starts (the search box above is on every screen): what the
 // team watches, the account's own categories, and eBay's top-level
@@ -73,7 +73,7 @@ export function DiscoverStartView({ data, onOpen, onWatchlist }: { data: Discove
         </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
         <section className="card flex flex-col p-4">
           <CardHeader
             title="Your watchlist"
@@ -94,6 +94,34 @@ export function DiscoverStartView({ data, onOpen, onWatchlist }: { data: Discove
         </section>
 
         <section className="card flex flex-col p-4">
+          <CardHeader title="Recently explored" note={`What your team explored on ${data.market.name} in the last 3 days, read again nightly`} />
+          {data.recent.length ? (
+            <ul className="-mx-2 mt-2">
+              {data.recent.slice(0, 6).map((r) => (
+                <li key={`${r.kind}:${r.value}`}>
+                  <button type="button" onClick={() => onOpen(r.kind === "category" ? { categoryId: r.value } : { q: r.value })} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--color-paper)]">
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate text-[12.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{r.kind === "keyword" ? `“${r.name}”` : r.name}</span>
+                        <FlagTag flag={r.flag} />
+                      </span>
+                      <span className="block truncate text-[11px] text-[var(--color-muted)]">
+                        {r.kind === "keyword" ? "Keyword" : r.path.join(" › ") || "Category"}
+                        {r.scanned && ` · ${count(Math.round(r.scanned.monthlySales))} sales a month`}
+                      </span>
+                    </span>
+                    {r.scanned && <ScoreBadge score={r.scanned.score} band={r.scanned.band} size="sm" />}
+                    <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <Quiet>Categories and keywords anyone opens show here for three days.</Quiet>
+          )}
+        </section>
+
+        <section className="card flex flex-col p-4 lg:col-span-2 xl:col-span-1">
           <CardHeader title="Your categories" note="Where the listings Liston made for this account sit" />
           {data.yourCategories.length ? (
             <ul className="-mx-2 mt-2">{data.yourCategories.slice(0, 6).map((c) => <CategoryRow key={c.id} category={c} note={`${c.listings} of your listings`} onOpen={() => onOpen({ categoryId: c.id })} />)}</ul>

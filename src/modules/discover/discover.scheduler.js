@@ -1,6 +1,8 @@
 // Reads each watched category and keyword again once a day
-// (discover.service.readDueWatches): a light tick every hour reads the few
-// that are due, within Discover's share of the allowances, and once a day
+// (discover.service.readDueWatches), then what anyone opened in the last
+// few days (refreshRecent, shared by every account on the site, keeping a
+// third of Discover's day for people): a light tick every hour reads the
+// few that are due, within Discover's share of the allowances, and once a day
 // drops readings older than Discover keeps. Progress lives in the database
 // (each watch's last reading), so a restart neither repeats nor skips one.
 const config = require('../../config');
@@ -23,7 +25,10 @@ async function tick() {
       prunedAt = Date.now();
       await discoverService.pruneReads().catch((err) => logger.warn('Discover: old readings not pruned', { error: err.message }));
     }
-    return await discoverService.readDueWatches({ limit: 5 });
+    const watched = await discoverService.readDueWatches({ limit: 5 });
+    // Then what anyone opened lately, once a night for everyone on the site.
+    const shared = await discoverService.refreshRecent({ limit: 5 });
+    return watched + shared;
   } catch (err) {
     logger.warn('Discover scheduler tick failed', { error: err.message });
     return 0;
