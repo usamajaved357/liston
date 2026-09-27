@@ -61,7 +61,7 @@ async function viewerFor({ userId, ownerId, role }, connectionId) {
 
 // Someone with Listings access but no part in hunting sees the approved
 // products (to draft them) and what became of them, nothing earlier.
-const LISTER_VIEWS = ['approved', 'listed'];
+const LISTER_VIEWS = ['approved'];
 const listerOnly = (viewer) => !viewer.canHunt && !viewer.canReview && viewer.canDraft;
 
 async function loadHunt(auth, huntId) {
@@ -338,13 +338,14 @@ async function add(auth, connectionId, { checkId, note }) {
 async function list(auth, connectionId, { view, mine, hunter, q, sort, page } = {}) {
   const viewer = await viewerFor(auth, connectionId);
   if (!viewer.canHunt && !viewer.canReview && !viewer.canDraft) refuse("You don't have access to hunting on this account.");
-  const allowed = listerOnly(viewer) ? LISTER_VIEWS : huntingRepository.VIEWS;
+  // My hunts (their own finds) for anyone who hunts; someone who only drafts sees what's approved.
+  const allowed = listerOnly(viewer) ? LISTER_VIEWS : huntingRepository.VIEWS.filter((v) => v !== 'mine' || viewer.canHunt);
   const chosen = allowed.includes(view) ? view : allowed.includes('all') ? 'all' : 'approved';
-  const hunterId = mine ? auth.userId : /^[0-9a-f-]{36}$/i.test(String(hunter || '')) ? hunter : null;
+  const hunterId = mine || chosen === 'mine' ? auth.userId : /^[0-9a-f-]{36}$/i.test(String(hunter || '')) ? hunter : null;
   const offset = Math.max(0, (Number(page) || 1) - 1) * PAGE;
   const [{ rows, more }, counts, hunters] = await Promise.all([
     huntingRepository.list(connectionId, { view: chosen, hunterId, q: String(q || '').trim().slice(0, 100), sort: huntingRepository.SORTS.includes(sort) ? sort : chosen === 'review' ? 'waiting' : 'newest', limit: PAGE, offset }),
-    huntingRepository.counts(connectionId, { hunterId }),
+    huntingRepository.counts(connectionId, { hunterId: chosen === 'mine' ? null : hunterId, viewerId: auth.userId }),
     huntingRepository.huntersOn(connectionId),
   ]);
   const sales = await salesOf(rows).catch(() => new Map());

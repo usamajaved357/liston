@@ -8,7 +8,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { money, count } from "@/components/research/format";
 import { HuntResult } from "./HuntResult";
 import { DecisionDialog, Decision } from "./DecisionDialog";
-import { Person, StageChip, Thumb, ago, announceHuntingChange, profitInk, roiText, signedMoney } from "./HuntBits";
+import { Person, StageChip, Thumb, ago, announceHuntingChange, profitInk, roiText, signedMoney , EDIT_BUTTON, EditIcon } from "./HuntBits";
 
 // One hunted product, opened from the list: where it stands and why, the
 // hunter's note, the full profit check, its history, and what the viewer
@@ -46,7 +46,7 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
         <Banner tone="amber">
           <b className="font-semibold">Sent back</b> by {who(hunt.reviewer)} {ago(hunt.decidedAt)}.
           {hunt.decisionNote && <Quote text={hunt.decisionNote} />}
-          {hunt.permissions.canResubmit && <p className="mt-2 text-[12.5px] text-amber-900/80">Change the links or your note below if needed, then resubmit it for review.</p>}
+          {hunt.permissions.canResubmit && <p className="mt-2 text-[12.5px] text-amber-900/80">Edit the links or your note below if needed, then resubmit it for review.</p>}
         </Banner>
       );
     case "rejected":
@@ -141,8 +141,18 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
   );
 }
 
-function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetail) => void }) {
-  const [open, setOpen] = useState(false);
+// Edit (the hunter's, while it waits or was sent back): the links and the note, read again on save.
+// startOpen: opened from the list's Edit, so the form is there straight away.
+function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntDetail; onSaved: (h: HuntDetail) => void; startOpen?: boolean; onClosed?: () => void }) {
+  const [open, setOpen] = useState(startOpen);
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    if (open) formRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [open]);
+  const close = () => {
+    setOpen(false);
+    onClosed?.();
+  };
   const [competitorUrl, setCompetitorUrl] = useState(hunt.competitorUrl || "");
   const [sourceUrl, setSourceUrl] = useState(hunt.sourceUrl);
   const [note, setNote] = useState(hunt.hunterNote || "");
@@ -155,8 +165,9 @@ function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetai
     setError(null);
     try {
       // A cleared competitor is taken away: the product is priced at the target return.
-      onSaved(await api.huntUpdate(hunt.id, { competitorUrl: competitorUrl.trim() || null, sourceUrl: sourceUrl.trim(), note }));
-      setOpen(false);
+      const saved = await api.huntUpdate(hunt.id, { competitorUrl: competitorUrl.trim() || null, sourceUrl: sourceUrl.trim(), note });
+      close();
+      onSaved(saved);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save it. Try again.");
     } finally {
@@ -166,13 +177,18 @@ function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetai
 
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className="btn btn-secondary btn-sm">
-        Change links or note
+      <button type="button" onClick={() => setOpen(true)} className={EDIT_BUTTON}>
+        <EditIcon />
+        Edit
       </button>
     );
   }
   return (
-    <form onSubmit={save} className="card w-full space-y-3 p-4">
+    <form ref={formRef} onSubmit={save} className="card w-full space-y-3 border-amber-200 p-4 ring-4 ring-amber-50">
+      <p className="flex items-center gap-1.5 text-[13px] font-semibold text-amber-800">
+        <EditIcon />
+        Edit this product
+      </p>
       <label className="block">
         <span className="label">
           Competitor on eBay <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>
@@ -189,7 +205,7 @@ function EditLinks({ hunt, onSaved }: { hunt: HuntDetail; onSaved: (h: HuntDetai
       </label>
       {error && <div className="notice notice-danger">{error}</div>}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={() => setOpen(false)} disabled={busy} className="btn btn-ghost btn-sm">
+        <button type="button" onClick={close} disabled={busy} className="btn btn-ghost btn-sm">
           Cancel
         </button>
         <button type="submit" disabled={busy} className="btn btn-primary btn-sm">
@@ -220,7 +236,9 @@ function ActionIcon({ kind }: { kind: "remove" | "approve" | "reject" | "send_ba
   );
 }
 
-export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string; you: string; onClose: () => void; onChanged: (hunt: HuntDetail | null) => void }) {
+export function HuntPanel({ huntId, you, onClose, onChanged, startEditing = false }: { huntId: string; you: string; onClose: () => void; onChanged: (hunt: HuntDetail | null) => void; startEditing?: boolean }) {
+  // Opened from the list's Edit: the edit form is open once, until it's saved or cancelled.
+  const [editFirst, setEditFirst] = useState(startEditing);
   const router = useRouter();
   const [hunt, setHunt] = useState<HuntDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -370,7 +388,7 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
                     {busy === "recheck" ? "Checking…" : "Check again"}
                   </button>
                 )}
-                {p?.canEdit && <EditLinks key={hunt.checkedAt} hunt={hunt} onSaved={update} />}
+                {p?.canEdit && <EditLinks key={hunt.checkedAt} hunt={hunt} onSaved={update} startOpen={editFirst} onClosed={() => setEditFirst(false)} />}
                 {moved && <span className="text-[12px] font-medium text-[var(--color-ink)]">{moved}</span>}
               </div>
               <HuntResult result={hunt.result} />

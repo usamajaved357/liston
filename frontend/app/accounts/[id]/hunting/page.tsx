@@ -21,13 +21,13 @@ import { PushPrompt } from "@/components/NotificationBell";
 // see what's approved, ready to draft. Each team member's hunting figures
 // are on their own page in the owner's Team area, not here.
 
-const VIEWS: HuntView[] = ["review", "sent_back", "approved", "listed", "rejected", "all"];
+const VIEWS: HuntView[] = ["all", "review", "approved", "rejected", "mine"];
 
-// Where a person starts: reviewers on the queue, listers on what's approved, hunters on everything.
+// Where a person starts: reviewers on the queue, listers on what's approved, hunters on My hunts.
 function startingView(connection: Connection): HuntView {
   const p = connection.permissions;
   if (!p || p.hunting_review) return "review";
-  if (p.hunting) return "all";
+  if (p.hunting) return "mine";
   return "approved";
 }
 
@@ -38,7 +38,6 @@ function HuntingBody() {
   const { connection, user, loading, error } = useConnection(params.id);
   const askedView = VIEWS.includes(search.get("view") as HuntView) ? (search.get("view") as HuntView) : null;
   const [view, setView] = useState<HuntView | null>(askedView);
-  const [mine, setMine] = useState(false);
   const [hunter, setHunter] = useState("");
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
@@ -49,7 +48,10 @@ function HuntingBody() {
   const [answered, setAnswered] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(search.get("open"));
+  // The open product is the address's ?open=, so a notification or link to it opens it even when this page is already showing.
+  const openId = search.get("open");
+  // Opened with Edit: the panel starts with its edit form open.
+  const [editing, setEditing] = useState(false);
   const [quick, setQuick] = useState<HuntSummary | null>(null);
   const [reload, setReload] = useState(0);
   // A product checked but not added yet: its Add bar is the page's footer.
@@ -81,14 +83,14 @@ function HuntingBody() {
   }, [q]);
 
   const effectiveView = view || (connection ? startingView(connection) : null);
-  const requestKey = JSON.stringify([effectiveView, mine, hunter, query, sort, reload]);
+  const requestKey = JSON.stringify([effectiveView, hunter, query, sort, reload]);
   const listLoading = answered !== requestKey || loadingMore;
 
   useEffect(() => {
     if (!connection || !effectiveView) return;
     let cancelled = false;
     api
-      .huntList(connection.id, { view: effectiveView, mine, hunter: hunter || undefined, q: query || undefined, sort: sort || undefined })
+      .huntList(connection.id, { view: effectiveView, hunter: effectiveView === "mine" ? undefined : hunter || undefined, q: query || undefined, sort: sort || undefined })
       .then((d) => {
         if (cancelled) return;
         // An empty queue on arrival: show everything instead.
@@ -105,13 +107,13 @@ function HuntingBody() {
     return () => {
       cancelled = true;
     };
-  }, [connection, effectiveView, view, mine, hunter, query, sort, reload, requestKey]);
+  }, [connection, effectiveView, view, hunter, query, sort, reload, requestKey]);
 
   async function loadMore() {
     if (!connection || !effectiveView || !data) return;
     setLoadingMore(true);
     try {
-      const next = await api.huntList(connection.id, { view: effectiveView, mine, hunter: hunter || undefined, q: query || undefined, sort: sort || undefined, page: page + 1 });
+      const next = await api.huntList(connection.id, { view: effectiveView, hunter: effectiveView === "mine" ? undefined : hunter || undefined, q: query || undefined, sort: sort || undefined, page: page + 1 });
       setData({ ...next, items: [...data.items, ...next.items] });
       setPage(page + 1);
     } catch (err) {
@@ -127,7 +129,7 @@ function HuntingBody() {
   }
   const open = useCallback(
     (id: string | null) => {
-      setOpenId(id);
+      setEditing(false);
       writeUrl({ open: id });
     },
     [writeUrl]
@@ -163,11 +165,10 @@ function HuntingBody() {
   const canHunt = viewer ? viewer.canHunt : !perms || Boolean(perms.hunting || perms.hunting_review);
   const canReview = viewer ? viewer.canReview : !perms || Boolean(perms.hunting_review);
   const views = useMemo(() => {
+    // The same tabs for everyone, in one order (a person who only drafts sees Approved).
     const allowed = data?.views || VIEWS;
-    // Reviewers start from the queue; hunters from everything.
-    const order: HuntView[] = canReview ? ["review", "sent_back", "approved", "listed", "rejected", "all"] : ["all", "review", "sent_back", "approved", "listed", "rejected"];
-    return order.filter((v) => allowed.includes(v));
-  }, [data?.views, canReview]);
+    return VIEWS.filter((v) => allowed.includes(v));
+  }, [data?.views]);
 
   if (loading) return <AccountPageSkeleton />;
   if (error || !connection || !user) {
@@ -236,7 +237,7 @@ function HuntingBody() {
                   </svg>
                   <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products" className="input input-sm !h-9 !pl-9" />
                 </label>
-                {canReview && (data?.hunters.length || 0) > 1 && (
+                {canReview && effectiveView !== "mine" && (data?.hunters.length || 0) > 1 && (
                   <select value={hunter} onChange={(e) => setHunter(e.target.value)} className="input input-sm !h-9 w-auto max-sm:flex-1" aria-label="Hunter">
                     <option value="">Everyone</option>
                     {data?.hunters.map((h) => (
@@ -245,16 +246,6 @@ function HuntingBody() {
                       </option>
                     ))}
                   </select>
-                )}
-                {canHunt && (
-                  <button
-                    type="button"
-                    onClick={() => setMine((m) => !m)}
-                    aria-pressed={mine}
-                    className={`btn btn-sm !h-9 max-sm:flex-1 ${mine ? "btn-primary" : "btn-secondary"}`}
-                  >
-                    My finds
-                  </button>
                 )}
                 <select value={sort} onChange={(e) => setSort(e.target.value as HuntSort | "")} className="input input-sm !h-9 w-auto max-sm:flex-1" aria-label="Sort">
                   <option value="">{effectiveView === "review" ? "Longest waiting" : "Newest"}</option>
@@ -279,6 +270,10 @@ function HuntingBody() {
                 you={user.id}
                 loading={listLoading}
                 onOpen={open}
+                onEdit={(id) => {
+                  open(id);
+                  setEditing(true);
+                }}
                 onApprove={setQuick}
                 onDraft={(h) => router.push(`/accounts/${connection.id}/listings/new?hunt=${h.id}`)}
                 onMore={loadMore}
@@ -288,7 +283,7 @@ function HuntingBody() {
         )}
       </div>
 
-      {openId && <HuntPanel key={openId} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} />}
+      {openId && <HuntPanel key={`${openId}-${editing}`} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} startEditing={editing} />}
       <DecisionDialog decision={quick ? "approve" : null} reasons={data?.reasons || []} title={quick?.title || ""} onClose={() => setQuick(null)} onSubmit={quickApprove} />
     </AccountShell>
   );

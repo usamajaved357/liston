@@ -203,6 +203,29 @@ test('opening a product with no readings (rejected, or hunted before readings) r
   assert.strictEqual(rows[0].n, 1);
 });
 
+test('the tabs: All, Waiting for review, Approved (drafted ones too), Rejected, and My hunts for each person', async () => {
+  const t = await team();
+  const { hunt: mine } = await hunt(t.connectionId, t.hunter.token);
+  await hunt(t.connectionId, t.ownerToken); // the owner's: approved as added
+  const list = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.hunter.token);
+  assert.deepStrictEqual(list.data.views, ['all', 'review', 'approved', 'rejected', 'mine']);
+  assert.strictEqual(list.data.view, 'mine');
+  assert.deepStrictEqual(list.data.items.map((h) => h.id), [mine.id]);
+  assert.strictEqual(list.data.counts.mine, 1);
+  assert.strictEqual(list.data.counts.all, 2);
+  // Approved holds a product once drafted too.
+  await request('POST', `/api/hunting/${mine.id}/decision`, { decision: 'approve' }, t.reviewer.token);
+  const draft = await listingRepository.createDraft({ connectionId: t.connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: 'Earbuds' } });
+  await huntingRepository.linkDraft(mine.id, draft.id, t.lister.id);
+  const approved = await request('GET', `/api/connections/${t.connectionId}/hunting?view=approved`, undefined, t.reviewer.token);
+  assert.strictEqual(approved.data.counts.approved, 2);
+  assert.ok(approved.data.items.some((h) => h.id === mine.id && h.stage === 'drafted'));
+  // The reviewer's own My hunts is empty; a sent-back tab is gone.
+  const reviewerMine = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.reviewer.token);
+  assert.strictEqual(reviewerMine.data.items.length, 0);
+  assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/hunting?view=sent_back`, undefined, t.reviewer.token)).data.view, 'all');
+});
+
 test('a bad link is refused before anything is read', async () => {
   const t = await team();
   const { status, data } = await request('POST', `/api/connections/${t.connectionId}/hunting/check`, { competitorUrl: 'https://www.ebay.co.uk/sch/earbuds', sourceUrl: SOURCE_URL }, t.hunter.token);
@@ -307,7 +330,7 @@ test('a lister sees only approved products, drafts them, and the listing and its
 
   const seen = await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.lister.token);
   assert.strictEqual(seen.status, 200);
-  assert.deepStrictEqual(seen.data.views, ['approved', 'listed']);
+  assert.deepStrictEqual(seen.data.views, ['approved']);
   assert.deepStrictEqual(seen.data.items.map((i) => i.id), [approved.id]);
   assert.strictEqual(seen.data.items[0].permissions.canDraft, true);
   assert.strictEqual((await request('GET', `/api/hunting/${waiting.id}`, undefined, t.lister.token)).status, 404);
@@ -370,6 +393,14 @@ test('only a reviewer removes a hunted product, at any stage; the hunter is told
   const bell = await request('GET', '/api/notifications', undefined, t.hunter.token);
   assert.deepStrictEqual(bell.data.items.map((n) => n.kind), ['hunt.removed', 'hunt.removed', 'hunt.approved']);
   assert.match(bell.data.items[0].body, /removed your hunted product/);
+
+  // The owner names themselves in their profile; the team sees that name, on older notifications too.
+  assert.strictEqual((await request('PATCH', '/api/users/me/name', { name: 'Usama Javed' }, t.ownerToken)).status, 200);
+  const renamed = await request('GET', '/api/notifications', undefined, t.hunter.token);
+  assert.strictEqual(renamed.data.items[0].detail.by, 'Usama Javed');
+  // A member's name is the owner's to set.
+  assert.strictEqual((await request('PATCH', '/api/users/me/name', { name: 'Me' }, t.hunter.token)).status, 403);
+  assert.strictEqual((await request('PATCH', '/api/users/me/name', { name: '   ' }, t.ownerToken)).status, 400);
 });
 
 test("the hunter is notified when a reviewer approves, rejects or sends back their product; the bell marks them read", async () => {
@@ -412,6 +443,12 @@ test("the hunter is notified when a reviewer approves, rejects or sends back the
     assert.strictEqual((await pool.query('SELECT 1 FROM push_subscriptions WHERE endpoint = $1', [sub.endpoint])).rowCount, 0);
   }
   assert.strictEqual((await request('POST', '/api/notifications/push', { endpoint: 'not a url', keys: {} }, t.hunter.token)).status, 400);
+  assert.deepStrictEqual(rejected.detail, { product: rejected.detail.product, by: rejected.detail.by, reason: 'Low demand', note: 'Too few sales' });
+  assert.ok(rejected.detail.product && rejected.detail.by);
+  // Clearing one, then all.
+  const cleared = await request('POST', '/api/notifications/clear', { ids: [sentBack.id] }, t.hunter.token);
+  assert.deepStrictEqual(cleared.data.items.map((n) => n.kind), ['hunt.approved', 'hunt.rejected']);
+  assert.strictEqual((await request('POST', '/api/notifications/clear', {}, t.hunter.token)).data.items.length, 0);
   // "Send a test" tells the person themselves, for checking their browser and computer.
   const tested = await request('POST', '/api/notifications/test', undefined, t.lister.token);
   assert.strictEqual(tested.status, 200);

@@ -2,11 +2,11 @@ const { query } = require('../../db/client');
 
 // notifications and push_subscriptions (migration 031).
 
-async function insert({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId = null }) {
+async function insert({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId = null, detail = {} }) {
   const { rows } = await query(
-    `INSERT INTO notifications (user_id, actor_user_id, kind, title, body, url, subject_type, subject_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [userId, actorUserId, kind, title, body, url, subjectType, subjectId === null || subjectId === undefined ? null : String(subjectId)]
+    `INSERT INTO notifications (user_id, actor_user_id, kind, title, body, url, subject_type, subject_id, detail)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [userId, actorUserId, kind, title, body, url, subjectType, subjectId === null || subjectId === undefined ? null : String(subjectId), JSON.stringify(detail || {})]
   );
   return rows[0];
 }
@@ -14,7 +14,13 @@ async function insert({ userId, actorUserId = null, kind, title, body = null, ur
 /** A person's latest notifications, newest first, and how many are unread. */
 async function listFor(userId, { limit = 30 } = {}) {
   const [list, unread] = await Promise.all([
-    query('SELECT id, kind, title, body, url, subject_type, subject_id, read_at, created_at FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2', [userId, limit]),
+    query(
+      `SELECT n.id, n.kind, n.title, n.body, n.url, n.subject_type, n.subject_id, n.detail, n.read_at, n.created_at,
+              u.name AS actor_name, u.email AS actor_email
+         FROM notifications n LEFT JOIN users u ON u.id = n.actor_user_id
+        WHERE n.user_id = $1 ORDER BY n.created_at DESC LIMIT $2`,
+      [userId, limit]
+    ),
     query('SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND read_at IS NULL', [userId]),
   ]);
   return { rows: list.rows, unread: unread.rows[0].n };
@@ -26,6 +32,15 @@ async function markRead(userId, ids = null) {
   const { rowCount } = ids
     ? await query('UPDATE notifications SET read_at = now() WHERE user_id = $1 AND id = ANY($2::uuid[]) AND read_at IS NULL', [userId, ids])
     : await query('UPDATE notifications SET read_at = now() WHERE user_id = $1 AND read_at IS NULL', [userId]);
+  return rowCount;
+}
+
+/** Clears some (or, with no ids, all) of a person's notifications. */
+async function deleteFor(userId, ids = null) {
+  if (ids && !ids.length) return 0;
+  const { rowCount } = ids
+    ? await query('DELETE FROM notifications WHERE user_id = $1 AND id = ANY($2::uuid[])', [userId, ids])
+    : await query('DELETE FROM notifications WHERE user_id = $1', [userId]);
   return rowCount;
 }
 
@@ -56,4 +71,4 @@ async function touchSubscription(endpoint) {
   await query('UPDATE push_subscriptions SET last_sent_at = now() WHERE endpoint = $1', [endpoint]);
 }
 
-module.exports = { insert, listFor, markRead, saveSubscription, deleteSubscription, forgetEndpoint, subscriptionsFor, touchSubscription };
+module.exports = { insert, listFor, markRead, deleteFor, saveSubscription, deleteSubscription, forgetEndpoint, subscriptionsFor, touchSubscription };

@@ -10,11 +10,11 @@ const logger = require('../../utils/logger');
  * Never throws, since a failed notification must not undo the work that
  * caused it.
  */
-async function notify({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId = null }) {
+async function notify({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId = null, detail = {} }) {
   if (!userId || !kind || !title) return null;
   let row;
   try {
-    row = await notificationsRepository.insert({ userId, actorUserId, kind, title, body, url, subjectType, subjectId });
+    row = await notificationsRepository.insert({ userId, actorUserId, kind, title, body, url, subjectType, subjectId, detail });
   } catch (err) {
     logger.warn('Notification not kept', { kind, error: err.message });
     return null;
@@ -41,8 +41,17 @@ async function pushTo(userId, payload) {
   );
 }
 
+// Who did it, by their name now (a name set later shows on older ones too).
+const nameOf = (row) => row.actor_name || (row.actor_email ? row.actor_email.split('@')[0] : null);
+
 function shape(row) {
-  return { id: row.id, kind: row.kind, title: row.title, body: row.body, url: row.url, readAt: row.read_at, createdAt: row.created_at };
+  const detail = { ...(row.detail || {}) };
+  if (row.kind.startsWith('hunt.')) {
+    // Older ones kept only their title ("Sent back: <product>").
+    if (!detail.product && row.title.includes(': ')) detail.product = row.title.slice(row.title.indexOf(': ') + 2);
+    if (detail.product) detail.by = nameOf(row) || detail.by || null;
+  }
+  return { id: row.id, kind: row.kind, title: row.title, body: row.body, url: row.url, detail, readAt: row.read_at, createdAt: row.created_at };
 }
 
 async function list(userId) {
@@ -65,6 +74,12 @@ async function subscribe(userId, { endpoint, keys, userAgent }) {
   await notificationsRepository.saveSubscription(userId, { endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent });
 }
 
+/** Clears some (or all) of a person's notifications. */
+async function clear(userId, ids) {
+  await notificationsRepository.deleteFor(userId, ids || null);
+  return list(userId);
+}
+
 /** A notification to oneself, to see that this browser and computer show them. */
 async function sendTest(userId) {
   await notify({
@@ -81,4 +96,4 @@ async function unsubscribe(userId, endpoint) {
   await notificationsRepository.deleteSubscription(userId, endpoint);
 }
 
-module.exports = { notify, list, markRead, subscribe, unsubscribe, sendTest };
+module.exports = { notify, list, markRead, clear, subscribe, unsubscribe, sendTest };

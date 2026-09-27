@@ -3,7 +3,7 @@
 import { HuntList as HuntListData, HuntSort, HuntSummary, HuntView } from "@/lib/api";
 import { count, money } from "@/components/research/format";
 import { ToneIcon } from "@/components/research/ResearchPanels";
-import { Person, RatingPill, StageChip, Thumb, VERDICT, ago, profitInk, roiText, signedMoney } from "./HuntBits";
+import { Person, RatingPill, StageChip, Thumb, VERDICT, ago, profitInk, roiText, signedMoney , EDIT_BUTTON, EditIcon } from "./HuntBits";
 import { SalesScorePill } from "./HuntSales";
 
 // The account's hunted products: the pipeline as tabs (waiting, sent back,
@@ -12,12 +12,11 @@ import { SalesScorePill } from "./HuntSales";
 // one action that moves it on for this person.
 
 export const VIEW_LABELS: Record<HuntView, string> = {
-  review: "Waiting for review",
-  sent_back: "Sent back",
-  approved: "Approved",
-  listed: "Drafted & listed",
-  rejected: "Rejected",
   all: "All",
+  review: "Waiting for review",
+  approved: "Approved",
+  rejected: "Rejected",
+  mine: "My hunts",
 };
 
 export const SORT_LABELS: Record<HuntSort, string> = {
@@ -31,11 +30,10 @@ export const SORT_LABELS: Record<HuntSort, string> = {
 
 const EMPTY: Record<HuntView, { title: string; text: string }> = {
   review: { title: "Nothing waiting for review", text: "New finds from the team land here for a decision." },
-  sent_back: { title: "Nothing sent back", text: "Products a reviewer returns for another look show here until they're resubmitted." },
-  approved: { title: "No approved products yet", text: "Approved products wait here, ready to draft." },
-  listed: { title: "Nothing drafted yet", text: "Products drafted from the hunt, and the listings they become, show here with their sales." },
+  approved: { title: "No approved products yet", text: "Approved products wait here, ready to draft, and stay here once drafted and listed." },
   rejected: { title: "Nothing rejected", text: "Rejected products show here with the reason." },
   all: { title: "No products hunted yet", text: "Check a product above to see its profit, then add it for review." },
+  mine: { title: "You haven't added a product yet", text: "Products you add show here, whatever happens to them: waiting, sent back, approved or rejected." },
 };
 
 function Status({ hunt }: { hunt: HuntSummary }) {
@@ -82,7 +80,7 @@ function Signals({ hunt }: { hunt: HuntSummary }) {
   );
 }
 
-function QuickAction({ hunt, onOpen, onApprove, onDraft, wide = false }: { hunt: HuntSummary; onOpen: () => void; onApprove: () => void; onDraft: () => void; wide?: boolean }) {
+function QuickAction({ hunt, onOpen, onEdit, onApprove, onDraft, wide = false }: { hunt: HuntSummary; onOpen: () => void; onEdit: () => void; onApprove: () => void; onDraft: () => void; wide?: boolean }) {
   const p = hunt.permissions;
   const size = wide ? "flex-1" : "btn-sm";
   const act = (fn: () => void) => (e: React.MouseEvent) => {
@@ -108,8 +106,9 @@ function QuickAction({ hunt, onOpen, onApprove, onDraft, wide = false }: { hunt:
     );
   if (p.canResubmit)
     return (
-      <button type="button" onClick={act(onOpen)} className={`btn btn-secondary ${wide ? "w-full" : "btn-sm"}`}>
-        Fix & resubmit
+      <button type="button" onClick={act(onEdit)} className={`${EDIT_BUTTON} ${wide ? "w-full" : ""}`}>
+        <EditIcon />
+        Edit
       </button>
     );
   return (
@@ -119,7 +118,7 @@ function QuickAction({ hunt, onOpen, onApprove, onDraft, wide = false }: { hunt:
   );
 }
 
-function Row({ hunt, you, onOpen, onApprove, onDraft }: { hunt: HuntSummary; you: string; onOpen: () => void; onApprove: () => void; onDraft: () => void }) {
+function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSummary; you: string; onOpen: () => void; onEdit: () => void; onApprove: () => void; onDraft: () => void }) {
   const v = VERDICT[hunt.verdict];
   // No competitor: the profit is the target by design, so it reads plain, "at your price".
   const unpriced = hunt.verdict === "unpriced";
@@ -160,7 +159,7 @@ function Row({ hunt, you, onOpen, onApprove, onDraft }: { hunt: HuntSummary; you
         ) : null}
         {(hunt.permissions.canDecide && hunt.stage === "pending") || (hunt.permissions.canDraft && hunt.stage === "approved") || hunt.permissions.canResubmit ? (
           <div className="mt-3 flex">
-            <QuickAction hunt={hunt} onOpen={onOpen} onApprove={onApprove} onDraft={onDraft} wide />
+            <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} onDraft={onDraft} wide />
           </div>
         ) : null}
       </div>
@@ -200,7 +199,7 @@ function Row({ hunt, you, onOpen, onApprove, onDraft }: { hunt: HuntSummary; you
         </div>
         <Status hunt={hunt} />
         <div className="flex justify-end">
-          <QuickAction hunt={hunt} onOpen={onOpen} onApprove={onApprove} onDraft={onDraft} />
+          <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} onDraft={onDraft} />
         </div>
       </div>
     </li>
@@ -239,7 +238,7 @@ export function PipelineTabs({ views, counts, value, onChange }: { views: HuntVi
   );
 }
 
-export function HuntRows({ data, view, you, loading, onOpen, onApprove, onDraft, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; onOpen: (id: string) => void; onApprove: (hunt: HuntSummary) => void; onDraft: (hunt: HuntSummary) => void; onMore?: () => void }) {
+export function HuntRows({ data, view, you, loading, onOpen, onEdit, onApprove, onDraft, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; onOpen: (id: string) => void; onEdit: (id: string) => void; onApprove: (hunt: HuntSummary) => void; onDraft: (hunt: HuntSummary) => void; onMore?: () => void }) {
   if (!data) {
     return (
       <ul className="divide-y divide-[var(--color-line)]">
@@ -281,7 +280,7 @@ export function HuntRows({ data, view, you, loading, onOpen, onApprove, onDraft,
       </div>
       <ul className="divide-y divide-[var(--color-line)]">
         {data.items.map((hunt) => (
-          <Row key={hunt.id} hunt={hunt} you={you} onOpen={() => onOpen(hunt.id)} onApprove={() => onApprove(hunt)} onDraft={() => onDraft(hunt)} />
+          <Row key={hunt.id} hunt={hunt} you={you} onOpen={() => onOpen(hunt.id)} onEdit={() => onEdit(hunt.id)} onApprove={() => onApprove(hunt)} onDraft={() => onDraft(hunt)} />
         ))}
       </ul>
       {data.more && onMore && (

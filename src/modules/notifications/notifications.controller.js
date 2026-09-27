@@ -35,6 +35,10 @@ module.exports = {
     const input = parse(readSchema, req.body, res);
     if (input) res.json(await notificationsService.markRead(req.userId, input.ids));
   }),
+  clear: handle(async (req, res) => {
+    const input = parse(readSchema, req.body, res);
+    if (input) res.json(await notificationsService.clear(req.userId, input.ids));
+  }),
   test: handle(async (req, res) => {
     res.json(await notificationsService.sendTest(req.userId));
   }),

@@ -211,6 +211,10 @@ test('nobody but the owner decides on their own find; hunters edit their own wai
     assert.strictEqual(rules.rules.canRemove(product, OWNER), true);
   }
   assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, HUNTER), true);
+  // Fixing and resubmitting are the hunter's alone, not a reviewer's or the owner's.
+  assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, REVIEWER), false);
+  assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, OWNER), false);
+  assert.strictEqual(rules.rules.canEdit({ ...byHunter, status: 'sent_back' }, OWNER), false);
 });
 
 test('drafting needs an approved product and Listings access; a drafted one is settled', () => {
@@ -435,8 +439,12 @@ const { noticeFor } = require('../../src/modules/hunting/hunt-notice');
 const push = require('../../src/modules/notifications/push');
 
 test('the hunter is told what the reviewer did, with the reason and the note', () => {
-  assert.deepStrictEqual(noticeFor('hunt.approved', { title: 'Wireless earbuds', by: 'Sara' }), { title: 'Approved: Wireless earbuds', body: "Sara approved your product. It's ready to draft." });
-  assert.deepStrictEqual(noticeFor('hunt.rejected', { title: 'Wireless earbuds', by: 'Sara', reason: 'Low demand', note: 'Too few sales' }), { title: 'Rejected: Wireless earbuds', body: 'Sara rejected it: Low demand. “Too few sales”' });
+  const approved = noticeFor('hunt.approved', { title: 'Wireless earbuds', by: 'Sara' });
+  assert.deepStrictEqual([approved.title, approved.body], ['Approved: Wireless earbuds', "Sara approved your product. It's ready to draft."]);
+  const rejected = noticeFor('hunt.rejected', { title: 'Wireless earbuds', by: 'Sara', reason: 'Low demand', note: 'Too few sales' });
+  assert.deepStrictEqual([rejected.title, rejected.body], ['Rejected: Wireless earbuds', 'Sara rejected it: Low demand. “Too few sales”']);
+  // Its parts too, for the bell to lay out.
+  assert.deepStrictEqual(rejected.detail, { product: 'Wireless earbuds', by: 'Sara', reason: 'Low demand', note: 'Too few sales' });
   assert.match(noticeFor('hunt.sent_back', { title: 'Earbuds', by: null, note: 'Find a cheaper supplier' }).body, /^A reviewer sent it back for you to improve\. “Find a cheaper supplier”$/);
   assert.strictEqual(noticeFor('hunt.removed', { title: 'Earbuds', by: 'Sam' }).body, 'Sam removed your hunted product.');
   // Long titles are cut to fit a notification.

@@ -290,3 +290,13 @@ export function SectionHead({ icon, title, meta, className = "" }: { icon: keyof
     </div>
   );
 }
+
+// Edit: the hunter's way back into a product that was sent back to them. Amber, like "Sent back".
+export const EDIT_BUTTON = "btn btn-sm gap-1.5 border border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-400 hover:bg-amber-100";
+export function EditIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+      <path d="M5 15l.6-2.8 6.9-6.9 2.2 2.2-6.9 6.9L5 15zM11.4 6.4l2.2 2.2" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

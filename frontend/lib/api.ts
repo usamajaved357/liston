@@ -1570,7 +1570,8 @@ export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "las
 // ---- Product hunting (backend modules/hunting) ----------------------------------
 
 export type HuntStage = "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
-export type HuntView = "review" | "sent_back" | "approved" | "listed" | "rejected" | "all";
+// The list's tabs; mine is "My hunts" (the person's own finds, whatever their stage).
+export type HuntView = "all" | "review" | "approved" | "rejected" | "mine";
 export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand" | "sales";
 // unpriced: checked without a competitor, so priced at the target return with no market to judge by.
 export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown";
@@ -1864,6 +1865,8 @@ export interface AppNotification {
   title: string;
   body: string | null;
   url: string | null;
+  // The parts, for laying it out (a reviewer's decision on a hunted product).
+  detail?: { product?: string | null; by?: string | null; reason?: string | null; note?: string | null };
   readAt: string | null;
   createdAt: string;
 }
@@ -1989,6 +1992,9 @@ export const api = {
   // scopes added since it was linked (order actions). Same connection id.
   reauthorizeConnection: (id: string, returnTo?: string) =>
     request<{ authorizeUrl: string }>(`/api/connections/${id}/reauthorize`, { method: "POST", body: JSON.stringify({ returnTo }) }),
+
+  // The owner's name, as their team sees it.
+  updateName: (name: string) => request<{ message: string; name: string }>("/api/users/me/name", { method: "PATCH", body: JSON.stringify({ name }) }),
 
   updateAvatar: (avatarUrl: string) =>
     request<{ message: string }>("/api/users/me/avatar", {
@@ -2119,10 +2125,9 @@ export const api = {
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
   huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
     request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
-  huntList: (connectionId: string, params: { view?: HuntView; mine?: boolean; hunter?: string; q?: string; sort?: HuntSort; page?: number } = {}) => {
+  huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } = {}) => {
     const query = new URLSearchParams();
     if (params.view) query.set("view", params.view);
-    if (params.mine) query.set("mine", "1");
     if (params.hunter) query.set("hunter", params.hunter);
     if (params.q) query.set("q", params.q);
     if (params.sort) query.set("sort", params.sort);
@@ -2143,6 +2148,7 @@ export const api = {
 
   // The bell: a person's notifications, and browser push for this browser.
   notifications: () => request<NotificationList>("/api/notifications"),
+  notificationsClear: (ids?: string[]) => request<NotificationList>("/api/notifications/clear", { method: "POST", body: JSON.stringify(ids ? { ids } : {}) }),
   notificationsTest: () => request<NotificationList>("/api/notifications/test", { method: "POST" }),
   notificationsRead: (ids?: string[]) => request<NotificationList>("/api/notifications/read", { method: "POST", body: JSON.stringify(ids ? { ids } : {}) }),
   pushSubscribe: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) =>

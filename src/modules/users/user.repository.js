@@ -50,11 +50,16 @@ async function updatePasswordHash(userId, passwordHash) {
   await query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2', [passwordHash, userId]);
 }
 
+async function updateName(userId, name) {
+  await query('UPDATE users SET name = $1, updated_at = now() WHERE id = $2', [name, userId]);
+}
+
 async function updateAvatar(userId, avatarUrl) {
   await query('UPDATE users SET avatar_url = $1, updated_at = now() WHERE id = $2', [avatarUrl, userId]);
 }
 
 module.exports = {
+  updateName,
   findByIdWithPlan,
   findRoleInfo,
   deleteById,

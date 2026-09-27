@@ -91,13 +91,13 @@ function UrlField({
   }
   return (
     <div className="min-w-0">
-      <label htmlFor={id} className="label flex items-center gap-1.5">
-        <span className="h-2 w-2 rounded-full" style={{ background: dot }} aria-hidden />
+      <label htmlFor={id} className="label flex items-center gap-1.5 !text-[10px]">
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: dot }} aria-hidden />
         {label} {optional && <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>}
       </label>
-      <div className="relative mt-1.5">
-        <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-[var(--color-muted)]">
-          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+      <div className="relative mt-1">
+        <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-[var(--color-muted)]">
+          <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
             <path d="M8.5 11.5a3.5 3.5 0 005 0l2.5-2.5a3.5 3.5 0 00-5-5l-1 1M11.5 8.5a3.5 3.5 0 00-5 0L4 11a3.5 3.5 0 005 5l1-1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
         </span>
@@ -105,7 +105,7 @@ function UrlField({
           id={id}
           ref={ref}
           className="input"
-          style={{ height: 44, paddingLeft: 38, paddingRight: value ? 44 : 76 }}
+          style={{ height: 36, fontSize: 13, paddingLeft: 32, paddingRight: value ? 38 : 64 }}
           type="url"
           inputMode="url"
           placeholder={placeholder}
@@ -115,7 +115,7 @@ function UrlField({
           disabled={disabled}
           required={required}
         />
-        <span className="absolute inset-y-0 right-1.5 flex items-center">
+        <span className="absolute inset-y-0 right-1 flex items-center">
           {value ? (
             <button
               type="button"
@@ -126,9 +126,9 @@ function UrlField({
               disabled={disabled}
               aria-label={`Clear the ${label} link`}
               title="Clear"
-              className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] disabled:opacity-40"
+              className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] disabled:opacity-40"
             >
-              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+              <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
                 <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
               </svg>
             </button>
@@ -137,7 +137,7 @@ function UrlField({
               type="button"
               onClick={paste}
               disabled={disabled}
-              className="h-8 rounded-full px-3 text-[12.5px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary-soft)] disabled:opacity-40"
+              className="h-7 rounded-full px-2.5 text-[11.5px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary-soft)] disabled:opacity-40"
             >
               Paste
             </button>
@@ -189,18 +189,18 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
   return (
     <div>
       <form onSubmit={check} className="card overflow-hidden">
-        <div className="flex items-start gap-3 border-b border-[var(--color-line)] bg-gradient-to-r from-[var(--color-primary-soft)] to-transparent px-4 py-3.5 sm:px-5">
-          <span className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary)] text-white">
-            <HuntIcon />
+        <div className="flex items-center gap-2.5 border-b border-[var(--color-line)] bg-gradient-to-r from-[var(--color-primary-soft)] to-transparent px-4 py-2.5">
+          <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary)] text-white">
+            <HuntIcon className="h-3.5 w-3.5" />
           </span>
           <div className="min-w-0">
-            <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Hunt a product</h2>
-            <p className="text-[12.5px] text-[var(--color-muted)]">
+            <h2 className="text-[13px] font-semibold leading-tight text-[var(--color-ink)]">Hunt a product</h2>
+            <p className="text-[11.5px] leading-snug text-[var(--color-muted)]">
               {`Paste the AliExpress product that supplies it, and a competitor selling it on ${marketName} if you have one. You'll see the profit on every option before adding it.`}
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-1 gap-3 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
+        <div className="grid grid-cols-1 gap-2.5 px-4 pb-3 pt-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
           <UrlField
             label="Competitor on eBay"
             dot="#0064D2"
@@ -212,10 +212,10 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
             disabled={busy}
           />
           <UrlField label="Supplier on AliExpress" dot="#E62E04" placeholder="https://www.aliexpress.com/item/…" value={sourceUrl} onChange={setSourceUrl} inputRef={sourceRef} disabled={busy} required />
-          <button type="submit" disabled={busy || !sourceUrl.trim()} className="btn btn-primary px-6" style={{ height: 44 }}>
+          <button type="submit" disabled={busy || !sourceUrl.trim()} className="btn btn-primary px-4 text-[13px]" style={{ height: 36 }}>
             {busy ? "Checking…" : checked ? "Check again" : "Check profit"}
           </button>
-          <p className="text-[12px] text-[var(--color-muted)] lg:col-span-3 lg:-mt-1">
+          <p className="text-[11px] text-[var(--color-muted)] lg:col-span-3 lg:-mt-0.5">
             The competitor sets the market price, the best seller and how many sell. Without one, each option is priced at your target return, as a draft would be.
           </p>
         </div>

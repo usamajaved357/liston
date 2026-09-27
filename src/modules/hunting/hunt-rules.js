@@ -35,8 +35,9 @@ const beforeDraft = (hunt) => !['drafted', 'listed'].includes(stageOf(hunt));
 
 const rules = {
   canDecide: (hunt, viewer) => viewer.canReview && beforeDraft(hunt) && (viewer.isOwner || !isHunter(hunt, viewer)),
-  canEdit: (hunt, viewer) => ['pending', 'sent_back'].includes(stageOf(hunt)) && (isHunter(hunt, viewer) || viewer.isOwner),
-  canResubmit: (hunt, viewer) => stageOf(hunt) === 'sent_back' && (isHunter(hunt, viewer) || viewer.isOwner),
+  // Fixing and resubmitting are the hunter's own; a reviewer sends it back instead.
+  canEdit: (hunt, viewer) => ['pending', 'sent_back'].includes(stageOf(hunt)) && isHunter(hunt, viewer),
+  canResubmit: (hunt, viewer) => stageOf(hunt) === 'sent_back' && isHunter(hunt, viewer),
   canRemove: (hunt, viewer) => Boolean(viewer.canReview),
   canRecheck: (hunt, viewer) => stageOf(hunt) !== 'listed' && (viewer.canHunt || viewer.canReview),
   canDraft: (hunt, viewer) => viewer.canDraft && ['approved', 'drafted', 'listed'].includes(stageOf(hunt)),

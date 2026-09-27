@@ -7,13 +7,15 @@ const { query } = require('../../db/client');
 // an eBay item, drafted while it has a draft, else its review decision.
 const STAGE_SQL = `CASE WHEN cardinality(h.item_ids) > 0 THEN 'listed' WHEN h.listing_id IS NOT NULL THEN 'drafted' ELSE h.status END`;
 
+// The list's tabs. Approved holds what was approved and has since been
+// drafted or listed too; a sent-back product is under All (and My hunts,
+// the person's own finds, whatever their stage, filtered by hunter).
 const VIEW_SQL = {
-  review: `${STAGE_SQL} = 'pending'`,
-  sent_back: `${STAGE_SQL} = 'sent_back'`,
-  approved: `${STAGE_SQL} = 'approved'`,
-  listed: `${STAGE_SQL} IN ('drafted', 'listed')`,
-  rejected: `${STAGE_SQL} = 'rejected'`,
   all: 'TRUE',
+  review: `${STAGE_SQL} = 'pending'`,
+  approved: `${STAGE_SQL} IN ('approved', 'drafted', 'listed')`,
+  rejected: `${STAGE_SQL} = 'rejected'`,
+  mine: 'TRUE',
 };
 const VIEWS = Object.keys(VIEW_SQL);
 
@@ -78,8 +80,8 @@ async function findForOwner(id, ownerId) {
 }
 
 /**
- * A page of an account's hunted products for a view (review | sent_back |
- * approved | listed | rejected | all), optionally one hunter's, searched by
+ * A page of an account's hunted products for a view (all | review |
+ * approved | rejected | mine), optionally one hunter's, searched by
  * title; sorted newest | waiting (longest waiting first) | profit | roi |
  * demand.
  */
@@ -99,16 +101,17 @@ async function list(connectionId, { view = 'all', hunterId = null, q = '', sort 
   return { rows: rows.slice(0, limit), more: rows.length > limit };
 }
 
-/** How many products each view holds on an account (one hunter's, if given). */
-async function counts(connectionId, { hunterId = null } = {}) {
-  const params = [connectionId];
+/** How many products each view holds on an account (one hunter's, if given); mine: the viewer's own. */
+async function counts(connectionId, { hunterId = null, viewerId = null } = {}) {
+  const params = [connectionId, viewerId];
   let where = 'h.connection_id = $1';
   if (hunterId) {
     params.push(hunterId);
     where += ` AND h.hunter_user_id = $${params.length}`;
   }
   const { rows } = await query(
-    `SELECT ${VIEWS.map((v) => `count(*) FILTER (WHERE ${VIEW_SQL[v]})::int AS ${v}`).join(', ')} FROM hunted_products h WHERE ${where}`,
+    `SELECT ${VIEWS.map((v) => (v === 'mine' ? `count(*) FILTER (WHERE h.hunter_user_id = $2)::int AS mine` : `count(*) FILTER (WHERE ${VIEW_SQL[v]})::int AS ${v}`)).join(', ')}
+       FROM hunted_products h WHERE ${where}`,
     params
   );
   return rows[0];
