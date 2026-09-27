@@ -109,6 +109,58 @@ async function loadOrderFinances(connectionId, orderIds) {
   );
 }
 
+// ---- account charges (Finances API), fees billed apart from orders ---------
+
+async function upsertAccountCharges(connectionId, rows) {
+  const BATCH = 200;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const values = [];
+    const params = [connectionId];
+    for (const r of batch) {
+      params.push(r.transactionId, r.kind, r.feeType, r.amount, r.currency, r.itemId, r.memo, r.chargedAt);
+      const n = params.length;
+      values.push(`($1, ${Array.from({ length: 8 }, (_, k) => `$${n - 7 + k}`).join(', ')}, now())`);
+    }
+    await query(
+      `INSERT INTO ebay_account_charges (connection_id, transaction_id, kind, fee_type, amount, currency, item_id, memo, charged_at, synced_at)
+       VALUES ${values.join(', ')}
+       ON CONFLICT (connection_id, transaction_id) DO UPDATE SET
+         kind = EXCLUDED.kind, fee_type = EXCLUDED.fee_type, amount = EXCLUDED.amount, currency = EXCLUDED.currency,
+         item_id = EXCLUDED.item_id, memo = EXCLUDED.memo, charged_at = EXCLUDED.charged_at, synced_at = now()`,
+      params
+    );
+  }
+}
+
+/**
+ * An account's charges from start to end (both included) in its own
+ * currency: [{ kind, feeType, amount }]. eBay bills the eBay account, not
+ * the site, so every connection
+ * of one account (its UK and Australian sites, say) reads the same charges:
+ * each counts only those in its own currency, and one also seen by an older
+ * connection of the same owner and currency counts there instead, so the
+ * business Overview never adds a shop subscription twice.
+ */
+async function loadAccountCharges(connectionId, currency, start, end) {
+  const result = await query(
+    `SELECT c.kind, c.fee_type, c.amount, c.charged_at FROM ebay_account_charges c
+     JOIN connections me ON me.id = c.connection_id
+     WHERE c.connection_id = $1 AND c.currency = $2 AND c.charged_at >= $3 AND c.charged_at <= $4
+       AND NOT EXISTS (
+         SELECT 1 FROM ebay_account_charges o JOIN connections oc ON oc.id = o.connection_id
+         WHERE o.transaction_id = c.transaction_id AND o.connection_id <> c.connection_id AND o.currency = c.currency
+           AND oc.user_id = me.user_id AND (oc.created_at, oc.id) < (me.created_at, me.id)
+       )`,
+    [connectionId, currency, start, end]
+  );
+  return result.rows.map((r) => ({ kind: r.kind, feeType: r.fee_type, amount: Number(r.amount), chargedAt: r.charged_at }));
+}
+
+async function pruneAccountChargesBefore(connectionId, before) {
+  await query(`DELETE FROM ebay_account_charges WHERE connection_id = $1 AND charged_at < $2`, [connectionId, before]);
+}
+
 // ---- item summaries --------------------------------------------------------
 
 async function loadItemSummaries(itemIds) {
@@ -125,7 +177,62 @@ async function saveItemSummary(itemId, summary) {
   );
 }
 
+// ---- product hunting --------------------------------------------------------
+
+/**
+ * What eBay took from an account's orders since a time, for judging a
+ * hunted product at the account's real fee rates: { orders, gross, fees,
+ * adFees } over the orders the Finances API has settled figures for.
+ */
+async function financeTotals(connectionId, since) {
+  const { rows } = await query(
+    `SELECT count(*)::int AS orders, COALESCE(sum(gross), 0) AS gross, COALESCE(sum(fees), 0) AS fees, COALESCE(sum(ad_fees), 0) AS ad_fees
+       FROM ebay_order_finances WHERE connection_id = $1 AND sale_date >= $2 AND gross > 0`,
+    [connectionId, since]
+  );
+  const r = rows[0] || {};
+  return { orders: Number(r.orders) || 0, gross: Number(r.gross) || 0, fees: Number(r.fees) || 0, adFees: Number(r.ad_fees) || 0 };
+}
+
+/** The orders (their data) on these accounts, placed in [start, end), with a line for any of these eBay items. */
+async function ordersForItems(connectionIds, itemIds, start, end) {
+  if (!connectionIds.length || !itemIds.length) return [];
+  const { rows } = await query(
+    `SELECT o.connection_id, o.data FROM ebay_orders o
+      WHERE o.connection_id = ANY($1) AND o.created_at >= $3 AND o.created_at < $4
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(o.data->'lineItems', '[]'::jsonb)) line WHERE line->>'itemId' = ANY($2))`,
+    [connectionIds, itemIds.map(String), start, end]
+  );
+  return rows.map((r) => ({ ...r.data, connectionId: r.connection_id }));
+}
+
+/**
+ * The owner's live listings on every account, from the mirror: [{
+ * connectionId, account, itemId, title, sku, imageUrl }]. `match` narrows
+ * them to a supplier product id in the custom label or one eBay item.
+ */
+async function ownerLiveListings(ownerId, match = null) {
+  const params = [ownerId];
+  let where = '';
+  if (match) {
+    params.push(match.productId || '', match.itemId || '');
+    where = `AND ((length($2) > 5 AND position($2 in COALESCE(item->>'sku', '')) > 0) OR (length($3) > 0 AND item->>'itemId' = $3))`;
+  }
+  const { rows } = await query(
+    `SELECT c.id AS connection_id, c.label AS account, item->>'itemId' AS item_id, item->>'title' AS title, item->>'sku' AS sku, item->>'imageUrl' AS image_url
+       FROM ebay_snapshots s
+       JOIN connections c ON c.id = s.connection_id
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.data->'items', '[]'::jsonb)) item
+      WHERE c.user_id = $1 AND s.kind = 'listings:active' ${where}`,
+    params
+  );
+  return rows.map((r) => ({ connectionId: r.connection_id, account: r.account, itemId: r.item_id, title: r.title, sku: r.sku, imageUrl: r.image_url }));
+}
+
 module.exports = {
+  financeTotals,
+  ordersForItems,
+  ownerLiveListings,
   loadSnapshot,
   saveSnapshot,
   loadOrders,
@@ -136,4 +243,7 @@ module.exports = {
   saveItemSummary,
   upsertOrderFinances,
   loadOrderFinances,
+  upsertAccountCharges,
+  loadAccountCharges,
+  pruneAccountChargesBefore,
 };

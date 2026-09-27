@@ -105,6 +105,8 @@ test('granting a global default feature makes the connection visible with resolv
     analytics: false,
     inbox: false,
     campaigns: false,
+    hunting: false,
+    hunting_review: false,
   });
 
   const detail = await request('GET', `/api/connections/${connectionId}`, undefined, memberToken);

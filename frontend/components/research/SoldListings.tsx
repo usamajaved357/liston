@@ -55,7 +55,46 @@ export function SoldListings({ sales, currency }: { sales: ResearchSales; curren
       {items.length === 0 ? (
         <p className="px-4 py-10 text-center text-[13px] text-[var(--color-muted)]">Nothing sold for this search in the last {sales.days} days.</p>
       ) : (
-        <div className="relative overflow-x-auto">
+        <>
+        {/* A phone: one card per sold listing; a removed one keeps eBay's banner. */}
+        <ul className="divide-y divide-[var(--color-line)] md:hidden">
+          {items.map((item, i) => {
+            const removed = item.state === "removed";
+            const landed = item.price === null ? null : item.price + (item.shipping ?? 0);
+            return (
+              <li key={item.itemId ?? i} onClick={() => !removed && item.url && window.open(item.url, "_blank", "noopener,noreferrer")} className="px-4 py-3">
+                {removed && (
+                  <p className="mb-2 flex items-center gap-2 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[12px] font-medium text-rose-800">
+                    <svg viewBox="0 0 20 20" className="h-4 w-4 shrink-0 text-rose-600" aria-hidden>
+                      <circle cx="10" cy="10" r="8" fill="currentColor" />
+                      <path d="M10 5.8v5M10 13.6v.4" stroke="#fff" strokeWidth="1.9" strokeLinecap="round" />
+                    </svg>
+                    This listing has been removed for a policy violation.
+                  </p>
+                )}
+                <div className="flex items-start gap-3">
+                  {item.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={item.image} alt="" loading="lazy" className={`h-12 w-12 shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-contain ${removed ? "opacity-60 grayscale" : ""}`} />
+                  ) : (
+                    <span className="h-12 w-12 shrink-0 rounded-lg border border-dashed border-[var(--color-line)]" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className={`line-clamp-2 text-[13.5px] font-medium leading-snug ${removed ? "text-[var(--color-muted)]" : "text-[var(--color-ink)]"}`}>{item.title || `Item ${item.legacyItemId}`}</p>
+                    <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">{[item.seller, removed ? `Item ${item.legacyItemId}` : null, item.state === "ended" ? "Ended" : null].filter(Boolean).join(" · ")}</p>
+                    <p className="mt-1 text-[12px] tabular-nums text-[var(--color-muted)]">
+                      <span className="text-[14px] font-semibold text-[var(--color-ink)]">{money(landed, item.currency ?? currency)}</span>
+                      {item.sold !== null && ` · ${count(item.sold)} sold`}
+                      {landed !== null && item.sold !== null && ` · ${bigMoney(landed * item.sold, item.currency ?? currency)}`}
+                      {item.lastSoldAt && ` · ${formatShortDate(item.lastSoldAt)}`}
+                    </p>
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="relative hidden overflow-x-auto md:block">
           <table className="w-full min-w-[760px] text-[13px]">
             <thead className="bg-[var(--color-paper)] text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
               <tr>
@@ -104,6 +143,7 @@ export function SoldListings({ sales, currency }: { sales: ResearchSales; curren
             </tbody>
           </table>
         </div>
+        </>
       )}
     </>
   );

@@ -60,6 +60,8 @@ interface Detail {
   fromEbay?: boolean;
   // Shown in amber: something the total leaves out.
   warn?: (m: MoneySummary) => boolean;
+  // Only when this says so (a line that's usually nothing).
+  shown?: (m: MoneySummary) => boolean;
 }
 
 interface Step {
@@ -68,7 +70,7 @@ interface Step {
   tone: Tone;
   // The small marker beside the card's name.
   accent: string;
-  note: string;
+  note: string | ((m: MoneySummary) => string);
   // The longer explanation, on hover.
   hint: string;
   fromEbay?: boolean;
@@ -94,13 +96,16 @@ const STEPS: Step[] = [
     figure: { kind: "money", of: (m) => m.fees },
     tone: "out",
     accent: "bg-rose-400",
-    note: "Taken by eBay",
-    hint: "Everything eBay took: final value, other selling fees and ads",
+    note: (m) => (m.settledSales > 0 ? `${percent(m.fees, m.settledSales)} of sales` : "Taken by eBay"),
+    hint: "Everything eBay took: the fees on each order, ads, listing fees and the eBay Store subscription",
     fromEbay: true,
     details: [
-      { label: "eBay fees", figure: { kind: "money", of: (m) => m.fees - m.adFees }, fromEbay: true, tone: "out" },
+      { label: "Order fees", figure: { kind: "money", of: (m) => m.fees - m.adFees - (m.accountFees ?? 0) }, fromEbay: true, tone: "out" },
       { label: "Ad fees", figure: { kind: "money", of: (m) => m.adFees }, fromEbay: true, tone: "out" },
-      { label: "Of sales", figure: { kind: "text", of: (m) => percent(m.fees, m.settledSales) }, fromEbay: true },
+      { label: "Listing fees", figure: { kind: "money", of: (m) => m.listingFees ?? 0 }, fromEbay: true, tone: "out" },
+      { label: "Store fee", figure: { kind: "money", of: (m) => m.storeFees ?? 0 }, fromEbay: true, tone: "out" },
+      // Other subscriptions (Terapeak Pro…), payout fees and the like: rare.
+      { label: "Other fees", figure: { kind: "money", of: (m) => m.otherFees ?? 0 }, fromEbay: true, tone: "out", shown: (m) => (m.otherFees ?? 0) !== 0 },
     ],
   },
   {
@@ -232,12 +237,12 @@ export function SalesCards({
   // A hidden amount is plain ink: its colour would give away its sign.
   const inkFor = (tone: Tone | undefined, figure: Figure) => (hidden && figure.kind === "money" ? INK.plain : inkOf(tone, valueOf(figure)));
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-      {STEPS.map((step) => {
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
+      {STEPS.map((step, index) => {
         const blocked = Boolean(unavailable && step.fromEbay);
         const figure = step.figure;
         return (
-          <div key={step.label} className="card flex flex-col px-5 py-4" title={step.hint}>
+          <div key={step.label} className={`card flex min-w-0 flex-col px-3.5 py-3 sm:px-5 sm:py-4 ${index === STEPS.length - 1 ? "max-lg:col-span-2" : ""}`} title={step.hint}>
             <span className="flex items-center gap-2 text-[13px] font-medium text-[var(--color-muted)]">
               <span className={`h-2 w-2 rounded-full ${step.accent}`} aria-hidden />
               {step.label}
@@ -245,10 +250,10 @@ export function SalesCards({
             {loading || !main ? (
               <span className="mt-3 h-7 w-28 animate-pulse rounded-md bg-[var(--color-line)]" />
             ) : blocked ? (
-              <span className="mt-2.5 text-[24px] font-semibold leading-none text-[var(--color-line-strong)]">—</span>
+              <span className="mt-2.5 text-[20px] font-semibold leading-none text-[var(--color-line-strong)] sm:text-[24px]">—</span>
             ) : (
               <>
-                <span className={`mt-2.5 text-[24px] font-semibold leading-none tracking-tight tabular-nums ${inkFor(step.tone, figure)}`}>{show(figure)}</span>
+                <span className={`mt-2.5 truncate text-[20px] font-semibold leading-none tracking-tight tabular-nums sm:text-[24px] ${inkFor(step.tone, figure)}`}>{show(figure)}</span>
                 {figure.kind === "money" &&
                   // Only when no exchange rate could be had: each other currency
                   // apart. A market with nothing in these dates, or one eBay has
@@ -262,9 +267,11 @@ export function SalesCards({
                     ))}
               </>
             )}
-            <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">{blocked && !loading ? "Needs the account reconnected" : step.note}</span>
-            <dl className="mt-3.5 space-y-1.5 border-t border-[var(--color-line)] pt-3 text-[12.5px]">
-              {step.details.map((d) => {
+            <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">
+              {blocked && !loading ? "Needs the account reconnected" : typeof step.note === "function" ? (main && !loading ? step.note(main) : "\u00a0") : step.note}
+            </span>
+            <dl className="mt-3 space-y-1 border-t border-[var(--color-line)] pt-2.5 text-[12px] sm:mt-3.5 sm:pt-3 sm:text-[12.5px]">
+              {step.details.filter((d) => !d.shown || (main && !loading && d.shown(main))).map((d) => {
                 const dBlocked = Boolean(unavailable && d.fromEbay);
                 const warn = main && !dBlocked ? d.warn?.(main) : false;
                 return (
@@ -285,13 +292,13 @@ export function SalesCards({
 }
 
 // The listing pipeline, stage by stage: products hunted, approved or rejected
-// (the product-hunting feature, still to come), then drafted and published
-// in Liston in the chosen dates. What's live and waiting right now sits
-// underneath.
-const STAGES: { label: string; note: string; of?: (w: ListingWork) => number }[] = [
-  { label: "Hunted", note: "Products found to list" },
-  { label: "Approved", note: "Picked to draft" },
-  { label: "Rejected", note: "Passed over" },
+// (product hunting), then drafted and published in Liston, all in the chosen
+// dates. What's live, waiting to publish and waiting for review right now
+// sits underneath.
+const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink?: string }[] = [
+  { label: "Hunted", note: "Products found to list", of: (w) => w.hunted ?? 0 },
+  { label: "Approved", note: "Picked to draft", of: (w) => w.approved ?? 0, ink: "text-emerald-600" },
+  { label: "Rejected", note: "Passed over", of: (w) => w.rejected ?? 0, ink: "text-rose-600" },
   { label: "Drafted", note: "Drafts created in Liston", of: (w) => w.drafted },
   { label: "Published", note: "Went live from Liston", of: (w) => w.published },
 ];
@@ -299,25 +306,16 @@ const STAGES: { label: string; note: string; of?: (w: ListingWork) => number }[]
 export function ListingCards({ work, loading }: { work: ListingWork | null; loading?: boolean }) {
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
         {STAGES.map((stage) => {
-          const soon = !stage.of;
+          const value = work ? stage.of(work) : 0;
           return (
-            <div key={stage.label} className={`card flex min-h-[136px] flex-col p-5 ${soon ? "border-dashed bg-transparent shadow-none" : ""}`}>
-              <span className="flex items-center justify-between gap-2">
-                <span className="text-[13px] font-medium text-[var(--color-muted)]">{stage.label}</span>
-                {soon && (
-                  <span className="rounded-full bg-[var(--color-paper)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
-                    Coming soon
-                  </span>
-                )}
-              </span>
-              {loading || (!soon && !work) ? (
+            <div key={stage.label} className="card flex min-h-[120px] min-w-0 flex-col p-3.5 sm:min-h-[136px] sm:p-5">
+              <span className="text-[13px] font-medium text-[var(--color-muted)]">{stage.label}</span>
+              {loading || !work ? (
                 <span className="mt-3 h-8 w-20 animate-pulse rounded-md bg-[var(--color-line)]" />
               ) : (
-                <span className={`mt-2.5 text-[28px] font-semibold leading-none tracking-tight tabular-nums ${soon ? "text-[var(--color-line-strong)]" : "text-[var(--color-ink)]"}`}>
-                  {soon ? "—" : count(stage.of!(work!))}
-                </span>
+                <span className={`mt-2.5 text-[24px] font-semibold leading-none sm:text-[28px] tracking-tight tabular-nums ${value > 0 && stage.ink ? stage.ink : "text-[var(--color-ink)]"}`}>{count(value)}</span>
               )}
               <span className="mt-auto pt-3 text-[12px] text-[var(--color-muted)]">{stage.note}</span>
             </div>
@@ -328,6 +326,11 @@ export function ListingCards({ work, loading }: { work: ListingWork | null; load
         <p className="mt-4 text-[13px] text-[var(--color-muted)]">
           Right now: <span className="font-medium text-[var(--color-ink)]">{count(work.live)}</span> live on eBay ·{" "}
           <span className="font-medium text-[var(--color-ink)]">{count(work.waiting)}</span> drafts waiting to publish
+          {(work.reviewing ?? 0) > 0 && (
+            <>
+              {" "}· <span className="font-medium text-[var(--color-ink)]">{count(work.reviewing ?? 0)}</span> hunted product{work.reviewing === 1 ? "" : "s"} waiting for review
+            </>
+          )}
         </p>
       )}
     </>

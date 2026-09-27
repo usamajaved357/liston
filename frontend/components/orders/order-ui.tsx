@@ -254,7 +254,7 @@ export function GlobalShippingInstructions() {
         <Chevron open={open} />
       </button>
       {open && (
-        <div className="mt-3 grid gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
           <div>
             <p className="font-bold">Pack it up</p>
             <p className="mt-1">Secure your item to make sure it arrives exactly as described.</p>
@@ -289,7 +289,7 @@ export function PostageInstructions() {
         <Chevron open={open} />
       </button>
       {open && (
-        <div className="mt-3 grid gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-5 text-[12.5px] leading-relaxed text-[var(--color-ink)] sm:grid-cols-3">
           <div>
             <p className="font-bold">Pack your item with care</p>
             <p className="mt-1">Use a box or envelope that&apos;s slightly larger than your item and cushion it with protective materials like bubble wrap, packing peanuts, foam or tissue paper to keep it secure during transit. If you&apos;re reusing a box, cover any previous labels or branding and reinforce corners with packing tape to ensure your package looks professional.</p>
@@ -314,7 +314,7 @@ export function PostageInstructions() {
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-md rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-md rounded-2xl bg-[var(--color-panel)] p-5 sm:p-6 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold text-[var(--color-ink)]">{title}</h2>
           <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">

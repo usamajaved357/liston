@@ -170,4 +170,90 @@ function orderFinancesFrom(transactions = []) {
   return rows;
 }
 
-module.exports = { getOrderTransactions, getTransactions, orderFinancesFrom, orderIdOf, mapOrderEarnings, baseUrl };
+// What eBay charges an account apart from its orders (NON_SALE_CHARGE:
+// "listing and listing upgrade fees, eBay store or other subscription fees,
+// and ad fees"), grouped the way the Overview shows them: the eBay Store
+// (shop) subscription on its own; other subscriptions (Terapeak Pro, eBay
+// Plus…) with the rest. Taxes eBay withholds and charity donations aren't
+// eBay's fees, so they're left out.
+const STORE_FEES = new Set(['EBAY_STORE_SUBSCRIPTION_FEE', 'STORE_SUBSCRIPTION_EARLY_TERMINATION_FEE']);
+const LISTING_FEES = new Set([
+  'INSERTION_FEE',
+  'VEHICLE_LOCAL_INSERTION_FEE',
+  'BOLD_FEE',
+  'SUBTITLE_FEE',
+  'GALLERY_FEE',
+  'GALLERY_PLUS_FEE',
+  'FEATURED_GALLERY_FEE',
+  'CATEGORY_FEATURED_FEE',
+  'LARGE_PICTURE_FEE',
+  'IPIXPHOTO_FEE',
+  'RESERVE_PRICE_FEE',
+  'BUY_IT_NOW_FEE',
+  'PRIVATE_LISTING_FEE',
+  'INTERNATIONAL_LISTING_FEE',
+  'AUCTION_END_EARLY_FEE',
+  'VALUE_PACK_BUNDLE_FEE',
+  'PRO_PACK_BUNDLE_FEE',
+  'PRO_PACK_PLUS_BUNDLE_FEE',
+  'VEHICLES_BASIC_PACKAGE_FEE',
+  'VEHICLES_PLUS_PACKAGE_FEE',
+  'VEHICLES_PREMIUM_PACKAGE_FEE',
+]);
+const NOT_FEES = new Set(['TAX_DEDUCTION_AT_SOURCE', 'INCOME_TAX_WITHHOLDING', 'VAT_WITHHOLDING', 'CHARITY_DONATION']);
+
+// eBay UK books its shop subscription as OTHER_FEES, not
+// EBAY_STORE_SUBSCRIPTION_FEE, its memo the period it pays for
+// ("2026-08-31 - 2026-09-29", £32.40 on the 1st, seen live Sept 2026). A
+// charge for a period, on no listing, is the shop's whatever its type.
+const BILLING_PERIOD = /^\s*\d{4}-\d{2}-\d{2}\s*-\s*\d{4}-\d{2}-\d{2}\s*$/;
+
+/**
+ * 'ads' | 'store' | 'listing' | 'other' for an account charge, or null when
+ * it isn't a fee. `memo` and `itemId` tell the shop subscription eBay files
+ * under another type.
+ */
+function chargeKind(feeType, { memo = null, itemId = null } = {}) {
+  const code = String(feeType || '').toUpperCase();
+  if (NOT_FEES.has(code)) return null;
+  if (/^AD_FEE/.test(code) || code === 'PREMIUM_AD_FEES') return 'ads';
+  if (STORE_FEES.has(code)) return 'store';
+  if (LISTING_FEES.has(code)) return 'listing';
+  if (!itemId && BILLING_PERIOD.test(memo || '')) return 'store';
+  return 'other';
+}
+
+/**
+ * The charges in a batch of transactions that name no order: [{
+ * transactionId, kind, feeType, amount (a credit back is negative),
+ * currency, itemId, memo, chargedAt }]. A charge against an order (an ad
+ * fee on a sale) belongs to that order's money instead (orderFinancesFrom).
+ * A fee credited as its own CREDIT transaction counts against the charges.
+ */
+function accountChargesFrom(transactions = []) {
+  const rows = [];
+  for (const t of transactions) {
+    const charge = t.transactionType === 'NON_SALE_CHARGE';
+    if (!charge && !(t.transactionType === 'CREDIT' && t.feeType)) continue;
+    if (orderIdOf(t)) continue;
+    const itemId = (t.references || []).find((r) => r.referenceType === 'ITEM_ID')?.referenceId || null;
+    const memo = t.transactionMemo || null;
+    const kind = chargeKind(t.feeType, { memo, itemId });
+    const value = Math.abs(money(t.amount));
+    if (!kind || !value || !t.transactionDate) continue;
+    const credit = t.bookingEntry === 'CREDIT' || !charge;
+    rows.push({
+      transactionId: t.transactionId || `${t.transactionType}:${t.feeType || ''}:${t.transactionDate}:${value}`,
+      kind,
+      feeType: t.feeType || null,
+      amount: Math.round((credit ? -value : value) * 100) / 100,
+      currency: t.amount?.currency || null,
+      itemId,
+      memo,
+      chargedAt: t.transactionDate,
+    });
+  }
+  return rows;
+}
+
+module.exports = { getOrderTransactions, getTransactions, orderFinancesFrom, accountChargesFrom, chargeKind, orderIdOf, mapOrderEarnings, baseUrl };

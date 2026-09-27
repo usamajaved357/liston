@@ -64,6 +64,45 @@ function priceTextOf(item) {
   return `${item.price.currency || ''} ${item.price.value}`.trim();
 }
 
+const money = (node) => (node && node.value !== undefined && node.value !== null && node.value !== '' ? Number(node.value) : null);
+
+// How many eBay says this listing (or one variation of it) has sold, and has
+// left: null when eBay didn't say.
+function soldOf(item) {
+  const counts = (item.estimatedAvailabilities || []).map((a) => a.estimatedSoldQuantity).filter((n) => n !== undefined && n !== null);
+  return counts.length ? counts.reduce((sum, n) => sum + (Number(n) || 0), 0) : null;
+}
+function availableOf(item) {
+  const counts = (item.estimatedAvailabilities || []).map((a) => a.estimatedAvailableQuantity).filter((n) => n !== undefined && n !== null);
+  return counts.length ? counts.reduce((sum, n) => sum + (Number(n) || 0), 0) : null;
+}
+
+// The first postage option a buyer on the site sees: what it costs and
+// eBay's delivery estimate.
+function postageOf(item) {
+  const ship = (item.shippingOptions || [])[0];
+  if (!ship) return null;
+  return {
+    cost: money(ship.shippingCost) ?? 0,
+    service: ship.type || ship.shippingServiceCode || null,
+    minDate: ship.minEstimatedDeliveryDate || ship.maxEstimatedDeliveryDate || null,
+    maxDate: ship.maxEstimatedDeliveryDate || ship.minEstimatedDeliveryDate || null,
+  };
+}
+
+// Who sells it, as buyers see it. The seller's legal details eBay also
+// sends (name, address, email) are left behind.
+function sellerOf(item) {
+  const s = item.seller;
+  if (!s) return null;
+  return {
+    username: s.username || null,
+    feedbackScore: s.feedbackScore ?? null,
+    feedbackPercentage: s.feedbackPercentage ? Number(s.feedbackPercentage) : null,
+    business: s.sellerAccountType === 'BUSINESS',
+  };
+}
+
 // categoryPath is pipe-delimited, broadest first:
 // "Clothes, Shoes & Accessories|Men|Men's Clothing|Shirts & Tops|T-Shirts"
 function breadcrumbOf(item) {
@@ -107,6 +146,16 @@ function normalizeSingle(item, url) {
     // eBay's real numeric leaf category id. Previously the AI had to guess
     // this from a breadcrumb; Browse returns it authoritatively.
     categoryId: item.categoryId || null,
+    // What sells and how fast (product hunting): eBay's sold count, what's
+    // left, the postage a buyer pays, who sells it and since when.
+    legacyItemId: item.legacyItemId || null,
+    url: item.itemWebUrl ? item.itemWebUrl.split('?')[0] : null,
+    sold: soldOf(item),
+    available: availableOf(item),
+    postage: postageOf(item),
+    seller: sellerOf(item),
+    createdAt: item.itemCreationDate || item.itemOriginDate || null,
+    location: item.itemLocation?.country ? { country: item.itemLocation.country } : null,
     variants: [],
   };
 }
@@ -123,8 +172,14 @@ function normalizeGroup(group, url) {
   const axes = varyingAspectNames(items);
   const base = normalizeSingle(first, url);
 
+  const sold = items.map(soldOf).filter((n) => n !== null);
+  const available = items.map(availableOf).filter((n) => n !== null);
+  const created = items.map((item) => item.itemCreationDate).filter(Boolean).sort();
   return {
     ...base,
+    sold: sold.length ? sold.reduce((sum, n) => sum + n, 0) : null,
+    available: available.length ? available.reduce((sum, n) => sum + n, 0) : null,
+    createdAt: created[0] || base.createdAt,
     title: (group.title || first.title || '').trim(),
     description: plainText(group.commonDescriptions?.[0]?.description) || base.description,
     // Aspects that vary belong to the variants, not to the parent product.
@@ -137,6 +192,9 @@ function normalizeGroup(group, url) {
       ),
       imageUrl: item.image?.imageUrl || null,
       priceText: priceTextOf(item),
+      sold: soldOf(item),
+      available: availableOf(item),
+      postageCost: postageOf(item)?.cost ?? null,
     })),
   };
 }

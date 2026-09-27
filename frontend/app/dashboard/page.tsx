@@ -9,6 +9,7 @@ import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
 import { BestSellersCard, SalesTrendCard } from "@/components/overview/OverviewSales";
+import { addListingTrends, ListingTrendCard, RecentListingsCard } from "@/components/overview/OverviewListings";
 import { useAmounts } from "@/lib/useAmounts";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { currencySymbol } from "@/lib/format";
@@ -149,10 +150,10 @@ export default function DashboardPage() {
   // until /me answers, never a blank page.
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <div className="mx-auto max-w-5xl space-y-4">
           <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="card h-28 animate-pulse" />
             ))}
@@ -207,8 +208,17 @@ export default function DashboardPage() {
   // The markets in view's listing work, added up (counts, not money).
   const listingWork = inView.length
     ? inView.reduce(
-        (sum, m) => ({ live: sum.live + m.listings.live, waiting: sum.waiting + m.listings.waiting, drafted: sum.drafted + m.listings.drafted, published: sum.published + m.listings.published }),
-        { live: 0, waiting: 0, drafted: 0, published: 0 }
+        (sum, m) => ({
+          live: sum.live + m.listings.live,
+          waiting: sum.waiting + m.listings.waiting,
+          drafted: sum.drafted + m.listings.drafted,
+          published: sum.published + m.listings.published,
+          hunted: sum.hunted + (m.listings.hunted ?? 0),
+          approved: sum.approved + (m.listings.approved ?? 0),
+          rejected: sum.rejected + (m.listings.rejected ?? 0),
+          reviewing: sum.reviewing + (m.listings.reviewing ?? 0),
+        }),
+        { live: 0, waiting: 0, drafted: 0, published: 0, hunted: 0, approved: 0, rejected: 0, reviewing: 0 }
       )
     : null;
   // One name per account, its markets after it ("Minsu LTD (UK, AU)") when
@@ -317,7 +327,7 @@ export default function DashboardPage() {
                 Sales figures for <span className="font-medium text-[var(--color-ink)]">{rangePhrase.replace(/^in /, "")}</span>
               </p>
             )}
-            <div className="flex items-center gap-3">
+            <div className="flex min-w-0 max-w-full items-center gap-3">
               {refreshing && <span className="text-[12px] text-[var(--color-muted)]">Updating…</span>}
               <div role="radiogroup" aria-label="Dates" className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
                 {RANGES.map((r) => (
@@ -371,9 +381,26 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {/* How listing work moved, and what went live. */}
+          {metric === "listings" && (
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="min-w-0 lg:col-span-2">
+                <ListingTrendCard points={addListingTrends(inView.map((m) => m.listingTrend))} caption={trendCaption} />
+              </div>
+              <RecentListingsCard
+                items={inView
+                  .flatMap((m) => m.recentListings ?? [])
+                  .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+                  .slice(0, 5)}
+                showMarket={current === "all" && markets.length > 1}
+                flagOf={(id) => markets.find((m) => m.id === id)?.flag ?? ""}
+              />
+            </div>
+          )}
+
           {/* How sales moved, and what sold most. */}
           {metric === "sales" && (
-            <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
               <div className="min-w-0 lg:col-span-2">
                 <SalesTrendCard points={trendInView} currency={trendCurrency} hidden={amounts.hidden} caption={trendCaption} note={trendNote} />
               </div>

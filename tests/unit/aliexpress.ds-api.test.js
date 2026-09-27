@@ -227,3 +227,99 @@ test('normalizeProduct keeps two SKUs shown under the same label apart by their 
     ['Camo Brown 25LB', 'Camo Brown 35LB', 'Green']
   );
 });
+
+test("normalizeProduct keeps the supplier's parcel: gross weight in kg and the box in cm, as AliExpress documents package_info_dto", () => {
+  const raw = (info) => ({
+    aliexpress_ds_product_get_response: {
+      rsp_code: 200,
+      result: { ae_item_base_info_dto: { subject: 'Phone Holder' }, ae_multimedia_info_dto: { image_urls: '' }, ...(info ? { package_info_dto: info } : {}) },
+    },
+  });
+  // AliExpress's own example: gross_weight "0.050", 18 × 8 × 6.
+  assert.deepStrictEqual(dsApi.normalizeProduct(raw({ gross_weight: '0.050', package_length: 18, package_width: 8, package_height: 6, package_type: false }), '1', 'url').package, {
+    weightKg: 0.05,
+    lengthCm: 18,
+    widthCm: 8,
+    heightCm: 6,
+  });
+  assert.deepStrictEqual(dsApi.normalizeProduct(raw({ gross_weight: '1.2', package_length: 0 }), '1', 'url').package, { weightKg: 1.2, lengthCm: null, widthCm: null, heightCm: null }, 'a box without all three sides is left out');
+  assert.strictEqual(dsApi.normalizeProduct(raw({ gross_weight: '0' }), '1', 'url').package, null, 'no usable weight, no parcel');
+  assert.strictEqual(dsApi.normalizeProduct(raw(null), '1', 'url').package, null);
+});
+
+test('normalizeProduct keeps each SKU id and stock, and the product and store record', () => {
+  const raw = {
+    aliexpress_ds_product_get_response: {
+      rsp_code: 200,
+      result: {
+        ae_item_base_info_dto: { subject: 'Earbuds', sales_count: '1000+', avg_evaluation_rating: '4.9', evaluation_count: '336', product_status_type: 'onSelling' },
+        ae_store_info: { store_name: "Stone's Store", store_country_code: 'CN', item_as_described_rating: '5.0', communication_rating: '4.8', shipping_speed_rating: '4.8' },
+        logistics_info_dto: { delivery_time: 7, ship_to_country: 'GB' },
+        ae_item_sku_info_dtos: {
+          ae_item_sku_info_d_t_o: [
+            { sku_id: '12000040177060882', sku_available_stock: 15, offer_sale_price: '3.36', currency_code: 'GBP', ae_sku_property_dtos: { ae_sku_property_d_t_o: [{ sku_property_name: 'Color', property_value_definition_name: 'Black' }] } },
+            { sku_id: '12000040177060883', sku_available_stock: 0, offer_sale_price: '3.36', currency_code: 'GBP', ae_sku_property_dtos: { ae_sku_property_d_t_o: [{ sku_property_name: 'Color', property_value_definition_name: 'White' }] } },
+          ],
+        },
+      },
+    },
+  };
+  const result = dsApi.normalizeProduct(raw, '1', 'https://aliexpress.com/item/1.html');
+  assert.deepStrictEqual(result.variants.map((v) => [v.skuId, v.stock]), [['12000040177060882', 15], ['12000040177060883', 0]]);
+  assert.deepStrictEqual(result.supplier, {
+    orders: '1000+',
+    rating: 4.9,
+    reviews: 336,
+    onSale: true,
+    store: { name: "Stone's Store", country: 'CN', described: 5, communication: 4.8, shipping: 4.8 },
+    deliveryDays: 7,
+  });
+});
+
+test('deliveryOption reads the fee in whole units, the free-postage threshold and the delivery days (live freight.query shape)', () => {
+  const option = dsApi.deliveryOption({
+    code: 'CAINIAO_FULFILLMENT_PRE',
+    shipping_fee_currency: 'GBP',
+    free_shipping: false,
+    max_delivery_days: 8,
+    min_delivery_days: 5,
+    tracking: true,
+    shipping_fee_format: '￡1.99',
+    free_shipping_threshold: '￡8.00',
+    company: 'AliExpress Selection Premium shipping',
+    ship_from_country: 'CN',
+    shipping_fee_cent: '1.99',
+  });
+  assert.deepStrictEqual(option, { code: 'CAINIAO_FULFILLMENT_PRE', company: 'AliExpress Selection Premium shipping', cost: 1.99, currency: 'GBP', freeOver: 8, minDays: 5, maxDays: 8, tracking: true, shipFrom: 'CN' });
+  assert.strictEqual(dsApi.deliveryOption({ free_shipping: true, shipping_fee_cent: '2.50' }).cost, 0);
+});
+
+test('a dropped connection to AliExpress is tried once more, then explained instead of an internal error', async () => {
+  const dropped = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+  let calls = 0;
+  const flaky = async () => {
+    calls += 1;
+    if (calls === 1) throw dropped();
+    return { ok: true, status: 200 };
+  };
+  const res = await dsApi.postGateway('a=1', { fetchImpl: flaky, retryDelayMs: 0 });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(calls, 2);
+
+  calls = 0;
+  const down = async () => {
+    calls += 1;
+    throw dropped();
+  };
+  await assert.rejects(dsApi.postGateway('a=1', { fetchImpl: down, retryDelayMs: 0 }), (err) => err instanceof ScrapingError && err.statusCode === 502 && err.expose && /Couldn't reach AliExpress/.test(err.message));
+  assert.strictEqual(calls, 2);
+
+  // No answer in time: said at once, not waited for twice.
+  calls = 0;
+  const slow = async () => {
+    calls += 1;
+    throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  };
+  await assert.rejects(dsApi.postGateway('a=1', { fetchImpl: slow, retryDelayMs: 0 }), (err) => err instanceof ScrapingError && err.statusCode === 504);
+  assert.strictEqual(calls, 1);
+});

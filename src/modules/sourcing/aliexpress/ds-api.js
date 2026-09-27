@@ -224,6 +224,32 @@ async function getValidAccessToken() {
   return (await refreshing).accessToken;
 }
 
+/**
+ * One POST to the gateway. A dropped connection (DNS, reset, refused) is
+ * tried once more; if it drops again, or AliExpress doesn't answer in 30
+ * seconds, the seller is told so in words instead of an internal error.
+ */
+async function postGateway(body, { fetchImpl = fetch, retryDelayMs = 700 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetchImpl(IOP_GATEWAY, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+        signal: AbortSignal.timeout(30 * 1000),
+      });
+    } catch (err) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw new ScrapingError("AliExpress didn't answer in time. Try again in a moment.", { source: 'aliexpress', statusCode: 504 });
+      }
+      if (attempt >= 2) {
+        throw new ScrapingError("Couldn't reach AliExpress just now: the connection dropped. Try again in a moment.", { source: 'aliexpress' });
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+}
+
 async function call(apiName, bizParams) {
   await assertConfigured();
   const accessToken = await getValidAccessToken();
@@ -239,12 +265,7 @@ async function call(apiName, bizParams) {
   for (const [key, value] of Object.entries(bizParams)) params[key] = String(value);
   params.sign = sign(params, appSecret);
 
-  const res = await fetch(IOP_GATEWAY, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params).toString(),
-    signal: AbortSignal.timeout(30 * 1000),
-  });
+  const res = await postGateway(new URLSearchParams(params).toString());
 
   if (!res.ok) {
     throw new ScrapingError(`AliExpress API request failed (${res.status})`, { source: 'aliexpress' });
@@ -351,6 +372,48 @@ function separateColliding(entries) {
   });
 }
 
+// The parcel the supplier ships: package_info_dto's gross weight (kg, a
+// string like "0.050") and box size (whole cm). eBay needs the weight when
+// the seller's postage policy works postage out from it. Null without a
+// usable weight; the size only when all three sides are given.
+function packageOf(info) {
+  const weightKg = Number(info?.gross_weight);
+  if (!(weightKg > 0)) return null;
+  const sides = [info.package_length, info.package_width, info.package_height].map(Number);
+  const sized = sides.every((n) => n > 0);
+  return {
+    weightKg: Math.round(weightKg * 1000) / 1000,
+    lengthCm: sized ? sides[0] : null,
+    widthCm: sized ? sides[1] : null,
+    heightCm: sized ? sides[2] : null,
+  };
+}
+
+// How the product and its store do on AliExpress: orders ("1000+"), the
+// rating and how many reviewed it, whether it's still on sale, the store
+// and its ratings, and the delivery days AliExpress quotes.
+function supplierOf(body) {
+  const base = body.ae_item_base_info_dto || {};
+  const store = body.ae_store_info || {};
+  const num = (v) => (v === undefined || v === null || v === '' || Number.isNaN(Number(v)) ? null : Number(v));
+  return {
+    orders: base.sales_count ? String(base.sales_count) : null,
+    rating: num(base.avg_evaluation_rating),
+    reviews: num(base.evaluation_count),
+    onSale: base.product_status_type ? base.product_status_type === 'onSelling' : null,
+    store: store.store_name
+      ? {
+          name: String(store.store_name),
+          country: store.store_country_code || null,
+          described: num(store.item_as_described_rating),
+          communication: num(store.communication_rating),
+          shipping: num(store.shipping_speed_rating),
+        }
+      : null,
+    deliveryDays: num(body.logistics_info_dto?.delivery_time),
+  };
+}
+
 function normalizeProduct(raw, productId, sourceUrl) {
   raiseIfError(raw);
   const body = unwrapEnvelope(raw);
@@ -392,7 +455,16 @@ function normalizeProduct(raw, productId, sourceUrl) {
     const currency = sku.currency_code || '';
     const { attributes, imageUrl, rawValues } = decodeSkuOptions(sku);
 
-    decoded.push({ attributes, rawValues, imageUrl, priceText: amount ? `${currency} ${amount}`.trim() : null });
+    decoded.push({
+      attributes,
+      rawValues,
+      imageUrl,
+      priceText: amount ? `${currency} ${amount}`.trim() : null,
+      // Which SKU this is (the shipping read asks per SKU) and how many
+      // the supplier has left of it.
+      skuId: sku.sku_id ? String(sku.sku_id) : null,
+      stock: sku.sku_available_stock === undefined || sku.sku_available_stock === null || sku.sku_available_stock === '' ? null : Number(sku.sku_available_stock),
+    });
     if (!priceText && amount) priceText = `${currency} ${amount}`.trim();
   }
   const variants = separateColliding(decoded).map(({ rawValues, ...variant }) => variant);
@@ -413,6 +485,8 @@ function normalizeProduct(raw, productId, sourceUrl) {
     priceText,
     specifics,
     categoryBreadcrumb: [],
+    package: packageOf(body.package_info_dto),
+    supplier: supplierOf(body),
     // A product with no options yields an empty array — common and expected,
     // not an error.
     variants,
@@ -469,4 +543,59 @@ async function fetchProduct(productId, sourceUrl, { shipTo, currency } = {}) {
   return normalizeProduct(raw, productId, sourceUrl);
 }
 
-module.exports = { fetchProduct, sign, raiseIfError, unwrapEnvelope, normalizeProduct, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };
+// "£8.00", "US $10.00", "8.00" -> 8; null when there's no number.
+function amountIn(text) {
+  const match = String(text || '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
+}
+
+// One way AliExpress can post it, from aliexpress.ds.freight.query.
+// `shipping_fee_cent` holds the amount in whole units ("1.99" with a format
+// of "£1.99"), whatever its name says. Confirmed live.
+function deliveryOption(option) {
+  const free = option.free_shipping === true || option.free_shipping === 'true';
+  const fee = free ? 0 : amountIn(option.shipping_fee_cent) ?? amountIn(option.shipping_fee_format);
+  return {
+    code: option.code || null,
+    company: option.company || null,
+    cost: fee,
+    currency: option.shipping_fee_currency || null,
+    // Orders at or over this price go free ("Choice" products).
+    freeOver: amountIn(option.free_shipping_threshold),
+    minDays: option.min_delivery_days === undefined ? null : Number(option.min_delivery_days),
+    maxDays: option.max_delivery_days === undefined ? null : Number(option.max_delivery_days),
+    tracking: option.tracking === true || option.tracking === 'true',
+    shipFrom: option.ship_from_country || null,
+  };
+}
+
+/**
+ * What it costs to send one of this SKU to the buyer's country, the way a
+ * seller would pick: the cheapest tracked option (else the cheapest), with
+ * the free-postage threshold and delivery days. Null when AliExpress has no
+ * delivery for it ("DELIVERY_INFO_EMPTY").
+ */
+async function fetchShipping(productId, skuId, { shipTo, currency } = {}) {
+  const raw = await call('aliexpress.ds.freight.query', {
+    queryDeliveryReq: JSON.stringify({
+      quantity: 1,
+      shipToCountry: shipTo || config.aliexpress.shipToCountry,
+      productId: String(productId),
+      selectedSkuId: String(skuId),
+      language: 'en_US',
+      locale: 'en_US',
+      currency: currency || config.aliexpress.targetCurrency,
+    }),
+  });
+  raiseIfError(raw);
+  const result = unwrapEnvelope(raw);
+  if (result.success === false || result.success === 'false') return null;
+  const options = asArray(result.delivery_options, 'delivery_option_d_t_o').filter((o) => o && typeof o === 'object').map(deliveryOption).filter((o) => o.cost !== null);
+  if (!options.length) return null;
+  const byCost = (a, b) => a.cost - b.cost || (a.maxDays ?? 99) - (b.maxDays ?? 99);
+  const tracked = options.filter((o) => o.tracking).sort(byCost);
+  const chosen = tracked[0] || [...options].sort(byCost)[0];
+  return { ...chosen, options: options.length };
+}
+
+module.exports = { fetchProduct, fetchShipping, deliveryOption, supplierOf, postGateway, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };

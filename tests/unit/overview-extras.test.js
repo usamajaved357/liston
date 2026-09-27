@@ -46,6 +46,7 @@ test("the business Overview shows each market's sales by day and best sellers, w
   }));
   mock.method(listingRepository, 'countListingWork', async () => ({ drafted: 0, published: 0, waiting: 0 }));
   mock.method(mirror, 'loadOrderFinances', async () => new Map());
+  mock.method(mirror, 'loadAccountCharges', async () => []);
   mock.method(mirror, 'loadItemSummaries', async (ids) => new Map(ids.includes('222') ? [['222', { summary: { imageUrl: 'https://i.ebayimg.com/222.jpg' } }]] : []));
   mock.method(orderRepository, 'sourceCostsByOrder', async () => new Map());
   mock.method(orderRepository, 'listArchivedOrderIds', async () => []);
@@ -55,7 +56,8 @@ test("the business Overview shows each market's sales by day and best sellers, w
   const gb = o.markets.find((m) => m.id === 'EBAY_GB');
   assert.strictEqual(gb.trend.length, 7);
   assert.strictEqual(gb.trend.at(-1).partial, true);
-  assert.strictEqual(gb.trend.reduce((s, p) => s + p.value, 0), 65, "today's two UK orders");
+  assert.strictEqual(gb.trend.reduce((s, p) => s + p.values.sales, 0), 65, "today's two UK orders");
+  assert.deepStrictEqual([gb.trend.at(-1).values.orders, gb.trend.at(-1).values.units], [2, 3], 'orders and units drawn too');
   assert.deepStrictEqual(
     gb.bestSellers.map((b) => [b.itemId, b.units, b.image, b.url, b.live, b.account]),
     [
@@ -67,6 +69,7 @@ test("the business Overview shows each market's sales by day and best sellers, w
   assert.strictEqual(auMarket.bestSellers[0].url, 'https://www.ebay.com.au/itm/333', 'a listing without a copy links to its own site');
   // All markets, in pounds (the UK sells most): A$40 is £20 at 2 AUD to the pound.
   assert.strictEqual(o.combined.money.currency, 'GBP');
-  assert.strictEqual(o.combined.trend.reduce((s, p) => s + p.value, 0), 85);
+  assert.strictEqual(o.combined.trend.reduce((s, p) => s + p.values.sales, 0), 85);
+  assert.strictEqual(o.combined.trend.at(-1).values.units, 6, 'units add up across markets, not converted');
   assert.deepStrictEqual(o.combined.bestSellers.map((b) => [b.itemId, b.currency]), [['333', 'AUD'], ['111', 'GBP'], ['222', 'GBP']]);
 });

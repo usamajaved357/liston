@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
+import { ShellFrame } from "@/components/ShellFrame";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -18,16 +19,20 @@ interface AppShellProps {
   role?: "owner" | "member";
   // Access requests are reviewed only by the addresses in ADMIN_EMAILS.
   isAdmin?: boolean;
+  // Pinned to the sidebar's foot (a member's name and Log out).
+  sidebarFooter?: React.ReactNode;
 }
 
 // connectionsUsed / maxConnections / planName are accepted for compatibility
 // with existing pages; the sidebar no longer shows plan usage.
-export function AppShell({ children, header, subheader, role, isAdmin }: AppShellProps) {
+export function AppShell({ children, header, subheader, role, isAdmin, sidebarFooter }: AppShellProps) {
   const pathname = usePathname();
 
   return (
-    <div className="h-screen flex overflow-hidden">
-      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto overscroll-contain bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-7">
+    <ShellFrame
+      sidebarClassName="gap-7"
+      sidebar={
+      <>
         <div className="flex items-center gap-2.5 px-2">
           <Logo size={30} />
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
@@ -58,14 +63,36 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
           <NavItem
             href="/connections"
             active={pathname === "/connections"}
-            label={role === "member" ? "Accounts" : "Connections"}
+            label={role === "member" ? "Dashboard" : "Connections"}
             icon={
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
-                <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18M3 12h18" stroke="currentColor" strokeWidth="1.4" />
-              </svg>
+              role === "member" ? (
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <rect x="3" y="3" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="3" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                  <rect x="3" y="16" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="2" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18M3 12h18" stroke="currentColor" strokeWidth="1.4" />
+                </svg>
+              )
             }
           />
+          {role === "member" && (
+            <NavItem
+              href="/account"
+              active={pathname === "/account"}
+              label="Profile"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <circle cx="12" cy="8.5" r="3.5" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M5 19.5c0-3.3 3.1-5.5 7-5.5s7 2.2 7 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              }
+            />
+          )}
           {role === "owner" && (
             <NavItem
               href="/team"
@@ -109,17 +136,20 @@ export function AppShell({ children, header, subheader, role, isAdmin }: AppShel
           )}
         </nav>
 
-      </aside>
-
-      <div className="flex-1 min-w-0 h-screen flex flex-col">
+        {sidebarFooter && <div className="mt-auto border-t border-[var(--color-line)] pt-3">{sidebarFooter}</div>}
+      </>
+      }
+    >
+      <div data-page-column className="flex-1 min-w-0 min-h-0 flex flex-col">
         {header && (
           <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
             {header}
             {subheader && <div className="mt-5">{subheader}</div>}
           </div>
         )}
-        <div className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
+        <div data-scroller className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
       </div>
-    </div>
+    </ShellFrame>
   );
 }
+

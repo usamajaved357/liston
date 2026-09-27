@@ -24,6 +24,8 @@ router.use('/:id/orders', require('../orders/order.routes'));
 router.get('/:id/earnings', requireAuth, requireFeature('orders'), connectionController.getEarnings);
 // The account's Overview money (sales, fees, earnings, source cost, profit) and listing work: owner-only, like the business Overview.
 router.get('/:id/overview', requireAuth, requireOwner, require('../overview/overview.controller').getAccountOverview);
+// A team member's own Overview there: their work on the account, no money (team.service.getOwnWork).
+router.get('/:id/my-work', requireAuth, requireAnyFeature(KNOWN_FEATURES), require('../team/team.controller').getOwnWork);
 router.use('/:id/analytics', require('../analytics/analytics.routes'));
 router.post('/:id/refresh', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.refresh);
 router.get('/:id/events', requireAuth, requireAnyFeature(['listings', 'orders', 'analytics']), connectionController.events);
@@ -59,5 +61,16 @@ router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingControl
 // variations to list, before anything is generated or paid for.
 router.post('/:id/listings/drafts/preview', requireAuth, requireFeature('listings'), listingController.previewDraft);
 router.post('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.generateDraft);
+// Product hunting (modules/hunting): hunters check and add products,
+// reviewers decide, listers draft the approved ones. The service decides
+// what each person may do; the badge answers everyone (zeros without access).
+const huntingController = require('../hunting/hunting.controller');
+const { HUNTING_ACCESS } = require('../hunting/hunting.routes');
+router.get('/:id/hunting', requireAuth, requireAnyFeature(HUNTING_ACCESS), huntingController.list);
+router.get('/:id/hunting/badge', requireAuth, requireAnyFeature(KNOWN_FEATURES), huntingController.badge);
+router.post('/:id/hunting/check', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.check);
+router.post('/:id/hunting', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.add);
+// A competitor's dated sales, pasted from eBay's purchase history page
+// (tens of KB of text, well within the app-wide JSON limit).
 
 module.exports = router;

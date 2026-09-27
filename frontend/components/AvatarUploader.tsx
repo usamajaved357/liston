@@ -3,7 +3,6 @@
 import { useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Avatar } from "@/components/Avatar";
-import { Alert } from "@/components/Alert";
 
 const OUTPUT_SIZE = 256;
 const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
@@ -86,37 +85,44 @@ export function AvatarUploader({ avatarUrl, onChange }: AvatarUploaderProps) {
     }
   }
 
+  // The photo with a camera button on it (choose a new one), and Remove under it.
   return (
-    <div className="flex items-center gap-5">
-      <Avatar avatarUrl={avatarUrl} size={72} />
-      <div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            disabled={uploading}
-            onClick={() => inputRef.current?.click()}
-            className="rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-2 text-sm font-medium text-[var(--color-ink)] hover:border-[var(--color-accent)] disabled:opacity-60 transition-colors"
-          >
-            {uploading ? "Uploading…" : avatarUrl ? "Change photo" : "Upload photo"}
-          </button>
-          {avatarUrl && (
-            <button
-              type="button"
-              disabled={uploading}
-              onClick={handleRemove}
-              className="text-sm font-medium text-[var(--color-danger)] hover:underline disabled:opacity-60"
-            >
-              Remove
-            </button>
+    <div className="flex w-[84px] flex-shrink-0 flex-col items-center">
+      <div className="relative">
+        <span className="block rounded-full bg-[var(--color-panel)] p-[3px] shadow-[0_8px_20px_-8px_rgba(15,23,42,0.35)] ring-1 ring-[var(--color-line)]">
+          <Avatar avatarUrl={avatarUrl} size={68} />
+        </span>
+        <button
+          type="button"
+          disabled={uploading}
+          onClick={() => inputRef.current?.click()}
+          aria-label={avatarUrl ? "Change photo" : "Upload a photo"}
+          title={avatarUrl ? "Change photo (PNG, JPEG or WebP, cropped to a square)" : "Upload a photo (PNG, JPEG or WebP, cropped to a square)"}
+          className="absolute -bottom-0.5 -right-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-md ring-2 ring-[var(--color-panel)] transition-colors hover:bg-[var(--color-primary-hover,#4338ca)] disabled:opacity-60"
+        >
+          {uploading ? (
+            <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 animate-spin" aria-hidden>
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.3" strokeWidth="3" />
+              <path d="M21 12a9 9 0 00-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+              <path d="M3.5 7A1.5 1.5 0 015 5.5h1.8l1.2-1.8h4l1.2 1.8H15A1.5 1.5 0 0116.5 7v7a1.5 1.5 0 01-1.5 1.5H5A1.5 1.5 0 013.5 14V7z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+              <circle cx="10" cy="10.3" r="2.6" stroke="currentColor" strokeWidth="1.6" />
+            </svg>
           )}
-        </div>
-        <p className="mt-1.5 text-xs text-[var(--color-muted)]">PNG, JPEG or WebP. Cropped to a square.</p>
-        {error && (
-          <div className="mt-2">
-            <Alert>{error}</Alert>
-          </div>
-        )}
+        </button>
       </div>
+      {avatarUrl ? (
+        <button type="button" disabled={uploading} onClick={handleRemove} className="mt-2 text-[11.5px] font-medium text-[var(--color-muted)] hover:text-[var(--color-danger)] disabled:opacity-60">
+          Remove photo
+        </button>
+      ) : (
+        <button type="button" disabled={uploading} onClick={() => inputRef.current?.click()} className="mt-2 text-[11.5px] font-semibold text-[var(--color-primary)] hover:underline disabled:opacity-60">
+          Add photo
+        </button>
+      )}
+      {error && <p className="mt-1 w-[180px] text-center text-[11px] leading-snug text-[var(--color-danger)]">{error}</p>}
       <input
         ref={inputRef}
         type="file"

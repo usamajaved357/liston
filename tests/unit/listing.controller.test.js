@@ -52,3 +52,15 @@ test('a blank option name a supplier left can still be renamed or removed', asyn
   assert.strictEqual(removed.status, 200);
   assert.strictEqual(update.mock.calls.length, 2);
 });
+
+test("a draft's package saves in kg and cm, clears with null, and a zero weight is refused by name", async () => {
+  const update = mock.method(listingService, 'updateDraft', async () => ({ listing: { id: 'listing-1' }, imageCheck: null }));
+  assert.strictEqual((await save({ package: { weightKg: 0.45, lengthCm: 18, widthCm: 8, heightCm: 6 } })).status, 200);
+  assert.strictEqual((await save({ package: { weightKg: 0.2, lengthCm: null, widthCm: null, heightCm: null } })).status, 200);
+  assert.strictEqual((await save({ package: null })).status, 200);
+  assert.deepStrictEqual(update.mock.calls[0].arguments[2].package, { weightKg: 0.45, lengthCm: 18, widthCm: 8, heightCm: 6 });
+  const refused = await save({ package: { weightKg: 0 } });
+  assert.strictEqual(refused.status, 400);
+  assert.strictEqual(refused.body.field, 'package.weightKg');
+  assert.strictEqual(refused.body.error, 'Enter the package weight in kg, above 0.');
+});

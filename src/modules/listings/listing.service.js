@@ -20,6 +20,8 @@ const analyticsService = require('../analytics/analytics.service');
 const listingSort = require('./listing-sort');
 const { alignVariantPhotos } = require('./variant-photos');
 const imagePipeline = require('../ai-generation/image-pipeline');
+const aliexpressSource = require('../sourcing/aliexpress');
+const huntingRepository = require('../hunting/hunting.repository');
 
 class ListingError extends Error {
   constructor(message, statusCode = 400) {
@@ -39,8 +41,14 @@ class ListingError extends Error {
 // if the URL shape ever differs (AliExpress item URLs aren't guaranteed
 // stable across their own site redesigns).
 function baseSkuFromSourceUrl(sourceUrl) {
-  const match = sourceUrl.match(/\/item\/(\d+)\.html/);
-  return match ? `AE${match[1]}` : `SRC${Date.now()}`;
+  // Any AliExpress link shape (/item/123.html, /item/123, slugged): the
+  // number in the label lets Liston recognise the product later (hunting's
+  // duplicate warning reads it).
+  try {
+    return `AE${aliexpressSource.productIdFromUrl(sourceUrl)}`;
+  } catch {
+    return `SRC${Date.now()}`;
+  }
 }
 
 function shortRandomSuffix() {
@@ -188,7 +196,9 @@ function prunePreviews() {
 
 // STEP ONE: read both listings, cost nothing, return what the seller needs to
 // choose from — the supplier's variation axes with their options and photos.
-async function previewDraftSources(connectionId, userId, { competitorUrl, sourceUrl }) {
+// `withSource` (for drafting a hunted product) also hands back the supplier
+// read as `readSource`, so the hunt can say what its prices did since.
+async function previewDraftSources(connectionId, userId, { competitorUrl, sourceUrl }, { withSource = false } = {}) {
   prunePreviews();
   const connection = await connectionService.getConnectionSummary(connectionId, userId);
   if (connection.platform_key !== 'ebay') {
@@ -246,6 +256,7 @@ async function previewDraftSources(connectionId, userId, { competitorUrl, source
       warnings: plan.warnings,
       totalCombinations: (source.variants || []).length,
     },
+    ...(withSource ? { readSource: source } : {}),
   };
 }
 
@@ -274,8 +285,14 @@ function keptPhotos(source, imageUrls) {
 async function generateEbayDraftFromUrlsNow(
   connectionId,
   userId,
-  { competitorUrl, sourceUrl, previewId, variantSelection, imageUrls }
+  { competitorUrl, sourceUrl, previewId, variantSelection, imageUrls, huntId, actorUserId }
 ) {
+  // A hunted product is drafted only once it's approved, on its own account.
+  if (huntId) {
+    const hunt = await huntingRepository.findForOwner(huntId, userId);
+    if (!hunt || String(hunt.connection_id) !== String(connectionId)) throw new ListingError('That hunted product was not found on this account.', 404);
+    if (!['approved', 'drafted', 'listed'].includes(hunt.stage)) throw new ListingError('That hunted product has not been approved yet.', 400);
+  }
   // STEP TWO picks up the listings read in step one. A preview belongs to the
   // user and connection that made it; anything else is treated as expired.
   let preRead = null;
@@ -341,15 +358,20 @@ async function generateEbayDraftFromUrlsNow(
   // Drafting the same supplier product twice must not hand both drafts the
   // same label; eBay itself is consulted at publish (see publishNow).
   const sku = await uniqueSku(connectionId, `Liston-${skuBase.replace(/^AE/, '')}`);
-  const finalDraftInput = { ...draftInput, skuBase, sku, ...(storeCategoryNames.length ? { storeCategoryNames } : {}) };
+  // The supplier's parcel (weight, box size) goes with it: eBay needs the
+  // weight when the account's postage policy works postage out from it.
+  const finalDraftInput = { ...draftInput, skuBase, sku, ...(storeCategoryNames.length ? { storeCategoryNames } : {}), ...(source?.package ? { package: source.package } : {}) };
 
-  return createEbayDraft(connectionId, userId, finalDraftInput, {
-    sourceData: { competitor, source },
+  const listing = await createEbayDraft(connectionId, userId, finalDraftInput, {
+    sourceData: { competitor, source, ...(huntId ? { huntId } : {}) },
     // What the automated steps couldn't do (dropped aspects, variants with no
     // photo of their own). Persisted so the review page can show it rather
     // than the seller finding out from a live listing.
     warnings,
   });
+  // The hunt follows its draft (and, once published, the eBay listing).
+  if (huntId) await huntingRepository.linkDraft(huntId, listing.id, actorUserId || null);
+  return listing;
 }
 
 async function suggestStoreCategoriesFor(connectionId, userId, draft) {
@@ -694,6 +716,7 @@ async function updateDraft(id, userId, patch) {
 
   if (patch.price !== undefined) draft.price = patch.price;
   if (patch.quantity !== undefined) draft.quantity = patch.quantity;
+  if (patch.package !== undefined) draft.package = patch.package;
   if (patch.listingPolicies !== undefined) {
     // Only IDs the account really has — a typo'd or stale ID would fail at
     // publish with an opaque eBay error instead of here.
@@ -1536,7 +1559,11 @@ async function finishRelist(listing, draft, own, revised) {
   if (own) {
     const { liveItemId, ...edited } = draft;
     await listingRepository.updateGeneratedData(own.id, { ...(own.generated_data || {}), ...edited }).catch(() => {});
-    if (newItemId !== String(listing.edit_of_item_id)) await listingRepository.setExternalProductId(own.id, newItemId).catch(() => {});
+    if (newItemId !== String(listing.edit_of_item_id)) {
+      await listingRepository.setExternalProductId(own.id, newItemId).catch(() => {});
+      // A hunted product's sales follow it to its new item number.
+      await huntingRepository.addItemForListing(own.id, newItemId).catch(() => {});
+    }
   }
   await listingRepository.deleteById(listing.id);
   logger.info('Ended listing relisted', { connectionId: listing.connection_id, from: listing.edit_of_item_id, to: newItemId });
@@ -1719,6 +1746,16 @@ async function publishNow(listing, id, userId) {
   const alreadyBuilt = Boolean(listing.platform_offer_id || listing.platform_group_key);
   const photos = alreadyBuilt ? { draft, warnings: [] } : await readyPhotosForPublish(listing, draft, userId);
   draft = photos.draft;
+  // A draft made before Liston kept the supplier's parcel gets it now (one
+  // AliExpress read), so a postage policy that works postage out from the
+  // weight doesn't refuse it. Saved, so it's read once.
+  if (!alreadyBuilt && !(Number(draft.package?.weightKg) > 0)) {
+    const pkg = await supplierPackage(listing, marketplaceId);
+    if (pkg) {
+      draft = { ...draft, package: pkg };
+      await listingRepository.updateGeneratedData(id, draft);
+    }
+  }
   // The item specifics eBay will actually accept: no variation attribute
   // repeated in the shared set, identifiers the product lacks marked "Does
   // Not Apply", and anything still required but empty named here rather
@@ -1865,6 +1902,7 @@ async function publishNow(listing, id, userId) {
 
     resyncListings(listing.connection_id, userId);
     const row = await listingRepository.updateStatus(id, 'published', { externalProductId: result.externalProductId });
+    await huntingRepository.addItemForListing(id, result.externalProductId).catch((err) => logger.warn('Hunted product not marked listed', { listingId: id, error: err.message }));
     const warnings = [...photos.warnings, ...skuWarnings, ...readied.warnings, ...tidied.warnings];
     return warnings.length ? { ...row, warnings } : row;
   } catch (err) {
@@ -1906,6 +1944,12 @@ async function publishNow(listing, id, userId) {
         options: (readyDraft.variesBy?.specifications || []).map((sp) => `${sp.name}: ${sp.values.join(' | ')}`),
       });
       err.message = explainPolicyBlock(err, readyDraft, { cleared, freshSku });
+      err.statusCode = 400;
+    }
+    // eBay wants the parcel's weight (the postage policy works postage out
+    // from it): said in the editor's terms, with where to put it.
+    if (isPackageWeightRefused(err)) {
+      err.message = explainPackageWeight(readyDraft.package);
       err.statusCode = 400;
     }
     // An option value eBay refused even though its schema called the axis
@@ -2035,6 +2079,28 @@ function dedupeVariationGroup(draft) {
 function isPolicyBlock(err) {
   const text = `${err.message || ''} ${JSON.stringify(err.details || '')}`;
   return /Hazardous Materials|PI_HAZ|improper words|violation of eBay policy/i.test(text);
+}
+
+// eBay 25020-style "…invalid shipping package details. The package weight
+// is not valid or is missing." — refused for want of the parcel's weight.
+function isPackageWeightRefused(err) {
+  const text = `${err?.message || ''} ${JSON.stringify(err?.details || '')}`;
+  return /package weight is not valid or is missing|invalid shipping package details/i.test(text);
+}
+
+function explainPackageWeight(pkg) {
+  const kg = Number(pkg?.weightKg);
+  return kg > 0
+    ? `eBay didn't accept the package weight (${kg} kg). Check the weight under Package in the draft, then publish again.`
+    : "eBay needs this listing's package weight: its postage policy works the postage out from the weight. Enter the weight under Package in the draft, then publish again.";
+}
+
+// The supplier's parcel for a draft that has none: AliExpress products only.
+async function supplierPackage(listing, marketplaceId) {
+  const url = listing.source_data?.source?.sourceUrl;
+  if (!url || !/aliexpress\./i.test(url)) return null;
+  const market = marketplaces.byId(marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
+  return aliexpressSource.fetchPackage(url, { shipTo: market.country, currency: market.currency });
 }
 
 // eBay's "A mixture of Self Hosted and EPS pictures are not allowed".

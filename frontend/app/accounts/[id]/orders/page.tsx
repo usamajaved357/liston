@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter, SupplierFilter } from "@/lib/api";
 import { readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
+import { scrollPageToTop } from "@/lib/pageScroll";
 import { formatMoney, formatShortDate, formatTime, internationalPhone } from "@/lib/format";
 import { useAccountTimeZone } from "@/lib/timezone";
 import { AccountShell } from "@/components/AccountShell";
@@ -281,6 +282,89 @@ function OrderCard({ order, country, countryName, href }: { order: Order; countr
   );
 }
 
+// An order on a phone, where the table's six columns don't fit: status and
+// total on top, the order number and date, each item, then who it goes to.
+function OrderMobileCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
+  const router = useRouter();
+  const timeZone = useAccountTimeZone();
+  const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
+  const sourcing = sourcingSummary(order);
+  const quantity = order.lineItems.reduce((n, li) => n + (li.quantityPurchased || 0), 0);
+  const a = order.shippingAddress;
+  const name = a?.name || order.buyerName || order.buyerUserId || "Unknown buyer";
+  const domestic = a?.country && countryName && a.country.toLowerCase() === countryName.toLowerCase();
+  const place = a ? [a.city, a.postalCode, domestic ? "" : a.country].filter(Boolean).join(" · ") : "";
+  const phone = a?.phone ? internationalPhone(a.phone, country) : null;
+  return (
+    <div
+      className="cursor-pointer border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 active:bg-[var(--color-paper)]/60"
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("a, button")) return;
+        router.push(href);
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className={`text-[13px] font-semibold leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
+          <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">
+            <Link href={href} className="font-mono tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2">
+              {order.orderId}
+            </Link>
+            {" · "}
+            {formatShortDate(order.createdAt, timeZone)}, {formatTime(order.createdAt, timeZone)}
+          </p>
+        </div>
+        <div className="flex-shrink-0 text-right">
+          <p className="text-[14px] font-semibold tabular-nums text-[var(--color-ink)]">{formatMoney(order.total)}</p>
+          <p className="text-[11px] text-[var(--color-muted)]">Qty {quantity}</p>
+        </div>
+      </div>
+      <div className="mt-2.5 space-y-2">
+        {order.lineItems.map((li, i) => (
+          <div key={`${li.itemId}-${i}`} className="flex items-start gap-3">
+            {li.imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={li.imageUrl} alt="" className="h-12 w-12 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-white object-cover" />
+            ) : (
+              <div className="h-12 w-12 flex-shrink-0 rounded-lg border border-[var(--color-line)] bg-[var(--color-paper)]" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-2 text-[12.5px] font-medium leading-snug text-[var(--color-ink)]">{cleanLineItemTitle(li.title)}</p>
+              <p className="mt-0.5 flex flex-wrap gap-x-2 text-[11.5px] text-[var(--color-muted)]">
+                {order.lineItems.length > 1 && <span>× {li.quantityPurchased}</span>}
+                {li.variation.map((v) => (
+                  <span key={v.name}>
+                    {v.name}: {v.value}
+                  </span>
+                ))}
+                {li.trackingNumber && <span>{li.trackingNumber}</span>}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2.5 flex items-center justify-between gap-3 text-[12px]">
+        <p className="min-w-0 truncate text-[var(--color-muted)]">
+          <span className="font-medium text-[var(--color-ink)]">{name}</span>
+          {place && ` · ${place}`}
+        </p>
+        {sourcing ? (
+          <span className={`flex-shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourcing.className}`}>
+            {sourcing.text}
+            {sourcing.partial ? " (some)" : ""}
+          </span>
+        ) : (
+          phone && (
+            <a href={`tel:${phone.replace(/\s+/g, "")}`} className="flex-shrink-0 text-[var(--color-muted)] underline decoration-[var(--color-line-strong)] underline-offset-2">
+              {phone}
+            </a>
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AccountOrdersPage() {
   return (
     <Suspense fallback={null}>
@@ -464,7 +548,7 @@ function AccountOrdersContent() {
               </button>
             ))}
           </div>
-          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+          <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto sm:flex-wrap sm:justify-end">
             {(archivedCount > 0 || archived) && (
               <button
                 type="button"
@@ -493,7 +577,7 @@ function AccountOrdersContent() {
                 { label: "Sort", value: sort, options: (Object.keys(SORT_LABELS) as OrderSort[]).map((key) => ({ key, label: SORT_LABELS[key] })), onChange: (k) => changeSort(k as OrderSort) },
               ]}
             />
-            <form onSubmit={handleSearchSubmit} className="relative w-56 min-w-[160px] flex-shrink">
+            <form onSubmit={handleSearchSubmit} className="relative min-w-0 flex-1 sm:w-56 sm:min-w-[160px] sm:flex-none sm:flex-shrink">
               <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
                 <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
                 <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -520,7 +604,7 @@ function AccountOrdersContent() {
             sizes={[25, 50, 100, 200]}
             onPage={(p) => {
               setPage(p);
-              document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
+              scrollPageToTop();
             }}
             onPerPage={(next) => {
               setPerPage(next);
@@ -571,7 +655,8 @@ function AccountOrdersContent() {
         )}
 
         {!error && !loading && orders.length > 0 && (
-          <div className="overflow-x-auto">
+          <>
+          <div className="hidden overflow-x-auto md:block">
             <div className="min-w-[980px]">
               <OrderTableHeader />
               {orders.map((order) => (
@@ -579,6 +664,12 @@ function AccountOrdersContent() {
               ))}
             </div>
           </div>
+          <div className="md:hidden">
+            {orders.map((order) => (
+              <OrderMobileCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} />
+            ))}
+          </div>
+          </>
         )}
 
       </div>

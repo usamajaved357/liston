@@ -123,7 +123,7 @@ type Tab = "policies" | "pricing" | "template";
 
 function Row({ title, hint, children, last }: { title: string; hint?: string; children: React.ReactNode; last?: boolean }) {
   return (
-    <div className={`grid gap-3 px-6 py-5 md:grid-cols-[240px_minmax(0,1fr)] ${last ? "" : "border-b border-[var(--color-line)]"}`}>
+    <div className={`grid grid-cols-1 gap-3 px-6 py-5 md:grid-cols-[240px_minmax(0,1fr)] ${last ? "" : "border-b border-[var(--color-line)]"}`}>
       <div>
         <p className="text-sm font-medium text-[var(--color-ink)]">{title}</p>
         {hint && <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">{hint}</p>}
@@ -138,7 +138,7 @@ function Row({ title, hint, children, last }: { title: string; hint?: string; ch
 function FontPickerDialog({ value, onPick, onClose }: { value: string; onPick: (id: string) => void; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 sm:p-6 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-bold text-[var(--color-ink)]">Choose a font</h2>
@@ -148,7 +148,7 @@ function FontPickerDialog({ value, onPick, onClose }: { value: string; onPick: (
             Close
           </button>
         </div>
-        <div className="mt-4 grid max-h-[60vh] gap-2 overflow-y-auto sm:grid-cols-2">
+        <div className="mt-4 grid grid-cols-1 max-h-[60vh] gap-2 overflow-y-auto sm:grid-cols-2">
           {TEMPLATE_FONTS.map((f) => {
             const active = f.id === value;
             return (
@@ -275,7 +275,7 @@ function Skeleton() {
   return (
     <div className="card max-w-3xl divide-y divide-[var(--color-line)]" aria-busy="true">
       {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="grid gap-3 px-6 py-5 md:grid-cols-[240px_minmax(0,1fr)]">
+        <div key={i} className="grid grid-cols-1 gap-3 px-6 py-5 md:grid-cols-[240px_minmax(0,1fr)]">
           <div className="space-y-2">
             <div className="h-3.5 w-32 animate-pulse rounded-full bg-[var(--color-line)]" />
             <div className="h-3 w-44 animate-pulse rounded-full bg-[var(--color-paper)]" />
@@ -570,7 +570,7 @@ export default function AccountSettingsPage() {
 
   if (loadingConnection) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <Skeleton />
       </main>
     );
@@ -727,7 +727,7 @@ export default function AccountSettingsPage() {
                       <p className="text-[12.5px] text-[var(--color-muted)]">
                         {policies?.registrationAddress ? "Prefilled from your eBay registration address. Check it, then create." : "Enter the address your orders ship from."}
                       </p>
-                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                         <input className="input input-sm sm:col-span-2" placeholder="Location name" value={locationForm.name} onChange={(e) => setLocationForm({ ...locationForm, name: e.target.value })} />
                         <input className="input input-sm sm:col-span-2" placeholder="Address line 1" value={locationForm.addressLine1} onChange={(e) => setLocationForm({ ...locationForm, addressLine1: e.target.value })} />
                         <input className="input input-sm sm:col-span-2" placeholder="Address line 2 (optional)" value={locationForm.addressLine2} onChange={(e) => setLocationForm({ ...locationForm, addressLine2: e.target.value })} />
@@ -764,13 +764,13 @@ export default function AccountSettingsPage() {
               <div className="card overflow-hidden">
                 <SectionHead title="Delivery and returns" blurb="What every listing tells buyers about dispatch, delivery and returns — shown as badges and a short section under the description." />
                 <Row title="Dispatch" hint="How fast, and from where.">
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <input className="input input-sm" placeholder="1 to 2 business days" value={template.dispatchTime} onChange={(e) => setT({ dispatchTime: e.target.value })} />
                     <input className="input input-sm" placeholder={connection.marketplace?.template?.warehouse || "From our UK warehouse"} value={template.dispatchNote} onChange={(e) => setT({ dispatchNote: e.target.value })} />
                   </div>
                 </Row>
                 <Row title="Delivery" hint="Carrier and typical delivery time.">
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <input className="input input-sm" placeholder={connection.marketplace?.template?.carrier || "Royal Mail / Evri"} value={template.carrier} onChange={(e) => setT({ carrier: e.target.value })} />
                     <input className="input input-sm" placeholder="2 to 4 business days" value={template.deliveryTime} onChange={(e) => setT({ deliveryTime: e.target.value })} />
                   </div>
@@ -795,14 +795,15 @@ export default function AccountSettingsPage() {
                 <Unit value={pricing.targetRoiPercent} unit="%" onChange={(v) => setP({ targetRoiPercent: v })} />
               </Row>
               <Row title="eBay fees" hint="Promoted Listings rate, final value fee, and the flat per-order charge.">
-                <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-                  <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
+                {/* A phone: the three fees one under another, their boxes lined up. */}
+                <div className="grid grid-cols-[5.5rem_auto] items-center justify-start gap-x-2 gap-y-3 sm:flex sm:flex-wrap sm:gap-x-5">
+                  <label className="contents items-center gap-2 text-[12.5px] text-[var(--color-muted)] sm:flex">
                     Ads <Unit value={pricing.adsFeePercent} unit="%" onChange={(v) => setP({ adsFeePercent: v })} width="w-24" />
                   </label>
-                  <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
+                  <label className="contents items-center gap-2 text-[12.5px] text-[var(--color-muted)] sm:flex">
                     Final value <Unit value={pricing.processingFeePercent} unit="%" onChange={(v) => setP({ processingFeePercent: v })} width="w-24" />
                   </label>
-                  <label className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
+                  <label className="contents items-center gap-2 text-[12.5px] text-[var(--color-muted)] sm:flex">
                     Per order <Unit value={pricing.fixedFeePerOrder} unit={pricing.currency} step="0.01" onChange={(v) => setP({ fixedFeePerOrder: v })} />
                   </label>
                 </div>
@@ -818,7 +819,7 @@ export default function AccountSettingsPage() {
               </Row>
               <div className="border-t border-[var(--color-line)] px-6 py-5">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">What this prices at</p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                   {[1, 5, 15].map((cost) => {
                     const preview = previewPrice(cost, pricing);
                     return (
@@ -843,14 +844,14 @@ export default function AccountSettingsPage() {
           )}
 
           {tab === "template" && (
-            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">
             <div className="space-y-6">
               <div className="card overflow-hidden">
                 <SectionHead
                   title="Layout"
                   blurb="How every description this account publishes is laid out. The preview updates as you pick; nothing changes on eBay until a listing is published or updated."
                 />
-                <div className="grid gap-3 px-6 py-5 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-3 px-6 py-5 sm:grid-cols-2 lg:grid-cols-3">
                   {LAYOUT_OPTIONS.map((l) => {
                     const active = (template.layout || "classic") === l.id;
                     return (
@@ -893,7 +894,7 @@ export default function AccountSettingsPage() {
                   }
                 />
                 <Row title="Store" hint="Name and the line under it.">
-                  <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <input className="input input-sm" placeholder="Store name" value={template.storeName} onChange={(e) => setT({ storeName: e.target.value })} />
                     <input className="input input-sm" placeholder="Tagline" value={template.tagline} onChange={(e) => setT({ tagline: e.target.value })} />
                   </div>
@@ -938,7 +939,7 @@ export default function AccountSettingsPage() {
                       {paletteState === "loading" ? (
                         <div className="h-12 animate-pulse rounded-xl bg-[var(--color-paper)]" />
                       ) : logoPalettes.length ? (
-                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                           {logoPalettes.map((p) => (
                             <PaletteRow key={p.name} name={p.name} accent={p.accentColor} dark={p.darkColor} active={activePalette(p)} onPick={() => setT({ accentColor: p.accentColor, darkColor: p.darkColor })} />
                           ))}
@@ -949,7 +950,7 @@ export default function AccountSettingsPage() {
                     </div>
                     <div>
                       <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Classic pairs</p>
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                         {PRESET_PALETTES.map((p) => (
                           <PaletteRow key={p.name} name={p.name} accent={p.accentColor} dark={p.darkColor} active={activePalette(p)} onPick={() => setT({ accentColor: p.accentColor, darkColor: p.darkColor })} />
                         ))}
@@ -1066,7 +1067,7 @@ export default function AccountSettingsPage() {
                         ) : fresh.length === 0 && chosen.length === 0 ? (
                           <p className="mt-2 text-[13px] text-[var(--color-muted)]">{ebayReviews.note || "No written positive feedback found on this account yet."}</p>
                         ) : (
-                          <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
+                          <div className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                             {fresh.map((review) => card(review, false))}
                             {chosen.map((review) => card(review, true))}
                           </div>
@@ -1126,7 +1127,7 @@ export default function AccountSettingsPage() {
 
       {editingCode && codeDraft !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => setEditingCode(false)}>
-          <div role="dialog" aria-modal="true" className="flex h-[85vh] w-full max-w-5xl flex-col rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" className="flex h-[85dvh] w-full max-w-5xl flex-col rounded-2xl bg-[var(--color-panel)] p-4 sm:p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-bold text-[var(--color-ink)]">Template code</h2>

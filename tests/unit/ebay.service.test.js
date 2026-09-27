@@ -939,3 +939,19 @@ test('listOrdersDetailed says what needs doing: paid orders past dispatch-by, an
   });
   assert.deepStrictEqual(result.attention, { overdue: 1, notOrdered: 1 });
 });
+
+test('buildInventoryItem carries the parcel eBay needs for calculated postage: kg and cm, or pounds and inches on eBay US', () => {
+  const { buildInventoryItem } = require('../../src/modules/ebay/ebay.service');
+  const base = { title: 'T', description: 'd', imageUrls: [], aspects: {}, condition: 'NEW', quantity: 1 };
+  const pkg = { weightKg: 0.45, lengthCm: 18, widthCm: 8, heightCm: 6 };
+  assert.deepStrictEqual(buildInventoryItem({ ...base, package: pkg, marketplaceId: 'EBAY_GB' }).packageWeightAndSize, {
+    weight: { value: 0.45, unit: 'KILOGRAM' },
+    dimensions: { length: 18, width: 8, height: 6, unit: 'CENTIMETER' },
+  });
+  assert.deepStrictEqual(buildInventoryItem({ ...base, package: pkg, marketplaceId: 'EBAY_US' }).packageWeightAndSize, {
+    weight: { value: 0.99, unit: 'POUND' },
+    dimensions: { length: 7.09, width: 3.15, height: 2.36, unit: 'INCH' },
+  });
+  assert.deepStrictEqual(buildInventoryItem({ ...base, package: { weightKg: 0.2 }, marketplaceId: 'EBAY_AU' }).packageWeightAndSize, { weight: { value: 0.2, unit: 'KILOGRAM' } }, 'the weight alone when the box size is unknown');
+  assert.strictEqual('packageWeightAndSize' in buildInventoryItem(base), false, 'nothing without a weight');
+});

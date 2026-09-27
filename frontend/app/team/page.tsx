@@ -25,6 +25,8 @@ const TODAY_WORDS: [TeamMetricKey, string, string][] = [
   ["ended", "ended", "ended"],
   ["drafted", "draft", "drafts"],
   ["draft_work", "draft worked on", "drafts worked on"],
+  ["hunted", "product hunted", "products hunted"],
+  ["hunts_reviewed", "hunt reviewed", "hunts reviewed"],
 ];
 function todayLine(member: TeamMember): string | null {
   const t = member.today;
@@ -102,7 +104,7 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (email: string, password: s
         </button>
       </div>
 
-      <div className="mt-5 grid gap-4 md:grid-cols-3">
+      <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
         <div>
           <label className="label" htmlFor="tm-name">Name</label>
           <input id="tm-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Optional" autoComplete="off" className="input mt-1" />
@@ -187,7 +189,7 @@ export default function TeamPage() {
   // Cold start with nothing cached: a skeleton, never a blank page.
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <PageSkeleton />
       </main>
     );
@@ -266,7 +268,7 @@ export default function TeamPage() {
                   </div>
                 )
               ) : (
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {active.map((member) => (
                     <MemberCard key={member.id} member={member} connections={connections} knownFeatures={knownFeatures} />
                   ))}
@@ -284,7 +286,7 @@ export default function TeamPage() {
                   {showFormer && (
                     <>
                       <p className="mt-1 text-[12px] text-[var(--color-muted)]">They can&apos;t log in. Their work stays on record, and they can be restored from their page.</p>
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                         {former.map((member) => (
                           <MemberCard key={member.id} member={member} connections={connections} knownFeatures={knownFeatures} />
                         ))}

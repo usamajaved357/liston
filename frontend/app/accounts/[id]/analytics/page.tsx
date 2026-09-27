@@ -6,6 +6,7 @@ import { api, ApiError, AccountAnalytics, AnalyticsRange } from "@/lib/api";
 import { cacheResponse, cachedResponse, readView, writeView } from "@/lib/viewState";
 import { slug } from "@/lib/csv";
 import { useConnection } from "@/lib/useConnection";
+import { pageScroller } from "@/lib/pageScroll";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
@@ -127,7 +128,7 @@ function AnalyticsPageInner() {
   const scrollRestored = useRef(false);
   useEffect(() => {
     if (!scrollReady) return;
-    const scroller = document.querySelector<HTMLElement>("[data-scroller]");
+    const scroller = pageScroller();
     if (!scroller) return;
     if (!scrollRestored.current) {
       scrollRestored.current = true;
@@ -214,10 +215,10 @@ function AnalyticsPageInner() {
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <div className="mx-auto max-w-6xl space-y-4">
           <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
-          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 xl:grid-cols-6">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="card h-24 animate-pulse" />
             ))}

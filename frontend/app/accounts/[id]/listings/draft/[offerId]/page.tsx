@@ -11,6 +11,7 @@ import {
   DraftCategoryInfo,
   DraftContent,
   DraftListing,
+  DraftPackage,
   DraftPatch,
   ImageCheck,
   ImageProposal,
@@ -47,6 +48,31 @@ const cardClass = "card p-4";
 const cardTitleClass = "text-[14px] font-bold text-[var(--color-ink)]";
 const smallButton = "btn btn-secondary btn-sm";
 const TITLE_MAX = 80;
+
+// The parcel as typed: kg and cm, kept as text while editing.
+type PackageFields = { weightKg: string; lengthCm: string; widthCm: string; heightCm: string };
+const PACKAGE_FIELDS: [keyof PackageFields, string][] = [
+  ["weightKg", "Weight (kg)"],
+  ["lengthCm", "Length (cm)"],
+  ["widthCm", "Width (cm)"],
+  ["heightCm", "Height (cm)"],
+];
+
+function packageFields(p?: DraftPackage | null): PackageFields {
+  const text = (n?: number | null) => (n != null && n > 0 ? String(n) : "");
+  return { weightKg: text(p?.weightKg), lengthCm: text(p?.lengthCm), widthCm: text(p?.widthCm), heightCm: text(p?.heightCm) };
+}
+
+// What the fields save as: nothing without a weight (a size alone isn't kept).
+function packageFromFields(f: PackageFields): DraftPackage | null {
+  const num = (v: string) => {
+    const n = parseFloat(v);
+    return n > 0 ? n : null;
+  };
+  const weightKg = num(f.weightKg);
+  if (!weightKg) return null;
+  return { weightKg, lengthCm: num(f.lengthCm), widthCm: num(f.widthCm), heightCm: num(f.heightCm) };
+}
 
 // Small inline icons for the compact action rows.
 const Icon = {
@@ -667,7 +693,7 @@ function ImagePickerDialog({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" className="w-full max-w-2xl rounded-2xl bg-[var(--color-panel)] p-5 shadow-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-[var(--color-ink)]">{title}</h2>
@@ -889,7 +915,7 @@ function VariationsTable({
               </p>
             </div>
           </div>
-          <div className="grid gap-4 bg-[var(--color-panel)] px-4 py-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 bg-[var(--color-panel)] px-4 py-4 md:grid-cols-3">
             <div>
               <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-muted)]">Switch category</p>
               {fixes === null ? (
@@ -993,7 +1019,7 @@ function VariationsTable({
       )}
 
       {/* Attribute values — rename in place, remove a whole colour or size at once */}
-      <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+      <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {specifications.map((spec) => (
           <div key={spec.name} className="rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]/70 px-3 py-2">
             <div className={`${labelClass} flex items-center justify-between`}>
@@ -1104,7 +1130,86 @@ function VariationsTable({
         ))}
       </div>
 
-      <div className="mt-2.5 overflow-x-auto rounded-xl border border-[var(--color-line)]">
+      {/* A phone: one card per variation, the same controls as the table's row. */}
+      <ul className="mt-2.5 divide-y divide-[var(--color-line)] rounded-xl border border-[var(--color-line)] md:hidden">
+        {variants.map((v, i) => {
+          const gone = isRowGone(v, i);
+          const rowRemovedDirectly = removedIndexes.has(i);
+          const image = imageOverrides[i] ?? v.imageUrls[0];
+          const roi = v.priceBreakdown ? repriceBreakdown(v.priceBreakdown, priceOverrides[i] ?? v.price.value) : undefined;
+          const name = axes.map((axis) => (v.aspects[axis]?.[0] !== undefined ? showValue(axis, v.aspects[axis][0]) : "—")).join(" · ");
+          return (
+            <li key={v.sku || i} className={`px-3 py-3 ${gone ? "bg-[var(--color-paper)]/60 text-[var(--color-muted)]" : ""}`}>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={disabled || gone}
+                  onClick={() => setPickerFor(i)}
+                  aria-label="Change this variation's photo"
+                  className="relative block h-11 w-11 flex-shrink-0 rounded-lg disabled:cursor-default"
+                >
+                  {image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={image} alt="" className={`h-11 w-11 rounded-lg border border-[var(--color-line)] bg-white object-contain ${gone ? "opacity-40" : ""}`} />
+                  ) : (
+                    <span className="flex h-11 w-11 items-center justify-center rounded-lg border border-dashed border-[var(--color-danger)] text-[10px] text-[var(--color-danger)]">none</span>
+                  )}
+                </button>
+                <p className={`min-w-0 flex-1 text-[14px] font-medium leading-snug ${gone ? "line-through" : "text-[var(--color-ink)]"}`}>{name}</p>
+                {!disabled &&
+                  (rowRemovedDirectly ? (
+                    <button type="button" onClick={() => onRestoreRow(i)} aria-label="Restore this variation" className="btn btn-secondary btn-icon flex-shrink-0 text-[var(--color-accent)]">
+                      {Icon.restore}
+                    </button>
+                  ) : gone ? null : (
+                    <button type="button" onClick={() => onRemoveRow(i)} aria-label="Remove this variation" className="btn btn-danger-ghost btn-icon flex-shrink-0">
+                      {Icon.trash}
+                    </button>
+                  ))}
+              </div>
+              <div className="mt-2.5 flex items-end gap-2">
+                <label className="min-w-0 flex-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Price ({currencySymbol(currency)})</span>
+                  <input type="number" step="0.01" min="0" value={priceOverrides[i] ?? v.price.value} disabled={disabled || gone} onChange={(e) => onPriceChange(i, e.target.value)} className="input input-sm mt-1" />
+                </label>
+                <label className="w-24 flex-shrink-0">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Qty</span>
+                  <input type="number" step="1" min="0" value={quantityOverrides[i] ?? String(v.quantity)} disabled={disabled || gone} onChange={(e) => onQuantityChange(i, e.target.value)} className="input input-sm mt-1" />
+                </label>
+                {roi && !gone && (
+                  <button
+                    type="button"
+                    onClick={() => setOpenBreakdown(openBreakdown?.index === i ? null : { index: i, right: 0 })}
+                    aria-expanded={openBreakdown?.index === i}
+                    className={`mb-0.5 inline-flex h-9 flex-shrink-0 items-center gap-1 rounded-full border px-3 text-[12.5px] font-semibold ${
+                      roi.roiPercent >= roi.targetRoiPercent ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-[#fecdd3] bg-[var(--color-danger-soft)] text-[var(--color-danger)]"
+                    }`}
+                  >
+                    {roi.roiPercent.toFixed(0)}% ROI
+                  </button>
+                )}
+              </div>
+              {roi && !gone && openBreakdown?.index === i && (
+                <div className="mt-2.5 rounded-xl border border-[var(--color-line)] p-2">
+                  <PriceBreakdownPanel breakdown={roi} />
+                </div>
+              )}
+              {!disabled && splitOffered && onSplit && !gone && (
+                <button
+                  type="button"
+                  onClick={() => onSplit(i)}
+                  disabled={splitting !== null}
+                  className={`btn btn-sm mt-2.5 w-full ${variationsSupported === false ? "btn-accent" : "btn-secondary"}`}
+                >
+                  {splitting === i ? "Creating…" : "List separately"}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-2.5 hidden overflow-x-auto rounded-xl border border-[var(--color-line)] md:block">
         <table className="w-full min-w-[640px] border-collapse text-[12.5px]">
           <thead className="bg-[var(--color-paper)] text-left">
             <tr className="text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-muted)]">
@@ -1514,7 +1619,7 @@ function PublishedDialog({ listing, onClose }: { listing: DraftListing; onClose:
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[rgba(15,23,42,0.45)] p-4" role="dialog" aria-modal="true">
-      <div className="card w-full max-w-md p-6" style={{ boxShadow: "var(--shadow-pop)" }}>
+      <div className="card w-full max-w-md p-5 sm:p-6 max-h-[calc(100dvh-2rem)] overflow-y-auto" style={{ boxShadow: "var(--shadow-pop)" }}>
         <div className="flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
             <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
@@ -1642,6 +1747,7 @@ export default function DraftEditorPage() {
   const [secondaryCategoryId, setSecondaryCategoryId] = useState<string | null>(null);
   const [secondaryCategoryPath, setSecondaryCategoryPath] = useState<string[]>([]);
   const [storeCategoryNames, setStoreCategoryNames] = useState<string[]>([]);
+  const [pkg, setPkg] = useState<PackageFields>(packageFields(null));
   const [categoryInfo, setCategoryInfo] = useState<DraftCategoryInfo | null>(null);
   // Words eBay's hazardous-materials filter refuses (from the server), so
   // the seller sees a "lead clip" problem while typing, not at publish.
@@ -1740,6 +1846,7 @@ export default function DraftEditorPage() {
     setSku(c.sku || "");
     setSecondaryCategoryId(c.secondaryCategoryId || null);
     setStoreCategoryNames(c.storeCategoryNames || []);
+    setPkg(packageFields(c.package));
   }, []);
 
   // The branded eBay render of the description. Rebuilt whenever the stored
@@ -1930,6 +2037,8 @@ export default function DraftEditorPage() {
     if (content && sku.trim() && sku.trim() !== (content.sku || "")) patch.sku = sku.trim();
     if (content && (secondaryCategoryId || null) !== (content.secondaryCategoryId || null)) patch.secondaryCategoryId = secondaryCategoryId;
     if (content && JSON.stringify(storeCategoryNames) !== JSON.stringify(content.storeCategoryNames || [])) patch.storeCategoryNames = storeCategoryNames;
+    const typedPackage = packageFromFields(pkg);
+    if (content && JSON.stringify(typedPackage) !== JSON.stringify(packageFromFields(packageFields(content.package)))) patch.package = typedPackage;
     return patch;
   }
   // Unsaved means the save would carry something. Judged on the patch
@@ -2556,7 +2665,7 @@ export default function DraftEditorPage() {
 
   if (!listing || !content) {
     return (
-      <main className="flex h-screen items-center justify-center px-6">
+      <main className="flex h-[100dvh] items-center justify-center px-6">
         <Alert>{error || "This draft doesn't exist, or isn't yours."}</Alert>
       </main>
     );
@@ -2568,7 +2677,7 @@ export default function DraftEditorPage() {
   const notes = content.warnings || [];
 
   return (
-    <main className="flex h-screen flex-col bg-[var(--color-paper)]">
+    <main className="flex h-[100dvh] flex-col bg-[var(--color-paper)]">
       <EditorHeader
         backHref={`/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`}
         backLabel={isLiveEdit ? "Back to listings" : "Back to drafts"}
@@ -2642,7 +2751,7 @@ export default function DraftEditorPage() {
                 )}
               </div>
               {!appliedNote.working && (appliedNote.rows.length > 0 || appliedNote.todo.length > 0) && (
-                <div className="grid gap-4 px-4 py-3 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 px-4 py-3 md:grid-cols-2">
                   {appliedNote.rows.length > 0 && (
                     <ul className="space-y-1.5">
                       {appliedNote.rows.map((row, i) => (
@@ -2744,7 +2853,7 @@ export default function DraftEditorPage() {
 
           {/* Photos and the AI box stay in view on the left while the details
               scroll on the right, so there is never a blank column. */}
-          <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
             <div className="space-y-4 lg:sticky lg:top-0 lg:max-h-[calc(100vh-7.5rem)] lg:self-start lg:overflow-y-auto lg:pb-1 lg:pr-0.5">
               <GalleryGrid
                 images={images}
@@ -2872,8 +2981,8 @@ export default function DraftEditorPage() {
                   )}
                 </div>
 
-                <div className={`mt-3 grid gap-3 ${single ? "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)]" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]"}`}>
-                  <div>
+                <div className={`mt-3 grid grid-cols-2 gap-3 ${single ? "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.8fr)]" : "sm:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)]"}`}>
+                  <div className="col-span-2 sm:col-span-1">
                     <label className={labelClass}>SKU (custom label)</label>
                     <div className="relative mt-1">
                       <input className={`${inputClass} font-mono text-[12.5px] ${editable ? "pr-10" : ""}`} value={sku} maxLength={50} placeholder="e.g. Liston-1005006" onChange={(e) => setSku(e.target.value)} disabled={!editable || busy} />
@@ -2895,7 +3004,7 @@ export default function DraftEditorPage() {
                       Kept unique across the account; a label already in use is replaced at publish.
                     </p>
                   </div>
-                  <div>
+                  <div className="col-span-2 sm:col-span-1">
                     <label className={labelClass}>Condition</label>
                     {editable ? (
                       <select className={`${inputClass} mt-1`} value={condition} onChange={(e) => setCondition(e.target.value)} disabled={busy}>
@@ -2935,7 +3044,7 @@ export default function DraftEditorPage() {
                 )}
 
                 {content.listingPolicies && (
-                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
                     {(
                       [
                         ["fulfillmentPolicyId", "Postage policy", policies?.fulfillmentPolicies || []],
@@ -2976,6 +3085,37 @@ export default function DraftEditorPage() {
                     ))}
                   </div>
                 )}
+
+                {/* The parcel: eBay needs the weight when the postage policy works postage out from it. */}
+                {content.listingPolicies && (
+                  <div className="mt-3">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                      {PACKAGE_FIELDS.map(([key, label]) => (
+                        <div key={key}>
+                          <label className={labelClass}>{label}</label>
+                          {editable ? (
+                            <input
+                              type="number"
+                              step={key === "weightKg" ? "0.001" : "0.1"}
+                              min="0"
+                              inputMode="decimal"
+                              className="input input-sm mt-1"
+                              value={pkg[key]}
+                              placeholder={key === "weightKg" ? "e.g. 0.25" : "—"}
+                              onChange={(e) => setPkg((p) => ({ ...p, [key]: e.target.value }))}
+                              disabled={busy}
+                            />
+                          ) : (
+                            <p className="mt-1 text-[13px] text-[var(--color-ink)]">{pkg[key] || "—"}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+                      The parcel as shipped, from the supplier when it gives one. eBay needs the weight when your postage policy works the postage out from it.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Item specifics */}
@@ -2993,7 +3133,7 @@ export default function DraftEditorPage() {
                 {specifics.length === 0 ? (
                   <p className="mt-2 text-[13px] text-[var(--color-muted)]">No item specifics yet.</p>
                 ) : (
-                  <div className="mt-2 grid gap-x-5 md:grid-cols-2">
+                  <div className="mt-2 grid grid-cols-1 gap-x-5 md:grid-cols-2">
                     {specifics.map((row, i) => {
                       const entry = schemaByName.get(row.name.trim().toLowerCase());
                       const unfilled = !row.value.trim();
@@ -3174,27 +3314,27 @@ export default function DraftEditorPage() {
       </div>
 
       {editable && (
-        <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)]">
-          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-6">
+        <footer className="z-40 flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] pb-[env(safe-area-inset-bottom)]">
+          <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="btn btn-danger-ghost">
                 {Icon.trash}
                 <span>{isRelist ? "Cancel" : isLiveEdit ? "Discard changes" : "Delete draft"}</span>
               </button>
               {isLiveEdit && !isRelist && (
-                <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now">
+                <button type="button" onClick={() => setConfirmEnd(true)} disabled={busy || ending} className="btn btn-danger-ghost" title="Take this listing off eBay now" aria-label="End listing">
                   <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                     <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
                     <path d="M8 12h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                   </svg>
-                  <span>{ending ? "Ending…" : "End listing"}</span>
+                  <span className="max-sm:hidden">{ending ? "Ending…" : "End listing"}</span>
                 </button>
               )}
             </div>
             <div className="flex items-center gap-3">
               {isRelist ? (
                 <>
-                  <span className="text-xs text-[var(--color-muted)]">{dirty ? "Relisted with your changes" : "Change anything first, or relist it as it was"}</span>
+                  <span className="text-xs text-[var(--color-muted)] max-sm:hidden">{dirty ? "Relisted with your changes" : "Change anything first, or relist it as it was"}</span>
                   <button
                     type="button"
                     onClick={() => setConfirmPublish(true)}
@@ -3207,7 +3347,7 @@ export default function DraftEditorPage() {
                 </>
               ) : isLiveEdit ? (
                 <>
-                  {dirty && <span className="text-xs text-[var(--color-muted)]">Changes go live on eBay when you publish</span>}
+                  {dirty && <span className="text-xs text-[var(--color-muted)] max-sm:hidden">Changes go live on eBay when you publish</span>}
                   <button
                     type="button"
                     onClick={() => setConfirmPublish(true)}

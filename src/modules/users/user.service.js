@@ -78,11 +78,23 @@ async function updateAvatar(userId, avatarDataUrl) {
   await userRepository.updateAvatar(userId, avatarDataUrl);
 }
 
+/**
+ * Someone's own name, as their team sees it (who approved a product, in
+ * notifications, histories and the Team pages). Owners and members alike;
+ * the owner can also set a member's, in Team.
+ */
+async function updateName(userId, name) {
+  const who = await userRepository.findRoleInfo(userId);
+  if (!who) throw new UserError('User not found', 404);
+  await userRepository.updateName(userId, name);
+}
+
 async function removeAvatar(userId) {
   await userRepository.updateAvatar(userId, null);
 }
 
 module.exports = {
+  updateName,
   getCurrentUser,
   deleteAccount,
   changeEmail,

@@ -5,7 +5,9 @@ const { query } = require('../../db/client');
 // migration — this list is only used to (a) seed sensible defaults when a
 // member is created and (b) decide whether a connection has "any" access at
 // all for a member. Add a new feature here once its routes are wired up.
-const KNOWN_FEATURES = ['orders', 'listings', 'analytics', 'inbox', 'campaigns'];
+// 'hunting' adds products for review; 'hunting_review' reviews them (and
+// includes hunting).
+const KNOWN_FEATURES = ['orders', 'listings', 'analytics', 'inbox', 'campaigns', 'hunting', 'hunting_review'];
 
 async function listMembers(ownerId) {
   const result = await query(

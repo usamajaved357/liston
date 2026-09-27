@@ -26,6 +26,14 @@ const KINDS = {
   'listing.relisted': 'Relisted',
   'listing.ended': 'Ended a listing',
   'listing.checked': 'Ran a deeper check',
+  'hunt.added': 'Hunted a product',
+  'hunt.approved': 'Approved a hunted product',
+  'hunt.rejected': 'Rejected a hunted product',
+  'hunt.sent_back': 'Sent a hunted product back',
+  'hunt.resubmitted': 'Resubmitted a hunted product',
+  'hunt.updated': 'Changed a hunted product',
+  'hunt.withdrawn': 'Withdrew a hunted product',
+  'hunt.removed': 'Removed a hunted product',
   'account.store_category_added': 'Added a Shop category',
   'account.source_account_saved': 'Saved a supplier account',
   'session.login': 'Logged in',
@@ -68,6 +76,8 @@ const METRICS = [
   { key: 'ended', label: 'Listings ended', kinds: ['listing.ended'], distinct: true },
   { key: 'drafted', label: 'Drafts created', kinds: ['listing.drafted'], distinct: false },
   { key: 'draft_work', label: 'Drafts worked on', kinds: ['listing.draft_edited'], distinct: true },
+  { key: 'hunted', label: 'Products hunted', kinds: ['hunt.added'], distinct: true },
+  { key: 'hunts_reviewed', label: 'Hunted products reviewed', kinds: ['hunt.approved', 'hunt.rejected', 'hunt.sent_back'], distinct: true },
 ];
 
 /**

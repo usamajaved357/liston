@@ -146,7 +146,7 @@ export function ResearchOverview({ result, checking, onRecheck, children }: { re
   return (
     <section className="card overflow-hidden">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3.5">
-        <div className="flex min-w-0 flex-1 items-center gap-4">
+        <div className="flex min-w-0 flex-1 basis-full items-center gap-4 sm:basis-auto">
           <HealthGauge status={pending ? null : status} />
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Listing health</p>
@@ -172,7 +172,7 @@ export function ResearchOverview({ result, checking, onRecheck, children }: { re
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-4">
+        <div className="flex shrink-0 items-center gap-4 max-sm:w-full max-sm:justify-between max-sm:border-t max-sm:border-[var(--color-line)] max-sm:pt-3">
           <span className="flex items-center gap-2 text-[12px] text-[var(--color-muted)]" title="Demand, how many listings sell, competition, price room and where rivals ship from. A takedown risk makes it Don't list whatever the score.">
             Market score
             <span className="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--color-paper)]">
@@ -190,7 +190,7 @@ export function ResearchOverview({ result, checking, onRecheck, children }: { re
       {open && (
         <div className="border-t border-[var(--color-line)] bg-[var(--color-paper)]/50 px-4 py-3.5">
           {advice?.summary && <p className="mb-3 max-w-4xl text-[13px] leading-relaxed text-[var(--color-ink)]">{advice.summary}</p>}
-          <ul className="grid gap-x-8 gap-y-2 md:grid-cols-2">
+          <ul className="grid grid-cols-1 gap-x-8 gap-y-2 md:grid-cols-2">
             {a.verdict.reasons.map((r) => (
               <li key={r.text} className="flex gap-2 text-[12.5px] leading-snug text-[var(--color-ink)]">
                 <span className={`mt-px shrink-0 ${INK[r.tone]}`}>
@@ -295,7 +295,7 @@ function PriceBody({ price, currency }: { price: ResearchPrice | null; currency:
   const maxCost = keep / (1 + price.targetRoiPercent / 100) - price.fees.shipping;
   const signal = price.confidence === "high" ? "Strong signal" : price.confidence === "medium" ? "Fair signal" : "Weak signal";
   return (
-    <div className="grid gap-5 md:grid-cols-[1fr_1.2fr]">
+    <div className="grid grid-cols-1 gap-5 md:grid-cols-[1fr_1.2fr]">
       <div>
         <p className="text-[13px] leading-relaxed text-[var(--color-ink)]">
           {price.basis === "sales" ? "Most sales happen at" : "Most listings sit at"} <b>{money(price.low, currency)}–{money(price.high, currency)}</b>
@@ -385,7 +385,7 @@ function TitleBody({ advice, keywords, checking }: { advice: ResearchAdvice | nu
       ) : (
         <p className="text-[12.5px] text-[var(--color-muted)]">A suggested title isn&apos;t available right now; the words below are what the selling titles use.</p>
       )}
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {advice && advice.keywords.length > 0 && (
           <div>
             <div className="flex items-center justify-between">
@@ -422,7 +422,7 @@ function RiskBody({ risks, checking }: { risks: ResearchRisk[]; checking: boolea
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div>
-      <ul className="grid gap-x-8 gap-y-3 md:grid-cols-2">
+      <ul className="grid grid-cols-1 gap-x-8 gap-y-3 md:grid-cols-2">
         {risks.map((r) => {
           const tone = RISK_TONE[r.level];
           const pending = r.level === "unknown" && checking && (r.key === "brand" || r.key === "safety");
@@ -466,7 +466,7 @@ function RiskBody({ risks, checking }: { risks: ResearchRisk[]; checking: boolea
 function MarketBody({ summary: s, currency }: { summary: ResearchSummary; currency: string }) {
   const max = Math.max(1, ...s.bands.map((b) => b.count));
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <div>
         <h3 className="text-[11.5px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Where prices sit</h3>
         {s.bands.length ? (

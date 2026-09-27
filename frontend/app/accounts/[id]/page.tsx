@@ -6,6 +6,8 @@ import Link from "next/link";
 import { AccountOverview, api, ApiError, EbaySite, OrderCounts, OrderRange, OrderStatusFilter } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric } from "@/components/overview/OverviewMoney";
+import { ListingTrendCard, RecentListingsCard } from "@/components/overview/OverviewListings";
+import { MemberWorkOverview } from "@/components/overview/MemberWorkOverview";
 import { useAmounts } from "@/lib/useAmounts";
 import { AccountShell } from "@/components/AccountShell";
 import { useAccountEvents } from "@/lib/useAccountEvents";
@@ -285,7 +287,7 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
           <p className="text-[13px] text-[var(--color-muted)]">
             Figures for <span className="font-medium text-[var(--color-ink)]">{phrase.replace(/^in /, "")}</span>
           </p>
-          <div role="radiogroup" aria-label="Dates" className="inline-flex flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+          <div role="radiogroup" aria-label="Dates" className="inline-flex max-w-full flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
             {RANGES.map((r) => (
               <button
                 key={r.key}
@@ -308,7 +310,18 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
           {dataError ? (
             <Alert>{dataError}</Alert>
           ) : metric === "listings" ? (
-            <ListingCards work={data?.listings ?? null} loading={!data} />
+            <>
+              <ListingCards work={data?.listings ?? null} loading={!data} />
+              {/* How listing work moved, and what went live. */}
+              {data && (
+                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <div className="min-w-0 lg:col-span-2">
+                    <ListingTrendCard points={data.listingTrend ?? null} caption={range === "today" ? "Last 7 days" : range === "this_month" ? "This month" : range === "last_month" ? "Last month" : `Last ${RANGES.find((r) => r.key === range)?.label ?? ""}`} />
+                  </div>
+                  <RecentListingsCard items={data.recentListings ?? []} showMarket={false} flagOf={() => ""} />
+                </div>
+              )}
+            </>
           ) : (
             <SalesCards summaries={data ? [data.money] : []} loading={!data} unavailable={data ? !data.financesAccess : false} hidden={amounts.hidden} />
           )}
@@ -331,8 +344,9 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
       </section>
 
       {/* The queue counts the dates chosen above; if those figures couldn't
-          be read, the last 90 days. What needs doing is always every open order. */}
-      {dataError ? (
+          be read, the last 90 days. What needs doing is always every open order.
+          The Listings tab is about listings, so it leaves the queue out. */}
+      {metric === "listings" ? null : dataError ? (
         <OrderQueue connectionId={connectionId} counts={queue.counts} attention={queue.attention} loading={!queue.counts && !queue.error} error={queue.error} />
       ) : (
         <OrderQueue
@@ -349,7 +363,8 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
 }
 
 // A team member granted Orders is doing fulfilment work — revenue isn't
-// theirs to see, so they get what needs doing and the queue, nothing else.
+// theirs to see, so under their own work they get what needs doing and the
+// queue, nothing else.
 function MemberDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
   const queue = useOrderQueue(connectionId, reloadKey, 0, onSynced);
   return <OrderQueue connectionId={connectionId} counts={queue.counts} attention={queue.attention} loading={!queue.counts && !queue.error} error={queue.error} />;
@@ -418,10 +433,10 @@ function OtherSitesNotice({ connectionId, label, onAdded }: { connectionId: stri
 
 function ShellSkeleton() {
   return (
-    <main className="min-h-screen bg-[var(--color-paper)] p-10">
+    <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="h-6 w-40 animate-pulse rounded-full bg-[var(--color-line)]" />
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="card h-28 animate-pulse" />
           ))}
@@ -481,13 +496,11 @@ export default function AccountOverviewPage() {
       {isOwner && connection.platform_key === "ebay" && <OtherSitesNotice connectionId={connection.id} label={connection.label} onAdded={reload} />}
       {isOwner ? (
         <OwnerDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
-      ) : connection.permissions?.orders ? (
-        <MemberDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />
       ) : (
-        <div className="card px-6 py-12 text-center">
-          <p className="text-sm font-medium text-[var(--color-ink)]">Nothing to show here yet</p>
-          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Use the sections in the sidebar you have access to.</p>
-        </div>
+        // A member: their own work here (never money), then the order queue with Orders access.
+        <MemberWorkOverview connectionId={connection.id}>
+          {connection.permissions?.orders && <MemberDashboard connectionId={connection.id} reloadKey={reloadKey} onSynced={setSyncedAt} />}
+        </MemberWorkOverview>
       )}
     </AccountShell>
   );

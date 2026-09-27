@@ -239,7 +239,7 @@ export default function ResearchPage() {
       )}
 
       {searching && !result && (
-        <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="card h-36 animate-pulse" />
           ))}
@@ -289,7 +289,7 @@ export default function ResearchPage() {
                 })}
               </div>
               {view === "active" && (
-                <div className="flex flex-wrap items-center gap-2 py-2">
+                <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 py-2">
                   <SegmentedControl size="sm" label="Sort" value={sort} onChange={setSort} options={RESEARCH_SORTS} />
                   {unread.length > 0 && (
                     <button
@@ -311,7 +311,13 @@ export default function ResearchPage() {
             {view === "sold" ? (
               <SoldListings sales={result.sales ?? { available: false }} currency={currency} />
             ) : (
-              <ResearchListings items={ordered.slice(0, shown)} currency={currency} connectionId={connection.id} maxSold={maxSold} />
+              <ResearchListings
+                items={ordered.slice(0, shown)}
+                currency={currency}
+                connectionId={connection.id}
+                maxSold={maxSold}
+                canHunt={!connection.permissions || Boolean(connection.permissions.hunting || connection.permissions.hunting_review)}
+              />
             )}
             {view === "active" && shown < ordered.length && (
               <div className="border-t border-[var(--color-line)] px-4 py-3 text-center">

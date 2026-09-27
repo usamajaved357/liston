@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { Marketplace, User } from "@/lib/api";
 import { AccountTimeZoneProvider } from "@/lib/timezone";
 import { SyncStatus } from "@/components/SyncStatus";
@@ -10,7 +11,8 @@ import { SITE_TIMEZONES } from "@/components/orders/order-ui";
 import { Logo } from "@/components/Logo";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ShellFrame } from "@/components/ShellFrame";
+import { NotificationBell } from "@/components/NotificationBell";
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -24,6 +26,9 @@ interface AccountShellProps {
   subheader?: React.ReactNode;
   // A full-width row pinned under the scrolling body (paging, say).
   footer?: React.ReactNode;
+  // Keep the footer pinned on phones too (an action bar), where a footer
+  // otherwise follows the content.
+  pinFooter?: boolean;
   connectionId: string;
   label: string;
   platformKey: string;
@@ -42,9 +47,32 @@ interface AccountShellProps {
   // same gate on each route independently (see requireFeature), so this is
   // a UX nicety, not the security boundary.
   permissions?: Record<string, boolean>;
-  // A member has no other shell: their sidebar carries their identity, a way
-  // back to their account list and the only logout they get.
+  // Who's viewing (a member's Log out is on their Dashboard and Profile).
   user: User;
+}
+
+// How many hunted products wait on this person: to review (reviewers and
+// the owner), sent back to them (hunters), or, for someone who only drafts,
+// approved and ready. Counted again whenever hunting changes on the page.
+function useHuntBadge(connectionId: string, enabled: boolean, permissions?: Record<string, boolean>) {
+  const [badge, setBadge] = useState(0);
+  const listerOnly = Boolean(permissions && !permissions.hunting && !permissions.hunting_review);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    const load = () =>
+      api
+        .huntBadge(connectionId)
+        .then((b) => !cancelled && setBadge(listerOnly ? b.approved : b.review + b.sentBack))
+        .catch(() => {});
+    load();
+    window.addEventListener("liston:hunting", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("liston:hunting", load);
+    };
+  }, [connectionId, enabled, listerOnly]);
+  return enabled ? badge : 0;
 }
 
 export function AccountShell({
@@ -53,31 +81,29 @@ export function AccountShell({
   actions,
   subheader,
   footer,
+  pinFooter = false,
   connectionId,
   label,
   platformKey,
   platformName,
   marketplace,
   permissions,
-  user,
   sync,
 }: AccountShellProps) {
   const timeZone = marketplace?.timeZone || (marketplace?.id ? SITE_TIMEZONES[marketplace.id] : undefined);
-  const router = useRouter();
   const canShow = (feature: string) => permissions === undefined || permissions[feature];
   const pathname = usePathname();
   const base = `/accounts/${connectionId}`;
-  const [confirmLogout, setConfirmLogout] = useState(false);
+  const huntingAccess = canShow("hunting") || canShow("hunting_review") || canShow("listings");
+  const huntBadge = useHuntBadge(connectionId, huntingAccess, permissions);
 
-  function handleLogout() {
-    localStorage.removeItem("token");
-    router.push("/login");
-  }
 
   return (
     <AccountTimeZoneProvider value={timeZone}>
-    <div className="h-screen flex overflow-hidden">
-      <aside className="w-[220px] flex-shrink-0 h-screen overflow-y-auto overscroll-contain bg-[var(--color-panel)] border-r border-[var(--color-line)] p-4 flex flex-col gap-6">
+    <ShellFrame
+      sidebarClassName="gap-6"
+      sidebar={
+      <>
         <div className="flex items-center gap-2.5 px-2">
           <Logo size={30} />
           <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
@@ -86,34 +112,32 @@ export function AccountShell({
         <AccountSwitcher connectionId={connectionId} label={label} platformKey={platformKey} platformName={platformName} marketplace={marketplace} />
 
         <nav className="flex flex-col gap-0.5">
-          {/* Overview's only content today is the Earnings widget, which is
-              orders-derived — showing it (or landing a member here at all)
-              when they have no Orders access just means an empty page, so
-              gate it the same as the Orders tab itself. */}
-          {canShow("orders") && (
+          {/* Every member has an Overview: their own work on the account
+              (and the order queue with Orders access); an owner's has the money. */}
+          <NavItem
+            href={base}
+            active={pathname === base}
+            label="Overview"
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                <rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                <rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                <rect x="13" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
+              </svg>
+            }
+          />
+          {huntingAccess && (
             <NavItem
-              href={base}
-              active={pathname === base}
-              label="Overview"
+              href={`${base}/hunting`}
+              active={pathname.startsWith(`${base}/hunting`)}
+              label="Hunting"
+              badge={huntBadge}
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <rect x="3" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="13" y="3" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="3" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                  <rect x="13" y="13" width="8" height="8" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                </svg>
-              }
-            />
-          )}
-          {canShow("listings") && (
-            <NavItem
-              href={`${base}/listings`}
-              active={pathname.startsWith(`${base}/listings`)}
-              label="Listings"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+                  <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.8" />
+                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                 </svg>
               }
             />
@@ -132,6 +156,19 @@ export function AccountShell({
               }
             />
           )}
+          {canShow("listings") && (
+            <NavItem
+              href={`${base}/listings`}
+              active={pathname.startsWith(`${base}/listings`)}
+              label="Listings"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M3.5 12.5V5.5a2 2 0 012-2h7l8 8-7 7-8-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+                </svg>
+              }
+            />
+          )}
           {canShow("orders") && (
             <NavItem
               href={`${base}/orders`}
@@ -145,6 +182,22 @@ export function AccountShell({
               }
             />
           )}
+          {canShow("inbox") && (
+            <NavItem
+              href={`${base}/inbox`}
+              active={pathname.startsWith(`${base}/inbox`)}
+              label="Inbox"
+              icon={
+                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                  <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
+                  <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              }
+            />
+          )}
+          {/* Connection Settings (business policies, shipping location) is always
+              admin-only, never delegable — hidden outright for a member rather
+              than shown then 403'd. */}
           {canShow("analytics") && (
             <NavItem
               href={`${base}/analytics`}
@@ -170,22 +223,6 @@ export function AccountShell({
               }
             />
           )}
-          {canShow("inbox") && (
-            <NavItem
-              href={`${base}/inbox`}
-              active={pathname.startsWith(`${base}/inbox`)}
-              label="Inbox"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              }
-            />
-          )}
-          {/* Connection Settings (business policies, shipping location) is always
-              admin-only, never delegable — hidden outright for a member rather
-              than shown then 403'd. */}
           {permissions === undefined && (
             <NavItem
               href={`${base}/settings`}
@@ -203,45 +240,39 @@ export function AccountShell({
           )}
         </nav>
 
-        {permissions !== undefined && (
-          <div className="mt-auto space-y-1 border-t border-[var(--color-line)] pt-3">
-            <Link href="/connections" className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Your accounts
-            </Link>
-            <button type="button" onClick={() => setConfirmLogout(true)} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                <path d="M10 4H6a2 2 0 00-2 2v12a2 2 0 002 2h4M15 8l4 4-4 4M19 12H9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Log out
-            </button>
-            <p className="truncate px-2.5 pt-1 text-[11px] text-[var(--color-muted)]">{user.email}</p>
-          </div>
-        )}
-      </aside>
-
-      <div className="flex-1 min-w-0 h-screen flex flex-col">
+      </>
+      }
+    >
+      <div data-page-column className="flex-1 min-w-0 min-h-0 flex flex-col">
         {header && (
           <div className="page-header flex-shrink-0 bg-[var(--color-paper)]">
           {/* Title and controls both sit on the sidebar's logo line (see
               .page-header); the subtitle hangs below the title. */}
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">{header}</div>
-            <div className="page-header-controls">
+          <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+            <div className="min-w-0 flex-1 basis-[220px]">{header}</div>
+            {/* On a phone the controls take their own row under the title:
+                the way to the Dashboard on the left, the data's freshness and
+                the page's own actions on the right. */}
+            <div className="page-header-controls max-sm:w-full max-sm:justify-end">
               {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
-              {/* Owners came from the main dashboard; members have no dashboard,
-                  their way out is the sidebar footer. */}
-              {permissions === undefined && (
-                <Link href="/dashboard" className="btn btn-sm flex-shrink-0 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white">
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                    <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              <NotificationBell />
+              {/* Back to the Dashboard: an owner's of all accounts, a member's
+                  of the accounts they work on. A dashboard mark, not an arrow,
+                  so it never reads as a page's own Back button. */}
+              <Link
+                  href={permissions === undefined ? "/dashboard" : "/connections"}
+                  title={permissions === undefined ? "All accounts' Dashboard" : "Your Dashboard"}
+                  className="btn btn-sm flex-shrink-0 gap-1.5 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white max-sm:order-first max-sm:mr-auto"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+                    <rect x="3.5" y="3.5" width="7" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+                    <rect x="13.5" y="3.5" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+                    <rect x="13.5" y="11.5" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
+                    <rect x="3.5" y="14.5" width="7" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
                   </svg>
                   Dashboard
                 </Link>
-              )}
             </div>
           </div>
           {subheader && <div className="mt-5">{subheader}</div>}
@@ -250,18 +281,17 @@ export function AccountShell({
         <div data-scroller className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>
           {children}
         </div>
-        {footer && <div className="flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)]">{footer}</div>}
+        {footer && (
+          <div
+            data-pinned-footer={pinFooter ? "" : undefined}
+            className={`flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)] ${pinFooter ? "shadow-[0_-8px_24px_-18px_rgba(15,23,42,0.35)]" : ""}`}
+          >
+            {footer}
+          </div>
+        )}
       </div>
 
-      <ConfirmDialog
-        open={confirmLogout}
-        title="Log out?"
-        description="You'll need to log in again to get back here."
-        confirmLabel="Log out"
-        onCancel={() => setConfirmLogout(false)}
-        onConfirm={handleLogout}
-      />
-    </div>
+    </ShellFrame>
     </AccountTimeZoneProvider>
   );
 }

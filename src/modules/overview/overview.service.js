@@ -4,8 +4,10 @@
 // money is never added across currencies.
 //
 // Everything is read from Liston's own copies: orders from the order mirror,
-// each order's fees and earnings from ebay_order_finances (read from eBay's
-// Finances API in bulk, in the background, at most every half hour), supplier
+// each order's fees and earnings from ebay_order_finances and the account's
+// own charges (listing fees, subscriptions) from ebay_account_charges (both
+// read from eBay's Finances API in bulk, in the background, at most every
+// half hour), supplier
 // costs from order_sourcing. One account failing (expired token, eBay hiccup)
 // degrades to a partial total with the account named, rather than blanking
 // the page.
@@ -22,6 +24,8 @@ const exchangeRates = require('../rates/exchange-rates');
 const listingRepository = require('../listings/listing.repository');
 const { query } = require('../../db/client');
 const logger = require('../../utils/logger');
+const huntingRepository = require('../hunting/hunting.repository');
+const listingTrend = require('./listing-trend');
 
 const RANGES = new Set(['today', '7d', '30d', '90d', 'this_month', 'last_month']);
 // How long the page waits for a finance read before answering with what's
@@ -55,18 +59,29 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
   });
   // Listing work in the same dates, in the same time zone as the orders.
   const [start, end] = ebayService.resolveRangeWindow(range, null, null, timeZone || marketplaces.timeZoneOf(connection.marketplace?.id || marketplaces.DEFAULT_ID));
-  const work = await listingRepository.countListingWork(connection.id, start, end);
+  const [work, hunting] = await Promise.all([
+    listingRepository.countListingWork(connection.id, start, end),
+    huntingRepository.countForOverview(connection.id, start, end).catch(() => ({ hunted: 0, approved: 0, rejected: 0, reviewing: 0 })),
+  ]);
   const orderIds = orders.map((o) => o.orderId);
-  const [moneyByOrder, costs, archived] = await Promise.all([
+  const [moneyByOrder, costs, archived, charges] = await Promise.all([
     mirror.loadOrderFinances(connection.id, orderIds),
     orderRepository.sourceCostsByOrder(connection.id, orderIds),
     orderRepository.listArchivedOrderIds(connection.id).catch(() => []),
+    mirror.loadAccountCharges(connection.id, currency, start, end),
   ]);
+  // The Listings tab's chart and its newest listings, from Liston's own records (no eBay call).
+  const listingWork = await listingExtras(connection, { range, timeZone, start, end, orders }).catch((err) => {
+    logger.warn('Overview: listing trend not worked out', { connectionId: connection.id, error: err.message });
+    return { listingTrend: null, recentListings: [] };
+  });
   return {
     activeListings: listings,
-    listings: { live: listings, drafted: work.drafted, published: work.published, waiting: work.waiting },
+    ...listingWork,
+    // The listing pipeline: hunting (products hunted, approved, rejected; waiting for review now), then drafts and what went live.
+    listings: { live: listings, drafted: work.drafted, published: work.published, waiting: work.waiting, hunted: hunting.hunted, approved: hunting.approved, rejected: hunting.rejected, reviewing: hunting.reviewing },
     ...(extras ? await salesExtras(connection, { range, timeZone, orders, recent }) : {}),
-    money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled }),
+    money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled, charges }),
     // The same dates' orders by state, for the account Overview's queue.
     queue: countQueue(orders, ebayService.classifyOrderStatus, archived),
     financesPending: !settled,
@@ -76,13 +91,68 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
   };
 }
 
-// Sales by day over the chosen dates and the account's best sellers in them,
+// The listing pipeline day by day (with the stretch before) and the newest
+// listings put live from Liston in the dates, each with what it has sold in
+// them (from the same orders the Sales tab counts).
+async function listingExtras(connection, { range, timeZone, start, end, orders }) {
+  const siteId = connection.marketplace?.id || marketplaces.DEFAULT_ID;
+  const tz = timeZone || marketplaces.timeZoneOf(siteId);
+  const today = analyticsDays.today(tz);
+  const { previousDays } = listingTrend.listingDays(range, today);
+  // A day's margin either side of the first day drawn, for the time zone.
+  const since = new Date(new Date(`${previousDays[0]}T00:00:00Z`).getTime() - 86400000);
+  const [hunts, drafts, recent] = await Promise.all([
+    huntingRepository.eventsSince(connection.id, since),
+    listingRepository.listingEventsSince(connection.id, since),
+    listingRepository.recentlyPublished(connection.id, start, end, 6),
+  ]);
+  const sold = new Map();
+  for (const order of orders || []) {
+    if (isCancelled(order)) continue;
+    for (const line of order.lineItems || []) {
+      if (line.itemId) sold.set(String(line.itemId), (sold.get(String(line.itemId)) || 0) + (Number(line.quantityPurchased) || 1));
+    }
+  }
+  const host = marketplaces.summary(siteId).itemHost;
+  return {
+    listingTrend: listingTrend.listingTrend(listingTrend.eventsFrom(hunts, drafts), { timeZone: tz, range, today }),
+    recentListings: recent.map((r) => ({
+      id: r.id,
+      itemId: r.item_id,
+      title: r.title,
+      image: r.image,
+      price: r.price === null ? null : Number(r.price),
+      currency: r.currency,
+      publishedAt: r.published_at,
+      units: r.item_id ? sold.get(String(r.item_id)) || 0 : 0,
+      url: r.item_id ? `https://${host}/itm/${r.item_id}` : null,
+      account: connection.label,
+      marketplaceId: siteId,
+    })),
+  };
+}
+
+// Sales by day over the chosen dates (orders, units, fees, earnings and
+// profit too) and the account's best sellers in them,
 // each with its photo and link: from the live listings Liston keeps, else a
 // listing's saved summary (one that has ended), never a new eBay read.
 async function salesExtras(connection, { range, timeZone, orders, recent }) {
   const siteId = connection.marketplace?.id || marketplaces.DEFAULT_ID;
   const tz = timeZone || marketplaces.timeZoneOf(siteId);
-  const trend = salesTrend.salesTrend(recent?.orders || [], { timeZone: tz, range, today: analyticsDays.today(tz), isCancelled });
+  const currency = marketplaces.currencyFor(siteId);
+  // The chart's money measures: eBay's figures and the supplier cost of
+  // every order drawn (the previous stretch too), and the account's charges
+  // since the first day drawn (a day's margin for the time zone).
+  const today = analyticsDays.today(tz);
+  const { days, previousDays } = salesTrend.trendDays(range, today);
+  const since = new Date(new Date(`${(previousDays || days)[0]}T00:00:00Z`).getTime() - 86400000);
+  const recentIds = (recent?.orders || []).map((o) => o.orderId);
+  const [finances, costs, charges] = await Promise.all([
+    mirror.loadOrderFinances(connection.id, recentIds),
+    orderRepository.sourceCostsByOrder(connection.id, recentIds),
+    mirror.loadAccountCharges(connection.id, currency, since, new Date()),
+  ]);
+  const trend = salesTrend.salesTrend(recent?.orders || [], { timeZone: tz, range, today, isCancelled, finances, costs, charges, currency });
   const top = salesTrend.bestSellers(orders, { isCancelled, limit: 6 });
   const live = recent?.listings || new Map();
   const ended = top.filter((b) => !live.has(b.itemId)).map((b) => b.itemId);
@@ -134,7 +204,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
         currency: summary.currency,
         accounts: accounts.length,
         activeListings: accounts.reduce((sum, a) => sum + a.activeListings, 0),
-        listings: ['live', 'drafted', 'published', 'waiting'].reduce(
+        listings: ['live', 'drafted', 'published', 'waiting', 'hunted', 'approved', 'rejected', 'reviewing'].reduce(
           (acc, key) => ({ ...acc, [key]: accounts.reduce((sum, a) => sum + (a.listings?.[key] || 0), 0) }),
           {}
         ),
@@ -142,6 +212,12 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
         // Its accounts' sales by day added up, and its best sellers.
         trend: salesTrend.addTrends(accounts.map((a) => a.trend)),
         bestSellers: salesTrend.mergeBestSellers(accounts.map((a) => a.bestSellers || [])),
+        // The Listings tab: the pipeline by day added up, and the newest listings across its accounts.
+        listingTrend: listingTrend.addListingTrends(accounts.map((a) => a.listingTrend)),
+        recentListings: accounts
+          .flatMap((a) => a.recentListings || [])
+          .sort((x, y) => new Date(y.publishedAt) - new Date(x.publishedAt))
+          .slice(0, 6),
       };
     })
     .sort((a, b) => b.accounts - a.accounts || b.money.sales - a.money.sales);

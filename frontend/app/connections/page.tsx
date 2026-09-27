@@ -12,6 +12,9 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
 import { AccountCards } from "@/components/AccountCards";
 import { AddConnectionPanel } from "@/components/AddConnectionPanel";
+import { MemberAccess } from "@/components/MemberAccess";
+import { NotificationBell } from "@/components/NotificationBell";
+import { MemberSidebarFooter } from "@/components/MemberSidebarFooter";
 import { ebayConnectError } from "@/lib/connect-errors";
 
 const TrashIcon = (
@@ -99,39 +102,78 @@ function ConnectionBanner() {
   return null;
 }
 
-// A team member never manages connections (no add/remove, no plan/billing
-// context) — they only ever see the account(s) an owner granted them access
-// to, as searchable cards (no admin affordances at all). Deliberately no
-// auto-redirect even with a single account: this page is also where
-// AccountShell's "Your accounts" link and its logout live, so it must always
-// be a real, working landing spot rather than something that immediately
-// bounces the viewer back to wherever they came from.
-function MemberAccountPicker({ user, connections }: { user: User; connections: Connection[] }) {
+// A team member's home. They never manage connections (no add/remove, no
+// plan/billing) — they see the account(s) an owner gave them, each with what
+// they can do there and what's waiting for them. Deliberately no auto-redirect even with a
+// single account: this is where the account sidebar's "Dashboard" link
+// lands, so it must always be a real page rather than something that
+// bounces the viewer back to where they came from.
+function MemberHome({ user, connections, loading }: { user: User; connections: Connection[]; loading: boolean }) {
   const router = useRouter();
   const [confirmLogout, setConfirmLogout] = useState(false);
+  const first = (user.name || "").trim().split(/\s+/)[0] || null;
+  const attention = connections.filter((c) => c.status !== "active").length;
 
   return (
-    <main className="min-h-screen px-6 py-10">
-      <div className="mx-auto max-w-6xl">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-xl font-extrabold text-[var(--color-ink)]">Your accounts</h1>
-          <AccountMenu
-            email={user.email}
-            subtitle="Team member"
-            avatarUrl={user.avatar_url}
-            onLogout={() => setConfirmLogout(true)}
-          />
+    <AppShell
+      connectionsUsed={0}
+      maxConnections={0}
+      planName=""
+      role="member"
+      sidebarFooter={<MemberSidebarFooter user={user} onLogout={() => setConfirmLogout(true)} />}
+      header={
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold text-[var(--color-ink)]">{first ? `Hi, ${first}` : "Welcome back"}</h1>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+              {loading
+                ? "Your team accounts."
+                : connections.length
+                  ? `You work on ${connections.length} account${connections.length === 1 ? "" : "s"} for your team. Pick one to get started.`
+                  : "Your team accounts show here once you're given access."}
+            </p>
+          </div>
+          {/* Profile and Log out live in the sidebar. */}
+          <div className="page-header-controls !flex-shrink-0">
+            <NotificationBell />
+          </div>
         </div>
-
-        {connections.length === 0 ? (
-          <p className="text-sm text-[var(--color-muted)]">
-            You don&apos;t have access to any accounts yet. Ask whoever manages Liston for your team to grant
-            you access.
-          </p>
-        ) : (
-          <AccountCards connections={connections} hrefFor={landingPathForConnection} />
-        )}
-      </div>
+      }
+    >
+      {loading ? (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-4" aria-hidden>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="card space-y-3 p-4">
+              <div className="flex gap-3">
+                <div className="h-10 w-10 animate-pulse rounded-lg bg-[var(--color-line)]" />
+                <div className="flex-1 space-y-2 pt-1">
+                  <div className="h-3.5 w-2/5 animate-pulse rounded-full bg-[var(--color-line)]" />
+                  <div className="h-3 w-3/5 animate-pulse rounded-full bg-[var(--color-line)]" />
+                </div>
+              </div>
+              <div className="h-7 w-3/4 animate-pulse rounded-full bg-[var(--color-line)]" />
+            </div>
+          ))}
+        </div>
+      ) : connections.length === 0 ? (
+        <div className="card mx-auto max-w-md px-6 py-10 text-center">
+          <p className="text-[14px] font-semibold text-[var(--color-ink)]">No accounts yet</p>
+          <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">Ask whoever manages Liston for your team to give you access to an account. It shows here as soon as they do.</p>
+        </div>
+      ) : (
+        <AccountCards
+          connections={connections}
+          hrefFor={landingPathForConnection}
+          extraFor={(c) => <MemberAccess connection={c} />}
+          summary={
+            attention > 0 ? (
+              <span className="font-medium text-amber-700">
+                {attention} account{attention === 1 ? " needs" : "s need"} reconnecting by your team owner
+              </span>
+            ) : undefined
+          }
+        />
+      )}
 
       <ConfirmDialog
         open={confirmLogout}
@@ -144,7 +186,7 @@ function MemberAccountPicker({ user, connections }: { user: User; connections: C
           router.push("/login");
         }}
       />
-    </main>
+    </AppShell>
   );
 }
 
@@ -187,7 +229,9 @@ export default function ConnectionsPage() {
       router.replace("/login");
       return;
     }
-    loadAll();
+    // Deferred a tick: the load sets state, which an effect mustn't do in its own body.
+    const t = setTimeout(loadAll, 0);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
@@ -213,7 +257,7 @@ export default function ConnectionsPage() {
   // Cold start with nothing cached: a skeleton, never a blank page.
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <PageSkeleton />
       </main>
     );
@@ -222,7 +266,7 @@ export default function ConnectionsPage() {
   // Connection management (add/remove, plan limits) is an owner-only
   // concept — a member only ever sees the account(s) they were granted.
   if (user.role === "member") {
-    return <MemberAccountPicker user={user} connections={connections} />;
+    return <MemberHome user={user} connections={connections} loading={loading} />;
   }
 
   const connectionsUsed = connections.length;

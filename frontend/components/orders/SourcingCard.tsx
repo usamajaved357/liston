@@ -149,7 +149,7 @@ export function SourcingCard({
 
       {open && (
         <div className="border-t border-[var(--color-line)] px-4 pb-4 pt-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div>
               <label className={labelClass}>Email</label>
               <input className={fieldClass} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Supplier account email" autoComplete="off" />

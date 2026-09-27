@@ -8,9 +8,11 @@
 function describeIssue(issue, name) {
   switch (issue.code) {
     case 'too_small':
+      // A field's own wording wins ("Enter the package weight in kg, above 0.").
+      if (!/^(String|Array|Number) must/.test(issue.message)) return issue.message;
       if (issue.type === 'string') return `${name} is empty. Fill it in to save.`;
       if (issue.type === 'array') return `${name} needs at least ${issue.minimum}.`;
-      return `${name} must be at least ${issue.minimum}.`;
+      return issue.exclusive ? `${name} must be more than ${issue.minimum}.` : `${name} must be at least ${issue.minimum}.`;
     case 'too_big':
       // Custom limits already read well ("eBay titles are limited to 80 characters").
       if (!/^(String|Array|Number) must/.test(issue.message)) return issue.message;

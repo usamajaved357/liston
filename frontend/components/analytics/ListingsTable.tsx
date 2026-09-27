@@ -8,6 +8,7 @@ import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { compactNumber, fullNumber } from "@/components/charts/chart-format";
 import { ListFooter } from "@/components/ListFooter";
 import { readView, writeView } from "@/lib/viewState";
+import { useIsPhone } from "@/lib/useIsPhone";
 import { downloadCsv, pct, toCsv } from "@/lib/csv";
 import { MetricKey, metricDef } from "./metrics";
 import { EditTag, HealthTag } from "./InsightCards";
@@ -63,6 +64,7 @@ function ReportNote({
   loadingAll: boolean;
   history?: AnalyticsHistory | null;
 }) {
+  const [more, setMore] = useState(false);
   let text: React.ReactNode = null;
   if (partial) {
     text = "Each listing’s traffic for today arrives once eBay closes the day. Sales and units below are live.";
@@ -89,9 +91,12 @@ function ReportNote({
   if (!text) return null;
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-4 py-2 text-[11.5px] text-[var(--color-muted)]">
-      <span className="flex-1">{text}</span>
+      {/* A phone: two lines, a tap for the rest, so the listings stay in view. */}
+      <button type="button" onClick={() => setMore((v) => !v)} className={`min-w-0 flex-1 text-left max-sm:basis-full sm:pointer-events-none ${more ? "" : "max-sm:line-clamp-2"}`}>
+        {text}
+      </button>
       {report.canLoadAll && !partial && (
-        <button type="button" onClick={onLoadAll} disabled={loadingAll} className="btn btn-secondary btn-sm" title={`Reads every listing's figures for this range: ${report.loadAllCalls} calls from today's allowance`}>
+        <button type="button" onClick={onLoadAll} disabled={loadingAll} className="btn btn-secondary btn-sm max-sm:w-full" title={`Reads every listing's figures for this range: ${report.loadAllCalls} calls from today's allowance`}>
           {loadingAll ? "Loading…" : `Load all ${fullNumber(report.live)}`}
           <span className="text-[11px] font-medium text-[var(--color-muted)]">
             {report.loadAllCalls} {report.loadAllCalls === 1 ? "call" : "calls"}
@@ -155,7 +160,9 @@ export function ListingsTable({
   // fills the screen: rows scroll under the pinned header and the pages sit
   // at the foot of the screen, as on Orders. It is the page's last card, so
   // it takes back most of the page's bottom padding (leaving ~6px).
+  // On a phone it just flows: the rows are cards, and the page scrolls.
   const sectionRef = useRef<HTMLElement>(null);
+  const phone = useIsPhone();
   const [fitHeight, setFitHeight] = useState<number | null>(null);
   useLayoutEffect(() => {
     const scroller = sectionRef.current?.closest<HTMLElement>("[data-scroller]");
@@ -344,7 +351,7 @@ export function ListingsTable({
   const filterLabel = filter !== "all" && filter !== "attention" && filter !== "updated" && filter !== "converting" ? (actionDef(filter)?.label ?? null) : null;
 
   return (
-    <section ref={sectionRef} className="card -mb-[26px] flex scroll-mt-1.5 flex-col overflow-hidden" id="analytics-listings" style={fitHeight ? { height: fitHeight } : undefined}>
+    <section ref={sectionRef} className="card -mb-[26px] flex scroll-mt-1.5 flex-col overflow-hidden" id="analytics-listings" style={fitHeight && !phone ? { height: fitHeight } : undefined}>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-line)] px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Listings</h2>
@@ -352,7 +359,7 @@ export function ListingsTable({
             {rows.length} live {rows.length === 1 ? "listing" : "listings"} · select one for its day-by-day figures
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 max-sm:w-full">
           {filterLabel ? (
             <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-[var(--color-primary-soft)] pl-3 pr-1 text-[11.5px] font-semibold text-[var(--color-primary)]">
               {filterLabel} · {visible.length}
@@ -363,6 +370,7 @@ export function ListingsTable({
               </button>
             </span>
           ) : (
+            <div className="min-w-0 max-sm:w-full">
             <SegmentedControl
               size="sm"
               label="Show"
@@ -377,13 +385,14 @@ export function ListingsTable({
                 { key: "converting", label: `Converting${counts.converting ? ` · ${counts.converting}` : ""}` },
               ]}
             />
+            </div>
           )}
-          <div className="relative">
+          <div className="relative max-sm:min-w-0 max-sm:flex-1">
             <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
               <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
               <path d="M16 16l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search listings" aria-label="Search listings" className="input input-sm w-44 !pl-8" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search listings" aria-label="Search listings" className="input input-sm w-44 !pl-8 max-sm:w-full" />
           </div>
           <button
             type="button"
@@ -403,7 +412,64 @@ export function ListingsTable({
       {/* Rows scroll inside the card under a pinned header; the pages stay at its foot. */}
       {/* Wide enough for every column from ~900px; below that the rows scroll sideways inside the card. */}
       <div ref={rowsRef} onScroll={rememberRowsScroll} className="min-h-0 flex-1 overflow-auto min-[900px]:overflow-x-hidden">
-        <table className="w-full min-w-[660px] table-fixed text-[12.5px]">
+        {phone && visible.length > 0 && (
+          <>
+            <div className="flex items-center gap-2 border-b border-[var(--color-line)] px-4 py-2 text-[12.5px] text-[var(--color-muted)]">
+              <label htmlFor="analytics-sort">Sort by</label>
+              <select
+                id="analytics-sort"
+                value={sort.key}
+                onChange={(e) => setSort({ key: e.target.value as SortKey, dir: e.target.value === "title" ? "asc" : "desc" })}
+                className="input input-sm min-w-0 flex-1"
+              >
+                {[{ key: "title" as SortKey, label: "Title" }, ...COLUMNS].map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setSort((st) => ({ ...st, dir: st.dir === "desc" ? "asc" : "desc" }))}
+                aria-label={sort.dir === "desc" ? "Highest first; tap for lowest first" : "Lowest first; tap for highest first"}
+                className="btn btn-secondary btn-icon flex-shrink-0"
+              >
+                <svg viewBox="0 0 24 24" fill="none" className={`h-4 w-4 transition-transform ${sort.dir === "asc" ? "rotate-180" : ""}`} aria-hidden>
+                  <path d="M12 5v14M6 13l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+            <ul className="divide-y divide-[var(--color-line)]/70">
+              {pageRows.map((row) => (
+                <li key={row.itemId}>
+                  <button type="button" onClick={() => onOpen(row.itemId)} className="block w-full px-4 py-3 text-left active:bg-[var(--color-primary-soft)]/40">
+                    <span className="flex items-start gap-2.5">
+                      <Thumb src={row.imageUrl} />
+                      <span className="min-w-0 flex-1">
+                        <span className="line-clamp-2 text-[13px] font-medium leading-snug text-[var(--color-ink)]">{row.title}</span>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-[var(--color-muted)]">
+                          <span className="tabular-nums">{formatMoney(row.price)}</span>
+                          {row.quantityAvailable != null && <span className={row.quantityAvailable <= 2 ? "font-semibold text-[var(--color-danger)]" : ""}>· {row.quantityAvailable} in stock</span>}
+                          {row.watchers ? <span>· {fullNumber(row.watchers)} watching</span> : null}
+                          {row.lastEdit?.waiting ? <EditTag edit={row.lastEdit} /> : row.health ? <HealthTag health={row.health} /> : null}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="mt-2.5 grid grid-cols-3 gap-y-2 rounded-xl bg-[var(--color-paper)]/70 px-1 py-2 text-[12.5px]">
+                      {COLUMNS.filter((c) => c.key !== "watchers").map((c) => (
+                        <span key={c.key} className="flex flex-col items-center">
+                          <span className="mb-0.5 text-[10.5px] font-medium uppercase tracking-wide text-[var(--color-muted)]">{c.label === "Click-through" ? "CTR" : c.label}</span>
+                          {figure(row, c.key)}
+                        </span>
+                      ))}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        <table className={`w-full min-w-[660px] table-fixed text-[12.5px] ${phone ? "hidden" : ""}`}>
           <colgroup>
             <col className="w-[31%]" />
             {COLUMNS.map((c) => (
@@ -478,7 +544,8 @@ export function ListingsTable({
             sizes={PAGE_SIZES}
             onPage={(p) => {
               setPage(p);
-              document.getElementById("analytics-listings")?.querySelector(".overflow-auto")?.scrollTo({ top: 0, behavior: "smooth" });
+              if (phone) sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+              else document.getElementById("analytics-listings")?.querySelector(".overflow-auto")?.scrollTo({ top: 0, behavior: "smooth" });
             }}
             onPerPage={(n) => {
               setPerPage(n);

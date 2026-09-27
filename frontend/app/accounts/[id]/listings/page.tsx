@@ -7,6 +7,7 @@ import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingSort, Li
 import { readView, writeView } from "@/lib/viewState";
 import { ViewMenu } from "@/components/ViewMenu";
 import { useConnection } from "@/lib/useConnection";
+import { scrollPageToTop } from "@/lib/pageScroll";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { ListFooter } from "@/components/ListFooter";
@@ -98,11 +99,11 @@ function ListingRow({
   return (
     <li
       onClick={open}
-      className={`group flex items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)] ${item.viewItemUrl ? "cursor-pointer" : ""}`}
+      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 transition-colors hover:bg-[var(--color-paper)] sm:flex-nowrap sm:gap-x-4 sm:px-5 sm:py-3.5 ${item.viewItemUrl ? "cursor-pointer" : ""}`}
     >
       <Thumb src={item.imageUrl} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13.5px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{item.title}</p>
+      <div className="min-w-0 flex-1 basis-[calc(100%-4.25rem)] sm:basis-auto">
+        <p className="line-clamp-2 text-[13.5px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)] sm:line-clamp-none sm:truncate">{item.title}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-muted)]">
           <StockBadge available={item.quantityAvailable} />
           <span className="font-mono text-[11.5px] tracking-tight">#{item.itemId}</span>
@@ -128,7 +129,9 @@ function ListingRow({
           </span>
         </div>
       </div>
-      <p className="w-20 flex-shrink-0 text-right text-[14px] font-medium tracking-tight text-[var(--color-ink)]">{formatMoney(item.price)}</p>
+      {/* On a phone: price and actions on their own line under the details. */}
+      <div className="flex w-full items-center gap-2 pl-[4.25rem] sm:contents">
+      <p className="mr-auto flex-shrink-0 text-[14px] font-medium tracking-tight text-[var(--color-ink)] sm:mr-0 sm:w-20 sm:text-right">{formatMoney(item.price)}</p>
       {onAnalytics && (
         <button
           type="button"
@@ -181,6 +184,7 @@ function ListingRow({
           {TrashIcon}
         </button>
       )}
+      </div>
     </li>
   );
 }
@@ -196,10 +200,10 @@ function DraftRow({ draft, connectionId, onDelete }: { draft: DraftListing; conn
   const variantCount = isVariation ? content.variants.length : null;
   const href = `/accounts/${connectionId}/listings/draft/${draft.id}`;
   return (
-    <li onClick={() => router.push(href)} className="group flex cursor-pointer items-center gap-4 px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)]">
+    <li onClick={() => router.push(href)} className="group flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 transition-colors hover:bg-[var(--color-paper)] sm:flex-nowrap sm:gap-x-4 sm:px-5 sm:py-3.5">
       <Thumb src={image || null} />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13.5px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{title}</p>
+      <div className="min-w-0 flex-1 basis-[calc(100%-4.25rem)] sm:basis-auto">
+        <p className="line-clamp-2 text-[13.5px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)] sm:line-clamp-none sm:truncate">{title}</p>
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-muted)]">
           <span className="inline-flex items-center gap-1.5 font-medium text-amber-700">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
@@ -210,7 +214,8 @@ function DraftRow({ draft, connectionId, onDelete }: { draft: DraftListing; conn
           {draft.created_at && <span>Drafted {formatShortDate(draft.created_at, timeZone)}</span>}
         </div>
       </div>
-      <p className="w-20 flex-shrink-0 text-right text-[14px] font-medium tracking-tight text-[var(--color-ink)]">
+      <div className="flex w-full items-center gap-2 pl-[4.25rem] sm:contents">
+      <p className="mr-auto flex-shrink-0 text-[14px] font-medium tracking-tight text-[var(--color-ink)] sm:mr-0 sm:w-20 sm:text-right">
         {price ? formatMoney({ amount: Number(price.value), currency: price.currency }) : ""}
       </p>
       <Link
@@ -232,6 +237,7 @@ function DraftRow({ draft, connectionId, onDelete }: { draft: DraftListing; conn
       >
         {TrashIcon}
       </button>
+      </div>
     </li>
   );
 }
@@ -275,6 +281,8 @@ export default function AccountListingsPage() {
   // Bumped after a manual refresh so the load effect runs again.
   const [reloadKey, setReloadKey] = useState(0);
   const [drafts, setDrafts] = useState<DraftListing[]>([]);
+  // Approved hunted products nobody has drafted yet, pointed to from Drafts.
+  const [readyHunts, setReadyHunts] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [totalEntries, setTotalEntries] = useState(0);
   const [counts, setCounts] = useState<{ active?: number; inactive?: number; draft?: number }>({});
@@ -301,6 +309,10 @@ export default function AccountListingsPage() {
       if (!cancelled) fn();
     };
     if (filter === "draft") {
+      api
+        .huntBadge(connection.id)
+        .then((b) => done(() => setReadyHunts(b.approved)))
+        .catch(() => {});
       api
         .listDraftListings(connection.id)
         .then((data) =>
@@ -427,7 +439,7 @@ export default function AccountListingsPage() {
 
   if (loadingConnection) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <div className="mx-auto max-w-5xl">
           <div className="mb-4 h-6 w-32 animate-pulse rounded-full bg-[var(--color-line)]" />
           <div className="card overflow-hidden">
@@ -490,7 +502,7 @@ export default function AccountListingsPage() {
             </button>
           ))}
         </div>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+        <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto sm:flex-wrap sm:justify-end">
           {filter === "draft" && (
             <Link href={`/accounts/${connection.id}/listings/new`} className="btn btn-primary btn-sm">
               <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
@@ -502,7 +514,7 @@ export default function AccountListingsPage() {
           {filter !== "draft" && (
             <ViewMenu title="Sort listings" sections={[{ label: "Sort", value: sort, options: filter === "inactive" ? INACTIVE_SORT_OPTIONS : SORT_OPTIONS, onChange: (k) => changeSort(k as ListingSort) }]} />
           )}
-        <div className="relative w-72 max-w-full">
+        <div className="relative min-w-0 flex-1 sm:w-72 sm:flex-none">
           <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
             <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
             <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -531,7 +543,7 @@ export default function AccountListingsPage() {
             sizes={[25, 50, 100, "all"]}
             onPage={(p) => {
               setPage(p);
-              document.querySelector("[data-scroller]")?.scrollTo({ top: 0, behavior: "smooth" });
+              scrollPageToTop();
             }}
             onPerPage={(n) => {
               setPerPage(n);
@@ -571,6 +583,27 @@ export default function AccountListingsPage() {
             Listing #{updatedItemId} was updated, but eBay didn&apos;t apply everything: {updateWarning}
           </span>
         </div>
+      )}
+
+      {filter === "draft" && readyHunts > 0 && (
+        <Link
+          href={`/accounts/${connection.id}/hunting?view=approved`}
+          className="mb-4 flex items-center gap-3 rounded-[var(--radius-card)] border border-emerald-200 bg-emerald-50/70 px-4 py-3 text-[13px] text-[var(--color-ink)] transition-colors hover:border-emerald-300"
+        >
+          <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-white">
+            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+              <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="2" />
+              <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="2" />
+            </svg>
+          </span>
+          <span className="min-w-0 flex-1">
+            <b className="font-semibold">
+              {readyHunts} approved hunted product{readyHunts === 1 ? "" : "s"}
+            </b>{" "}
+            {readyHunts === 1 ? "is" : "are"} ready to draft.
+          </span>
+          <span className="flex-shrink-0 font-semibold text-emerald-700">Open Hunting</span>
+        </Link>
       )}
 
       <div className="card overflow-hidden">

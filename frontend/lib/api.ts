@@ -60,8 +60,17 @@ async function request<T>(
 export interface MoneySummary {
   currency: string;
   sales: number;
+  // Everything eBay took: each order's fees and the account's own charges.
   fees: number;
+  // Promoted-listing fees, on orders or billed per click.
   adFees: number;
+  // What eBay charged the account apart from its orders, ads aside:
+  // listing and upgrade fees, the eBay Store (shop) subscription, and the
+  // rest (other subscriptions, payout fees…).
+  accountFees?: number;
+  listingFees?: number;
+  storeFees?: number;
+  otherFees?: number;
   refunds: number;
   earnings: number;
   sourceCost: number;
@@ -88,6 +97,11 @@ export interface ListingWork {
   waiting: number;
   drafted: number;
   published: number;
+  // Product hunting in the same dates, and how many wait for review now.
+  hunted?: number;
+  approved?: number;
+  rejected?: number;
+  reviewing?: number;
 }
 
 export interface OverviewAccount {
@@ -106,12 +120,39 @@ export interface OverviewAccount {
   financesAccess: boolean;
 }
 
+// The Listings tab's chart: the listing pipeline per day, with the stretch before.
+export type ListingTrendKey = "hunted" | "approved" | "rejected" | "drafted" | "published";
+export interface ListingTrendPoint {
+  day: string;
+  previousDay: string | null;
+  partial: boolean;
+  values: Record<ListingTrendKey, number>;
+  previous: Record<ListingTrendKey, number> | null;
+}
+
+// A listing put live from Liston in the dates, with what it sold in them.
+export interface RecentListing {
+  id: string;
+  itemId: string | null;
+  title: string | null;
+  image: string | null;
+  price: number | null;
+  currency: string | null;
+  publishedAt: string;
+  units: number;
+  url: string | null;
+  account: string;
+  marketplaceId: string;
+}
+
 // One account's Overview: its money and listing work for a range, in its
 // own currency and time zone.
 export interface AccountOverview {
   range: string;
   activeListings: number;
   listings: ListingWork;
+  listingTrend?: ListingTrendPoint[] | null;
+  recentListings?: RecentListing[];
   money: MoneySummary;
   // The same dates' orders by state (archived ones left out).
   queue?: OrderCounts;
@@ -294,10 +335,14 @@ export interface ResearchResult {
 // Sales by day under the business Overview's cards: what buyers paid each
 // day, the same day of the previous stretch alongside (null when older than
 // the 90 days Liston keeps), today still running.
+// The Sales chart's measures for a day: money in the market's currency
+// (eBay's fees, earnings and profit from its figures for each order, the
+// account's own charges on the day billed), orders and units as counts.
+export type SalesTrendKey = "sales" | "orders" | "units" | "fees" | "earnings" | "profit";
 export interface OverviewTrendPoint {
   day: string;
-  value: number;
-  previous: number | null;
+  values: Record<SalesTrendKey, number>;
+  previous: Record<SalesTrendKey, number> | null;
   previousDay: string | null;
   partial: boolean;
 }
@@ -330,6 +375,8 @@ export interface OverviewMarket {
   money: MoneySummary;
   trend?: OverviewTrendPoint[];
   bestSellers?: OverviewBestSeller[];
+  listingTrend?: ListingTrendPoint[] | null;
+  recentListings?: RecentListing[];
 }
 
 export interface Overview {
@@ -520,7 +567,7 @@ export interface TeamMember {
 
 // A member's figures (backend team/activity.js METRICS). An order line or
 // listing counts once per range, however often it was touched.
-export type TeamMetricKey = "active_days" | "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted" | "draft_work";
+export type TeamMetricKey = "active_days" | "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted" | "draft_work" | "hunted" | "hunts_reviewed";
 export type TeamMetrics = Record<TeamMetricKey, number>;
 export type TeamRange = "today" | "yesterday" | "7d" | "30d" | "this_month" | "last_month" | "custom";
 
@@ -536,15 +583,32 @@ export interface MemberOverview {
   previousSeries: ({ day: string } & TeamMetrics)[]; // the period before, lined up day by day
   accounts: ({ connectionId: string | null; label: string; actions: number } & TeamMetrics)[];
   permissions: TeamMemberPermission[];
+  // Their hunted products' results (by when hunted) and their reviews (by when decided).
+  hunting?: MemberHunting;
+  // Their hunted products approved and rejected, day by day on the day decided (for the chart).
+  huntOutcomes?: {
+    series: { day: string; approved: number; rejected: number; converting?: number }[];
+    previousSeries: { day: string; approved: number; rejected: number; converting?: number }[];
+    totals: { approved: number; rejected: number; converting?: number };
+    previous: { approved: number; rejected: number; converting?: number };
+  };
   connections: { id: string; label: string }[];
   knownFeatures: string[];
 }
+
+// A team member's own work on one account (their Overview there): the same
+// figures as their Team page, for that account only and with no money —
+// sales from their finds are orders and units.
+export type HuntSalesCount = { orders: number; units: number; lastAt: string | null; sales?: number; currency?: string | null };
+export type WorkOverview = Omit<MemberOverview, "member" | "connections" | "knownFeatures" | "hunting"> & {
+  hunting?: Omit<MemberHunting, "sales" | "previousSales"> & { sales: HuntSalesCount[]; previousSales: HuntSalesCount[] };
+};
 
 export interface MemberActivityItem {
   id: string;
   kind: string;
   label: string;
-  subjectType: "order" | "listing" | "draft" | "account" | "session";
+  subjectType: "order" | "listing" | "draft" | "account" | "session" | "hunt";
   subjectId: string;
   subjectPart: string | null;
   title: string | null;
@@ -994,6 +1058,16 @@ export interface StoreCategoriesResponse {
   warnings?: string[];
 }
 
+// The parcel the item ships in, from the supplier (AliExpress) or typed in
+// the editor. eBay needs the weight when the postage policy works postage
+// out from it; the box size helps it quote. kg and cm.
+export interface DraftPackage {
+  weightKg: number;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
+}
+
 export interface SingleDraftContent {
   title: string;
   description: string;
@@ -1012,6 +1086,7 @@ export interface SingleDraftContent {
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
+  package?: DraftPackage | null;
   // Things the automated drafting steps couldn't do — dropped item specifics,
   // supplier photos that were marketing graphics, variations with no photo of
   // their own. Shown on the review page rather than failing the draft.
@@ -1050,6 +1125,7 @@ export interface VariationDraftContent {
   marketplaceId?: string;
   merchantLocationKey: string;
   listingPolicies?: ListingPolicies;
+  package?: DraftPackage | null;
   warnings?: string[];
 }
 
@@ -1091,7 +1167,8 @@ export interface DraftPreview {
 export type GenerateDraftInput =
   | { competitorUrl?: string; sourceUrl: string }
   // imageUrls: the supplier photos kept in step two, in order (first = main).
-  | { previewId: string; variantSelection?: Record<string, string[]>; imageUrls?: string[] };
+  // huntId: drafting an approved hunted product ties the draft to it.
+  | { previewId: string; variantSelection?: Record<string, string[]>; imageUrls?: string[]; huntId?: string };
 
 // Listing settings — every sell price is derived from these plus the
 // supplier's own cost, so the seller never types a price per draft.
@@ -1206,6 +1283,8 @@ export interface DraftPatch {
   categoryId?: string;
   secondaryCategoryId?: string | null;
   storeCategoryNames?: string[];
+  // Null clears it.
+  package?: DraftPackage | null;
 }
 
 export interface ImageCheck {
@@ -1541,6 +1620,339 @@ export interface ListingAnalytics {
 
 export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "last_month" | "custom" | "all_time";
 
+// ---- Product hunting (backend modules/hunting) ----------------------------------
+
+export type HuntStage = "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
+// The list's tabs; mine is "My hunts" (the person's own finds, whatever their stage).
+export type HuntView = "all" | "review" | "approved" | "rejected" | "mine";
+export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand" | "sales";
+// unpriced: checked without a competitor, so priced at the target return with no market to judge by.
+export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown";
+// target: no competitor, so the price a draft would list it at.
+export type HuntMatchQuality = "exact" | "close" | "lowest" | "single" | "target";
+export type HuntLevel = "ok" | "warn" | "bad" | "unknown";
+
+export interface HuntPerson {
+  id: string;
+  name: string;
+}
+
+// One supplier option, worked out at the competitor's price for it.
+export interface HuntOption {
+  label: string | null;
+  attributes: Record<string, string>;
+  imageUrl: string | null;
+  cost: number | null;
+  costExact: boolean;
+  stock: number | null;
+  shipping: number;
+  totalCost?: number;
+  match: { label: string | null; price: number; sold: number | null; quality: HuntMatchQuality } | null;
+  sellPrice: number | null;
+  fees: { ads: number; processing: number; fixed: number; total: number } | null;
+  profit: number | null;
+  roi: number | null;
+  margin: number | null;
+  breakEven: number | null;
+  targetPrice: number | null;
+  yourPrice?: number;
+}
+
+export interface HuntCheckItem {
+  key: string;
+  label: string;
+  level: HuntLevel;
+  detail: string;
+}
+
+// Where the same product already is on the owner's accounts (a warning, never a block).
+export interface HuntDuplicate {
+  type: "hunt" | "draft" | "listing" | "live" | "own_competitor" | "similar";
+  id?: string;
+  itemId?: string | null;
+  connectionId: string;
+  account: string;
+  sameAccount: boolean;
+  title: string;
+  stage?: HuntStage;
+  by?: string | null;
+  at?: string;
+  same?: "supplier" | "competitor" | "both";
+  similarity?: number;
+}
+
+export interface HuntCheckResult {
+  version: number;
+  currency: string;
+  targetRoiPercent: number;
+  market?: { id: string; name: string; country: string };
+  // Null when the product was checked without a competitor.
+  competitor: {
+    itemId: string | null;
+    url: string | null;
+    title: string;
+    imageUrl: string | null;
+    lowestPrice: number | null;
+    postage: { cost: number; service: string | null; days: { min: number | null; max: number | null } | null } | null;
+    seller: { username: string | null; feedbackScore: number | null; feedbackPercentage: number | null; business: boolean } | null;
+    country: string | null;
+    abroad: boolean;
+    categoryPath: string[];
+  } | null;
+  source: {
+    productId: string | null;
+    url: string | null;
+    title: string;
+    imageUrl: string | null;
+    options: number;
+    supplier: {
+      orders: string | null;
+      rating: number | null;
+      reviews: number | null;
+      onSale: boolean | null;
+      store: { name: string; country: string | null; described: number | null; communication: number | null; shipping: number | null } | null;
+      deliveryDays: number | null;
+    } | null;
+    days: { min: number | null; max: number } | null;
+  };
+  // counted: postage per sale in the figures (0 with a free-shipping offer); cost: what AliExpress quoted.
+  shipping:
+    | { basis: "aliexpress"; counted: number; cost: number; freeOver: number | null; company: string | null; minDays: number | null; maxDays: number | null; tracking: boolean; forOption?: string | null }
+    | { basis: "settings"; counted: number; cost: number };
+  fees: { basis: "orders" | "settings"; adsPercent: number; processingPercent: number; fixed: number; orders?: number; days?: number };
+  demand: { sold: number | null; soldPerMonth: number | null; daysLive: number | null; available: number | null; variations: number; sellingVariations: number };
+  sales?: {
+    // The competitor's sold count per variation (lifetime, eBay's figure), most sold first.
+    variations: HuntVariationSales[];
+    // Liston's own daily readings of the competitor (only on a saved product).
+    history?: HuntSalesHistory | null;
+    // eBay's dated sales (Marketplace Insights), once eBay grants it to Liston.
+    ebay?: { available: boolean; days?: number; sold?: number; lastSoldAt?: string | null; lastPrice?: number | null; found?: boolean } | null;
+  };
+  salesScore?: HuntSalesScore | null;
+  options: HuntOption[];
+  summary: {
+    headline: { basis: "best_seller" | "best_option" | "your_price" | null; optionIndex: number | null; profit: number | null; roi: number | null };
+    // The cheapest option's price: what buyers would see first.
+    entryPrice?: number | null;
+    bestSeller: { label: string | null; price: number | null; sold: number | null; optionIndex: number | null; quality: HuntMatchQuality | null } | null;
+    bestOptionIndex: number | null;
+    total: number;
+    inStock: number;
+    profitable: number;
+    belowTarget: number;
+    verdict: HuntVerdict;
+  };
+  warnings: string[];
+  checks: HuntCheckItem[];
+  duplicates: HuntDuplicate[];
+}
+
+export interface HuntVariationSales {
+  label: string | null;
+  sold: number | null;
+  share: number | null;
+  price: number | null;
+  available: number | null;
+  supplier: string[];
+}
+
+export interface HuntSalesHistory {
+  readings: number;
+  since: string | null;
+  coveredDays: number;
+  days: { day: string; sold: number }[];
+  soldLast7: number | null;
+  soldLast30: number | null;
+  perDay: number | null;
+  trend: "up" | "flat" | "down" | null;
+  byVariation: { label: string | null; sold: number }[];
+}
+
+export type HuntSalesBand = "hot" | "strong" | "steady" | "slow" | "cold";
+export interface HuntSalesScore {
+  score: number;
+  band: HuntSalesBand;
+  label: string;
+  estimate: boolean;
+  // value: the figure behind the points ("9 sold"); full: what earns all of them ("500+ sold").
+  parts: { key: string; label: string; points: number; max: number; detail: string; value?: string; full?: string }[];
+}
+
+export interface HuntPermissions {
+  canDecide: boolean;
+  canEdit: boolean;
+  canResubmit: boolean;
+  canRemove: boolean;
+  canRecheck: boolean;
+  canDraft: boolean;
+}
+
+export interface HuntSales {
+  currency: string | null;
+  orders: number;
+  units: number;
+  sales: number;
+  lastAt: string | null;
+}
+
+export interface HuntSummary {
+  id: string;
+  connectionId: string;
+  title: string;
+  imageUrl: string | null;
+  stage: HuntStage;
+  status: "pending" | "approved" | "rejected" | "sent_back";
+  currency: string;
+  headline: { profit: number | null; roi: number | null; basis: "best_seller" | "best_option" | "your_price" | null; label: string | null };
+  bestSeller: { label: string | null; sold: number | null } | null;
+  verdict: HuntVerdict;
+  targetRoiPercent: number | null;
+  soldPerMonth: number | null;
+  salesScore: { score: number; band: HuntSalesBand; label: string } | null;
+  competitorSold: number | null;
+  supplier: { rating: number | null; reviews: number | null; orders: string | null } | null;
+  options: number | null;
+  hunter: HuntPerson | null;
+  reviewer: HuntPerson | null;
+  autoApproved: boolean;
+  createdAt: string;
+  submittedAt: string;
+  decidedAt: string | null;
+  checkedAt: string;
+  resubmits: number;
+  rejectReason: string | null;
+  rejectReasonLabel: string | null;
+  decisionNote: string | null;
+  hunterNote: string | null;
+  warnings: number;
+  duplicates: number;
+  // Live listings with a very similar title (the same product from another supplier, say).
+  similar?: number;
+  competitorUrl: string | null;
+  sourceUrl: string;
+  listingId: string | null;
+  itemIds: string[];
+  draftedBy: HuntPerson | null;
+  draftedAt: string | null;
+  listedAt: string | null;
+  sales: HuntSales | null;
+  permissions: HuntPermissions;
+}
+
+export interface HuntViewer {
+  userId: string;
+  isOwner: boolean;
+  canHunt: boolean;
+  canReview: boolean;
+  canDraft: boolean;
+}
+
+export interface HuntReason {
+  key: string;
+  label: string;
+}
+
+export interface HuntTimelineEvent {
+  kind: "hunted" | "approved" | "rejected" | "sent_back" | "resubmitted" | "updated" | "drafted" | "listed";
+  at: string;
+  by: HuntPerson | null;
+  reason?: string | null;
+  note?: string | null;
+  auto?: boolean;
+  itemId?: string | null;
+}
+
+export interface HuntDetail extends HuntSummary {
+  connectionLabel: string;
+  result: HuntCheckResult;
+  timeline: HuntTimelineEvent[];
+  viewer: HuntViewer;
+  reasons: HuntReason[];
+  previous?: { profit: number | null; roi: number | null };
+}
+
+export interface HuntList {
+  view: HuntView;
+  views: HuntView[];
+  items: HuntSummary[];
+  counts: Record<HuntView, number>;
+  more: boolean;
+  viewer: HuntViewer;
+  hunters: HuntPerson[];
+  reasons: HuntReason[];
+}
+
+export interface HuntHunterFigures {
+  hunted: number;
+  approved: number;
+  rejected: number;
+  sentBack: number;
+  waiting: number;
+  drafted: number;
+  listed: number;
+  approvalRate: number | null;
+}
+
+export interface HuntReviewerFigures {
+  reviewed: number;
+  approved: number;
+  rejected: number;
+  sentBack: number;
+  avgHoursToDecide: number | null;
+}
+
+export interface MemberHunting {
+  hunter: HuntHunterFigures;
+  previousHunter: HuntHunterFigures;
+  reviewer: HuntReviewerFigures;
+  previousReviewer: HuntReviewerFigures;
+  sales: HuntSales[];
+  previousSales: HuntSales[];
+  reasons: (HuntReason & { count: number })[];
+}
+
+export interface AppNotification {
+  id: string;
+  kind: string;
+  title: string;
+  body: string | null;
+  url: string | null;
+  // The parts, for laying it out (a reviewer's decision on a hunted product).
+  detail?: { product?: string | null; by?: string | null; reason?: string | null; note?: string | null };
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface NotificationList {
+  items: AppNotification[];
+  unread: number;
+  // Whether this server sends browser push, and the key a browser subscribes with.
+  push: { available: boolean; publicKey: string | null };
+}
+
+export interface HuntBadge {
+  review: number;
+  sentBack: number;
+  approved: number;
+  access: boolean;
+}
+
+export interface HuntDraftStart {
+  preview: DraftPreview;
+  hunt: {
+    id: string;
+    title: string;
+    currency: string;
+    competitorUrl: string | null;
+    sourceUrl: string;
+    hunter: HuntPerson | null;
+    headline: HuntCheckResult["summary"]["headline"] | null;
+    priceChanges: { label: string | null; before: number; after: number }[];
+    selection: Record<string, string[]> | null;
+  };
+}
+
 export const api = {
   signup: (email: string, password: string, extra: { name?: string; accessNote?: string } = {}) =>
     request<AuthResponse>("/api/auth/signup", {
@@ -1633,6 +2045,9 @@ export const api = {
   // scopes added since it was linked (order actions). Same connection id.
   reauthorizeConnection: (id: string, returnTo?: string) =>
     request<{ authorizeUrl: string }>(`/api/connections/${id}/reauthorize`, { method: "POST", body: JSON.stringify({ returnTo }) }),
+
+  // The owner's name, as their team sees it.
+  updateName: (name: string) => request<{ message: string; name: string }>("/api/users/me/name", { method: "PATCH", body: JSON.stringify({ name }) }),
 
   updateAvatar: (avatarUrl: string) =>
     request<{ message: string }>("/api/users/me/avatar", {
@@ -1757,6 +2172,42 @@ export const api = {
       { method: "POST", body: JSON.stringify({ items }) }
     ),
   researchBudget: (id: string) => request<ResearchBudget>(`/api/connections/${id}/research/budget`),
+
+  // Product hunting: check a product, add it for review, decide, draft.
+  huntCheck: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
+    request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
+  huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
+    request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
+  huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.view) query.set("view", params.view);
+    if (params.hunter) query.set("hunter", params.hunter);
+    if (params.q) query.set("q", params.q);
+    if (params.sort) query.set("sort", params.sort);
+    if (params.page && params.page > 1) query.set("page", String(params.page));
+    return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
+  },
+  huntBadge: (connectionId: string) => request<HuntBadge>(`/api/connections/${connectionId}/hunting/badge`),
+  huntDetail: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}`),
+  huntRecheck: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}/recheck`, { method: "POST" }),
+  // competitorUrl: null takes the competitor away; left out, it stays.
+  huntUpdate: (huntId: string, input: { competitorUrl?: string | null; sourceUrl?: string; note?: string }) =>
+    request<HuntDetail>(`/api/hunting/${huntId}`, { method: "PATCH", body: JSON.stringify(input) }),
+  huntResubmit: (huntId: string, note?: string) => request<HuntDetail>(`/api/hunting/${huntId}/resubmit`, { method: "POST", body: JSON.stringify(note === undefined ? {} : { note }) }),
+  huntDecide: (huntId: string, input: { decision: "approve" | "reject" | "send_back"; reason?: string; note?: string }) =>
+    request<HuntDetail>(`/api/hunting/${huntId}/decision`, { method: "POST", body: JSON.stringify(input) }),
+  // Only reviewers (the owner included) remove a hunted product.
+  huntRemove: (huntId: string) => request<Record<string, never>>(`/api/hunting/${huntId}`, { method: "DELETE" }),
+
+  // The bell: a person's notifications, and browser push for this browser.
+  notifications: () => request<NotificationList>("/api/notifications"),
+  notificationsClear: (ids?: string[]) => request<NotificationList>("/api/notifications/clear", { method: "POST", body: JSON.stringify(ids ? { ids } : {}) }),
+  notificationsTest: () => request<NotificationList>("/api/notifications/test", { method: "POST" }),
+  notificationsRead: (ids?: string[]) => request<NotificationList>("/api/notifications/read", { method: "POST", body: JSON.stringify(ids ? { ids } : {}) }),
+  pushSubscribe: (subscription: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
+    request<Record<string, never>>("/api/notifications/push", { method: "POST", body: JSON.stringify(subscription) }),
+  pushUnsubscribe: (endpoint: string) => request<Record<string, never>>("/api/notifications/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
+  huntDraftStart: (huntId: string) => request<HuntDraftStart>(`/api/hunting/${huntId}/draft`, { method: "POST" }),
 
   getAccountOverview: (id: string, range: string) => request<AccountOverview>(`/api/connections/${id}/overview?range=${range}`),
 
@@ -1959,6 +2410,9 @@ export const api = {
   restoreTeamMember: (id: string) => request<void>(`/api/team/members/${id}/restore`, { method: "POST" }),
 
   // A member's page: figures for a range (the viewer's own days), per day and account.
+  myWork: (connectionId: string, range: TeamRange) =>
+    // In the account's own site days, as its Overview (no viewer time zone).
+    request<WorkOverview>(`/api/connections/${connectionId}/my-work?range=${range}`),
   getMemberOverview: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
     const q = new URLSearchParams({ range, tz: viewerTimeZone() });
     if (range === "custom" && custom) {

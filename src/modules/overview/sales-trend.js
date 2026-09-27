@@ -33,25 +33,64 @@ function trendDays(range, today) {
   return { days, previousDays };
 }
 
+// The measures the chart can show, as the money cards count them: what
+// buyers paid, orders and units (cancelled orders left out), and from eBay's
+// figures for each order what it took, what reached the seller and what was
+// left after the supplier. The account's own charges (listing fees, the shop
+// subscription) land on the day eBay billed them.
+const MONEY_KEYS = ['sales', 'fees', 'earnings', 'profit'];
+const KEYS = ['sales', 'orders', 'units', ...MONEY_KEYS.slice(1)];
+const empty = () => Object.fromEntries(KEYS.map((k) => [k, 0]));
+const rounded = (values) => Object.fromEntries(KEYS.map((k) => [k, round2(values[k] || 0)]));
+
 /**
- * Sales by day — what buyers paid, as the Sales card counts it (order
- * totals, cancelled orders left out) — with the previous stretch's day
- * alongside each: [{ day, value, previous, previousDay, partial }]. Today
- * is still running (`partial`).
+ * Each day's measures, the previous stretch's day alongside:
+ * [{ day, values: { sales, orders, units, fees, earnings, profit },
+ *    previous (the same, or null), previousDay, partial }]. Today is still
+ * running (`partial`).
+ *
+ * @param finances Map orderId -> { fees, earnings } (eBay's figures)
+ * @param costs    Map orderId -> { value, currency } (the Source section)
+ * @param charges  [{ amount, chargedAt }] the account's charges, in its currency
  */
-function salesTrend(orders, { timeZone, range, today, isCancelled }) {
+function salesTrend(orders, { timeZone, range, today, isCancelled, finances = new Map(), costs = new Map(), charges = [], currency = null }) {
   const { days, previousDays } = trendDays(range, today);
   const byDay = new Map();
+  const at = (day) => {
+    if (!byDay.has(day)) byDay.set(day, empty());
+    return byDay.get(day);
+  };
   for (const order of orders || []) {
-    if (isCancelled(order)) continue;
     const day = analyticsDays.dayOf(order.createdAt, timeZone);
     if (!day) continue;
-    byDay.set(day, (byDay.get(day) || 0) + (Number(order.total?.amount) || 0));
+    const values = at(day);
+    if (!isCancelled(order)) {
+      values.sales += Number(order.total?.amount) || 0;
+      values.orders += 1;
+      values.units += (order.lineItems || []).reduce((n, line) => n + (Number(line.quantityPurchased) || 1), 0);
+    }
+    // eBay's money counts whether or not the order was cancelled, as on the cards.
+    const money = finances.get(order.orderId);
+    if (!money) continue;
+    const cost = costs.get(order.orderId);
+    const orderCost = cost && (!cost.currency || !currency || cost.currency === currency) ? cost.value : 0;
+    values.fees += Number(money.fees) || 0;
+    values.earnings += Number(money.earnings) || 0;
+    values.profit += (Number(money.earnings) || 0) - orderCost;
+  }
+  for (const charge of charges) {
+    const day = analyticsDays.dayOf(charge.chargedAt, timeZone);
+    const amount = Number(charge.amount) || 0;
+    if (!day || !amount) continue;
+    const values = at(day);
+    values.fees += amount;
+    values.earnings -= amount;
+    values.profit -= amount;
   }
   return days.map((day, i) => ({
     day,
-    value: round2(byDay.get(day) || 0),
-    previous: previousDays ? round2(byDay.get(previousDays[i]) || 0) : null,
+    values: rounded(byDay.get(day) || {}),
+    previous: previousDays ? rounded(byDay.get(previousDays[i]) || {}) : null,
     previousDay: previousDays ? previousDays[i] : null,
     partial: day === today,
   }));
@@ -93,19 +132,21 @@ function addTrends(trends) {
   const list = trends.filter((t) => Array.isArray(t) && t.length);
   if (!list.length) return [];
   return list[0].map((point, i) => {
-    const previous = list.map((t) => t[i]?.previous).filter((v) => v !== null && v !== undefined);
+    const previous = list.map((t) => t[i]?.previous).filter(Boolean);
+    const sum = (of) => rounded(Object.fromEntries(KEYS.map((k) => [k, of.reduce((n, v) => n + (v?.[k] || 0), 0)])));
     return {
       ...point,
-      value: round2(list.reduce((sum, t) => sum + (t[i]?.value || 0), 0)),
-      previous: previous.length ? round2(previous.reduce((a, b) => a + b, 0)) : null,
+      values: sum(list.map((t) => t[i]?.values)),
+      previous: previous.length ? sum(previous) : null,
     };
   });
 }
 
-/** A trend in another currency: `rate` of the trend's currency buys one of the other. */
+/** A trend in another currency: `rate` of the trend's currency buys one of the other. Counts stay. */
 function convertTrend(trend, rate) {
   if (!rate) return trend;
-  return (trend || []).map((p) => ({ ...p, value: round2(p.value / rate), previous: p.previous === null ? null : round2(p.previous / rate) }));
+  const convert = (values) => (values ? { ...values, ...Object.fromEntries(MONEY_KEYS.map((k) => [k, round2((values[k] || 0) / rate)])) } : null);
+  return (trend || []).map((p) => ({ ...p, values: convert(p.values), previous: convert(p.previous) }));
 }
 
 /**
@@ -121,4 +162,4 @@ function mergeBestSellers(lists, { limit = 6, rateOf = () => 1 } = {}) {
     .slice(0, limit);
 }
 
-module.exports = { trendDays, salesTrend, bestSellers, addTrends, convertTrend, mergeBestSellers, ORDERS_KEPT_DAYS };
+module.exports = { KEYS, trendDays, salesTrend, bestSellers, addTrends, convertTrend, mergeBestSellers, ORDERS_KEPT_DAYS };

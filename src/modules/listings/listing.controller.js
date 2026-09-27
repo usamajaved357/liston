@@ -37,6 +37,8 @@ const generateDraftSchema = z.union([
     // The supplier photos the seller kept in step two, in their order (the
     // first is the main photo). Only photos from the same preview count.
     imageUrls: z.array(z.string().min(1)).min(1, 'Keep at least one photo.').max(100).optional(),
+    // Drafting a hunted product: the draft is tied to the hunt.
+    huntId: z.string().uuid().optional(),
   }),
 ]);
 
@@ -60,7 +62,7 @@ async function generateDraft(req, res, next) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
 
-    const listing = await listingService.generateEbayDraftFromUrls(req.params.id, req.ownerId, parsed.data);
+    const listing = await listingService.generateEbayDraftFromUrls(req.params.id, req.ownerId, { ...parsed.data, actorUserId: req.userId });
     await activityRepository.record({ actorUserId: req.userId, connectionId: listing.connection_id, kind: 'listing.drafted', subjectType: 'draft', subjectId: listing.id, ...listingFacts(listing.generated_data) });
     res.status(201).json({ listing });
   } catch (err) {
@@ -220,6 +222,8 @@ function draftFieldLabel(path, body) {
       return 'The second category';
     case 'storeCategoryNames':
       return key !== undefined ? `Shop category ${nth(key)}` : 'Shop categories';
+    case 'package':
+      return { weightKg: 'The package weight', lengthCm: 'The package length', widthCm: 'The package width', heightCm: 'The package height' }[key] || 'The package';
     default:
       return 'A field';
   }
@@ -282,6 +286,17 @@ const updateDraftSchema = z
     categoryId: z.string().regex(/^\d+$/).optional(),
     secondaryCategoryId: z.string().regex(/^\d+$/).nullable().optional(),
     storeCategoryNames: z.array(z.string().min(1).max(200)).max(2, 'eBay allows at most two Shop categories').optional(),
+    // The parcel, in kg and cm: eBay needs the weight when the postage
+    // policy works postage out from it. Null clears it.
+    package: z
+      .object({
+        weightKg: z.number().positive('Enter the package weight in kg, above 0.').max(1000, 'The package weight is limited to 1,000 kg.'),
+        lengthCm: z.number().positive('Enter the package length in cm, above 0, or leave it empty.').max(1000).nullable().optional(),
+        widthCm: z.number().positive('Enter the package width in cm, above 0, or leave it empty.').max(1000).nullable().optional(),
+        heightCm: z.number().positive('Enter the package height in cm, above 0, or leave it empty.').max(1000).nullable().optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .refine((patch) => Object.keys(patch).length > 0, 'Nothing to update');
 

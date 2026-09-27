@@ -8,13 +8,12 @@ import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
-import { KpiTile } from "@/components/charts/KpiTile";
-import { TrendChart } from "@/components/charts/TrendChart";
-import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
+import { dayRangeLabel } from "@/components/charts/chart-format";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, timeAgo } from "@/components/team/team-shared";
+import { MemberPerformance } from "@/components/team/MemberPerformance";
 
 // One team member's page: what they did (figures for any range against the
 // period before, day by day and per eBay account), the full activity log
@@ -42,10 +41,12 @@ const EXTRA_KINDS: { key: string; label: string }[] = [
   { key: "listing.draft_deleted", label: "Deleted drafts" },
   { key: "account.store_category_added", label: "Shop categories added" },
   { key: "account.source_account_saved", label: "Supplier accounts saved" },
+  { key: "hunt.resubmitted", label: "Hunted products resubmitted" },
+  { key: "hunt.updated", label: "Hunted products changed" },
+  { key: "hunt.withdrawn", label: "Hunted products withdrawn" },
+  { key: "hunt.removed", label: "Hunted products removed" },
   { key: "session.login", label: "Logins" },
 ];
-
-const change = (now: number, before: number) => (before > 0 ? (now - before) / before : null);
 
 function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
   const tabs: { key: Tab; label: string }[] = [
@@ -54,7 +55,7 @@ function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
     { key: "access", label: "Access" },
   ];
   return (
-    <div role="tablist" className="flex gap-1 border-b border-[var(--color-line)]">
+    <div role="tablist" className="flex w-full gap-1 border-b border-[var(--color-line)] sm:w-auto">
       {tabs.map((t) => (
         <button
           key={t.key}
@@ -62,7 +63,7 @@ function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
           role="tab"
           aria-selected={value === t.key}
           onClick={() => onChange(t.key)}
-          className={`-mb-px border-b-2 px-3.5 py-2 text-[13px] font-medium transition-colors ${
+          className={`-mb-px flex-1 border-b-2 px-3.5 py-2.5 text-[14px] font-medium transition-colors sm:flex-none sm:py-2 sm:text-[13px] ${
             value === t.key ? "border-[var(--color-primary)] text-[var(--color-primary)]" : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]"
           }`}
         >
@@ -78,13 +79,9 @@ function RangePicker({ range, custom, onChange }: { range: TeamRange; custom: { 
   const [from, setFrom] = useState(custom.from);
   const [to, setTo] = useState(custom.to);
   const [open, setOpen] = useState(range === "custom");
-  useEffect(() => {
-    setFrom(custom.from);
-    setTo(custom.to);
-  }, [custom.from, custom.to]);
   const today = new Date().toISOString().slice(0, 10);
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
       <SegmentedControl
         label="Period"
         value={open ? "custom" : range}
@@ -99,15 +96,15 @@ function RangePicker({ range, custom, onChange }: { range: TeamRange; custom: { 
       />
       {open && (
         <form
-          className="flex items-center gap-1.5"
+          className="flex w-full items-center gap-1.5 sm:w-auto"
           onSubmit={(e) => {
             e.preventDefault();
             if (from && to) onChange("custom", { from, to });
           }}
         >
-          <input type="date" value={from} max={to || today} onChange={(e) => setFrom(e.target.value)} className="input input-sm w-auto" aria-label="From" />
+          <input type="date" value={from} max={to || today} onChange={(e) => setFrom(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="From" />
           <span className="text-[12px] text-[var(--color-muted)]">to</span>
-          <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="input input-sm w-auto" aria-label="To" />
+          <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="To" />
           <button type="submit" disabled={!from || !to || from > to} className="btn btn-secondary btn-sm">
             Apply
           </button>
@@ -133,96 +130,6 @@ function NothingRecorded({ recordingSince, compact = false }: { recordingSince: 
   );
 }
 
-function Performance({ data, onOpenLog }: { data: MemberOverview; onOpenLog: (kind: TeamMetricKey) => void }) {
-  const [metric, setMetric] = useState<TeamMetricKey>(() => data.metrics.find((m) => m.key !== "active_days" && data.totals[m.key] > 0)?.key || "supplier_orders");
-  const compared = `vs ${dayRangeLabel(data.range.previous.from, data.range.previous.to)}`;
-  const label = data.metrics.find((m) => m.key === metric)?.label || "";
-  const points = data.series.map((p, i) => ({ day: p.day, value: p[metric], previous: data.previousSeries[i]?.[metric] ?? null, previousDay: data.previousSeries[i]?.day ?? null }));
-  const shown = data.metrics.filter((m) => data.totals[m.key] > 0 || data.previous[m.key] > 0);
-  const columns = shown.length ? shown : data.metrics.slice(0, 2);
-
-  if (data.actions === 0 && Object.values(data.previous).every((v) => v === 0)) {
-    return <NothingRecorded recordingSince={data.recordingSince} />;
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        {data.metrics.map((m) => (
-          <KpiTile
-            key={m.key}
-            label={m.label}
-            value={fullNumber(data.totals[m.key])}
-            change={change(data.totals[m.key], data.previous[m.key])}
-            compared={compared}
-            spark={data.series.length > 1 ? data.series.map((p) => p[m.key]) : undefined}
-            selected={metric === m.key}
-            onSelect={() => setMetric(m.key)}
-          />
-        ))}
-      </div>
-
-      {data.series.length > 1 && (
-        <div className="card p-4">
-          <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">{label} per day</h2>
-            <button type="button" onClick={() => onOpenLog(metric)} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
-              See each one in the log
-            </button>
-          </div>
-          <TrendChart points={points} format={(v) => (v == null ? "—" : fullNumber(v))} label={label} variant="bars" currentLabel={dayRangeLabel(data.range.from, data.range.to)} previousLabel={dayRangeLabel(data.range.previous.from, data.range.previous.to)} />
-        </div>
-      )}
-
-      <div className="card overflow-hidden">
-        <div className="flex items-baseline justify-between gap-2 px-4 py-3">
-          <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By eBay account</h2>
-          <span className="text-[11.5px] text-[var(--color-muted)]">
-            {fullNumber(data.actions)} action{data.actions === 1 ? "" : "s"} in all
-          </span>
-        </div>
-        {data.accounts.length === 0 ? (
-          <p className="border-t border-[var(--color-line)] px-4 py-4 text-[12.5px] text-[var(--color-muted)]">Nothing in this period.</p>
-        ) : (
-          <div className="overflow-x-auto border-t border-[var(--color-line)]">
-            <table className="w-full min-w-[520px] text-[12.5px]">
-              <thead>
-                <tr className="bg-[var(--color-paper)] text-[10.5px] uppercase tracking-wide text-[var(--color-muted)]">
-                  <th className="px-4 py-2 text-left font-semibold">Account</th>
-                  {columns.map((m) => (
-                    <th key={m.key} className="px-3 py-2 text-right font-semibold">
-                      {m.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-line)]">
-                {data.accounts.map((a) => (
-                  <tr key={a.connectionId || a.label}>
-                    <td className="px-4 py-2.5 font-medium text-[var(--color-ink)]">
-                      {a.label}
-                      {!a.connectionId && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">(disconnected)</span>}
-                    </td>
-                    {columns.map((m) => (
-                      <td key={m.key} className={`px-3 py-2.5 text-right tabular-nums ${a[m.key] ? "text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>
-                        {fullNumber(a[m.key])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      <p className="text-[11.5px] leading-relaxed text-[var(--color-muted)]">
-        Days run midnight to midnight in {data.range.timeZone.replace("_", " ")}. An order line or listing counts once per period however many times it was touched (re-saving a supplier
-        order number isn&apos;t a second order); edits, drafts and cases count each time.
-      </p>
-    </div>
-  );
-}
-
 // A moment in the owner's time zone — the same days the figures and charts
 // count in, whatever the viewer's own clock says.
 function inZone(iso: string, timeZone: string | undefined) {
@@ -235,10 +142,48 @@ function inZone(iso: string, timeZone: string | undefined) {
   };
 }
 
+// What kind of work an entry is, for its icon: orders, listings, hunting, logins, account.
+function kindStyle(kind: string): { tile: string; icon: React.ReactNode } {
+  const area = kind.split(".")[0];
+  if (area === "order")
+    return { tile: "bg-sky-50 text-sky-600 ring-sky-200", icon: <path d="M3.5 7L10 3.5 16.5 7v6.5L10 17l-6.5-3.5V7zM3.5 7L10 10.5 16.5 7M10 10.5V17" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /> };
+  if (area === "listing")
+    return { tile: "bg-violet-50 text-violet-600 ring-violet-200", icon: <path d="M4 9.5V5a1 1 0 011-1h4.5l6.5 6.5-5.5 5.5L4 9.5zM7.3 7.3h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /> };
+  if (area === "hunt")
+    return { tile: "bg-amber-50 text-amber-600 ring-amber-200", icon: <><circle cx="10" cy="10" r="6" stroke="currentColor" strokeWidth="1.6" /><circle cx="10" cy="10" r="2.3" stroke="currentColor" strokeWidth="1.6" /></> };
+  if (area === "session")
+    return { tile: "bg-slate-50 text-slate-500 ring-slate-200", icon: <path d="M8 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H8M12 6.5L15.5 10 12 13.5M15.5 10H8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /> };
+  return { tile: "bg-teal-50 text-teal-600 ring-teal-200", icon: <path d="M3.5 8l1.5-4h10l1.5 4M3.5 8v8h13V8M3.5 8h13M8 16v-4h4v4" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /> };
+}
+
+// The log in days (the owner's), newest first: Today, Yesterday, then dates.
+function groupByDay(items: MemberActivityItem[], timeZone: string | undefined) {
+  const today = inZone(new Date().toISOString(), timeZone).date;
+  const yesterday = inZone(new Date(Date.now() - 86400000).toISOString(), timeZone).date;
+  const groups: { date: string; label: string; items: MemberActivityItem[] }[] = [];
+  for (const i of items) {
+    const date = inZone(i.at, timeZone).date;
+    let g = groups[groups.length - 1];
+    if (!g || g.date !== date) {
+      const label =
+        date === today
+          ? "Today"
+          : date === yesterday
+            ? "Yesterday"
+            : new Date(i.at).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", ...(timeZone ? { timeZone } : {}) });
+      g = { date, label, items: [] };
+      groups.push(g);
+    }
+    g.items.push(i);
+  }
+  return groups;
+}
+
 function subjectLink(item: MemberActivityItem): string | null {
   if (!item.connectionId) return null;
   if (item.subjectType === "order") return `/accounts/${item.connectionId}/orders/${encodeURIComponent(item.subjectId)}`;
   if (item.subjectType === "listing") return `/accounts/${item.connectionId}/listings?q=${encodeURIComponent(item.subjectId)}`;
+  if (item.subjectType === "hunt" && item.kind !== "hunt.withdrawn" && item.kind !== "hunt.removed") return `/accounts/${item.connectionId}/hunting?open=${encodeURIComponent(item.subjectId)}`;
   return null;
 }
 
@@ -256,17 +201,18 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
   const [connectionId, setConnectionId] = useState("");
   const [items, setItems] = useState<MemberActivityItem[]>([]);
   const [next, setNext] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [more, setMore] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [timeZone, setTimeZone] = useState<string | undefined>(undefined);
   const params = useMemo(() => ({ range, ...(range === "custom" ? custom : {}), kind: kind || undefined, connectionId: connectionId || undefined }), [range, custom, kind, connectionId]);
+  // Loading until the request for these filters has answered.
+  const requestKey = JSON.stringify([memberId, params]);
+  const [answered, setAnswered] = useState<string | null>(null);
+  const loading = answered !== requestKey;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     api
       .getMemberActivity(memberId, params)
       .then((d) => {
@@ -274,13 +220,14 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
         setItems(d.items);
         setNext(d.next);
         setTimeZone(d.range.timeZone);
+        setError(null);
       })
       .catch((err) => !cancelled && setError(err instanceof ApiError ? err.message : "Couldn't load the activity."))
-      .finally(() => !cancelled && setLoading(false));
+      .finally(() => !cancelled && setAnswered(requestKey));
     return () => {
       cancelled = true;
     };
-  }, [memberId, params]);
+  }, [memberId, params, requestKey]);
 
   async function loadMore() {
     if (!next) return;
@@ -324,7 +271,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
   return (
     <div className="card overflow-hidden">
       <div className="flex flex-wrap items-center gap-2 px-4 py-3">
-        <select value={kind} onChange={(e) => onKind(e.target.value)} className="input input-sm w-auto" aria-label="What">
+        <select value={kind} onChange={(e) => onKind(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="What">
           <option value="">All work</option>
           {metrics.map((m) => (
             <option key={m.key} value={m.key}>
@@ -338,7 +285,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
           ))}
         </select>
         {connections.length > 1 && (
-          <select value={connectionId} onChange={(e) => setConnectionId(e.target.value)} className="input input-sm w-auto" aria-label="eBay account">
+          <select value={connectionId} onChange={(e) => setConnectionId(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="eBay account">
             <option value="">All accounts</option>
             {connections.map((c) => (
               <option key={c.id} value={c.id}>
@@ -347,7 +294,7 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
             ))}
           </select>
         )}
-        <button type="button" onClick={exportCsv} disabled={exporting || items.length === 0} className="btn btn-secondary btn-sm ml-auto">
+        <button type="button" onClick={exportCsv} disabled={exporting || items.length === 0} className="btn btn-secondary btn-sm flex-shrink-0 sm:ml-auto">
           <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
             <path d="M12 4v11M7 10l5 5 5-5M5 20h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -367,40 +314,59 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
           </div>
         )
       ) : (
-        <ul className="divide-y divide-[var(--color-line)] border-t border-[var(--color-line)]">
-          {items.map((i) => {
-            const href = subjectLink(i);
-            const subject =
-              i.subjectType === "order" ? `Order ${i.subjectId}` : i.subjectType === "listing" ? `#${i.subjectId}` : i.subjectType === "draft" ? "Draft" : null;
-            return (
-              <li key={i.id} className="flex items-start gap-3 px-4 py-2.5">
-                <span className="w-24 flex-shrink-0 pt-px text-[11.5px] tabular-nums text-[var(--color-muted)]" title={timeZone ? `${timeZone} time` : undefined}>
-                  {inZone(i.at, timeZone).label}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-[12.5px] text-[var(--color-ink)]">
-                    <span className="font-medium">{i.label}</span>
-                    {subject && <span className="text-[var(--color-muted)]"> · </span>}
-                    {!subject ? null : href ? (
-                      <Link href={href} className="font-mono text-[11.5px] text-[var(--color-primary)] hover:underline">
-                        {subject}
-                      </Link>
-                    ) : (
-                      <span className="font-mono text-[11.5px] text-[var(--color-muted)]">{subject}</span>
-                    )}
-                  </p>
-                  {(i.title || (i.kind === "order.note" && typeof i.detail.text === "string")) && (
-                    <p className="mt-0.5 truncate text-[11.5px] text-[var(--color-muted)]">{i.kind === "order.note" && typeof i.detail.text === "string" ? `“${i.detail.text}”` : i.title}</p>
-                  )}
-                </div>
-                <div className="flex-shrink-0 text-right">
-                  {i.amount != null && <p className="text-[12px] tabular-nums text-[var(--color-ink)]">{formatMoney({ amount: i.amount, currency: i.currency || undefined })}</p>}
-                  <p className="text-[11px] text-[var(--color-muted)]">{i.connectionLabel}</p>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="border-t border-[var(--color-line)]">
+          {groupByDay(items, timeZone).map((g) => (
+            <div key={g.date}>
+              <p className="sticky top-0 z-[1] border-b border-[var(--color-line)] bg-[var(--color-paper)]/95 px-4 py-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)] backdrop-blur">
+                {g.label}
+                <span className="ml-1.5 font-medium normal-case tracking-normal">· {g.items.length} action{g.items.length === 1 ? "" : "s"}</span>
+              </p>
+              <ul className="divide-y divide-[var(--color-line)]">
+                {g.items.map((i) => {
+                  const href = subjectLink(i);
+                  const subject = i.subjectType === "order" ? `Order ${i.subjectId}` : i.subjectType === "listing" ? `#${i.subjectId}` : i.subjectType === "draft" ? "Draft" : null;
+                  const k = kindStyle(i.kind);
+                  const at = inZone(i.at, timeZone);
+                  return (
+                    <li key={i.id} className="flex items-start gap-3 px-4 py-2.5">
+                      <span className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${k.tile}`} aria-hidden>
+                        <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
+                          {k.icon}
+                        </svg>
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12.5px] text-[var(--color-ink)]">
+                          <span className="font-medium">{i.label}</span>
+                          {subject && <span className="text-[var(--color-muted)]"> · </span>}
+                          {!subject ? null : href ? (
+                            <Link href={href} className="font-mono text-[11.5px] text-[var(--color-primary)] hover:underline">
+                              {subject}
+                            </Link>
+                          ) : (
+                            <span className="font-mono text-[11.5px] text-[var(--color-muted)]">{subject}</span>
+                          )}
+                        </p>
+                        {(i.title || (i.kind === "order.note" && typeof i.detail.text === "string")) && (
+                          <p className="mt-0.5 truncate text-[11.5px] text-[var(--color-muted)]">{i.kind === "order.note" && typeof i.detail.text === "string" ? `\u201c${i.detail.text}\u201d` : i.title}</p>
+                        )}
+                        <p className="mt-0.5 text-[11px] text-[var(--color-muted)] sm:hidden">
+                          {[i.connectionLabel, i.amount != null ? formatMoney({ amount: i.amount, currency: i.currency || undefined }) : null].filter(Boolean).join(" · ")}
+                        </p>
+                      </div>
+                      <div className="flex-shrink-0 text-right">
+                        <p className="text-[11.5px] tabular-nums text-[var(--color-muted)]" title={timeZone ? `${timeZone} time` : undefined}>
+                          {at.time}
+                        </p>
+                        {i.amount != null && <p className="hidden text-[12px] font-medium tabular-nums text-[var(--color-ink)] sm:block">{formatMoney({ amount: i.amount, currency: i.currency || undefined })}</p>}
+                        <p className="hidden max-w-[140px] truncate text-[11px] text-[var(--color-muted)] sm:block">{i.connectionLabel}</p>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
       )}
       {next && (
         <div className="border-t border-[var(--color-line)] px-4 py-2.5 text-center">
@@ -442,7 +408,10 @@ function MemberPageBody() {
   const [data, setData] = useState<MemberOverview | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Loading until the figures for this member and range have answered.
+  const figuresKey = JSON.stringify([memberId, range, custom]);
+  const [answered, setAnswered] = useState<string | null>(null);
+  const loading = answered !== figuresKey;
   const [resetOpen, setResetOpen] = useState(false);
   const [revealed, setRevealed] = useState<{ email: string; password: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -450,7 +419,6 @@ function MemberPageBody() {
 
   const load = useCallback(async () => {
     if (range === "custom" && (!custom.from || !custom.to)) return;
-    setLoading(true);
     try {
       const [me, conns, overview] = await Promise.all([api.me(), api.listConnections(), api.getMemberOverview(memberId, range, custom)]);
       setUser(me.user);
@@ -466,16 +434,18 @@ function MemberPageBody() {
       }
       setError(err instanceof ApiError ? (err.status === 404 ? "This team member doesn't exist, or isn't on your team." : err.message) : "Couldn't load this team member.");
     } finally {
-      setLoading(false);
+      setAnswered(figuresKey);
     }
-  }, [memberId, range, custom, router]);
+  }, [memberId, range, custom, router, figuresKey]);
 
   useEffect(() => {
     if (!localStorage.getItem("token")) {
       router.replace("/login");
       return;
     }
-    load();
+    // After this render: loading shows from the figures' key, not from state set here.
+    const t = setTimeout(load, 0);
+    return () => clearTimeout(t);
   }, [load, router]);
 
   async function changeAccess(updates: PermissionUpdate[]) {
@@ -499,7 +469,7 @@ function MemberPageBody() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-[var(--color-paper)] p-10">
+      <main className="min-h-screen bg-[var(--color-paper)] p-4 sm:p-10">
         <PageSkeleton />
       </main>
     );
@@ -519,19 +489,24 @@ function MemberPageBody() {
       isAdmin={user.is_admin}
       header={
         <div className="flex min-w-0 items-center gap-3">
-          <Link href="/team" className="btn btn-ghost btn-icon flex-shrink-0" aria-label="Back to Team" title="Back to Team">
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+          <Link
+            href="/team"
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"
+            aria-label="Back to Team"
+            title="Back to Team"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
               <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </Link>
-          {member && <MemberAvatar member={member} size={36} />}
+          {member && <MemberAvatar member={member} size={46} />}
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 truncate text-lg font-semibold text-[var(--color-ink)]">
               {name || "Team member"}
               {removed && <span className="chip text-[11px] font-medium text-[var(--color-muted)]">Removed {formatShortDate(member!.deactivated_at!)}</span>}
             </h1>
             {member && (
-              <p className="truncate text-[12.5px] text-[var(--color-muted)]">
+              <p className="line-clamp-2 text-[12.5px] text-[var(--color-muted)] sm:line-clamp-none sm:truncate">
                 {member.name ? `${member.email} · ` : ""}added {formatShortDate(member.created_at)} · last login {timeAgo(member.last_login_at)} · last active {timeAgo(member.lastActiveAt)}
               </p>
             )}
@@ -557,19 +532,31 @@ function MemberPageBody() {
           <>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <Tabs value={tab} onChange={(t) => setQuery({ tab: t === "performance" ? null : t })} />
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 max-sm:ml-auto">
                 {!removed && (
-                  <button type="button" onClick={() => setResetOpen(true)} className="btn btn-secondary btn-sm">
+                  <button type="button" onClick={() => setResetOpen(true)} className="btn btn-secondary btn-sm !h-8 gap-1.5 !px-3 !text-[12.5px]">
+                    <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+                      <circle cx="7" cy="12.5" r="3.2" stroke="currentColor" strokeWidth="1.6" />
+                      <path d="M9.3 10.2L16 3.5M13.5 6l1.8 1.8M11.8 7.7l1.4 1.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                    </svg>
                     Change password
                   </button>
                 )}
                 {removed ? (
-                  <button type="button" onClick={() => setRemoved(false)} disabled={busy} className="btn btn-primary btn-sm">
+                  <button type="button" onClick={() => setRemoved(false)} disabled={busy} className="btn btn-primary btn-sm !h-8 !px-3 !text-[12.5px]">
                     {busy ? "Restoring…" : "Restore access"}
                   </button>
                 ) : (
-                  <button type="button" onClick={() => setConfirmRemove(true)} className="btn btn-danger-ghost btn-sm">
-                    Remove access
+                  <button
+                    type="button"
+                    onClick={() => setConfirmRemove(true)}
+                    aria-label="Remove access"
+                    title="Remove access"
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted)] transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
+                  >
+                    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+                      <path d="M4.5 6h11M8 6V4.5h4V6M6 6l.7 9.2a1 1 0 001 .8h4.6a1 1 0 001-.8L14 6M8.5 9v4.5M11.5 9v4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
                   </button>
                 )}
               </div>
@@ -578,6 +565,7 @@ function MemberPageBody() {
             {tab !== "access" && (
               <div className={`mb-4 flex flex-wrap items-center justify-between gap-2 ${loading ? "opacity-60" : ""}`}>
                 <RangePicker
+                  key={`${custom.from}:${custom.to}`}
                   range={range}
                   custom={custom}
                   onChange={(r, c) => setQuery({ range: r === "7d" ? null : r, from: c?.from || null, to: c?.to || null })}
@@ -588,7 +576,7 @@ function MemberPageBody() {
 
             {tab === "performance" && (
               <div className={loading ? "opacity-60 transition-opacity" : "transition-opacity"}>
-                <Performance key={`${data.range.from}:${data.range.to}`} data={data} onOpenLog={(k) => setQuery({ tab: "activity", kind: k })} />
+                <MemberPerformance key={`${data.range.from}:${data.range.to}`} data={data} onOpenLog={(k) => setQuery({ tab: "activity", kind: k })} />
               </div>
             )}
             {tab === "activity" && (
@@ -598,8 +586,10 @@ function MemberPageBody() {
               <div className="card overflow-hidden">
                 <div className="px-5 py-4">
                   <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">What {member!.name || "they"} can use</h2>
-                  <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">
-                    {removed ? "Kept as it was, and back in force if you restore them." : "Changes save straight away and apply from their next click."}
+                  <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
+                    {removed
+                      ? "Kept as it was, and back in force if you restore them."
+                      : "Switch an area on for every account, then tap an account to set it apart. Changes save straight away and apply from their next click."}
                   </p>
                 </div>
                 <div className="border-t border-[var(--color-line)]">

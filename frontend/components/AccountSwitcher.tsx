@@ -2,24 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { api, Connection } from "@/lib/api";
+import { Connection } from "@/lib/api";
+import { useConnections } from "@/lib/useConnections";
+import { landingPathForConnection, sectionAllowed } from "@/lib/permissions";
 import { PlatformIcon } from "@/components/PlatformIcon";
 
 // The account card at the top of the account sidebar, with a menu that
-// jumps straight to any other connected account. The section you're in is
-// kept: switching from one account's Orders lands on the other's Orders.
-// The list is fetched once per login and remembered for the session; it is
-// keyed by the login token so a different user in the same tab never sees
-// the previous user's accounts.
-let cached: { token: string; connections: Connection[] } | null = null;
-function currentToken() {
-  try {
-    return localStorage.getItem("token") || "";
-  } catch {
-    return "";
-  }
-}
-
+// jumps straight to any other account. The section you're in is kept:
+// switching from one account's Orders lands on the other's Orders, unless a
+// team member can't open that section there, who lands where they can.
 export function AccountSwitcher({
   connectionId,
   label,
@@ -36,23 +27,10 @@ export function AccountSwitcher({
   const router = useRouter();
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const [connections, setConnections] = useState<Connection[]>(() => (cached && cached.token === currentToken() ? cached.connections : []));
+  const connections = useConnections();
   const [query, setQuery] = useState("");
   const wrap = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const token = currentToken();
-    if (cached && cached.token === token) return;
-    cached = null;
-    api
-      .listConnections()
-      .then((data) => {
-        cached = { token, connections: data.connections };
-        setConnections(data.connections);
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -79,10 +57,10 @@ export function AccountSwitcher({
     // Same section, other account. /accounts/<id>/orders?x -> /accounts/<other>/orders
     const rest = pathname.replace(/^\/accounts\/[^/]+/, "");
     const section = rest.split("/")[1] || "";
-    const keep = ["listings", "orders", "analytics", "campaigns", "inbox", "settings"].includes(section) ? `/${section}` : "";
+    const keep = ["hunting", "research", "listings", "orders", "analytics", "campaigns", "inbox", "settings"].includes(section) ? `/${section}` : "";
     setOpen(false);
     setQuery("");
-    router.push(`/accounts/${target.id}${keep}`);
+    router.push(sectionAllowed(target, section) ? `/accounts/${target.id}${keep}` : landingPathForConnection(target));
   }
 
   return (

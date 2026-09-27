@@ -138,6 +138,24 @@ const config = {
     // may spend.
     dailyCalls: parseInt(process.env.RESEARCH_DAILY_CALLS || '3000', 10),
   },
+  // Product hunting reads each competitor listing through the same Browse
+  // allowance: at most this many of its 5,000 a day, so drafting and
+  // research always have calls left.
+  // Browser push notifications (Web Push, notifications/push.js). Without
+  // keys the bell still works, with no push to the browser.
+  push: {
+    publicKey: process.env.VAPID_PUBLIC_KEY || null,
+    privateKey: process.env.VAPID_PRIVATE_KEY || null,
+    subject: process.env.VAPID_SUBJECT || null,
+  },
+  hunting: {
+    dailyCalls: parseInt(process.env.HUNTING_DAILY_CALLS || '1000', 10),
+    // The daily re-read of hunted products' competitors (their sales
+    // history): at most this many Browse calls a day, and off on a machine
+    // that shouldn't spend the shared allowance.
+    trackCalls: parseInt(process.env.HUNT_TRACK_DAILY_CALLS || '300', 10),
+    trackerEnabled: process.env.HUNT_TRACKER !== 'off',
+  },
   analytics: {
     dailyLimit: parseInt(process.env.EBAY_ANALYTICS_DAILY_LIMIT || '100', 10),
     schedulerEnabled: process.env.ANALYTICS_SCHEDULER !== 'off',
