@@ -8,6 +8,7 @@ const analyticsBudget = require('./modules/ebay/analytics-budget');
 const browseUsage = require('./modules/ebay/browse-usage');
 const analyticsScheduler = require('./modules/analytics/analytics.scheduler');
 const huntingScheduler = require('./modules/hunting/hunting.scheduler');
+const discoverScheduler = require('./modules/discover/discover.scheduler');
 
 const app = createApp();
 
@@ -21,6 +22,8 @@ const server = app.listen(config.port, () => {
   analyticsBudget.start();
   analyticsScheduler.start();
   huntingScheduler.start();
+  // Watched categories and keywords, read again every night.
+  discoverScheduler.start();
   // The Browse API's own allowance (drafting, health checks, research).
   browseUsage.start();
   // Claude's spend by feature, kept across restarts.

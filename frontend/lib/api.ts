@@ -1912,6 +1912,162 @@ export interface MemberHunting {
   reasons: (HuntReason & { count: number })[];
 }
 
+// ---- Discover (the Hunting page's tab for finding what to hunt) ----------------
+
+export interface DiscoverListing {
+  itemId: string;
+  title: string;
+  image: string | null;
+  url: string | null;
+  price: { value: number; currency: string } | null;
+  shipping: { cost: number; free: boolean } | null;
+  landed: number | null; // price with postage
+  seller: { username: string; feedbackScore: number | null; feedbackPercentage: number | null } | null;
+  overseas: boolean;
+  country: string | null;
+  category: string | null;
+  categoryId: string | null;
+  createdAt: string | null;
+  daysLive: number | null;
+  delivery: { min: number | null; max: number | null; compared: "faster" | "similar" | "slower" | "unknown" };
+  sold: number | null; // eBay's total, null until read
+  soldPerMonth: number | null;
+  options: { label: string; sold: number; price: number | null }[] | null; // best-selling first
+  optionCount: number;
+  readDay: string | null;
+  recent: { sold: number; days: number; from: string; to: string } | null; // sold between two readings
+  lift?: number | null; // rising: selling this many times faster lately than over its life
+}
+
+export interface DiscoverScorePart {
+  key: string;
+  label: string;
+  points: number;
+  max: number;
+  value: string;
+  full: string;
+  detail: string;
+}
+export interface DiscoverOpportunity {
+  score: number;
+  band: "strong" | "fair" | "weak";
+  parts: DiscoverScorePart[];
+}
+export interface DiscoverFigures {
+  total: number;
+  sample: number;
+  demand: { read: number; selling: number; medianPerMonth: number | null; topPerMonth: number | null; soldTotal: number };
+  competition: { sellers: number; topSeller: { username: string; share: number } | null };
+  price: { low: number; median: number; high: number } | null;
+  fit: { sellers: number; canMatch: number; share: number; overseas: number } | null;
+}
+export interface DiscoverKeyword {
+  term: string;
+  words: number;
+  listings: number;
+  selling: number;
+  listingShare: number;
+  salesShare: number;
+  lift: number | null;
+  perMonth: number;
+}
+export interface DiscoverChild {
+  id: string;
+  name: string;
+  leaf: boolean;
+  listings: number | null;
+  scanned: { score: number; band: DiscoverOpportunity["band"]; medianPerMonth: number | null; selling: number; read: number; price: number | null; fit: number | null; topSeller: number | null; takenAt: string } | null;
+}
+export interface DiscoverBudget {
+  trading: number;
+  browse: number;
+  tradingPaused: boolean;
+  used: { trading: number; browse: number };
+  limits: { trading: number; browse: number };
+  resetAt: string;
+}
+export interface DiscoverAccount {
+  min: number;
+  max: number;
+  policyName: string | null;
+  serviceName: string | null;
+}
+export interface DiscoverSubjectRef {
+  categoryId?: string;
+  q?: string;
+}
+export interface DiscoverExplore {
+  subject: { kind: "category" | "keyword"; categoryId: string | null; q: string | null; name: string; path: { id: string; name: string }[]; leaf: boolean; takenAt: string; stale: boolean };
+  figures: DiscoverFigures;
+  opportunity: DiscoverOpportunity;
+  recent: { sold: number; days: number; listings: number } | null;
+  rising: DiscoverListing[];
+  listings: DiscoverListing[];
+  keywords: DiscoverKeyword[];
+  brands: { name: string; count: number; unbranded: boolean }[];
+  categories: { id: string; name: string; count: number }[];
+  children: DiscoverChild[];
+  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean };
+  watch: { id: string } | null;
+  ranking: { total: number; done: number } | null;
+  market: { id: string; name: string; currency: string; country?: string; flag?: string };
+  account: DiscoverAccount | null;
+  budget: DiscoverBudget;
+}
+export interface DiscoverCategoryCard {
+  id: string;
+  name: string;
+  path?: string[];
+  leaf?: boolean;
+  listings?: number;
+  scanned: { score: number; band: DiscoverOpportunity["band"]; total: number } | null;
+}
+export interface DiscoverStart {
+  market: { id: string; name: string; currency: string };
+  account: DiscoverAccount | null;
+  yourCategories: DiscoverCategoryCard[];
+  topCategories: DiscoverCategoryCard[];
+  watches: number;
+  budget: DiscoverBudget;
+}
+export interface DiscoverWatch {
+  id: string;
+  kind: "category" | "keyword";
+  value: string;
+  label: string;
+  createdAt: string;
+  createdBy: string | null;
+  lastReadAt: string | null;
+  takenAt?: string;
+  figures: { total: number; medianPerMonth: number | null; selling: number; read: number; price: number | null } | null;
+  opportunity?: { score: number; band: DiscoverOpportunity["band"] };
+  recent?: { sold: number; days: number; listings: number } | null;
+  rising?: DiscoverListing[];
+}
+export interface DiscoverWatchList {
+  items: DiscoverWatch[];
+  limit: number;
+  market: { id: string; name: string; currency: string };
+}
+export interface DiscoverOwnKeyword {
+  term: string;
+  words: number;
+  listings: number;
+  measured: number; // of them, the ones eBay measured traffic for
+  impressions: number;
+  views: number;
+  sold: number;
+  ctr: number | null;
+  conversion: number | null;
+}
+export interface DiscoverOwnKeywords {
+  status: string;
+  range: { key: string; from?: string; to?: string };
+  listings: number;
+  measured: number;
+  keywords: DiscoverOwnKeyword[];
+}
+
 export interface AppNotification {
   id: string;
   kind: string;
@@ -2187,6 +2343,22 @@ export const api = {
     if (params.page && params.page > 1) query.set("page", String(params.page));
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },
+  discoverStart: (connectionId: string) => request<DiscoverStart>(`/api/connections/${connectionId}/discover`),
+  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number) => {
+    const q = new URLSearchParams();
+    if (subject.categoryId) q.set("categoryId", subject.categoryId);
+    if (subject.q) q.set("q", subject.q);
+    if (reads) q.set("reads", String(reads));
+    return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
+  },
+  discoverRank: (connectionId: string, categoryId: string) =>
+    request<{ total: number; done: number }>(`/api/connections/${connectionId}/discover/rank`, { method: "POST", body: JSON.stringify({ categoryId }) }),
+  discoverWatches: (connectionId: string) => request<DiscoverWatchList>(`/api/connections/${connectionId}/discover/watches`),
+  discoverWatch: (connectionId: string, subject: DiscoverSubjectRef) =>
+    request<{ id: string }>(`/api/connections/${connectionId}/discover/watches`, { method: "POST", body: JSON.stringify(subject) }),
+  discoverUnwatch: (connectionId: string, watchId: string) => request<void>(`/api/connections/${connectionId}/discover/watches/${watchId}`, { method: "DELETE" }),
+  discoverOwnKeywords: (connectionId: string, range: "7d" | "30d" | "90d") =>
+    request<DiscoverOwnKeywords>(`/api/connections/${connectionId}/discover/your-keywords?range=${range}`),
   huntBadge: (connectionId: string) => request<HuntBadge>(`/api/connections/${connectionId}/hunting/badge`),
   huntDetail: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}`),
   huntRecheck: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}/recheck`, { method: "POST" }),

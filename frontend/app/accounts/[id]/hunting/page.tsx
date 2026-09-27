@@ -13,13 +13,16 @@ import { HuntPanel } from "@/components/hunting/HuntPanel";
 import { DecisionDialog, Decision } from "@/components/hunting/DecisionDialog";
 import { announceHuntingChange } from "@/components/hunting/HuntBits";
 import { PushPrompt } from "@/components/NotificationBell";
+import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 
 // Product hunting on one eBay account: team members find products (a
 // competitor's listing and the AliExpress product to supply it), Liston
 // works out the profit on every option, and each product waits for a
 // reviewer before anyone may draft it. Reviewers see the queue; listers
 // see what's approved, ready to draft. Each team member's hunting figures
-// are on their own page in the owner's Team area, not here.
+// are on their own page in the owner's Team area, not here. The Discover
+// tab (?tab=discover) is where hunters find what to hunt: categories and
+// keywords, what's selling, a watchlist.
 
 const VIEWS: HuntView[] = ["all", "review", "approved", "rejected", "mine"];
 
@@ -61,6 +64,9 @@ function HuntingBody() {
   const [showForm, setShowForm] = useState(Boolean(search.get("competitor")));
   // A fresh form after each add.
   const [formKey, setFormKey] = useState(0);
+  // A competitor picked in Discover ("Hunt this"), filled into a fresh form.
+  const [prefill, setPrefill] = useState<string | null>(null);
+  const tab: "products" | "discover" = search.get("tab") === "discover" ? "discover" : "products";
 
   // The page's place in the URL, so a shared or reopened link lands the same.
   const writeUrl = useCallback(
@@ -72,7 +78,6 @@ function HuntingBody() {
       };
       if (next.view !== undefined) put("view", next.view);
       if (next.open !== undefined) put("open", next.open);
-      qs.delete("tab");
       qs.delete("competitor");
       router.replace(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
     },
@@ -151,6 +156,24 @@ function HuntingBody() {
   }
   const closePanel = useCallback(() => open(null), [open]);
 
+  // Products (the hunted products) or Discover (what to hunt), in the address.
+  function changeTab(next: "products" | "discover") {
+    const qs = new URLSearchParams(search.toString());
+    if (next === "discover") qs.set("tab", "discover");
+    else qs.delete("tab");
+    qs.delete("competitor");
+    router.push(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
+  }
+  // "Hunt this" in Discover: back to the products with the form open and the competitor filled in.
+  function huntFromDiscover(url: string) {
+    setPrefill(url);
+    setFormKey((k) => k + 1);
+    setChecked(null);
+    setAdded(null);
+    setShowForm(true);
+    changeTab("products");
+  }
+
   async function quickApprove(input: { decision: Decision; reason?: string; note?: string }) {
     if (!quick) return;
     try {
@@ -167,6 +190,9 @@ function HuntingBody() {
   const perms = connection?.permissions;
   const canHunt = viewer ? viewer.canHunt : !perms || Boolean(perms.hunting || perms.hunting_review);
   const canReview = viewer ? viewer.canReview : !perms || Boolean(perms.hunting_review);
+  // Discover is for whoever hunts or reviews; their own keywords need the account's analytics.
+  const canDiscover = !perms || Boolean(perms.hunting || perms.hunting_review);
+  const canSeeTraffic = !perms || Boolean(perms.analytics);
   const views = useMemo(() => {
     // The same tabs for everyone, in one order (a person who only drafts sees Approved).
     const allowed = data?.views || VIEWS;
@@ -199,6 +225,26 @@ function HuntingBody() {
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Find products worth listing on {market?.name ?? "eBay"}. Each one is checked for profit and approved before it&apos;s drafted.</p>
         </div>
       }
+      subheader={
+        canDiscover ? (
+          <div role="tablist" aria-label="Hunting" className="flex gap-x-1 border-b border-[var(--color-line)]">
+            {(["products", "discover"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tab === t}
+                onClick={() => changeTab(t)}
+                className={`-mb-px shrink-0 border-b-2 px-3.5 py-2 text-[13.5px] font-medium transition-colors ${
+                  tab === t ? "border-[var(--color-primary)] text-[var(--color-primary)]" : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                }`}
+              >
+                {t === "products" ? "Hunted products" : "Discover"}
+              </button>
+            ))}
+          </div>
+        ) : undefined
+      }
       footer={checked ? <HuntAddBar key={checked.checkId} connectionId={connection.id} checked={checked} onDiscard={() => setChecked(null)} onAdded={onAdded} /> : undefined}
       pinFooter
       actions={
@@ -208,6 +254,7 @@ function HuntingBody() {
             onClick={() => {
               setShowForm(true);
               setAdded(null);
+              if (tab === "discover") changeTab("products");
             }}
             className="btn btn-primary btn-sm !h-8 gap-1 !px-3 !text-[12.5px]"
           >
@@ -219,6 +266,9 @@ function HuntingBody() {
         ) : undefined
       }
     >
+      {tab === "discover" && canDiscover ? (
+        <DiscoverPanel connectionId={connection.id} canSeeTraffic={canSeeTraffic} onHunt={huntFromDiscover} />
+      ) : (
       <div className="space-y-5">
         {added && !checked && (
           <div className="notice notice-success">
@@ -235,7 +285,7 @@ function HuntingBody() {
             key={formKey}
             connectionId={connection.id}
             marketName={market?.name ?? "eBay"}
-            initialCompetitor={formKey === 0 ? search.get("competitor") : null}
+            initialCompetitor={prefill ?? (formKey === 0 ? search.get("competitor") : null)}
             checked={checked}
             onChecked={onChecked}
             onClose={() => {
@@ -319,6 +369,7 @@ function HuntingBody() {
           </section>
         )}
       </div>
+      )}
 
       {openId && <HuntPanel key={`${openId}-${editing}`} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} startEditing={editing} />}
       <DecisionDialog decision={quick ? "approve" : null} reasons={data?.reasons || []} title={quick?.title || ""} onClose={() => setQuick(null)} onSubmit={quickApprove} />

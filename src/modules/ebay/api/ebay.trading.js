@@ -384,6 +384,47 @@ async function getItemSummary(accessToken, itemId, { siteId } = {}) {
   };
 }
 
+// How many a listing has sold, any seller's (Discover's reading of the
+// listings leading a category or keyword): the total, and per option for a
+// listing with options ("Warm white / 5m": 2), which Browse gives only as
+// one total. Trimmed to those fields. { itemId, sold, options, categoryId,
+// categoryPath, startedAt, title }.
+async function getItemSales(accessToken, itemId, { siteId } = {}) {
+  const body =
+    `<ItemID>${itemId}</ItemID>` +
+    [
+      'Item.ItemID',
+      'Item.Title',
+      'Item.SellingStatus.QuantitySold',
+      'Item.ListingDetails.StartTime',
+      'Item.PrimaryCategory',
+      'Item.Variations.Variation.VariationSpecifics',
+      'Item.Variations.Variation.SellingStatus.QuantitySold',
+      'Item.Variations.Variation.StartPrice',
+    ]
+      .map((f) => `<OutputSelector>${f}</OutputSelector>`)
+      .join('');
+  const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
+  const item = res.Item || {};
+  const options = toArray(item.Variations?.Variation).map((v) => ({
+    label: toArray(v.VariationSpecifics?.NameValueList)
+      .map((nv) => toArray(nv.Value).map(String).join(', '))
+      .filter(Boolean)
+      .join(' / '),
+    sold: Number(v.SellingStatus?.QuantitySold ?? 0),
+    price: money(v.StartPrice)?.amount ?? null,
+  }));
+  return {
+    itemId: String(item.ItemID ?? itemId),
+    title: item.Title !== undefined ? String(item.Title) : null,
+    sold: Number(item.SellingStatus?.QuantitySold ?? 0),
+    options: options.length ? options : null,
+    categoryId: item.PrimaryCategory?.CategoryID !== undefined ? String(item.PrimaryCategory.CategoryID) : null,
+    categoryPath: item.PrimaryCategory?.CategoryName ? String(item.PrimaryCategory.CategoryName) : null,
+    startedAt: item.ListingDetails?.StartTime || null,
+  };
+}
+
 // Only the fields mapOrder/mapLineItem read. A full GetOrders response is
 // several times larger (shipping addresses, fee breakdowns, monetary
 // details) and the parse time was most of what the dashboard waited on.
@@ -746,6 +787,7 @@ async function getMemberFeedback(accessToken, userId, siteId = 0) {
 
 module.exports = {
   EbayTradingError,
+  getItemSales,
   relistListing,
   getUserProfile,
   getMemberFeedback,

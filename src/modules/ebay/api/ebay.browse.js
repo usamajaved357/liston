@@ -80,7 +80,8 @@ function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort,
     'search',
     '/buy/browse/v1/item_summary/search',
     {
-      q,
+      // A category alone (Discover) has no search words.
+      ...(q ? { q } : {}),
       limit,
       ...(offset ? { offset } : {}),
       ...(filter ? { filter } : {}),
