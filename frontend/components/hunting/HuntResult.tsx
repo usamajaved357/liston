@@ -6,12 +6,13 @@ import { HuntCheckResult, HuntDuplicate, HuntMatchQuality, HuntOption } from "@/
 import { count, money, age } from "@/components/research/format";
 import { ToneIcon } from "@/components/research/ResearchPanels";
 import { HuntSales } from "./HuntSales";
-import { ExternalIcon, FactPill, FeedbackPill, INK, LEVEL_TONE, MATCH, MatchChip, RatingPill, STAGE, StoreScores, Thumb, VERDICT, profitInk, roiText, signedMoney, ago } from "./HuntBits";
+import { ExternalIcon, FactPill, FeedbackPill, INK, LEVEL_TONE, MATCH, MatchChip, RatingPill, SectionHead, STAGE, StoreScores, Thumb, VERDICT, profitInk, roiText, signedMoney, ago } from "./HuntBits";
 
-// A hunted product's profit check: the two listings side by side, the
-// verdict on the best seller, every supplier option worked out at the
-// competitor's price for it, what could go wrong, and where the product
-// already is on the owner's accounts.
+// A hunted product's profit check, most telling first: the profit on the
+// best seller and where its money goes, where the product already is on the
+// owner's accounts, what to check before approving, how the competitor
+// sells, the two listings, and last every supplier option worked out at the
+// competitor's price for it.
 
 const OPTIONS_SHOWN = 8;
 
@@ -116,6 +117,14 @@ function Verdict({ result }: { result: HuntCheckResult }) {
           </dl>
         )}
       </div>
+      {row && row.sellPrice !== null && row.fees && (
+        <div className="border-t border-black/5 bg-white/75 px-4 py-4 sm:px-5">
+          <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+            Where the money goes{row.label && result.options.length > 1 ? ` · ${row.label}` : ""}
+          </p>
+          <Split option={row} currency={currency} />
+        </div>
+      )}
       {unpriced && (
         <p className="border-t border-black/5 bg-white/50 px-4 py-2 text-[12px] text-[var(--color-ink)] sm:px-5">
           Checked from the supplier alone: there&apos;s no market price, best seller or demand to judge by, so each option earns your target by design. Add a competitor to see whether buyers pay these prices.
@@ -126,7 +135,46 @@ function Verdict({ result }: { result: HuntCheckResult }) {
           The competitor&apos;s best seller, <b className="font-semibold">{best.label}</b>, has no matching option at this supplier.
         </p>
       )}
+      <WorkedOut result={result} />
     </section>
+  );
+}
+
+// How the fees, postage and price were arrived at, folded away under the profit.
+function WorkedOut({ result }: { result: HuntCheckResult }) {
+  const { competitor: c, currency, shipping, fees } = result;
+  return (
+    <details className="group border-t border-black/5 bg-white/50">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-2.5 text-[12px] font-semibold text-[var(--color-ink)] hover:bg-white/60 sm:px-5 [&::-webkit-details-marker]:hidden">
+        How it&apos;s worked out
+        <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 text-[var(--color-muted)] transition-transform group-open:rotate-180" aria-hidden>
+          <path d="M6 8l4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </summary>
+      <div className="space-y-1 px-4 pb-3.5 text-[12px] leading-relaxed text-[var(--color-muted)] sm:px-5">
+        <p>
+          <b className="font-semibold text-[var(--color-ink)]">Fees:</b>{" "}
+          {fees.basis === "orders"
+            ? `what eBay took on this account's last ${fees.orders} orders (${fees.days} days): ${fees.processingPercent}% final value, ${fees.adsPercent}% promoted listings`
+            : `this account's pricing settings: ${fees.processingPercent}% final value, ${fees.adsPercent}% promoted listings`}
+          , plus {money(fees.fixed, currency)} per order.
+        </p>
+        <p>
+          <b className="font-semibold text-[var(--color-ink)]">Postage:</b>{" "}
+          {shipping.basis === "aliexpress"
+            ? shipping.freeOver
+              ? `AliExpress ships it free on orders over ${money(shipping.freeOver, currency)}${shipping.company ? ` (${shipping.company})` : ""}, so postage isn't counted. It only adds the ${money(shipping.cost, currency)} fee when there's no free-shipping offer.`
+              : `AliExpress's own charge to ${result.market?.name || "the buyer"}${shipping.company ? ` (${shipping.company})` : ""}${shipping.forOption ? ` for ${shipping.forOption}` : ""}, added to every sale.`
+            : "the flat postage cost in this account's pricing settings (AliExpress didn't quote)."}
+        </p>
+        <p>
+          <b className="font-semibold text-[var(--color-ink)]">Price:</b>{" "}
+          {c
+            ? "each option is sold at the competitor's price for the same option, postage included; an option they don't sell uses their lowest price."
+            : `no competitor, so each option is priced as a draft would be: cost and postage marked up to your ${result.targetRoiPercent}% target return, rounded up to .99.`}
+        </p>
+      </div>
+    </details>
   );
 }
 
@@ -220,7 +268,7 @@ function StockText({ stock }: { stock: number | null }) {
 function OptionsTable({ result }: { result: HuntCheckResult }) {
   const { currency, targetRoiPercent, summary } = result;
   const unpriced = summary.verdict === "unpriced";
-  const [open, setOpen] = useState<number | null>(summary.headline.optionIndex);
+  const [open, setOpen] = useState<number | null>(null);
   const [all, setAll] = useState(false);
   // The option the product is judged on first, then what earns most, the out-of-stock last.
   const ordered = useMemo(() => {
@@ -260,12 +308,11 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
 
   return (
     <section className="card overflow-hidden">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3">
-        <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">{single ? "Profit per sale" : `Profit on each option (${result.options.length})`}</h3>
-        <p className="text-[11.5px] text-[var(--color-muted)]">
-          {result.competitor ? "At the competitor's price, postage included." : `At your price: cost and postage marked up to your ${targetRoiPercent}% target return.`} Tap a row for the breakdown.
-        </p>
-      </div>
+      <SectionHead
+        icon="options"
+        title={single ? "Profit per sale" : `Every option (${result.options.length})`}
+        meta={`${result.competitor ? "At the competitor's price, postage included." : `At your price: cost and postage marked up to your ${targetRoiPercent}% target return.`} Tap a row for the breakdown.`}
+      />
 
       {/* Phones: a card per option. */}
       <ul className="divide-y divide-[var(--color-line)] border-t border-[var(--color-line)] md:hidden">
@@ -381,30 +428,51 @@ function OptionsTable({ result }: { result: HuntCheckResult }) {
 
 // ---- risks and duplicates ------------------------------------------------------------------------
 
+const CHECK_TILE = {
+  bad: "bg-rose-50/70 ring-rose-200",
+  warn: "bg-amber-50/70 ring-amber-200",
+  good: "bg-[var(--color-panel)] ring-[var(--color-line)]",
+  unknown: "bg-[var(--color-paper)] ring-[var(--color-line)]",
+} as const;
+
 function Checks({ result }: { result: HuntCheckResult }) {
   const order = { bad: 0, warn: 1, unknown: 2, ok: 3 } as const;
   const checks = [...result.checks].sort((a, b) => order[a.level] - order[b.level]);
+  const bad = checks.filter((c) => c.level === "bad").length;
+  const look = checks.filter((c) => c.level === "warn").length;
+  const fine = checks.filter((c) => c.level === "ok").length;
+  const pill = "inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-[11.5px] font-semibold ring-1 ring-inset";
   return (
-    <section className="card p-4">
-      <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">Before approving</h3>
-      <ul className="mt-2.5 space-y-2.5">
+    <section className="card overflow-hidden">
+      <SectionHead
+        icon="checks"
+        title="Before approving"
+        meta={
+          <>
+            {bad > 0 && <span className={`${pill} bg-rose-50 text-rose-700 ring-rose-200`}>{bad} against it</span>}
+            {look > 0 && <span className={`${pill} bg-amber-50 text-amber-700 ring-amber-200`}>{look} to look at</span>}
+            {fine > 0 && <span className={`${pill} bg-emerald-50 text-emerald-700 ring-emerald-200`}>{fine} fine</span>}
+          </>
+        }
+      />
+      <ul className="grid grid-cols-1 gap-2 border-t border-[var(--color-line)] p-4 sm:px-5 md:grid-cols-2">
         {checks.map((c) => {
           const tone = LEVEL_TONE[c.level];
           return (
-            <li key={c.key} className="flex gap-2.5">
-              <span className={`mt-0.5 flex-shrink-0 ${INK[tone]}`}>
+            <li key={c.key} className={`flex min-w-0 gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset ${CHECK_TILE[tone]}`}>
+              <span className={`mt-px flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-black/5 ${INK[tone]}`}>
                 <ToneIcon tone={tone} />
               </span>
-              <span className="min-w-0 text-[12.5px] leading-relaxed">
-                <span className="font-semibold text-[var(--color-ink)]">{c.label}</span>
-                <span className="text-[var(--color-muted)]"> · {c.detail}</span>
+              <span className="min-w-0">
+                <span className="block text-[12.5px] font-semibold text-[var(--color-ink)]">{c.label}</span>
+                <span className="block text-[12px] leading-snug text-[var(--color-muted)]">{c.detail}</span>
               </span>
             </li>
           );
         })}
       </ul>
       {result.warnings.length > 0 && (
-        <ul className="mt-3 space-y-1 border-t border-[var(--color-line)] pt-3 text-[12px] text-amber-800">
+        <ul className="space-y-1 border-t border-[var(--color-line)] px-4 py-3 text-[12px] text-amber-800 sm:px-5">
           {result.warnings.map((w) => (
             <li key={w}>{w}</li>
           ))}
@@ -486,12 +554,16 @@ function NoCompetitor({ target }: { target: number }) {
   );
 }
 
-export function HuntResult({ result, connectionId, onSalesImported }: { result: HuntCheckResult; connectionId?: string; onSalesImported?: () => void }) {
-  const { competitor: c, source: s, currency, shipping, fees, demand } = result;
+export function HuntResult({ result }: { result: HuntCheckResult }) {
+  const { competitor: c, source: s, currency, shipping, demand } = result;
   const supplier = s.supplier;
   const postage = c?.postage ? (c.postage.cost ? `+ ${money(c.postage.cost, currency)} postage` : "Free postage") : null;
   return (
     <div className="space-y-4">
+      <Verdict result={result} />
+      <Duplicates items={result.duplicates || []} />
+      <Checks result={result} />
+      <HuntSales result={result} />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {!c ? (
           <NoCompetitor target={result.targetRoiPercent} />
@@ -561,40 +633,7 @@ export function HuntResult({ result, connectionId, onSalesImported }: { result: 
         </ProductCard>
       </div>
 
-      <Verdict result={result} />
-      <HuntSales result={result} connectionId={connectionId} onImported={onSalesImported} />
       <OptionsTable result={result} />
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <Checks result={result} />
-        <div className="space-y-4">
-          <Duplicates items={result.duplicates || []} />
-          <section className="card p-4 text-[12px] leading-relaxed text-[var(--color-muted)]">
-            <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">How it&apos;s worked out</h3>
-            <p className="mt-1.5">
-              <b className="font-semibold text-[var(--color-ink)]">Fees:</b>{" "}
-              {fees.basis === "orders"
-                ? `what eBay took on this account's last ${fees.orders} orders (${fees.days} days): ${fees.processingPercent}% final value, ${fees.adsPercent}% promoted listings`
-                : `this account's pricing settings: ${fees.processingPercent}% final value, ${fees.adsPercent}% promoted listings`}
-              , plus {money(fees.fixed, currency)} per order.
-            </p>
-            <p className="mt-1">
-              <b className="font-semibold text-[var(--color-ink)]">Postage:</b>{" "}
-              {shipping.basis === "aliexpress"
-                ? shipping.freeOver
-                  ? `AliExpress ships it free on orders over ${money(shipping.freeOver, currency)}${shipping.company ? ` (${shipping.company})` : ""}, so postage isn't counted. It only adds the ${money(shipping.cost, currency)} fee when there's no free-shipping offer.`
-                  : `AliExpress's own charge to ${result.market?.name || "the buyer"}${shipping.company ? ` (${shipping.company})` : ""}${shipping.forOption ? ` for ${shipping.forOption}` : ""}, added to every sale.`
-                : "the flat postage cost in this account's pricing settings (AliExpress didn't quote)."}
-            </p>
-            <p className="mt-1">
-              <b className="font-semibold text-[var(--color-ink)]">Price:</b>{" "}
-              {c
-                ? "each option is sold at the competitor's price for the same option, postage included; an option they don't sell uses their lowest price."
-                : `no competitor, so each option is priced as a draft would be: cost and postage marked up to your ${result.targetRoiPercent}% target return, rounded up to .99.`}
-            </p>
-          </section>
-        </div>
-      </div>
     </div>
   );
 }

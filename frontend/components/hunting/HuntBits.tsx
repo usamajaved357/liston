@@ -258,3 +258,35 @@ export const HuntIcon = ({ className = "h-4 w-4" }: { className?: string }) => (
 export function announceHuntingChange() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event("liston:hunting"));
 }
+
+// ---- section headers ----------------------------------------------------------------------
+
+const SECTION_ICON = {
+  // Coins: the profit.
+  profit: <path d="M10 3.5c3.6 0 6.5 1.3 6.5 3s-2.9 3-6.5 3-6.5-1.3-6.5-3 2.9-3 6.5-3zM3.5 6.5v3.5c0 1.7 2.9 3 6.5 3s6.5-1.3 6.5-3V6.5M3.5 10v3.5c0 1.7 2.9 3 6.5 3s6.5-1.3 6.5-3V10" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />,
+  // A shield with a tick: what to check before approving.
+  checks: <path d="M10 2.8l5.8 2.2v4.6c0 3.6-2.5 6.3-5.8 7.6-3.3-1.3-5.8-4-5.8-7.6V5L10 2.8zM7.3 10.1l1.9 1.9 3.6-3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />,
+  // Rising bars: the sales.
+  sales: <path d="M4 16.5h12M5.5 13.5v-3M9 13.5V7.5M12.5 13.5v-5M16 13.5V4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />,
+  // Stacked layers: the options.
+  options: <path d="M10 3l7 3.7-7 3.7-7-3.7L10 3zM3 10.2l7 3.7 7-3.7M3 13.6l7 3.7 7-3.7" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />,
+  // Two boxes: the two listings.
+  listings: <path d="M3.5 5.5h5v9h-5zM11.5 5.5h5v9h-5z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />,
+} as const;
+
+/** A section's header: a small icon tile, the title, and what it's about on the right. */
+export function SectionHead({ icon, title, meta, className = "" }: { icon: keyof typeof SECTION_ICON; title: React.ReactNode; meta?: React.ReactNode; className?: string }) {
+  return (
+    <div className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-4 py-3 sm:px-5 ${className}`}>
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary-soft)] text-[var(--color-primary)]">
+          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+            {SECTION_ICON[icon]}
+          </svg>
+        </span>
+        <h3 className="truncate text-[13.5px] font-semibold text-[var(--color-ink)]">{title}</h3>
+      </div>
+      {meta && <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11.5px] text-[var(--color-muted)]">{meta}</div>}
+    </div>
+  );
+}

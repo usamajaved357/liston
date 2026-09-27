@@ -3,7 +3,6 @@ const huntingRepository = require('./hunting.repository');
 const huntProfit = require('./hunt-profit');
 const huntDuplicates = require('./hunt-duplicates');
 const huntSales = require('./hunt-sales');
-const soldHistory = require('./sold-history');
 const salesHistory = require('../ebay/sales-history');
 const logger = require('../../utils/logger');
 const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, HuntError, rules } = require('./hunt-rules');
@@ -136,9 +135,7 @@ async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, 
   // eBay's dated sales for the listing, once eBay grants Liston its sales
   // history (Marketplace Insights): sold in the last 90 days and when last.
   result.sales.ebay = competitor ? await ebaySoldHistory(competitor, itemId, site.id) : null;
-  // Sales pasted from eBay's purchase history for this listing earlier.
-  result.sales.exact = competitor ? await exactSales(ownerId, itemId, competitorUrl, site.id) : null;
-  result.salesScore = huntSales.salesScore({ demand: result.demand, variations: result.sales.variations, exact: result.sales.exact?.figures || null });
+  result.salesScore = huntSales.salesScore({ demand: result.demand, variations: result.sales.variations });
   result.market = { id: site.id, name: site.name, country: site.country };
   result.duplicates = await duplicatesFor(ownerId, { productId, itemId, title: competitor?.title || source.title, titles: [competitor?.title, source.title], connectionId, excludeId });
   return { competitorUrl: competitorUrl || null, sourceUrl, itemId, productId, result, reading: huntProfit.salesReading(competitor, site.currency) };
@@ -158,32 +155,19 @@ async function ebaySoldHistory(competitor, itemId, marketplaceId) {
   }
 }
 
-/**
- * A competitor listing's dated sales pasted from eBay's purchase history, as
- * figures (sold-history.insights), with the page to copy them from; null
- * figures until someone has pasted them.
- */
-async function exactSales(ownerId, itemId, competitorUrl, marketplaceId) {
-  if (!itemId) return null;
-  const { rows, importedAt } = await huntingRepository.competitorSales(ownerId, itemId);
-  const timeZone = analyticsDays.timeZoneFor(marketplaceId || 'EBAY_GB') || 'Europe/London';
-  const figures = rows.length ? soldHistory.insights(rows, { timeZone }) : null;
-  return { url: soldHistory.purchaseHistoryUrl(competitorUrl, itemId), importedAt, figures };
-}
-
-/** A product's readings as history, and its sales score with them (and eBay's dated sales, when pasted). */
-async function salesWithHistory(huntId, result, exact = null) {
+/** A product's readings as history, and its sales score with them. */
+async function salesWithHistory(huntId, result) {
   const readings = await huntingRepository.readings(huntId);
   const spm = result?.demand?.soldPerMonth;
   const h = huntSales.history(readings, { lifetimePerDay: spm === null || spm === undefined ? null : spm / 30 });
-  return { history: h, score: huntSales.salesScore({ demand: result?.demand, variations: result?.sales?.variations || [], history: h, exact: exact?.figures || null }) };
+  return { history: h, score: huntSales.salesScore({ demand: result?.demand, variations: result?.sales?.variations || [], history: h }) };
 }
 
 /** Keeps a reading of the competitor's sales and the score it gives. */
 async function recordReading(huntId, read) {
   if (!read.reading) return;
   await huntingRepository.addReading(huntId, read.reading);
-  const { score } = await salesWithHistory(huntId, read.result, read.result?.sales?.exact);
+  const { score } = await salesWithHistory(huntId, read.result);
   await huntingRepository.setSalesScore(huntId, score ? score.score : null);
 }
 
@@ -390,16 +374,12 @@ async function detail(auth, huntId) {
     huntingRepository.history(auth.ownerId, hunt.id),
     duplicatesFor(auth.ownerId, { productId: hunt.source_product_id, itemId: hunt.competitor_item_id, title: hunt.title, titles: [hunt.check_result?.competitor?.title, hunt.check_result?.source?.title, hunt.title], connectionId: hunt.connection_id, excludeId: hunt.id }).catch(() => hunt.check_result?.duplicates || []),
     salesOf([hunt]).catch(() => new Map()),
-    (async () => {
-      const exact = await exactSales(auth.ownerId, hunt.competitor_item_id, hunt.competitor_url, checkResult.market?.id);
-      const withHistory = await salesWithHistory(hunt.id, { ...checkResult, sales: { variations } }, exact);
-      return { ...withHistory, exact };
-    })().catch(() => ({ history: null, score: checkResult.salesScore || null, exact: null })),
+    salesWithHistory(hunt.id, { ...checkResult, sales: { variations } }).catch(() => ({ history: null, score: checkResult.salesScore || null })),
   ]);
   return {
     ...summaryOf(hunt, viewer, sales.get(hunt.id)),
     connectionLabel: hunt.connection_label,
-    result: { ...checkResult, duplicates, salesScore: withHistory.score, sales: { ...(checkResult.sales || {}), variations, history: withHistory.history, exact: withHistory.exact } },
+    result: { ...checkResult, duplicates, salesScore: withHistory.score, sales: { ...(checkResult.sales || {}), exact: undefined, variations, history: withHistory.history } },
     timeline: timelineOf(hunt, events),
     viewer: viewerSummary(viewer),
     reasons: REJECT_REASONS,
@@ -477,31 +457,6 @@ async function withdraw(auth, huntId) {
   if (!rules.canWithdraw(hunt, viewer)) refuse('It can only be withdrawn by its hunter while it waits for review, or removed by the owner before it is drafted.');
   await huntingRepository.deleteById(hunt.id);
   await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.withdrawn', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { stage: stageOf(hunt) } });
-}
-
-/**
- * Sales pasted from eBay's purchase history for a competitor listing: read,
- * kept (each sale once) and the figures returned; the owner's hunted
- * products of that listing have their sales score redone. A team member
- * opens the page in their own browser and copies it: Liston never fetches
- * eBay pages.
- */
-async function importSoldHistory(auth, connectionId, { itemId, competitorUrl, text }) {
-  const viewer = await viewerFor(auth, connectionId);
-  if (!viewer.canHunt && !viewer.canReview) refuse("You don't have access to hunting on this account.");
-  const rows = soldHistory.parse(text);
-  if (!rows.length) {
-    throw new HuntError("No sales found in what you pasted. Open the listing's sold history on eBay, select everything on the page (Cmd/Ctrl+A), copy it and paste it here.");
-  }
-  const added = await huntingRepository.addCompetitorSales(auth.ownerId, itemId, rows, auth.userId);
-  const connection = await connectionService.getConnectionSummary(connectionId, auth.ownerId);
-  const marketplaceId = connection.marketplace?.id || connection.settings?.ebay?.marketplaceId;
-  const exact = await exactSales(auth.ownerId, itemId, competitorUrl, marketplaceId);
-  for (const hunt of await huntingRepository.huntsOfCompetitor(auth.ownerId, itemId)) {
-    const { score } = await salesWithHistory(hunt.id, hunt.check_result, exact).catch(() => ({ score: null }));
-    if (score) await huntingRepository.setSalesScore(hunt.id, score.score);
-  }
-  return { read: rows.length, added, exact };
 }
 
 /** The side menu's badge. */
@@ -642,8 +597,7 @@ async function readSalesNow(hunt) {
   const reading = huntProfit.salesReading(competitor, site.currency);
   await huntingRepository.addReading(hunt.id, reading);
   const demand = { ...(hunt.demand || hunt.check_result?.demand || {}), sold: competitor.sold ?? null };
-  const exact = await exactSales(hunt.owner_user_id, hunt.competitor_item_id, hunt.competitor_url, site.id);
-  const { score } = await salesWithHistory(hunt.id, { demand, sales: { variations: reading.variations } }, exact);
+  const { score } = await salesWithHistory(hunt.id, { demand, sales: { variations: reading.variations } });
   await huntingRepository.setSalesScore(hunt.id, score ? score.score : null);
 }
 
@@ -699,4 +653,4 @@ function forgetChecks() {
   checks.clear();
 }
 
-module.exports = { importSoldHistory, readDueSales, check, add, list, detail, recheck, update, resubmit, decide, withdraw, badge, draftStart, team, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };
+module.exports = { readDueSales, check, add, list, detail, recheck, update, resubmit, decide, withdraw, badge, draftStart, team, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };

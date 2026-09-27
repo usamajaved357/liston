@@ -71,6 +71,5 @@ router.post('/:id/hunting/check', requireAuth, requireAnyFeature(['hunting', 'hu
 router.post('/:id/hunting', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.add);
 // A competitor's dated sales, pasted from eBay's purchase history page
 // (tens of KB of text, well within the app-wide JSON limit).
-router.post('/:id/hunting/sold-history', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.soldHistory);
 
 module.exports = router;

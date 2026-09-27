@@ -224,6 +224,32 @@ async function getValidAccessToken() {
   return (await refreshing).accessToken;
 }
 
+/**
+ * One POST to the gateway. A dropped connection (DNS, reset, refused) is
+ * tried once more; if it drops again, or AliExpress doesn't answer in 30
+ * seconds, the seller is told so in words instead of an internal error.
+ */
+async function postGateway(body, { fetchImpl = fetch, retryDelayMs = 700 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fetchImpl(IOP_GATEWAY, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+        signal: AbortSignal.timeout(30 * 1000),
+      });
+    } catch (err) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+        throw new ScrapingError("AliExpress didn't answer in time. Try again in a moment.", { source: 'aliexpress', statusCode: 504 });
+      }
+      if (attempt >= 2) {
+        throw new ScrapingError("Couldn't reach AliExpress just now: the connection dropped. Try again in a moment.", { source: 'aliexpress' });
+      }
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+}
+
 async function call(apiName, bizParams) {
   await assertConfigured();
   const accessToken = await getValidAccessToken();
@@ -239,12 +265,7 @@ async function call(apiName, bizParams) {
   for (const [key, value] of Object.entries(bizParams)) params[key] = String(value);
   params.sign = sign(params, appSecret);
 
-  const res = await fetch(IOP_GATEWAY, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params).toString(),
-    signal: AbortSignal.timeout(30 * 1000),
-  });
+  const res = await postGateway(new URLSearchParams(params).toString());
 
   if (!res.ok) {
     throw new ScrapingError(`AliExpress API request failed (${res.status})`, { source: 'aliexpress' });
@@ -577,4 +598,4 @@ async function fetchShipping(productId, skuId, { shipTo, currency } = {}) {
   return { ...chosen, options: options.length };
 }
 
-module.exports = { fetchProduct, fetchShipping, deliveryOption, supplierOf, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };
+module.exports = { fetchProduct, fetchShipping, deliveryOption, supplierOf, postGateway, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };

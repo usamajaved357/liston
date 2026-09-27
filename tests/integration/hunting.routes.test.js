@@ -203,41 +203,6 @@ test('opening a product with no readings (rejected, or hunted before readings) r
   assert.strictEqual(rows[0].n, 1);
 });
 
-test("sales pasted from eBay's purchase history are kept once each and fill in the product's exact sales and score", async () => {
-  const t = await team();
-  const { hunt: added } = await hunt(t.connectionId, t.hunter.token);
-  const now = Date.now();
-  const stamp = (daysAgo) => {
-    const d = new Date(now - daysAgo * 86400000);
-    const mon = d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' });
-    return `${d.getUTCDate()} ${mon} ${d.getUTCFullYear()} at ${((d.getUTCHours() + 11) % 12) + 1}:${String(d.getUTCMinutes()).padStart(2, '0')}:00${d.getUTCHours() < 12 ? 'am' : 'pm'} GMT`;
-  };
-  const page = ['Recent purchases', 'User ID\tVariation\tBuy It Now price\tQuantity\tDate of purchase', `b***e\tColour: Black\t£12.99\t1\t${stamp(1)}`, `4***e\tColour: White\t£13.99\t2\t${stamp(5)}`, `9***5\tColour: Black\t£12.99\t1\t${stamp(40)}`].join('\n');
-  const pasted = await request('POST', `/api/connections/${t.connectionId}/hunting/sold-history`, { itemId: '123456789012', competitorUrl: COMPETITOR_URL, text: page }, t.hunter.token);
-  assert.strictEqual(pasted.status, 200, JSON.stringify(pasted.data));
-  assert.strictEqual(pasted.data.read, 3);
-  assert.strictEqual(pasted.data.added, 3);
-  assert.deepStrictEqual(pasted.data.exact.figures.windows.d7, { units: 3, orders: 2 });
-  // Pasting the page again adds nothing new.
-  const again = await request('POST', `/api/connections/${t.connectionId}/hunting/sold-history`, { itemId: '123456789012', text: page }, t.hunter.token);
-  assert.strictEqual(again.data.added, 0);
-  // Nonsense is refused with directions.
-  const junk = await request('POST', `/api/connections/${t.connectionId}/hunting/sold-history`, { itemId: '123456789012', text: 'this is not the purchase history page at all' }, t.hunter.token);
-  assert.strictEqual(junk.status, 400);
-  assert.match(junk.data.error, /sold history/);
-
-  const detail = await request('GET', `/api/hunting/${added.id}`, undefined, t.reviewer.token);
-  const exact = detail.data.result.sales.exact;
-  assert.strictEqual(exact.url, 'https://www.ebay.co.uk/bin/purchaseHistory?item=123456789012');
-  assert.strictEqual(exact.figures.units, 4);
-  assert.strictEqual(exact.figures.daysSinceLast, 1);
-  assert.strictEqual(detail.data.result.salesScore.exact, true);
-  // A fresh check of the same listing picks the pasted sales up too.
-  const checked = await request('POST', `/api/connections/${t.connectionId}/hunting/check`, { competitorUrl: COMPETITOR_URL, sourceUrl: SOURCE_URL }, t.hunter.token);
-  assert.strictEqual(checked.data.result.sales.exact.figures.units, 4);
-  assert.strictEqual((await request('POST', `/api/connections/${t.connectionId}/hunting/sold-history`, { itemId: '123456789012', text: page }, t.nobody.token)).status, 403);
-});
-
 test('a bad link is refused before anything is read', async () => {
   const t = await team();
   const { status, data } = await request('POST', `/api/connections/${t.connectionId}/hunting/check`, { competitorUrl: 'https://www.ebay.co.uk/sch/earbuds', sourceUrl: SOURCE_URL }, t.hunter.token);

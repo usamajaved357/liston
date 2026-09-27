@@ -80,24 +80,14 @@ const logShare = (n, full) => Math.min(1, Math.log10(1 + Math.max(0, n)) / Math.
  * days of them), and how many of the options sell (15). Null without a
  * competitor (nothing to judge).
  */
-function salesScore({ demand, variations = [], history: h = null, exact = null }) {
+function salesScore({ demand, variations = [], history: h = null }) {
   if (!demand || demand.sold === null || demand.sold === undefined) return null;
-  // eBay's dated sales, when pasted, are the real recent pace.
-  const spm = exact ? exact.perMonth : demand.soldPerMonth ?? 0;
+  const spm = demand.soldPerMonth ?? 0;
   const velocity = Math.round(45 * logShare(spm, 60));
   const proven = Math.round(20 * logShare(demand.sold, 500));
   let trend;
   let trendDetail;
-  if (exact && exact.daysSinceLast >= 14) {
-    trend = 0;
-    trendDetail = `No sale in ${exact.daysSinceLast} days (eBay's sold history).`;
-  } else if (exact && exact.trend) {
-    trend = { up: 20, flat: 12, down: 4 }[exact.trend];
-    trendDetail = { up: 'Selling faster in the last 15 days than the 15 before (eBay’s sold history).', flat: 'Selling at a steady pace (eBay’s sold history).', down: 'Selling slower in the last 15 days than the 15 before (eBay’s sold history).' }[exact.trend];
-  } else if (exact) {
-    trend = exact.daysSinceLast <= 2 ? 16 : exact.daysSinceLast <= 7 ? 12 : 6;
-    trendDetail = `Last sold ${exact.daysSinceLast === 0 ? 'today' : `${exact.daysSinceLast} day${exact.daysSinceLast === 1 ? '' : 's'} ago`} (eBay's sold history).`;
-  } else if (h && h.coveredDays >= 7 && h.soldLast7 === 0) {
+  if (h && h.coveredDays >= 7 && h.soldLast7 === 0) {
     trend = 0;
     trendDetail = 'None sold in the last 7 days of Liston’s readings.';
   } else if (h && h.trend) {
@@ -116,10 +106,9 @@ function salesScore({ demand, variations = [], history: h = null, exact = null }
     score,
     band,
     label,
-    estimate: !exact && !(h && h.trend),
-    exact: Boolean(exact),
+    estimate: !(h && h.trend),
     parts: [
-      { key: 'velocity', label: 'Sells a month', points: velocity, max: 45, detail: exact ? `${spm} a month at the last 30 days' pace (eBay's sold history).` : `${spm} a month on the competitor's listing.` },
+      { key: 'velocity', label: 'Sells a month', points: velocity, max: 45, detail: `${spm} a month on the competitor's listing.` },
       { key: 'proven', label: 'Sold in all', points: proven, max: 20, detail: `${demand.sold} sold since it was listed.` },
       { key: 'trend', label: 'Trend', points: trend, max: 20, detail: trendDetail },
       {

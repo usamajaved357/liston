@@ -293,3 +293,33 @@ test('deliveryOption reads the fee in whole units, the free-postage threshold an
   assert.deepStrictEqual(option, { code: 'CAINIAO_FULFILLMENT_PRE', company: 'AliExpress Selection Premium shipping', cost: 1.99, currency: 'GBP', freeOver: 8, minDays: 5, maxDays: 8, tracking: true, shipFrom: 'CN' });
   assert.strictEqual(dsApi.deliveryOption({ free_shipping: true, shipping_fee_cent: '2.50' }).cost, 0);
 });
+
+test('a dropped connection to AliExpress is tried once more, then explained instead of an internal error', async () => {
+  const dropped = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+  let calls = 0;
+  const flaky = async () => {
+    calls += 1;
+    if (calls === 1) throw dropped();
+    return { ok: true, status: 200 };
+  };
+  const res = await dsApi.postGateway('a=1', { fetchImpl: flaky, retryDelayMs: 0 });
+  assert.strictEqual(res.status, 200);
+  assert.strictEqual(calls, 2);
+
+  calls = 0;
+  const down = async () => {
+    calls += 1;
+    throw dropped();
+  };
+  await assert.rejects(dsApi.postGateway('a=1', { fetchImpl: down, retryDelayMs: 0 }), (err) => err instanceof ScrapingError && err.statusCode === 502 && err.expose && /Couldn't reach AliExpress/.test(err.message));
+  assert.strictEqual(calls, 2);
+
+  // No answer in time: said at once, not waited for twice.
+  calls = 0;
+  const slow = async () => {
+    calls += 1;
+    throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  };
+  await assert.rejects(dsApi.postGateway('a=1', { fetchImpl: slow, retryDelayMs: 0 }), (err) => err instanceof ScrapingError && err.statusCode === 504);
+  assert.strictEqual(calls, 1);
+});

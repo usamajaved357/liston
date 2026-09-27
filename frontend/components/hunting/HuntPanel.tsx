@@ -373,11 +373,7 @@ export function HuntPanel({ huntId, you, onClose, onChanged }: { huntId: string;
                 {p?.canEdit && <EditLinks key={hunt.checkedAt} hunt={hunt} onSaved={update} />}
                 {moved && <span className="text-[12px] font-medium text-[var(--color-ink)]">{moved}</span>}
               </div>
-              <HuntResult
-                result={hunt.result}
-                connectionId={hunt.connectionId}
-                onSalesImported={() => api.huntDetail(huntId).then(update).catch(() => {})}
-              />
+              <HuntResult result={hunt.result} />
               <Timeline events={hunt.timeline} you={you} />
             </>
           )}

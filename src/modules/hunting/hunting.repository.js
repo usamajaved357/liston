@@ -320,49 +320,7 @@ async function dueForReading({ limit = 20, hours = 20, days = 90, ownerId = null
 
 // ---- a competitor's dated sales, pasted from eBay (migration 029) -------------------
 
-/** Keeps pasted sales, each once; returns how many were new. */
-async function addCompetitorSales(ownerId, itemId, rows, userId) {
-  let added = 0;
-  for (let i = 0; i < rows.length; i += 200) {
-    const chunk = rows.slice(i, i + 200);
-    const params = [ownerId, String(itemId), userId || null];
-    const values = chunk.map((r) => {
-      params.push(r.soldAt, r.variation || '', r.price, r.currency, r.quantity || 1);
-      const n = params.length;
-      return `($1, $2, $${n - 4}, $${n - 3}, $${n - 2}, $${n - 1}, $${n}, $3)`;
-    });
-    const { rowCount } = await query(
-      `INSERT INTO competitor_sales (owner_user_id, item_id, sold_at, variation, price, currency, quantity, imported_by) VALUES ${values.join(', ')} ON CONFLICT DO NOTHING`,
-      params
-    );
-    added += rowCount;
-  }
-  return added;
-}
-
-/** A competitor listing's pasted sales, newest first, and when they were last pasted. */
-async function competitorSales(ownerId, itemId) {
-  if (!itemId) return { rows: [], importedAt: null };
-  const { rows } = await query(
-    `SELECT sold_at, variation, price, currency, quantity, imported_at FROM competitor_sales WHERE owner_user_id = $1 AND item_id = $2 ORDER BY sold_at DESC LIMIT 2000`,
-    [ownerId, String(itemId)]
-  );
-  return {
-    rows: rows.map((r) => ({ soldAt: new Date(r.sold_at).toISOString(), variation: r.variation, price: r.price === null ? null : Number(r.price), currency: r.currency, quantity: r.quantity })),
-    importedAt: rows.reduce((at, r) => (!at || r.imported_at > at ? r.imported_at : at), null),
-  };
-}
-
-/** The owner's hunted products of this competitor listing (their scores follow new sales). */
-async function huntsOfCompetitor(ownerId, itemId) {
-  const { rows } = await query('SELECT id, check_result FROM hunted_products WHERE owner_user_id = $1 AND competitor_item_id = $2', [ownerId, String(itemId)]);
-  return rows;
-}
-
 module.exports = {
-  addCompetitorSales,
-  competitorSales,
-  huntsOfCompetitor,
   addReading,
   readings,
   setSalesScore,

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, RefObject, useEffect, useId, useRef, useState } from "react";
 import { api, ApiError, HuntCheckResult, HuntDetail } from "@/lib/api";
 import { Alert } from "@/components/Alert";
 import { HuntResult } from "./HuntResult";
@@ -45,6 +45,105 @@ function Progress({ step, competitor }: { step: number; competitor: boolean }) {
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+// A link field: a link mark on the left, and on the right Paste while it's
+// empty and a clear button once it has a link.
+function UrlField({
+  label,
+  dot,
+  optional,
+  value,
+  onChange,
+  placeholder,
+  inputRef,
+  disabled,
+  required,
+  onFilled,
+}: {
+  label: string;
+  dot: string;
+  optional?: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  inputRef?: RefObject<HTMLInputElement | null>;
+  disabled?: boolean;
+  required?: boolean;
+  onFilled?: () => void;
+}) {
+  const id = useId();
+  const own = useRef<HTMLInputElement>(null);
+  const ref = inputRef || own;
+  async function paste() {
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (text) {
+        onChange(text);
+        onFilled?.();
+        return;
+      }
+    } catch {}
+    // No clipboard access: the field, ready for Cmd/Ctrl+V.
+    ref.current?.focus();
+  }
+  return (
+    <div className="min-w-0">
+      <label htmlFor={id} className="label flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full" style={{ background: dot }} aria-hidden />
+        {label} {optional && <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>}
+      </label>
+      <div className="relative mt-1.5">
+        <span className="pointer-events-none absolute inset-y-0 left-3.5 flex items-center text-[var(--color-muted)]">
+          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+            <path d="M8.5 11.5a3.5 3.5 0 005 0l2.5-2.5a3.5 3.5 0 00-5-5l-1 1M11.5 8.5a3.5 3.5 0 00-5 0L4 11a3.5 3.5 0 005 5l1-1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </span>
+        <input
+          id={id}
+          ref={ref}
+          className="input"
+          style={{ height: 44, paddingLeft: 38, paddingRight: value ? 44 : 76 }}
+          type="url"
+          inputMode="url"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onPaste={() => setTimeout(() => onFilled?.(), 0)}
+          disabled={disabled}
+          required={required}
+        />
+        <span className="absolute inset-y-0 right-1.5 flex items-center">
+          {value ? (
+            <button
+              type="button"
+              onClick={() => {
+                onChange("");
+                ref.current?.focus();
+              }}
+              disabled={disabled}
+              aria-label={`Clear the ${label} link`}
+              title="Clear"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)] disabled:opacity-40"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+                <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={paste}
+              disabled={disabled}
+              className="h-8 rounded-full px-3 text-[12.5px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary-soft)] disabled:opacity-40"
+            >
+              Paste
+            </button>
+          )}
+        </span>
+      </div>
     </div>
   );
 }
@@ -102,40 +201,18 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
           </div>
         </div>
         <div className="grid grid-cols-1 gap-3 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
-          <label className="block min-w-0">
-            <span className="label flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-[#0064D2]" aria-hidden />
-              Competitor on eBay <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>
-            </span>
-            <input
-              className="input mt-1.5"
-              type="url"
-              inputMode="url"
-              placeholder="https://www.ebay.co.uk/itm/…"
-              value={competitorUrl}
-              onChange={(e) => setCompetitorUrl(e.target.value)}
-              onPaste={() => setTimeout(() => !sourceUrl && sourceRef.current?.focus(), 0)}
-              disabled={busy}
-            />
-          </label>
-          <label className="block min-w-0">
-            <span className="label flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-[#E62E04]" aria-hidden />
-              Supplier on AliExpress
-            </span>
-            <input
-              ref={sourceRef}
-              className="input mt-1.5"
-              type="url"
-              inputMode="url"
-              placeholder="https://www.aliexpress.com/item/…"
-              value={sourceUrl}
-              onChange={(e) => setSourceUrl(e.target.value)}
-              disabled={busy}
-              required
-            />
-          </label>
-          <button type="submit" disabled={busy || !sourceUrl.trim()} className="btn btn-primary h-10 px-5">
+          <UrlField
+            label="Competitor on eBay"
+            dot="#0064D2"
+            optional
+            placeholder="https://www.ebay.co.uk/itm/…"
+            value={competitorUrl}
+            onChange={setCompetitorUrl}
+            onFilled={() => !sourceUrl && sourceRef.current?.focus()}
+            disabled={busy}
+          />
+          <UrlField label="Supplier on AliExpress" dot="#E62E04" placeholder="https://www.aliexpress.com/item/…" value={sourceUrl} onChange={setSourceUrl} inputRef={sourceRef} disabled={busy} required />
+          <button type="submit" disabled={busy || !sourceUrl.trim()} className="btn btn-primary px-6" style={{ height: 44 }}>
             {busy ? "Checking…" : checked ? "Check again" : "Check profit"}
           </button>
           <p className="text-[12px] text-[var(--color-muted)] lg:col-span-3 lg:-mt-1">
@@ -153,7 +230,7 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
 
       {checked && (
         <div ref={resultRef} className="mt-4 scroll-mt-4 animate-[fadeIn_200ms_ease-out]">
-          <HuntResult result={checked.result} connectionId={connectionId} />
+          <HuntResult result={checked.result} />
         </div>
       )}
     </div>

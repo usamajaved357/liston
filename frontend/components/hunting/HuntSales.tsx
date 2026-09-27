@@ -4,7 +4,7 @@ import { HuntCheckResult, HuntSalesBand, HuntSalesScore } from "@/lib/api";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { count, money } from "@/components/research/format";
 import { formatShortDate } from "@/lib/format";
-import { SoldHistory } from "./SoldHistory";
+import { SectionHead } from "./HuntBits";
 
 // How well the competitor's listing sells: a sales score, its sales split by
 // variation (eBay's sold count for each), and its sales over time from
@@ -62,12 +62,9 @@ function Tile({ label, value, note }: { label: string; value: string; note?: str
 
 const TREND = { up: { text: "Rising", ink: "text-emerald-700" }, flat: { text: "Steady", ink: "text-[var(--color-ink)]" }, down: { text: "Slowing", ink: "text-rose-700" } };
 
-export function HuntSales({ result, connectionId, onImported }: { result: HuntCheckResult; connectionId?: string; onImported?: () => void }) {
+export function HuntSales({ result }: { result: HuntCheckResult }) {
   if (!result.competitor || !result.sales) return null;
   const { variations, history, ebay } = result.sales;
-  const itemId = result.competitor.itemId;
-  // The page to copy dated sales from (a check made before this was kept has none).
-  const exact = result.sales.exact || (itemId ? { url: `${(() => { try { return new URL(result.competitor?.url || "").origin; } catch { return "https://www.ebay.co.uk"; } })()}/bin/purchaseHistory?item=${itemId}`, importedAt: null, figures: null } : null);
   const score = result.salesScore;
   const currency = result.currency;
   const maxSold = Math.max(1, ...variations.map((v) => v.sold || 0));
@@ -78,12 +75,7 @@ export function HuntSales({ result, connectionId, onImported }: { result: HuntCh
 
   return (
     <section className="card overflow-hidden">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3">
-        <h3 className="text-[13px] font-semibold text-[var(--color-ink)]">Sales</h3>
-        <p className="text-[11.5px] text-[var(--color-muted)]">The competitor&apos;s listing, from eBay&apos;s sold counts</p>
-      </div>
-
-      {exact && <SoldHistory key={itemId || "none"} exact={exact} connectionId={connectionId} itemId={itemId} competitorUrl={result.competitor.url} currency={currency} onImported={onImported} />}
+      <SectionHead icon="sales" title="Sales" meta={<>The competitor&apos;s listing, from eBay&apos;s sold counts{score && <SalesScorePill score={score} />}</>} />
 
       <div className="grid grid-cols-1 border-t border-[var(--color-line)] lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         {/* The score and what it's made of. */}
@@ -96,7 +88,7 @@ export function HuntSales({ result, connectionId, onImported }: { result: HuntCh
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Sales score</p>
                   <p className={`text-[20px] font-semibold ${SALES_BAND[score.band].ink}`}>{score.label}</p>
                   <p className="text-[12px] leading-snug text-[var(--color-muted)]">
-                    {score.exact ? "From eBay's sold history: its real recent pace and last sale." : score.estimate ? "From its sales so far; the trend joins in after 3 days of Liston's readings." : "From its sales and Liston's daily readings."}
+                    {score.estimate ? "From its sales so far; the trend joins in after 3 days of Liston's readings." : "From its sales and Liston's daily readings."}
                   </p>
                 </div>
               </div>
@@ -158,8 +150,7 @@ export function HuntSales({ result, connectionId, onImported }: { result: HuntCh
         </div>
       </div>
 
-      {/* Over time, from Liston's readings (eBay's own dated sales, once pasted, say it better). */}
-      {!exact?.figures && (
+      {/* Over time, from Liston's readings. */}
       <div className="border-t border-[var(--color-line)] p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <p className="text-[12px] font-semibold text-[var(--color-ink)]">Sales over time</p>
@@ -196,7 +187,7 @@ export function HuntSales({ result, connectionId, onImported }: { result: HuntCh
         ) : (
           <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
             {history && history.readings === 1
-              ? `First reading: ${firstSold !== null ? `${count(firstSold)} sold in all` : "its sold count"}${since ? ` on ${since}` : ""}. Liston reads the listing every day from here, so sales per day fill in from tomorrow. For every past sale with its date, paste eBay's sold history above.`
+              ? `First reading: ${firstSold !== null ? `${count(firstSold)} sold in all` : "its sold count"}${since ? ` on ${since}` : ""}. Liston reads the listing every day from here, so sales per day fill in from tomorrow.`
               : history
                 ? "Liston is reading this listing's sales now; refresh in a moment."
                 : "eBay shows how many a listing has sold, not when. Once this product is added, Liston reads the competitor every day and its sales per day and trend build up here."}
@@ -210,7 +201,6 @@ export function HuntSales({ result, connectionId, onImported }: { result: HuntCh
           </p>
         )}
       </div>
-      )}
     </section>
   );
 }

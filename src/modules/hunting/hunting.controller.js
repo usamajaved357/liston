@@ -33,11 +33,6 @@ const decisionSchema = z.object({
   note: note.optional(),
 });
 const resubmitSchema = z.object({ note: note.optional() });
-const soldHistorySchema = z.object({
-  itemId: z.string().regex(/^\d{6,}$/, 'Which eBay listing is this for?'),
-  competitorUrl: z.string().max(500).optional(),
-  text: z.string({ required_error: 'Paste the sold history page.' }).min(20, 'Paste the whole sold history page.').max(400000, "That's more than a sold history page."),
-});
 
 function parse(schema, body, res) {
   const parsed = schema.safeParse(body || {});
@@ -60,10 +55,6 @@ module.exports = {
   check: handle(async (req, res) => {
     const input = parse(checkSchema, req.body, res);
     if (input) res.json(await huntingService.check(auth(req), req.params.id, input));
-  }),
-  soldHistory: handle(async (req, res) => {
-    const input = parse(soldHistorySchema, req.body, res);
-    if (input) res.json(await huntingService.importSoldHistory(auth(req), req.params.id, input));
   }),
   add: handle(async (req, res) => {
     const input = parse(addSchema, req.body, res);
