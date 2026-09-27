@@ -144,7 +144,7 @@ async function upsertAccountCharges(connectionId, rows) {
  */
 async function loadAccountCharges(connectionId, currency, start, end) {
   const result = await query(
-    `SELECT c.kind, c.fee_type, c.amount FROM ebay_account_charges c
+    `SELECT c.kind, c.fee_type, c.amount, c.charged_at FROM ebay_account_charges c
      JOIN connections me ON me.id = c.connection_id
      WHERE c.connection_id = $1 AND c.currency = $2 AND c.charged_at >= $3 AND c.charged_at <= $4
        AND NOT EXISTS (
@@ -154,7 +154,7 @@ async function loadAccountCharges(connectionId, currency, start, end) {
        )`,
     [connectionId, currency, start, end]
   );
-  return result.rows.map((r) => ({ kind: r.kind, feeType: r.fee_type, amount: Number(r.amount) }));
+  return result.rows.map((r) => ({ kind: r.kind, feeType: r.fee_type, amount: Number(r.amount), chargedAt: r.charged_at }));
 }
 
 async function pruneAccountChargesBefore(connectionId, before) {

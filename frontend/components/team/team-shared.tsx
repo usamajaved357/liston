@@ -271,6 +271,37 @@ export function timeAgo(iso: string | null | undefined): string {
  * account, and per account either following it (soft switch) or its own
  * choice. Every change saves straight away.
  */
+const FEATURE_NOTES: Record<string, string> = {
+  orders: "Orders: sourcing, dispatch, refunds and cases",
+  listings: "Drafting, publishing and editing listings",
+  analytics: "Traffic, listing health and figures",
+  inbox: "Buyer messages",
+  campaigns: "Promoted Listings",
+  hunting: "Adding products to hunt, for review",
+  hunting_review: "Approving, rejecting or sending back hunted products",
+};
+
+const FEATURE_ICON: Record<string, React.ReactNode> = {
+  orders: <path d="M3.5 7L10 3.5 16.5 7v6.5L10 17l-6.5-3.5V7zM3.5 7L10 10.5 16.5 7M10 10.5V17" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />,
+  listings: <path d="M4 9.5V5a1 1 0 011-1h4.5l6.5 6.5-5.5 5.5L4 9.5zM7.3 7.3h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />,
+  analytics: <path d="M4 16V9M8.5 16V4M13 16v-5M17 16H3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />,
+  inbox: <path d="M3.5 6A1.5 1.5 0 015 4.5h10A1.5 1.5 0 0116.5 6v8a1.5 1.5 0 01-1.5 1.5H5A1.5 1.5 0 013.5 14V6zM4 6l6 4.5L16 6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />,
+  campaigns: <path d="M4 8.5v3a1 1 0 001 1h1.5l4.5 3V4.5l-4.5 3H5a1 1 0 00-1 1zM14 7.5a3.5 3.5 0 010 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />,
+  hunting: (
+    <>
+      <circle cx="10" cy="10" r="6" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="10" cy="10" r="2.3" stroke="currentColor" strokeWidth="1.6" />
+    </>
+  ),
+  hunting_review: <path d="M10 2.8l5.8 2.2v4.6c0 3.6-2.5 6.3-5.8 7.6-3.3-1.3-5.8-4-5.8-7.6V5L10 2.8zM7.3 10.1l1.9 1.9 3.6-3.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />,
+};
+
+/**
+ * A member's access, one row per area: a switch for every account (the
+ * default), and under it one pill per eBay account to switch that account
+ * on or off apart from the default. A pill that differs from the default
+ * carries a dot; Reset puts the area back to the default everywhere.
+ */
 export function AccessGrid({
   member,
   connections,
@@ -285,11 +316,12 @@ export function AccessGrid({
   const [saving, setSaving] = useState(false);
   const rows = permissionsGrid(member, connections, knownFeatures);
   const globalValues = rows[0].values;
+  const accounts = rows.slice(1);
 
-  async function setValue(connectionId: string | null, feature: string, allowed: boolean | null) {
+  async function save(updates: PermissionUpdate[]) {
     setSaving(true);
     try {
-      await onChange([{ connectionId, feature, allowed }]);
+      await onChange(updates);
     } finally {
       setSaving(false);
     }
@@ -299,116 +331,81 @@ export function AccessGrid({
     return <p className="px-5 py-4 text-[13px] text-[var(--color-muted)]">Connect an eBay account first, then choose what this member can see.</p>;
   }
 
-  // Tailwind can't see a class built at runtime, so the template is inline.
-  const cols = "grid items-center gap-3 px-5";
-  const colStyle = { gridTemplateColumns: `minmax(0,1fr) repeat(${knownFeatures.length}, 92px)` };
-
-  // A phone: one section per account, each area a row with its switch.
-  // The default is always open; accounts fold, their line saying whether
-  // they follow it.
-  const featureRows = (row: (typeof rows)[number]) =>
-    knownFeatures.map((f) => {
-      const isDefault = row.connectionId === null;
-      const override = row.values[f];
-      const effective = isDefault ? row.values[f] ?? false : override === undefined ? globalValues[f] ?? false : override;
-      const inherited = !isDefault && override === undefined;
-      return (
-        <div key={f} className="flex items-center justify-between gap-3 py-2">
-          <span className="text-[14px] text-[var(--color-ink)]">
-            {featureLabel(f)}
-            {inherited && <span className="ml-1.5 text-[11.5px] text-[var(--color-muted)]">default</span>}
-          </span>
-          <Switch
-            on={effective}
-            inherited={inherited}
-            disabled={saving}
-            onChange={() => setValue(row.connectionId, f, !effective)}
-            label={isDefault ? `${featureLabel(f)} on all accounts` : `${featureLabel(f)} on ${row.rowLabel}`}
-          />
-        </div>
-      );
-    });
-  const phone = (
-    <div className="divide-y divide-[var(--color-line)] md:hidden">
-      {rows.map((row) => {
-        if (row.connectionId === null) {
-          return (
-            <div key="global" className="px-4 py-3">
-              <p className="text-[14px] font-semibold text-[var(--color-ink)]">All accounts</p>
-              <p className="text-[12px] text-[var(--color-muted)]">Default for every account</p>
-              <div className="mt-1">{featureRows(row)}</div>
-            </div>
-          );
-        }
-        const own = knownFeatures.some((f) => row.values[f] !== undefined);
-        const on = knownFeatures.filter((f) => (row.values[f] === undefined ? globalValues[f] : row.values[f])).length;
+  return (
+    <div className="divide-y divide-[var(--color-line)]">
+      {knownFeatures.map((f) => {
+        const byDefault = Boolean(globalValues[f]);
+        const perAccount = accounts.map((a) => {
+          const override = a.values[f];
+          return { id: a.connectionId as string, label: a.rowLabel, on: override === undefined ? byDefault : override, differs: override !== undefined && override !== byDefault };
+        });
+        const onCount = perAccount.filter((a) => a.on).length;
+        const differing = perAccount.filter((a) => a.differs);
+        const summary = onCount === 0 ? "Off" : onCount === perAccount.length ? (perAccount.length === 1 ? "On" : "Every account") : `${onCount} of ${perAccount.length} accounts`;
         return (
-          <details key={row.connectionId} className="group px-4 py-3">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
-              <span className="min-w-0">
-                <span className="block truncate text-[14px] font-medium text-[var(--color-ink)]">{row.rowLabel}</span>
-                <span className="block text-[12px] text-[var(--color-muted)]">
-                  {own ? "Set for this account" : "Follows the default"} · {on} of {knownFeatures.length} on
-                </span>
+          <div key={f} className="px-5 py-3">
+            <div className="flex items-center gap-3">
+              <span
+                className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${
+                  onCount ? "bg-emerald-50 text-emerald-600 ring-emerald-200" : "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]"
+                }`}
+                aria-hidden
+              >
+                <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+                  {FEATURE_ICON[f]}
+                </svg>
               </span>
-              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-open:rotate-180" aria-hidden>
-                <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </summary>
-            <div className="mt-1">{featureRows(row)}</div>
-          </details>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-semibold text-[var(--color-ink)]">{featureLabel(f)}</p>
+                <p className="truncate text-[11.5px] text-[var(--color-muted)]">{FEATURE_NOTES[f] || ""}</p>
+              </div>
+              <span className={`hidden text-[11.5px] font-medium sm:inline ${onCount ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{summary}</span>
+              <Switch
+                on={byDefault}
+                disabled={saving}
+                // The default; an account set apart keeps its own setting (and its dot).
+                onChange={() => save([{ connectionId: null, feature: f, allowed: !byDefault }])}
+                label={`${featureLabel(f)} on every account`}
+              />
+            </div>
+            {perAccount.length > 1 && (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 pl-11">
+                {perAccount.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    disabled={saving}
+                    // Flipping back to the default clears the account's own setting.
+                    onClick={() => save([{ connectionId: a.id, feature: f, allowed: !a.on === byDefault ? null : !a.on }])}
+                    title={a.differs ? `${a.label}: ${a.on ? "on" : "off"}, unlike the default` : `${a.label}: ${a.on ? "on" : "off"}, as the default`}
+                    aria-pressed={a.on}
+                    className={`inline-flex h-6 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium ring-1 ring-inset transition-colors disabled:opacity-60 ${
+                      a.on ? "bg-emerald-50 text-emerald-800 ring-emerald-200 hover:bg-emerald-100" : "bg-white text-[var(--color-muted)] ring-[var(--color-line)] hover:text-[var(--color-ink)]"
+                    }`}
+                  >
+                    <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3" aria-hidden>
+                      {a.on ? <path d="M5 10.5l3.2 3.2L15 6.8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" /> : <path d="M6 10h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />}
+                    </svg>
+                    {a.label}
+                    {a.differs && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-amber-500" aria-label="differs from the default" />}
+                  </button>
+                ))}
+                {differing.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => save(differing.map((a) => ({ connectionId: a.id, feature: f, allowed: null })))}
+                    className="ml-1 text-[11.5px] font-semibold text-[var(--color-primary)] hover:underline disabled:opacity-60"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         );
       })}
     </div>
-  );
-
-  return (
-    <>
-    {phone}
-    <div className="hidden overflow-x-auto md:block">
-      <div className="min-w-[640px]">
-        <div className={`${cols} border-b border-[var(--color-line)] bg-[var(--color-paper)] py-2`} style={colStyle}>
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Access to</span>
-          {knownFeatures.map((f) => (
-            <span key={f} className="text-center text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-              {featureLabel(f)}
-            </span>
-          ))}
-        </div>
-        <div className="divide-y divide-[var(--color-line)]">
-          {rows.map((row) => {
-            const isDefault = row.connectionId === null;
-            return (
-              <div key={row.connectionId ?? "global"} className={`${cols} py-3`} style={colStyle}>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-[var(--color-ink)]">{isDefault ? "All accounts" : row.rowLabel}</p>
-                  <p className="text-[11.5px] text-[var(--color-muted)]">{isDefault ? "Default for every account" : "Follows the default unless changed"}</p>
-                </div>
-                {knownFeatures.map((f) => {
-                  if (isDefault) {
-                    return (
-                      <div key={f} className="flex justify-center">
-                        <Switch on={row.values[f] ?? false} disabled={saving} onChange={() => setValue(null, f, !row.values[f])} label={`${featureLabel(f)} on all accounts`} />
-                      </div>
-                    );
-                  }
-                  // Undefined = following the default. Flipping it here
-                  // writes an explicit override for this one account.
-                  const override = row.values[f];
-                  const effective = override === undefined ? globalValues[f] ?? false : override;
-                  return (
-                    <div key={f} className="flex items-center justify-center">
-                      <Switch on={effective} inherited={override === undefined} disabled={saving} onChange={() => setValue(row.connectionId, f, !effective)} label={`${featureLabel(f)} on ${row.rowLabel}`} />
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-    </>
   );
 }
 

@@ -57,6 +57,8 @@ function HuntingBody() {
   // A product checked but not added yet: its Add bar is the page's footer.
   const [checked, setChecked] = useState<HuntCheck | null>(null);
   const [added, setAdded] = useState<string | null>(null);
+  // The Hunt a product form: hidden until asked for (or arriving with a competitor to hunt, from Research).
+  const [showForm, setShowForm] = useState(Boolean(search.get("competitor")));
   // A fresh form after each add.
   const [formKey, setFormKey] = useState(0);
 
@@ -144,6 +146,7 @@ function HuntingBody() {
     setChecked(null);
     setAdded(hunt.stage === "approved" ? "Added and approved: it's ready to draft." : "Added: it's waiting for a reviewer.");
     setFormKey((k) => k + 1);
+    setShowForm(false);
     refresh();
   }
   const closePanel = useCallback(() => open(null), [open]);
@@ -198,6 +201,23 @@ function HuntingBody() {
       }
       footer={checked ? <HuntAddBar key={checked.checkId} connectionId={connection.id} checked={checked} onDiscard={() => setChecked(null)} onAdded={onAdded} /> : undefined}
       pinFooter
+      actions={
+        canHunt && !showForm ? (
+          <button
+            type="button"
+            onClick={() => {
+              setShowForm(true);
+              setAdded(null);
+            }}
+            className="btn btn-primary btn-sm !h-8 gap-1 !px-3 !text-[12.5px]"
+          >
+            <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+              <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+            </svg>
+            Add a product
+          </button>
+        ) : undefined
+      }
     >
       <div className="space-y-5">
         {added && !checked && (
@@ -210,7 +230,7 @@ function HuntingBody() {
             </button>
           </div>
         )}
-        {canHunt && (
+        {canHunt && showForm && (
           <HuntForm
             key={formKey}
             connectionId={connection.id}
@@ -218,27 +238,22 @@ function HuntingBody() {
             initialCompetitor={formKey === 0 ? search.get("competitor") : null}
             checked={checked}
             onChecked={onChecked}
+            onClose={() => {
+              setShowForm(false);
+              setChecked(null);
+            }}
           />
         )}
 
         {/* The list steps aside while a checked product is on screen; it's back after Add or Discard. */}
         {!checked && (
           <section className="card overflow-hidden">
-            <div className="border-b border-[var(--color-line)] px-2 sm:px-3">
+            {/* One header row: the tabs, then who, search and sort on the right. */}
+            <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-3 py-2.5">
               <PipelineTabs views={views} counts={data?.counts || ({} as HuntList["counts"])} value={effectiveView || "all"} onChange={changeView} />
-            </div>
-            <div className="border-b border-[var(--color-line)] bg-[var(--color-paper)]/40 px-4 py-2.5">
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="relative min-w-[180px] flex-1 max-sm:basis-full">
-                  <span className="sr-only">Search</span>
-                  <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
-                    <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
-                    <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
-                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products" className="input input-sm !h-9 !pl-9" />
-                </label>
+              <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto">
                 {canReview && effectiveView !== "mine" && (data?.hunters.length || 0) > 1 && (
-                  <select value={hunter} onChange={(e) => setHunter(e.target.value)} className="input input-sm !h-9 w-auto max-sm:flex-1" aria-label="Hunter">
+                  <select value={hunter} onChange={(e) => setHunter(e.target.value)} className="input input-sm !h-8 w-auto !text-[12.5px]" aria-label="Hunter">
                     <option value="">Everyone</option>
                     {data?.hunters.map((h) => (
                       <option key={h.id} value={h.id}>
@@ -247,7 +262,7 @@ function HuntingBody() {
                     ))}
                   </select>
                 )}
-                <select value={sort} onChange={(e) => setSort(e.target.value as HuntSort | "")} className="input input-sm !h-9 w-auto max-sm:flex-1" aria-label="Sort">
+                <select value={sort} onChange={(e) => setSort(e.target.value as HuntSort | "")} className="input input-sm !h-8 w-auto flex-shrink-0 !text-[12.5px]" aria-label="Sort">
                   <option value="">{effectiveView === "review" ? "Longest waiting" : "Newest"}</option>
                   {(Object.keys(SORT_LABELS) as HuntSort[])
                     .filter((k) => k !== (effectiveView === "review" ? "waiting" : "newest"))
@@ -257,6 +272,27 @@ function HuntingBody() {
                       </option>
                     ))}
                 </select>
+                <label className="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
+                  <span className="sr-only">Search</span>
+                  <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
+                    <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Title, item number, hunter or note" className="input input-sm !h-8 !pl-8 !pr-8 !text-[12.5px]" aria-label="Search products" />
+                  {q && (
+                    <button
+                      type="button"
+                      onClick={() => setQ("")}
+                      aria-label="Clear the search"
+                      title="Clear"
+                      className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
+                    >
+                      <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+                        <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  )}
+                </label>
               </div>
             </div>
             {listError ? (
@@ -268,6 +304,7 @@ function HuntingBody() {
                 data={data}
                 view={effectiveView || "all"}
                 you={user.id}
+                query={query}
                 loading={listLoading}
                 onOpen={open}
                 onEdit={(id) => {

@@ -9,6 +9,7 @@ import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
 import { BestSellersCard, SalesTrendCard } from "@/components/overview/OverviewSales";
+import { addListingTrends, ListingTrendCard, RecentListingsCard } from "@/components/overview/OverviewListings";
 import { useAmounts } from "@/lib/useAmounts";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { currencySymbol } from "@/lib/format";
@@ -207,8 +208,17 @@ export default function DashboardPage() {
   // The markets in view's listing work, added up (counts, not money).
   const listingWork = inView.length
     ? inView.reduce(
-        (sum, m) => ({ live: sum.live + m.listings.live, waiting: sum.waiting + m.listings.waiting, drafted: sum.drafted + m.listings.drafted, published: sum.published + m.listings.published }),
-        { live: 0, waiting: 0, drafted: 0, published: 0 }
+        (sum, m) => ({
+          live: sum.live + m.listings.live,
+          waiting: sum.waiting + m.listings.waiting,
+          drafted: sum.drafted + m.listings.drafted,
+          published: sum.published + m.listings.published,
+          hunted: sum.hunted + (m.listings.hunted ?? 0),
+          approved: sum.approved + (m.listings.approved ?? 0),
+          rejected: sum.rejected + (m.listings.rejected ?? 0),
+          reviewing: sum.reviewing + (m.listings.reviewing ?? 0),
+        }),
+        { live: 0, waiting: 0, drafted: 0, published: 0, hunted: 0, approved: 0, rejected: 0, reviewing: 0 }
       )
     : null;
   // One name per account, its markets after it ("Minsu LTD (UK, AU)") when
@@ -368,6 +378,23 @@ export default function DashboardPage() {
                   </Link>
                 </p>
               )}
+            </div>
+          )}
+
+          {/* How listing work moved, and what went live. */}
+          {metric === "listings" && (
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="min-w-0 lg:col-span-2">
+                <ListingTrendCard points={addListingTrends(inView.map((m) => m.listingTrend))} caption={trendCaption} />
+              </div>
+              <RecentListingsCard
+                items={inView
+                  .flatMap((m) => m.recentListings ?? [])
+                  .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+                  .slice(0, 5)}
+                showMarket={current === "all" && markets.length > 1}
+                flagOf={(id) => markets.find((m) => m.id === id)?.flag ?? ""}
+              />
             </div>
           )}
 

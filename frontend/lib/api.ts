@@ -97,6 +97,11 @@ export interface ListingWork {
   waiting: number;
   drafted: number;
   published: number;
+  // Product hunting in the same dates, and how many wait for review now.
+  hunted?: number;
+  approved?: number;
+  rejected?: number;
+  reviewing?: number;
 }
 
 export interface OverviewAccount {
@@ -115,12 +120,39 @@ export interface OverviewAccount {
   financesAccess: boolean;
 }
 
+// The Listings tab's chart: the listing pipeline per day, with the stretch before.
+export type ListingTrendKey = "hunted" | "approved" | "rejected" | "drafted" | "published";
+export interface ListingTrendPoint {
+  day: string;
+  previousDay: string | null;
+  partial: boolean;
+  values: Record<ListingTrendKey, number>;
+  previous: Record<ListingTrendKey, number> | null;
+}
+
+// A listing put live from Liston in the dates, with what it sold in them.
+export interface RecentListing {
+  id: string;
+  itemId: string | null;
+  title: string | null;
+  image: string | null;
+  price: number | null;
+  currency: string | null;
+  publishedAt: string;
+  units: number;
+  url: string | null;
+  account: string;
+  marketplaceId: string;
+}
+
 // One account's Overview: its money and listing work for a range, in its
 // own currency and time zone.
 export interface AccountOverview {
   range: string;
   activeListings: number;
   listings: ListingWork;
+  listingTrend?: ListingTrendPoint[] | null;
+  recentListings?: RecentListing[];
   money: MoneySummary;
   // The same dates' orders by state (archived ones left out).
   queue?: OrderCounts;
@@ -303,10 +335,14 @@ export interface ResearchResult {
 // Sales by day under the business Overview's cards: what buyers paid each
 // day, the same day of the previous stretch alongside (null when older than
 // the 90 days Liston keeps), today still running.
+// The Sales chart's measures for a day: money in the market's currency
+// (eBay's fees, earnings and profit from its figures for each order, the
+// account's own charges on the day billed), orders and units as counts.
+export type SalesTrendKey = "sales" | "orders" | "units" | "fees" | "earnings" | "profit";
 export interface OverviewTrendPoint {
   day: string;
-  value: number;
-  previous: number | null;
+  values: Record<SalesTrendKey, number>;
+  previous: Record<SalesTrendKey, number> | null;
   previousDay: string | null;
   partial: boolean;
 }
@@ -339,6 +375,8 @@ export interface OverviewMarket {
   money: MoneySummary;
   trend?: OverviewTrendPoint[];
   bestSellers?: OverviewBestSeller[];
+  listingTrend?: ListingTrendPoint[] | null;
+  recentListings?: RecentListing[];
 }
 
 export interface Overview {
@@ -547,6 +585,13 @@ export interface MemberOverview {
   permissions: TeamMemberPermission[];
   // Their hunted products' results (by when hunted) and their reviews (by when decided).
   hunting?: MemberHunting;
+  // Their hunted products approved and rejected, day by day on the day decided (for the chart).
+  huntOutcomes?: {
+    series: { day: string; approved: number; rejected: number; converting?: number }[];
+    previousSeries: { day: string; approved: number; rejected: number; converting?: number }[];
+    totals: { approved: number; rejected: number; converting?: number };
+    previous: { approved: number; rejected: number; converting?: number };
+  };
   connections: { id: string; label: string }[];
   knownFeatures: string[];
 }

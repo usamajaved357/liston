@@ -28,9 +28,39 @@ test("sales by day count what buyers paid, cancelled orders left out, in the vie
   ];
   const trend = salesTrend(orders, { timeZone: 'Europe/London', range: '7d', today: TODAY, isCancelled });
   const today = trend.at(-1);
-  assert.deepStrictEqual(today, { day: TODAY, value: 25, previous: 7.5, previousDay: '2026-09-19', partial: true });
-  assert.strictEqual(trend.find((p) => p.day === '2026-09-24').value, 0, 'the cancelled order is left out');
+  assert.deepStrictEqual(today, {
+    day: TODAY,
+    values: { sales: 25, orders: 3, units: 0, fees: 0, earnings: 0, profit: 0 },
+    previous: { sales: 7.5, orders: 1, units: 0, fees: 0, earnings: 0, profit: 0 },
+    previousDay: '2026-09-19',
+    partial: true,
+  });
+  assert.deepStrictEqual(trend.find((p) => p.day === '2026-09-24').values.orders, 0, 'the cancelled order is left out');
   assert.ok(trend.slice(0, -1).every((p) => !p.partial));
+});
+
+test("each day's units, eBay fees, earnings and profit: eBay's figures per order, the supplier cost off profit, the account's charges on the day billed", () => {
+  const line = (units) => ({ itemId: '1', quantityPurchased: units });
+  const orders = [
+    { orderId: 'a', createdAt: '2026-09-26T08:00:00Z', total: { amount: 20 }, lineItems: [line(2), line(1)] },
+    { orderId: 'b', createdAt: '2026-09-26T09:00:00Z', total: { amount: 10 }, lineItems: [line(1)] },
+    { orderId: 'c', createdAt: '2026-09-26T10:00:00Z', total: { amount: 10 }, lineItems: [line(4)], cancelled: true },
+  ];
+  const finances = new Map([
+    ['a', { fees: 3, earnings: 17 }],
+    ['c', { fees: 0.5, earnings: -0.5 }], // eBay's money on a cancelled order still counts
+  ]);
+  const costs = new Map([
+    ['a', { value: 6, currency: 'GBP' }],
+    ['b', { value: 4, currency: 'GBP' }], // no eBay figures yet: not in profit
+  ]);
+  const charges = [
+    { amount: 2, chargedAt: '2026-09-26T12:00:00Z' },
+    { amount: 1, chargedAt: '2026-09-25T12:00:00Z' },
+  ];
+  const trend = salesTrend(orders, { timeZone: 'Europe/London', range: '7d', today: TODAY, isCancelled, finances, costs, charges, currency: 'GBP' });
+  assert.deepStrictEqual(trend.at(-1).values, { sales: 30, orders: 2, units: 4, fees: 5.5, earnings: 14.5, profit: 8.5 });
+  assert.deepStrictEqual(trend.at(-2).values, { sales: 0, orders: 0, units: 0, fees: 1, earnings: -1, profit: -1 });
 });
 
 test('best sellers: most units first, then most sales; an order counts once per listing; cancelled orders left out', () => {
@@ -49,11 +79,12 @@ test('best sellers: most units first, then most sales; an order counts once per 
 });
 
 test("accounts' trends add up day by day, a market's converts into the main currency, and best sellers merge across currencies", () => {
-  const a = [{ day: '2026-09-25', value: 10, previous: 4 }, { day: TODAY, value: 5, previous: null }];
-  const b = [{ day: '2026-09-25', value: 2.5, previous: 1 }, { day: TODAY, value: 0, previous: null }];
-  assert.deepStrictEqual(addTrends([a, b]).map((p) => [p.value, p.previous]), [[12.5, 5], [5, null]]);
+  const v = (sales, orders) => ({ sales, orders, units: orders, fees: 0, earnings: 0, profit: 0 });
+  const a = [{ day: '2026-09-25', values: v(10, 2), previous: v(4, 1) }, { day: TODAY, values: v(5, 1), previous: null }];
+  const b = [{ day: '2026-09-25', values: v(2.5, 1), previous: v(1, 1) }, { day: TODAY, values: v(0, 0), previous: null }];
+  assert.deepStrictEqual(addTrends([a, b]).map((p) => [p.values.sales, p.values.orders, p.previous?.sales ?? null]), [[12.5, 3, 5], [5, 1, null]]);
   assert.deepStrictEqual(addTrends([]), []);
-  assert.deepStrictEqual(convertTrend([{ day: TODAY, value: 26.4, previous: null }], 1.32), [{ day: TODAY, value: 20, previous: null }]);
+  assert.deepStrictEqual(convertTrend([{ day: TODAY, values: v(26.4, 3), previous: null }], 1.32), [{ day: TODAY, values: v(20, 3), previous: null }], 'money converts, counts stay');
   const uk = [{ itemId: '1', units: 4, sales: 40, currency: 'GBP' }];
   const au = [{ itemId: '2', units: 4, sales: 100, currency: 'AUD' }, { itemId: '3', units: 1, sales: 5, currency: 'AUD' }];
   // Same units: A$100 is £50 at 2.0, so it ranks above £40.

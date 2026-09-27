@@ -292,13 +292,13 @@ export function SalesCards({
 }
 
 // The listing pipeline, stage by stage: products hunted, approved or rejected
-// (the product-hunting feature, still to come), then drafted and published
-// in Liston in the chosen dates. What's live and waiting right now sits
-// underneath.
-const STAGES: { label: string; note: string; of?: (w: ListingWork) => number }[] = [
-  { label: "Hunted", note: "Products found to list" },
-  { label: "Approved", note: "Picked to draft" },
-  { label: "Rejected", note: "Passed over" },
+// (product hunting), then drafted and published in Liston, all in the chosen
+// dates. What's live, waiting to publish and waiting for review right now
+// sits underneath.
+const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink?: string }[] = [
+  { label: "Hunted", note: "Products found to list", of: (w) => w.hunted ?? 0 },
+  { label: "Approved", note: "Picked to draft", of: (w) => w.approved ?? 0, ink: "text-emerald-600" },
+  { label: "Rejected", note: "Passed over", of: (w) => w.rejected ?? 0, ink: "text-rose-600" },
   { label: "Drafted", note: "Drafts created in Liston", of: (w) => w.drafted },
   { label: "Published", note: "Went live from Liston", of: (w) => w.published },
 ];
@@ -308,23 +308,14 @@ export function ListingCards({ work, loading }: { work: ListingWork | null; load
     <>
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
         {STAGES.map((stage) => {
-          const soon = !stage.of;
+          const value = work ? stage.of(work) : 0;
           return (
-            <div key={stage.label} className={`card flex min-h-[120px] min-w-0 flex-col p-3.5 sm:min-h-[136px] sm:p-5 ${soon ? "border-dashed bg-transparent shadow-none" : ""}`}>
-              <span className="flex items-center justify-between gap-2">
-                <span className="text-[13px] font-medium text-[var(--color-muted)]">{stage.label}</span>
-                {soon && (
-                  <span className="rounded-full bg-[var(--color-paper)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
-                    Coming soon
-                  </span>
-                )}
-              </span>
-              {loading || (!soon && !work) ? (
+            <div key={stage.label} className="card flex min-h-[120px] min-w-0 flex-col p-3.5 sm:min-h-[136px] sm:p-5">
+              <span className="text-[13px] font-medium text-[var(--color-muted)]">{stage.label}</span>
+              {loading || !work ? (
                 <span className="mt-3 h-8 w-20 animate-pulse rounded-md bg-[var(--color-line)]" />
               ) : (
-                <span className={`mt-2.5 text-[24px] font-semibold leading-none sm:text-[28px] tracking-tight tabular-nums ${soon ? "text-[var(--color-line-strong)]" : "text-[var(--color-ink)]"}`}>
-                  {soon ? "—" : count(stage.of!(work!))}
-                </span>
+                <span className={`mt-2.5 text-[24px] font-semibold leading-none sm:text-[28px] tracking-tight tabular-nums ${value > 0 && stage.ink ? stage.ink : "text-[var(--color-ink)]"}`}>{count(value)}</span>
               )}
               <span className="mt-auto pt-3 text-[12px] text-[var(--color-muted)]">{stage.note}</span>
             </div>
@@ -335,6 +326,11 @@ export function ListingCards({ work, loading }: { work: ListingWork | null; load
         <p className="mt-4 text-[13px] text-[var(--color-muted)]">
           Right now: <span className="font-medium text-[var(--color-ink)]">{count(work.live)}</span> live on eBay ·{" "}
           <span className="font-medium text-[var(--color-ink)]">{count(work.waiting)}</span> drafts waiting to publish
+          {(work.reviewing ?? 0) > 0 && (
+            <>
+              {" "}· <span className="font-medium text-[var(--color-ink)]">{count(work.reviewing ?? 0)}</span> hunted product{work.reviewing === 1 ? "" : "s"} waiting for review
+            </>
+          )}
         </p>
       )}
     </>

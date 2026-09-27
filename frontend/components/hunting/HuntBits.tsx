@@ -27,12 +27,12 @@ export const STAGE: Record<HuntStage, { label: string; chip: string; dot: string
 };
 
 /** Where a product stands: its colour, a small mark for the stage, and the words. */
-export function StageChip({ stage, className = "" }: { stage: HuntStage; className?: string }) {
+export function StageChip({ stage, className = "", small = false }: { stage: HuntStage; className?: string; small?: boolean }) {
   const s = STAGE[stage];
   return (
-    <span className={`inline-flex h-7 items-center gap-1.5 whitespace-nowrap rounded-full py-0.5 pl-1 pr-3 text-[12px] font-semibold ring-1 ring-inset ${s.chip} ${className}`}>
-      <span className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-white ${s.icon}`} aria-hidden>
-        <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5">
+    <span className={`inline-flex items-center whitespace-nowrap rounded-full py-0.5 font-semibold ring-1 ring-inset ${small ? "h-6 gap-1 pl-0.5 pr-2 text-[11px]" : "h-7 gap-1.5 pl-1 pr-3 text-[12px]"} ${s.chip} ${className}`}>
+      <span className={`flex flex-shrink-0 items-center justify-center rounded-full text-white ${small ? "h-[18px] w-[18px]" : "h-5 w-5"} ${s.icon}`} aria-hidden>
+        <svg viewBox="0 0 20 20" fill="none" className={small ? "h-3 w-3" : "h-3.5 w-3.5"}>
           {ICON[stage]}
         </svg>
       </span>

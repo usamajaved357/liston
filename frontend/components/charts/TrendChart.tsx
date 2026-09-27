@@ -65,10 +65,21 @@ export function TrendChart({
   const innerH = height - M.top - M.bottom;
   const n = points.length;
 
-  const { ticks, yMax } = useMemo(() => {
+  const { ticks, yMin, yMax } = useMemo(() => {
     const values = points.flatMap((p) => [p.value, hasPrevious ? p.previous : null]).filter((v): v is number => v != null);
-    const t = niceTicks(Math.max(0, ...values), 4);
-    return { ticks: t, yMax: t[t.length - 1] || 1 };
+    const hi = Math.max(0, ...values);
+    const lo = Math.min(0, ...values);
+    if (lo === 0) {
+      const t = niceTicks(hi, 4);
+      return { ticks: t, yMin: 0, yMax: t[t.length - 1] || 1 };
+    }
+    // A figure below nothing (a day's profit after the account's charges):
+    // the same steps carried on under zero.
+    const base = niceTicks(hi - lo, 4);
+    const step = base[1] - base[0];
+    const t: number[] = [];
+    for (let v = Math.floor(lo / step) * step; v <= Math.ceil(hi / step) * step + step * 0.001; v += step) t.push(Math.round(v * 1e6) / 1e6);
+    return { ticks: t, yMin: t[0], yMax: t[t.length - 1] };
   }, [points, hasPrevious]);
   const left = Math.ceil(Math.max(...ticks.map((t) => labelWidth(axisFormat(t))), 8)) + AXIS_GAP;
   const innerW = width - left - M.right;
@@ -76,7 +87,7 @@ export function TrendChart({
   // Bars sit in slots; lines run edge to edge.
   const slot = n > 0 ? innerW / n : innerW;
   const x = (i: number) => (variant === "bars" ? left + slot * (i + 0.5) : left + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW));
-  const y = (v: number) => M.top + innerH - (v / yMax) * innerH;
+  const y = (v: number) => M.top + innerH - ((v - yMin) / (yMax - yMin || 1)) * innerH;
 
   // Smooth runs between gaps: a monotone curve through each day's figure,
   // never overshooting a real high or low.

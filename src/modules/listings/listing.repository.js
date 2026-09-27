@@ -206,6 +206,31 @@ async function countListingWork(connectionId, start, end) {
   return rows[0] || { drafted: 0, published: 0, waiting: 0 };
 }
 
+/** An account's listing work since a moment, for the Overview's chart: when each draft was made, and published. */
+async function listingEventsSince(connectionId, since) {
+  const { rows } = await query(
+    `SELECT created_at, status, updated_at FROM listings
+      WHERE connection_id = $1 AND edit_of_item_id IS NULL AND (created_at >= $2 OR (status = 'published' AND updated_at >= $2))`,
+    [connectionId, since]
+  );
+  return rows;
+}
+
+/** The newest listings put live from Liston in [start, end): title, photo, price, eBay item. */
+async function recentlyPublished(connectionId, start, end, limit = 6) {
+  const { rows } = await query(
+    `SELECT id, external_product_id AS item_id, updated_at AS published_at,
+            COALESCE(generated_data->>'commonTitle', generated_data->>'title') AS title,
+            generated_data->'imageUrls'->>0 AS image,
+            generated_data->'price'->>'value' AS price, generated_data->'price'->>'currency' AS currency
+       FROM listings
+      WHERE connection_id = $1 AND edit_of_item_id IS NULL AND status = 'published' AND updated_at >= $2 AND updated_at < $3
+      ORDER BY updated_at DESC LIMIT $4`,
+    [connectionId, start, end, limit]
+  );
+  return rows;
+}
+
 // Drafts on any of the owner's accounts that eBay refused for a policy
 // reason (brand/VeRO, hazardous words, prohibited items), newest first:
 // { title, message, account, at }. Product research checks a product
@@ -225,6 +250,8 @@ async function findPolicyRefusals(ownerId, limit = 500) {
 module.exports = {
   findPolicyRefusals,
   countListingWork,
+  listingEventsSince,
+  recentlyPublished,
   latestChanges,
   findPublishedDataByItemIds,
   recordListingChange,

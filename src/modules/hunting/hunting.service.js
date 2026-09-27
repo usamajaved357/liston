@@ -8,6 +8,7 @@ const logger = require('../../utils/logger');
 const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, HuntError, rules } = require('./hunt-rules');
 const stats = require('./hunting-stats');
 const { noticeFor } = require('./hunt-notice');
+const analyticsDays = require('../analytics/analytics-days');
 const notificationsService = require('../notifications/notifications.service');
 const connectionService = require('../connections/connection.service');
 const teamRepository = require('../team/team.repository');
@@ -541,6 +542,33 @@ async function memberFigures(ownerId, memberId, win) {
 }
 
 /**
+ * A hunter's products that sold, day by day in the owner's days: how many
+ * different products from their finds had an order that day (cancelled
+ * orders left out), and how many in the whole window.
+ */
+async function convertingByDay(ownerId, hunterId, { startsAt, endsAt, timeZone }) {
+  const listed = await huntingRepository.listedHunts(ownerId, { hunterId });
+  const huntOf = new Map();
+  for (const h of listed) for (const id of h.item_ids || []) huntOf.set(String(id), h.id);
+  if (!huntOf.size) return { byDay: new Map(), total: 0 };
+  const orders = await mirror.ordersForItems([...new Set(listed.map((h) => h.connection_id))], [...huntOf.keys()], startsAt, endsAt);
+  const byDay = new Map();
+  const all = new Set();
+  for (const order of orders) {
+    if (isCancelled(order)) continue;
+    const day = analyticsDays.dayOf(order.createdAt, timeZone);
+    for (const line of order.lineItems || []) {
+      const huntId = huntOf.get(String(line.itemId));
+      if (!huntId || !day) continue;
+      if (!byDay.has(day)) byDay.set(day, new Set());
+      byDay.get(day).add(huntId);
+      all.add(huntId);
+    }
+  }
+  return { byDay: new Map([...byDay].map(([day, set]) => [day, set.size])), total: all.size };
+}
+
+/**
  * The daily reading of hunted products' competitors (hunting.scheduler):
  * each due product's listing read once more through Browse, within
  * `HUNT_TRACK_DAILY_CALLS`, its sold counts kept and its score redone.
@@ -612,4 +640,4 @@ function forgetChecks() {
   checks.clear();
 }
 
-module.exports = { readDueSales, check, add, list, detail, recheck, update, resubmit, decide, remove, badge, draftStart, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };
+module.exports = { convertingByDay, readDueSales, check, add, list, detail, recheck, update, resubmit, decide, remove, badge, draftStart, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };

@@ -32,7 +32,7 @@ const EMPTY: Record<HuntView, { title: string; text: string }> = {
   review: { title: "Nothing waiting for review", text: "New finds from the team land here for a decision." },
   approved: { title: "No approved products yet", text: "Approved products wait here, ready to draft, and stay here once drafted and listed." },
   rejected: { title: "Nothing rejected", text: "Rejected products show here with the reason." },
-  all: { title: "No products hunted yet", text: "Check a product above to see its profit, then add it for review." },
+  all: { title: "No products hunted yet", text: "Click Hunt a product to check one for profit, then add it for review." },
   mine: { title: "You haven't added a product yet", text: "Products you add show here, whatever happens to them: waiting, sent back, approved or rejected." },
 };
 
@@ -45,8 +45,8 @@ function Status({ hunt }: { hunt: HuntSummary }) {
   else if (hunt.stage === "approved") line = hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;
   return (
     <div className="flex min-w-0 flex-col items-center text-center">
-      <StageChip stage={hunt.stage} />
-      {line && <p className="mt-1 max-w-[190px] truncate text-[11.5px] text-[var(--color-muted)]">{line}</p>}
+      <StageChip stage={hunt.stage} small />
+      {line && <p className="mt-0.5 max-w-[170px] truncate text-[11px] text-[var(--color-muted)]">{line}</p>}
     </div>
   );
 }
@@ -82,7 +82,7 @@ function Signals({ hunt }: { hunt: HuntSummary }) {
 
 function QuickAction({ hunt, onOpen, onEdit, onApprove, onDraft, wide = false }: { hunt: HuntSummary; onOpen: () => void; onEdit: () => void; onApprove: () => void; onDraft: () => void; wide?: boolean }) {
   const p = hunt.permissions;
-  const size = wide ? "flex-1" : "btn-sm";
+  const size = wide ? "flex-1" : "btn-sm !h-7 !px-3 !text-[12px]";
   const act = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation();
     fn();
@@ -100,13 +100,13 @@ function QuickAction({ hunt, onOpen, onEdit, onApprove, onDraft, wide = false }:
     );
   if (p.canDraft && hunt.stage === "approved")
     return (
-      <button type="button" onClick={act(onDraft)} className={`btn btn-primary ${wide ? "w-full" : "btn-sm"}`}>
+      <button type="button" onClick={act(onDraft)} className={`btn btn-primary ${wide ? "w-full" : "btn-sm !h-7 !px-3 !text-[12px]"}`}>
         Draft
       </button>
     );
   if (p.canResubmit)
     return (
-      <button type="button" onClick={act(onEdit)} className={`${EDIT_BUTTON} ${wide ? "w-full" : ""}`}>
+      <button type="button" onClick={act(onEdit)} className={`${EDIT_BUTTON} ${wide ? "w-full" : "!h-7 !px-3 !text-[12px]"}`}>
         <EditIcon />
         Edit
       </button>
@@ -127,11 +127,11 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
   return (
     <li>
       {/* Phones */}
-      <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === "Enter" && onOpen()} className="block cursor-pointer px-4 py-3.5 md:hidden">
-        <div className="flex gap-3">
-          <Thumb src={hunt.imageUrl} size={56} />
+      <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === "Enter" && onOpen()} className="block cursor-pointer px-4 py-3 md:hidden">
+        <div className="flex gap-2.5">
+          <Thumb src={hunt.imageUrl} size={48} />
           <div className="min-w-0 flex-1">
-            <p className="line-clamp-2 text-[13.5px] font-medium leading-snug text-[var(--color-ink)]">{hunt.title}</p>
+            <p className="line-clamp-2 text-[13px] font-medium leading-snug text-[var(--color-ink)]">{hunt.title}</p>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-[var(--color-muted)]">
               <Person person={hunt.hunter} you={you} size={16} />
               <span>· {ago(hunt.createdAt)}</span>
@@ -141,7 +141,7 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
         </div>
         <div className="mt-3 flex items-end justify-between gap-3">
           <div>
-            <p className={`text-[17px] font-semibold leading-none tabular-nums ${ink}`}>{signedMoney(hunt.headline.profit, hunt.currency)}</p>
+            <p className={`text-[15px] font-semibold leading-none tabular-nums ${ink}`}>{signedMoney(hunt.headline.profit, hunt.currency)}</p>
             <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">
               {returnText}
               {hunt.soldPerMonth !== null ? ` · ${count(hunt.soldPerMonth)}/mo sold` : ""}
@@ -152,7 +152,7 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
               </span>
             )}
           </div>
-          <StageChip stage={hunt.stage} />
+          <StageChip stage={hunt.stage} small />
         </div>
         {(hunt.stage === "sent_back" && hunt.decisionNote) || (hunt.stage === "rejected" && hunt.rejectReasonLabel) ? (
           <p className="mt-2 line-clamp-2 rounded-lg bg-[var(--color-paper)] px-2.5 py-1.5 text-[12px] text-[var(--color-ink)]">{hunt.stage === "rejected" ? hunt.rejectReasonLabel : hunt.decisionNote}</p>
@@ -170,14 +170,14 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
         tabIndex={0}
         onClick={onOpen}
         onKeyDown={(e) => e.key === "Enter" && onOpen()}
-        className="hidden cursor-pointer grid-cols-[minmax(0,1fr)_132px_120px_196px_176px] items-center gap-4 px-4 py-3 transition-colors hover:bg-[var(--color-paper)]/70 md:grid"
+        className="hidden cursor-pointer grid-cols-[minmax(0,1fr)_112px_104px_176px_150px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[var(--color-paper)]/70 md:grid"
       >
-        <div className="flex min-w-0 items-center gap-3">
-          <Thumb src={hunt.imageUrl} size={52} />
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Thumb src={hunt.imageUrl} size={42} />
           <div className="min-w-0">
-            <p className="line-clamp-2 text-[13.5px] font-medium leading-snug text-[var(--color-ink)]">{hunt.title}</p>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-[var(--color-muted)]">
-              <Person person={hunt.hunter} you={you} size={16} />
+            <p className="line-clamp-2 text-[12.5px] font-medium leading-snug text-[var(--color-ink)]">{hunt.title}</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-[var(--color-muted)]">
+              <Person person={hunt.hunter} you={you} size={14} />
               <span>· {ago(hunt.createdAt)}</span>
               {hunt.bestSeller?.label && <span className="max-w-[160px] truncate">· Best seller {hunt.bestSeller.label}</span>}
               <Signals hunt={hunt} />
@@ -185,15 +185,15 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
           </div>
         </div>
         <div className="text-center" title={unpriced ? "No competitor: priced at your target return" : `${v.label}${hunt.headline.basis === "best_seller" ? " on the best seller" : hunt.headline.basis === "best_option" ? " on the best option" : ""}`}>
-          <p className={`text-[15px] font-semibold tabular-nums ${ink}`}>{signedMoney(hunt.headline.profit, hunt.currency)}</p>
-          <p className="text-[11.5px] tabular-nums text-[var(--color-muted)]">{returnText}</p>
+          <p className={`text-[13.5px] font-semibold tabular-nums ${ink}`}>{signedMoney(hunt.headline.profit, hunt.currency)}</p>
+          <p className="text-[11px] tabular-nums text-[var(--color-muted)]">{returnText}</p>
         </div>
         <div className="flex flex-col items-center text-center">
-          <p className="text-[13px] font-semibold tabular-nums text-[var(--color-ink)]">
+          <p className="text-[12.5px] font-semibold tabular-nums text-[var(--color-ink)]">
             {hunt.soldPerMonth === null ? "—" : count(hunt.soldPerMonth)}
-            <span className="ml-1 text-[11.5px] font-normal text-[var(--color-muted)]">/ month</span>
+            <span className="ml-1 text-[11px] font-normal text-[var(--color-muted)]">/ month</span>
           </p>
-          <span className="mt-1">
+          <span className="mt-0.5">
             <SalesScorePill score={hunt.salesScore} small />
           </span>
         </div>
@@ -206,12 +206,12 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
   );
 }
 
+// The tabs, as the Orders and Listings pages have them: one rounded bar, the chosen tab filled.
 export function PipelineTabs({ views, counts, value, onChange }: { views: HuntView[]; counts: Record<HuntView, number>; value: HuntView; onChange: (v: HuntView) => void }) {
   return (
-    <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Hunted products">
+    <div className="inline-flex max-w-full flex-shrink-0 items-center overflow-x-auto rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Hunted products">
       {views.map((v) => {
         const on = v === value;
-        const n = counts[v] ?? 0;
         return (
           <button
             key={v}
@@ -219,18 +219,12 @@ export function PipelineTabs({ views, counts, value, onChange }: { views: HuntVi
             role="tab"
             aria-selected={on}
             onClick={() => onChange(v)}
-            className={`-mb-px flex flex-shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-[13.5px] font-medium transition-colors ${
-              on ? "border-[var(--color-primary)] text-[var(--color-primary)]" : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            className={`flex h-7 flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[12.5px] font-medium transition-colors ${
+              on ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
             }`}
           >
             {VIEW_LABELS[v]}
-            <span
-              className={`min-w-[20px] rounded-full px-1.5 text-center text-[11px] font-semibold leading-[18px] tabular-nums ${
-                on ? "bg-[var(--color-primary)] text-white" : n && v === "review" ? "bg-indigo-100 text-indigo-700" : "bg-[var(--color-paper)] text-[var(--color-muted)]"
-              }`}
-            >
-              {count(n)}
-            </span>
+            <span className={`tabular-nums ${on ? "text-white/70" : v === "review" && (counts[v] ?? 0) > 0 ? "font-semibold text-indigo-600" : "text-[var(--color-muted)]/70"}`}>{count(counts[v] ?? 0)}</span>
           </button>
         );
       })}
@@ -238,13 +232,13 @@ export function PipelineTabs({ views, counts, value, onChange }: { views: HuntVi
   );
 }
 
-export function HuntRows({ data, view, you, loading, onOpen, onEdit, onApprove, onDraft, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; onOpen: (id: string) => void; onEdit: (id: string) => void; onApprove: (hunt: HuntSummary) => void; onDraft: (hunt: HuntSummary) => void; onMore?: () => void }) {
+export function HuntRows({ data, view, you, loading, query = "", onOpen, onEdit, onApprove, onDraft, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; query?: string; onOpen: (id: string) => void; onEdit: (id: string) => void; onApprove: (hunt: HuntSummary) => void; onDraft: (hunt: HuntSummary) => void; onMore?: () => void }) {
   if (!data) {
     return (
       <ul className="divide-y divide-[var(--color-line)]">
         {Array.from({ length: 4 }).map((_, i) => (
-          <li key={i} className="flex items-center gap-3 px-4 py-4">
-            <div className="h-[52px] w-[52px] animate-pulse rounded-xl bg-[var(--color-line)]" />
+          <li key={i} className="flex items-center gap-2.5 px-4 py-3">
+            <div className="h-[42px] w-[42px] animate-pulse rounded-lg bg-[var(--color-line)]" />
             <div className="flex-1 space-y-2">
               <div className="h-3.5 w-2/3 animate-pulse rounded bg-[var(--color-line)]" />
               <div className="h-3 w-1/3 animate-pulse rounded bg-[var(--color-line)]" />
@@ -255,23 +249,24 @@ export function HuntRows({ data, view, you, loading, onOpen, onEdit, onApprove, 
     );
   }
   if (!data.items.length) {
-    const empty = EMPTY[view];
+    // A search that finds nothing says so, rather than that nothing was ever hunted.
+    const empty = query.trim() ? { title: `No products match \u201c${query.trim()}\u201d`, text: "Search by title, eBay item number, AliExpress product number, hunter or note." } : EMPTY[view];
     return (
-      <div className="flex flex-col items-center px-6 py-12 text-center">
-        <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)]">
+      <div className="flex flex-col items-center px-6 py-10 text-center">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)]">
           <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
             <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.8" />
             <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
           </svg>
         </span>
-        <p className="mt-3 text-[14px] font-semibold text-[var(--color-ink)]">{empty.title}</p>
-        <p className="mt-1 max-w-sm text-[13px] leading-relaxed text-[var(--color-muted)]">{empty.text}</p>
+        <p className="mt-2.5 text-[13px] font-semibold text-[var(--color-ink)]">{empty.title}</p>
+        <p className="mt-0.5 max-w-sm text-[12px] leading-relaxed text-[var(--color-muted)]">{empty.text}</p>
       </div>
     );
   }
   return (
     <div className={loading ? "opacity-60 transition-opacity" : "transition-opacity"}>
-      <div className="hidden grid-cols-[minmax(0,1fr)_132px_120px_196px_176px] gap-4 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)] md:grid">
+      <div className="hidden grid-cols-[minmax(0,1fr)_112px_104px_176px_150px] gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)] md:grid">
         <span>Product</span>
         <span className="text-center">Profit per sale</span>
         <span className="text-center">Demand</span>
@@ -284,7 +279,7 @@ export function HuntRows({ data, view, you, loading, onOpen, onEdit, onApprove, 
         ))}
       </ul>
       {data.more && onMore && (
-        <button type="button" onClick={onMore} disabled={loading} className="w-full border-t border-[var(--color-line)] py-3 text-[13px] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-paper)]">
+        <button type="button" onClick={onMore} disabled={loading} className="w-full border-t border-[var(--color-line)] py-2.5 text-[12.5px] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-paper)]">
           {loading ? "Loading…" : "Show more"}
         </button>
       )}

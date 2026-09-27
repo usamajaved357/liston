@@ -224,6 +224,19 @@ test('the tabs: All, Waiting for review, Approved (drafted ones too), Rejected, 
   const reviewerMine = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.reviewer.token);
   assert.strictEqual(reviewerMine.data.items.length, 0);
   assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/hunting?view=sent_back`, undefined, t.reviewer.token)).data.view, 'all');
+  // Search finds a product by its eBay item number, the hunter's name or a note, not only its title.
+  const search = async (q) => (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all&q=${encodeURIComponent(q)}`, undefined, t.reviewer.token)).data.items.map((h) => h.id);
+  assert.ok((await search('123456789012')).includes(mine.id));
+  assert.deepStrictEqual(await search('hunter'), [mine.id]);
+  assert.deepStrictEqual(await search('no such thing anywhere'), []);
+  // The Overview's Hunted / Approved / Rejected for the dates, and what waits now.
+  const hour = new Date(Date.now() - 3600 * 1000);
+  const soon = new Date(Date.now() + 60 * 1000);
+  const { hunt: third } = await hunt(t.connectionId, t.hunter.token);
+  await request('POST', `/api/hunting/${third.id}/decision`, { decision: 'reject', reason: 'low_profit' }, t.reviewer.token);
+  await hunt(t.connectionId, t.hunter.token);
+  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, hour, soon), { hunted: 4, approved: 2, rejected: 1, reviewing: 1 });
+  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, new Date(Date.now() - 7200 * 1000), hour), { hunted: 0, approved: 0, rejected: 0, reviewing: 1 });
 });
 
 test('a bad link is refused before anything is read', async () => {
@@ -363,6 +376,13 @@ test('a lister sees only approved products, drafts them, and the listing and its
   const h = page.data.hunting.hunter;
   assert.deepStrictEqual({ hunted: h.hunted, approved: h.approved, waiting: h.waiting, listed: h.listed }, { hunted: 2, approved: 1, waiting: 1, listed: 1 });
   assert.strictEqual(page.data.hunting.sales[0].sales, 25.98);
+  // The sold product counts as converting, on the day of its order.
+  assert.strictEqual(page.data.huntOutcomes.totals.converting, 1);
+  assert.strictEqual(page.data.huntOutcomes.series.reduce((n, d) => n + d.converting, 0), 1);
+  // Their products approved and rejected by day, for the chart.
+  assert.strictEqual(page.data.huntOutcomes.totals.approved, 1);
+  assert.strictEqual(page.data.huntOutcomes.series.reduce((n, d) => n + d.approved, 0), 1);
+  assert.strictEqual(page.data.huntOutcomes.series.length, page.data.series.length);
   const reviewerPage = await request('GET', `/api/team/members/${t.reviewer.id}/overview?range=7d`, undefined, t.ownerToken);
   assert.strictEqual(reviewerPage.data.hunting.reviewer.approved, 1);
   // Only the owner sees a member's page; the Hunting page has no team view any more.

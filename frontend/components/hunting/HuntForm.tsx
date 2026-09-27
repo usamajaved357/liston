@@ -154,7 +154,7 @@ export type HuntCheck = { checkId: string; result: HuntCheckResult; autoApproves
  * The form and, once read, the product's profit check. The check itself is
  * the page's (`checked`), so the page can put the Add bar in its footer.
  */
-export function HuntForm({ connectionId, marketName, initialCompetitor, checked, onChecked }: { connectionId: string; marketName: string; initialCompetitor?: string | null; checked: HuntCheck | null; onChecked: (check: HuntCheck | null) => void }) {
+export function HuntForm({ connectionId, marketName, initialCompetitor, checked, onChecked, onClose }: { connectionId: string; marketName: string; initialCompetitor?: string | null; checked: HuntCheck | null; onChecked: (check: HuntCheck | null) => void; onClose?: () => void }) {
   const [competitorUrl, setCompetitorUrl] = useState(initialCompetitor || "");
   const [sourceUrl, setSourceUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -193,12 +193,26 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
           <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--color-primary)] text-white">
             <HuntIcon className="h-3.5 w-3.5" />
           </span>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h2 className="text-[13px] font-semibold leading-tight text-[var(--color-ink)]">Hunt a product</h2>
             <p className="text-[11.5px] leading-snug text-[var(--color-muted)]">
               {`Paste the AliExpress product that supplies it, and a competitor selling it on ${marketName} if you have one. You'll see the profit on every option before adding it.`}
             </p>
           </div>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy}
+              aria-label="Close"
+              title={checked ? "Close and discard this check" : "Close"}
+              className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-white hover:text-[var(--color-ink)] disabled:opacity-50"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+                <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
         </div>
         <div className="grid grid-cols-1 gap-2.5 px-4 pb-3 pt-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-end">
           <UrlField

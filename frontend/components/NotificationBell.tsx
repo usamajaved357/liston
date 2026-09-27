@@ -66,7 +66,7 @@ function dayGroup(iso: string) {
   return "Earlier";
 }
 
-function BellIcon({ off = false, className = "h-[18px] w-[18px]" }: { off?: boolean; className?: string }) {
+function BellIcon({ off = false, className = "h-4 w-4" }: { off?: boolean; className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
       <path d="M6 16.5V11a6 6 0 1112 0v5.5l1.5 2h-15l1.5-2z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
@@ -373,7 +373,7 @@ export function NotificationBell() {
         aria-label={label}
         title={on ? "Notifications: on in this browser" : "Notifications: browser notifications are off"}
         aria-expanded={open}
-        className={`relative flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${
+        className={`relative flex h-8 w-8 items-center justify-center rounded-full border transition-colors ${
           open
             ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)] text-[var(--color-primary)]"
             : on
@@ -383,9 +383,9 @@ export function NotificationBell() {
       >
         <BellIcon off={push !== null && !on} />
         {/* On in this browser: a green dot at the foot of the bell. */}
-        {on && <span className="absolute bottom-0.5 right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-[var(--color-paper)]" aria-hidden />}
+        {on && <span className="absolute bottom-0 right-0 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-[var(--color-paper)]" aria-hidden />}
         {unread > 0 && (
-          <span className="absolute -right-1 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-600 px-1 text-[10.5px] font-bold leading-none text-white ring-2 ring-[var(--color-paper)]">
+          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-[var(--color-paper)]">
             {unread > 9 ? "9+" : unread}
           </span>
         )}

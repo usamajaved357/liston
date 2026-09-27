@@ -82,7 +82,7 @@ async function findForOwner(id, ownerId) {
 /**
  * A page of an account's hunted products for a view (all | review |
  * approved | rejected | mine), optionally one hunter's, searched by
- * title; sorted newest | waiting (longest waiting first) | profit | roi |
+ * title, item or product number, link, hunter or note; sorted newest | waiting (longest waiting first) | profit | roi |
  * demand.
  */
 async function list(connectionId, { view = 'all', hunterId = null, q = '', sort = 'newest', limit = 50, offset = 0 } = {}) {
@@ -93,8 +93,11 @@ async function list(connectionId, { view = 'all', hunterId = null, q = '', sort 
     where += ` AND h.hunter_user_id = $${params.length}`;
   }
   if (q) {
+    // Title, eBay item number, AliExpress product number, either link, the hunter, or a note.
     params.push(`%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
-    where += ` AND h.title ILIKE $${params.length}`;
+    const p = `$${params.length}`;
+    where += ` AND (h.title ILIKE ${p} OR h.competitor_item_id ILIKE ${p} OR h.source_product_id ILIKE ${p} OR h.competitor_url ILIKE ${p} OR h.source_url ILIKE ${p}
+      OR hu.name ILIKE ${p} OR hu.email ILIKE ${p} OR h.hunter_note ILIKE ${p} OR h.decision_note ILIKE ${p} OR array_to_string(h.item_ids, ' ') ILIKE ${p})`;
   }
   params.push(limit + 1, offset);
   const { rows } = await query(`${SELECT} WHERE ${where} ORDER BY ${SORT_SQL[sort] || SORT_SQL.newest} LIMIT $${params.length - 1} OFFSET $${params.length}`, params);
@@ -115,6 +118,24 @@ async function counts(connectionId, { hunterId = null, viewerId = null } = {}) {
     params
   );
   return rows[0];
+}
+
+/**
+ * An account's hunting in [start, end) for the Overview: products hunted,
+ * approved (drafted or listed since included) and rejected in those dates,
+ * and how many wait for review now.
+ */
+async function countForOverview(connectionId, start, end) {
+  const { rows } = await query(
+    `SELECT
+       count(*) FILTER (WHERE created_at >= $2 AND created_at < $3)::int AS hunted,
+       count(*) FILTER (WHERE status = 'approved' AND decided_at >= $2 AND decided_at < $3)::int AS approved,
+       count(*) FILTER (WHERE status = 'rejected' AND decided_at >= $2 AND decided_at < $3)::int AS rejected,
+       count(*) FILTER (WHERE status = 'pending')::int AS reviewing
+     FROM hunted_products WHERE connection_id = $1`,
+    [connectionId, start, end]
+  );
+  return rows[0] || { hunted: 0, approved: 0, rejected: 0, reviewing: 0 };
 }
 
 /** The badge: products waiting that this person may review, their own sent back, and approved ones ready to draft. */
@@ -231,6 +252,25 @@ async function huntedBetween(ownerId, { start, end, connectionId = null, hunterI
   return rows;
 }
 
+/** An account's hunting since a moment, for the Overview's chart: when each was hunted, and decided (with the decision). */
+async function eventsSince(connectionId, since) {
+  const { rows } = await query(
+    `SELECT created_at, status, decided_at FROM hunted_products WHERE connection_id = $1 AND (created_at >= $2 OR decided_at >= $2)`,
+    [connectionId, since]
+  );
+  return rows;
+}
+
+/** One hunter's products approved or rejected in [start, end), by when decided (for their chart). */
+async function outcomesBetween(ownerId, { start, end, hunterId }) {
+  const { rows } = await query(
+    `SELECT status, decided_at FROM hunted_products
+      WHERE owner_user_id = $1 AND hunter_user_id = $4 AND status IN ('approved', 'rejected') AND decided_at >= $2 AND decided_at < $3`,
+    [ownerId, start, end, hunterId]
+  );
+  return rows;
+}
+
 /** Products last decided in [start, end) (one account, or one reviewer's, if given), for time to decide. */
 async function decidedBetween(ownerId, { start, end, connectionId = null, reviewerId = null }) {
   const { rows } = await query(
@@ -324,6 +364,9 @@ async function dueForReading({ limit = 20, hours = 20, days = 90, ownerId = null
 // ---- a competitor's dated sales, pasted from eBay (migration 029) -------------------
 
 module.exports = {
+  eventsSince,
+  outcomesBetween,
+  countForOverview,
   personName,
   addReading,
   readings,
