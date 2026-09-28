@@ -10,25 +10,66 @@ import { AccountDelivery, BudgetLine, CardHeader, Chevron, FlagTag, perMonth, Qu
 // explored lately and watches, the account's own categories, and eBay's
 // top-level categories to browse.
 
-const TILE_TONES = ["bg-indigo-50 text-indigo-700", "bg-sky-50 text-sky-700", "bg-emerald-50 text-emerald-700", "bg-amber-50 text-amber-700", "bg-rose-50 text-rose-700", "bg-violet-50 text-violet-700", "bg-teal-50 text-teal-700", "bg-orange-50 text-orange-700"];
+const TILE_TONES = [
+  "bg-indigo-50 text-indigo-700 ring-indigo-100",
+  "bg-sky-50 text-sky-700 ring-sky-100",
+  "bg-emerald-50 text-emerald-700 ring-emerald-100",
+  "bg-amber-50 text-amber-700 ring-amber-100",
+  "bg-rose-50 text-rose-700 ring-rose-100",
+  "bg-violet-50 text-violet-700 ring-violet-100",
+  "bg-teal-50 text-teal-700 ring-teal-100",
+  "bg-orange-50 text-orange-700 ring-orange-100",
+];
 const toneOf = (name: string) => TILE_TONES[[...name].reduce((n, ch) => n + ch.charCodeAt(0), 0) % TILE_TONES.length];
+const SCORE_DOT = { strong: "bg-emerald-500", fair: "bg-amber-500", weak: "bg-rose-500" } as const;
+const SCORE_TEXT = { strong: "text-emerald-700", fair: "text-amber-700", weak: "text-rose-700" } as const;
 
+// 49,899,944 -> "49.9M", 9,714 -> "9.7k": a live count that fits a capsule.
+function compact(n: number) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "")}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "")}k`;
+  return String(n);
+}
+
+// One of eBay's top-level categories as a capsule: a round initial, the
+// whole name on its own line, and under it the live listings and, once
+// explored, its opportunity (a dot and the score) — so the name never
+// shares its line with anything and isn't cut short.
 function CategoryTile({ category, onOpen }: { category: DiscoverCategoryCard; onOpen: () => void }) {
   const initials = category.name
-    .split(/[\s,&]+/)
+    .split(/[\s,&/]+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((w) => w[0].toUpperCase())
     .join("");
+  const s = category.scanned;
   return (
     <li>
-      <button type="button" onClick={onOpen} className="group flex w-full items-center gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-3 text-left transition-all hover:-translate-y-px hover:border-[var(--color-primary)]/40 hover:shadow-[var(--shadow-card)]">
-        <span className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg text-[13px] font-semibold ${toneOf(category.name)}`}>{initials}</span>
+      <button
+        type="button"
+        onClick={onOpen}
+        title={s ? `${category.name}: ${count(s.total)} live listings, opportunity ${s.score} of 100` : `${category.name}: not explored yet`}
+        className="group flex h-full w-full items-center gap-2.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] py-1.5 pl-1.5 pr-3.5 text-left transition-all hover:-translate-y-px hover:border-[var(--color-primary)]/40 hover:shadow-[var(--shadow-card)]"
+      >
+        <span className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[11.5px] font-semibold ring-1 ring-inset ${toneOf(category.name)}`}>{initials}</span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{category.name}</span>
-          <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{category.scanned ? `${count(category.scanned.total)} live listings` : "Not explored yet"}</span>
+          <span className="block text-[12px] font-semibold leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{category.name}</span>
+          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-none text-[var(--color-muted)]">
+            {s ? (
+              <>
+                <span className="tabular-nums">{compact(s.total)} live</span>
+                <span aria-hidden>·</span>
+                <span className={`inline-flex items-center gap-1 font-semibold tabular-nums ${SCORE_TEXT[s.band]}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${SCORE_DOT[s.band]}`} aria-hidden />
+                  {s.score}
+                </span>
+              </>
+            ) : (
+              "Not explored yet"
+            )}
+          </span>
         </span>
-        {category.scanned ? <ScoreBadge score={category.scanned.score} band={category.scanned.band} size="sm" /> : <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-primary)]" />}
+        <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-primary)]" />
       </button>
     </li>
   );
@@ -201,7 +242,7 @@ export function DiscoverStartView({
 
       <section className="card p-4">
         <CardHeader title="Browse eBay's categories" note="Open one to see its products and rank its subcategories; go deeper for more specific products and keywords" />
-        <ul className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {data.topCategories.map((c) => (
             <CategoryTile key={c.id} category={c} onOpen={() => onOpen({ categoryId: c.id })} />
           ))}

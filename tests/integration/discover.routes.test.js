@@ -173,6 +173,10 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.ok(winners.data.products.some((p) => p.from.name === 'Test Lighting'));
   const priced = await request('GET', `${base}/winners?priceMin=25&brand=unbranded`, undefined, t.hunter);
   assert.ok(priced.data.products.every((p) => p.price.median >= 25 && p.branded === false), JSON.stringify(priced.data.products.map((p) => [p.price.median, p.branded])));
+  // The pool is the whole site's (other subjects too), so: nothing 60 days old passes "this month", and the test listings pass "3 months".
+  const lately = await request('GET', `${base}/winners?listedWithin=30`, undefined, t.hunter);
+  assert.ok(lately.data.products.every((p) => p.newestDays !== null && p.newestDays <= 30 && p.from.name !== 'Test Lighting'));
+  assert.ok((await request('GET', `${base}/winners?listedWithin=90`, undefined, t.hunter)).data.products.some((p) => p.from.name === 'Test Lighting'));
   assert.strictEqual((await request('GET', `${base}/winners?sort=sideways`, undefined, t.hunter)).status, 400);
   // Subcategories, busiest first, not ranked yet.
   assert.deepStrictEqual(d.children.map((c) => [c.id, c.listings, c.scanned]), [[CHILDREN[0], 500, null], [CHILDREN[1], 400, null]]);

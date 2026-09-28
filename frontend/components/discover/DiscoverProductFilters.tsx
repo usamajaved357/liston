@@ -9,14 +9,25 @@ import { ViewMenu } from "@/components/ViewMenu";
 // momentum, delivery it can match); sellers (the top seller's rating, the
 // smallest seller selling it). The same bar on a subject's page (where
 // `filterProducts` applies it to the products loaded) and in Winners
-// (where the server applies it to the pool).
+// (where the server applies it to the pool). A hunter starts with the
+// filters a dropshipper wants — unbranded, a delivery the account can match,
+// listed in the last three months — and can clear them.
 
 type Sort = NonNullable<DiscoverWinnersFilters["sort"]>;
 type Brand = NonNullable<DiscoverWinnersFilters["brand"]>;
 type Rating = NonNullable<DiscoverWinnersFilters["rating"]>;
 type Size = NonNullable<DiscoverWinnersFilters["size"]>;
 
-export const DEFAULT_FILTERS: DiscoverWinnersFilters = { sort: "score", brand: "any", rating: "any", size: "any", minSales: 0 };
+// Nothing set; and where a hunter starts: unbranded, a delivery the account can match, listed in the last three months.
+export const EMPTY_FILTERS: DiscoverWinnersFilters = { sort: "score", brand: "any", rating: "any", size: "any", minSales: 0, listedWithin: null, fit: false, newOnly: false };
+export const DEFAULT_FILTERS: DiscoverWinnersFilters = { ...EMPTY_FILTERS, brand: "unbranded", fit: true, listedWithin: 90 };
+const LISTED: { key: string; label: string; short: string; days: number | null }[] = [
+  { key: "0", label: "Any time", short: "Any time", days: null },
+  { key: "30", label: "This month: a listing launched in the last 30 days", short: "Listed this month", days: 30 },
+  { key: "90", label: "Last 3 months", short: "Listed in 3 months", days: 90 },
+  { key: "180", label: "Last 6 months", short: "Listed in 6 months", days: 180 },
+  { key: "365", label: "Last year", short: "Listed in a year", days: 365 },
+];
 const SIZES: Record<Exclude<Size, "any">, [number, number]> = { small: [0, 1000], medium: [1000, 10000], large: [10000, Infinity] };
 
 // Price bands, as the menu offers them; the filter itself is a range.
@@ -42,8 +53,10 @@ export function filterProducts(products: DiscoverProduct[], f: DiscoverWinnersFi
     if (f.fit && p.delivery.known && (p.delivery.share ?? 0) < 40) return false;
     if (f.priceMin !== null && f.priceMin !== undefined && (!p.price || p.price.median < f.priceMin)) return false;
     if (f.priceMax !== null && f.priceMax !== undefined && (!p.price || p.price.median > f.priceMax)) return false;
-    if (f.brand === "unbranded" && p.branded !== false) return false;
+    // Unbranded: no named brand on its listings (a brand not read yet counts as none; VeRO brands are hidden before this).
+    if (f.brand === "unbranded" && p.branded === true) return false;
     if (f.brand === "branded" && p.branded !== true) return false;
+    if (f.listedWithin && !(p.newestDays !== null && p.newestDays <= f.listedWithin)) return false;
     if (f.rating === "top" && !(p.seller.percentage !== null && p.seller.percentage >= 99)) return false;
     if (f.rating === "good" && !(p.seller.percentage !== null && p.seller.percentage >= 98)) return false;
     if (f.rating === "weak" && !(p.seller.percentage !== null && p.seller.percentage < 98)) return false;
@@ -70,6 +83,7 @@ export function countActive(f: DiscoverWinnersFilters): number {
   if (f.brand && f.brand !== "any") n += 1;
   if (f.rating && f.rating !== "any") n += 1;
   if (f.size && f.size !== "any") n += 1;
+  if (f.listedWithin) n += 1;
   if (f.minSales) n += 1;
   if (f.newOnly) n += 1;
   return n;
@@ -136,7 +150,7 @@ export function DiscoverProductFilters({ filters, onChange, currency }: { filter
             onChange: (brand) => set({ brand: brand as Brand }),
             options: [
               { key: "any", label: "Any brand" },
-              { key: "unbranded", label: "Unbranded: what a supplier can provide" , short: "Unbranded" },
+              { key: "unbranded", label: "Unbranded: what a supplier can provide", short: "Unbranded" },
               { key: "branded", label: "Branded" },
             ],
           },
@@ -158,6 +172,13 @@ export function DiscoverProductFilters({ filters, onChange, currency }: { filter
               { key: "50", label: "50 or more a month", short: "50+/mo" },
               { key: "150", label: "150 or more a month", short: "150+/mo" },
             ],
+          },
+          {
+            label: "Listed",
+            value: String(filters.listedWithin || 0),
+            hideInSummary: !filters.listedWithin,
+            onChange: (key) => set({ listedWithin: LISTED.find((l) => l.key === key)?.days ?? null }),
+            options: LISTED.map((l) => ({ key: l.key, label: l.label, short: l.short })),
           },
           {
             label: "Momentum",
@@ -214,7 +235,7 @@ export function DiscoverProductFilters({ filters, onChange, currency }: { filter
       />
 
       {active > 0 && (
-        <button type="button" onClick={() => onChange({ ...DEFAULT_FILTERS, sort: filters.sort })} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
+        <button type="button" onClick={() => onChange({ ...EMPTY_FILTERS, sort: filters.sort })} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
           Clear {active} filter{active === 1 ? "" : "s"}
         </button>
       )}

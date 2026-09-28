@@ -475,43 +475,65 @@ async function review(ownerId, connectionId, input) {
 
 // ---- winners: the best products across everything explored on the site ----------------
 
-const winnersCache = new Map();
+const winnersCache = new Map(); // per site and account: the scored pool
+const poolCache = new Map(); // per site: what's loaded and grouped, shared by every account
 // New scans or readings change the pool: the next Winners request builds it again.
-const forgetWinners = () => winnersCache.clear();
+const forgetWinners = () => {
+  winnersCache.clear();
+  poolCache.clear();
+};
 
 /**
- * The product pool for an account: every scan on its site from the last
- * month (shared: anyone's), its listings that may be shown, grouped into
- * products and scored for this account, best first. Kept five minutes.
+ * A site's product pool, shared by every Liston account on the site: every
+ * scan from the last month (anyone's), its listings that may be shown, with
+ * their readings and recent sales. Loaded once and kept five minutes; what
+ * depends on the account (delivery fit, the score) is worked out per account
+ * from it, so a second account costs no database reads.
+ */
+async function sitePool(site, day) {
+  const hit = poolCache.get(site.id);
+  if (hit && Date.now() - hit.at < WINNERS_CACHE_MS) return hit.value;
+  const scans = await repo.scansForSite(site.id, new Date(Date.now() - WINNERS_DAYS * 86400000), WINNERS_SCANS);
+  const ids = [...new Set(scans.flatMap((s) => s.listings.map(idOf)))];
+  const [reads, history] = await Promise.all([
+    repo.latestReads(site.id, ids, analyticsDays.addDays(day, -READ_FALLBACK_DAYS)),
+    repo.readsSince(site.id, ids, analyticsDays.addDays(day, -(trends.WEEK + 1))),
+  ]);
+  const recent = trends.recentSales(history);
+  const subjects = [];
+  for (const s of scans) {
+    const isCategory = s.subject.startsWith('c:');
+    const value = s.subject.slice(2);
+    const path = isCategory ? await taxonomy.getCategoryPath(site.id, value).catch(() => []) : [];
+    if (isCategory && !path.length) continue;
+    const name = isCategory ? path[path.length - 1].name : value;
+    // A restricted subject, or one under a restricted category (Electronic Smoking…): out.
+    if (compliance.termsIn(isCategory ? path.map((p) => p.name).join(' ') : name).restricted.length) continue;
+    const { kept } = compliance.partition(s.listings);
+    subjects.push({ scan: { ...s, listings: kept }, from: { kind: isCategory ? 'category' : 'keyword', value, name, path: isCategory ? path.slice(0, -1).map((p) => p.name) : [] } });
+  }
+  const value = { subjects, reads, recent, pool: { subjects: scans.length, listings: ids.length } };
+  poolCache.set(site.id, { at: Date.now(), value });
+  return value;
+}
+
+/**
+ * The product pool for an account: the site's pool grouped into products
+ * and scored for this account (its delivery), best first. Kept five minutes.
  */
 async function winnersPool(ownerId, connectionId) {
   const ctx = await context(ownerId, connectionId);
   const cacheKey = `${ctx.site.id}:${connectionId}`;
   const hit = winnersCache.get(cacheKey);
   if (hit && Date.now() - hit.at < WINNERS_CACHE_MS) return hit.value;
-  const scans = await repo.scansForSite(ctx.site.id, new Date(Date.now() - WINNERS_DAYS * 86400000), WINNERS_SCANS);
-  const ids = [...new Set(scans.flatMap((s) => s.listings.map(idOf)))];
-  const [reads, history] = await Promise.all([
-    repo.latestReads(ctx.site.id, ids, analyticsDays.addDays(ctx.day, -READ_FALLBACK_DAYS)),
-    repo.readsSince(ctx.site.id, ids, analyticsDays.addDays(ctx.day, -(trends.WEEK + 1))),
-  ]);
-  const recent = trends.recentSales(history);
+  const site = await sitePool(ctx.site, ctx.day);
   const seen = new Set();
   const pool = [];
   let read = 0;
-  for (const s of scans) {
-    const isCategory = s.subject.startsWith('c:');
-    const value = s.subject.slice(2);
-    const path = isCategory ? await taxonomy.getCategoryPath(ctx.site.id, value).catch(() => []) : [];
-    if (isCategory && !path.length) continue;
-    const name = isCategory ? path[path.length - 1].name : value;
-    // A restricted subject, or one under a restricted category (Electronic Smoking…): out.
-    if (compliance.termsIn(isCategory ? path.map((p) => p.name).join(' ') : name).restricted.length) continue;
-    const { kept } = compliance.partition(s.listings);
-    const listings = trends.summarise(scoring.withPace(placed({ ...s, listings: kept }, ctx, reads)), recent).listings;
+  for (const { scan: s, from } of site.subjects) {
+    const listings = trends.summarise(scoring.withPace(placed(s, ctx, site.reads)), site.recent).listings;
     read += listings.filter((l) => l.soldPerMonth !== null).length;
-    const from = { kind: isCategory ? 'category' : 'keyword', value, name, path: isCategory ? path.slice(0, -1).map((p) => p.name) : [] };
-    for (const p of products.productsOf(listings, { subject: name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: WINNERS_PER_SCAN })) {
+    for (const p of products.productsOf(listings, { subject: from.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: WINNERS_PER_SCAN })) {
       // The same product found under two subjects: once, where it scored best.
       if (p.read === 0 || p.itemIds.some((id) => seen.has(id))) continue;
       p.itemIds.forEach((id) => seen.add(id));
@@ -519,7 +541,7 @@ async function winnersPool(ownerId, connectionId) {
     }
   }
   pool.sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
-  const value = { products: pool, pool: { subjects: scans.length, listings: ids.length, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
+  const value = { products: pool, pool: { ...site.pool, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
   winnersCache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
@@ -531,7 +553,7 @@ const SELLER_SIZES = { small: [0, 1000], medium: [1000, 10000], large: [10000, I
  * this account, filtered the way a hunter filters — delivery it can match,
  * a price band, a minimum of sales a month, new lately — and sorted.
  */
-async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', minSales = 0, newOnly = false, sort = 'score' } = {}) {
+async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score' } = {}) {
   const all = await winnersPool(ownerId, connectionId);
   const words = wordsOfQuery(q);
   const sizeBand = SELLER_SIZES[size] || null;
@@ -540,8 +562,11 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
     if (fit && p.delivery.known && p.delivery.share < 40) return false;
     if (priceMin !== null && (!p.price || p.price.median < priceMin)) return false;
     if (priceMax !== null && (!p.price || p.price.median > priceMax)) return false;
-    if (brand === 'unbranded' && p.branded !== false) return false;
+    // Unbranded: no named brand on its listings (a brand not read yet counts as none; VeRO brands are hidden before this).
+    if (brand === 'unbranded' && p.branded === true) return false;
     if (brand === 'branded' && p.branded !== true) return false;
+    // Listed lately: its youngest listing with a sold count is this many days old at most.
+    if (listedWithin && !(p.newestDays !== null && p.newestDays <= listedWithin)) return false;
     if (rating === 'top' && !(p.seller.percentage !== null && p.seller.percentage >= 99)) return false;
     if (rating === 'good' && !(p.seller.percentage !== null && p.seller.percentage >= 98)) return false;
     if (rating === 'weak' && !(p.seller.percentage !== null && p.seller.percentage < 98)) return false;

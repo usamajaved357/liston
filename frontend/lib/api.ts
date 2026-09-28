@@ -1981,6 +1981,7 @@ export interface DiscoverWinnersFilters {
   brand?: "any" | "unbranded" | "branded";
   rating?: "any" | "top" | "good" | "weak";
   size?: "any" | "small" | "medium" | "large";
+  listedWithin?: number | null; // days: its youngest listing with a sold count is at most this old
   minSales?: number;
   newOnly?: boolean;
   sort?: "score" | "sales" | "rising" | "new" | "price";
@@ -2505,6 +2506,7 @@ export const api = {
     if (f.brand && f.brand !== "any") q.set("brand", f.brand);
     if (f.rating && f.rating !== "any") q.set("rating", f.rating);
     if (f.size && f.size !== "any") q.set("size", f.size);
+    if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
     if (f.minSales) q.set("minSales", String(f.minSales));
     if (f.newOnly) q.set("newOnly", "1");
     if (f.sort) q.set("sort", f.sort);

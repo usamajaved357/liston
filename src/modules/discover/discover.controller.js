@@ -27,6 +27,7 @@ const winnersSchema = z.object({
   brand: z.enum(['any', 'unbranded', 'branded']).optional().default('any'),
   rating: z.enum(['any', 'top', 'good', 'weak']).optional().default('any'),
   size: z.enum(['any', 'small', 'medium', 'large']).optional().default('any'),
+  listedWithin: z.coerce.number().int().min(0).max(730).optional().default(0),
   minSales: z.coerce.number().int().min(0).max(100000).optional().default(0),
   newOnly: flag,
   sort: z.enum(['score', 'sales', 'rising', 'new', 'price']).optional().default('score'),
