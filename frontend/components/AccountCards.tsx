@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Connection } from "@/lib/api";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { formatShortDate } from "@/lib/format";
+import { PillTabs } from "@/components/PillTabs";
 
 // The connected accounts as a searchable grid of cards: two or three to a
 // row, each with its market and a way in. One eBay account on several sites
@@ -158,11 +159,6 @@ export function AccountCards({ connections, hrefFor = (c) => `/accounts/${c.id}`
     .filter((c) => !needle || needle.split(/\s+/).every((word) => marketText(c).includes(word)))
     .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }) || (a.marketplace?.label ?? "").localeCompare(b.marketplace?.label ?? ""));
 
-  const chip = (active: boolean) =>
-    `inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium transition-colors ${
-      active ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-panel)] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)] hover:text-[var(--color-ink)]"
-    }`;
-
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-3">
@@ -183,15 +179,14 @@ export function AccountCards({ connections, hrefFor = (c) => `/accounts/${c.id}`
       </div>
 
       {markets.length > 1 && (
-        <div role="radiogroup" aria-label="Market" className="mb-4 flex flex-wrap gap-1.5">
-          <button type="button" role="radio" aria-checked={market === "all"} onClick={() => setMarket("all")} className={chip(market === "all")}>
-            All markets <span className="opacity-70">{connections.length}</span>
-          </button>
-          {markets.map((m) => (
-            <button key={m.id} type="button" role="radio" aria-checked={market === m.id} onClick={() => setMarket(market === m.id ? "all" : m.id)} className={chip(market === m.id)}>
-              <span aria-hidden>{m.flag}</span> {m.label} <span className="opacity-70">{m.n}</span>
-            </button>
-          ))}
+        <div className="mb-4">
+          <PillTabs
+            role="radiogroup"
+            label="Market"
+            tabs={[{ key: "all", label: "All markets", count: connections.length }, ...markets.map((m) => ({ key: m.id, label: m.label, icon: m.flag, count: m.n }))]}
+            value={market}
+            onChange={setMarket}
+          />
         </div>
       )}
 

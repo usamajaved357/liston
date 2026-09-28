@@ -1,5 +1,7 @@
 "use client";
 
+import { PillTabs } from "@/components/PillTabs";
+
 // The pinned footer under a paged list: how many are showing, the page
 // size, and the pages. One control shared by every list page, so a seller
 // reads it the same way on Listings and Orders.
@@ -55,20 +57,13 @@ export function ListFooter<S extends PageSize>({
           Showing <span className="font-medium text-[var(--color-ink)]">{from}</span> to <span className="font-medium text-[var(--color-ink)]">{to}</span> of{" "}
           <span className="font-medium text-[var(--color-ink)]">{totalEntries}</span>
         </span>
-        <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-          {sizes.map((s) => (
-            <button
-              key={String(s)}
-              type="button"
-              onClick={() => onPerPage(s)}
-              className={`h-6 rounded-full px-2.5 text-[11.5px] font-medium transition-colors ${
-                perPage === s ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              }`}
-            >
-              {s === "all" ? "All" : s}
-            </button>
-          ))}
-        </div>
+        <PillTabs
+          role="radiogroup"
+          label="Per page"
+          tabs={sizes.map((size) => ({ key: String(size), label: size === "all" ? "All" : String(size) }))}
+          value={String(perPage)}
+          onChange={(k) => onPerPage(sizes.find((size) => String(size) === k) ?? perPage)}
+        />
         <span className="text-[12px] text-[var(--color-muted)]">per page</span>
       </div>
       {totalPages > 1 && (

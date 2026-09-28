@@ -1644,8 +1644,16 @@ export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "las
 
 export type HuntStage = "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
 // The list's tabs; mine is "My hunts" (the person's own finds, whatever their stage).
-export type HuntView = "all" | "review" | "approved" | "rejected" | "mine";
+export type HuntView = "all" | "review" | "approved" | "drafted" | "listed" | "rejected" | "mine";
 export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand" | "sales";
+// The hunted products' filters: profit a sale at least (1, 2, 3, 5, 10), sold a month at least (5, 10, 30, 100),
+// added in the last 7, 30 or 90 days, and only products not already hunted, drafted or live elsewhere.
+export interface HuntFilters {
+  profit?: number | null;
+  demand?: number | null;
+  added?: number | null;
+  unique?: boolean;
+}
 // unpriced: checked without a competitor, so priced at the target return with no market to judge by.
 export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown";
 // target: no competitor, so the price a draft would list it at.
@@ -2503,12 +2511,16 @@ export const api = {
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
   huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
     request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
-  huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } = {}) => {
+  huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } & HuntFilters = {}) => {
     const query = new URLSearchParams();
     if (params.view) query.set("view", params.view);
     if (params.hunter) query.set("hunter", params.hunter);
     if (params.q) query.set("q", params.q);
     if (params.sort) query.set("sort", params.sort);
+    if (params.profit) query.set("profit", String(params.profit));
+    if (params.demand) query.set("demand", String(params.demand));
+    if (params.added) query.set("added", String(params.added));
+    if (params.unique) query.set("unique", "1");
     if (params.page && params.page > 1) query.set("page", String(params.page));
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter, SupplierFilter } from "@/lib/api";
@@ -15,6 +15,7 @@ import { AccountPageSkeleton, ListSkeleton } from "@/components/Skeleton";
 import { ListFooter } from "@/components/ListFooter";
 import { ViewMenu } from "@/components/ViewMenu";
 import { useAccountEvents } from "@/lib/useAccountEvents";
+import { PillTabs } from "@/components/PillTabs";
 
 // How the list is ordered, apart from which days it covers. Each status tab
 // keeps its own choice; untouched, Awaiting dispatch shows the nearest
@@ -419,11 +420,6 @@ function AccountOrdersContent() {
   const [status, setStatus] = useState<OrderStatusFilter>(
     initialStatus && VALID_STATUSES.includes(initialStatus as OrderStatusFilter) ? (initialStatus as OrderStatusFilter) : "all"
   );
-  // On a phone the tabs scroll sideways: the chosen one is kept in view.
-  const tabsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    tabsRef.current?.querySelector<HTMLElement>("[data-active]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [status, connection]);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -565,21 +561,7 @@ function AccountOrdersContent() {
       }
       subheader={
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div ref={tabsRef} className="inline-flex flex-shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-            {STATUS_TABS.map((tab) => (
-              <button
-                key={tab.key}
-                data-active={status === tab.key || undefined}
-                onClick={() => changeStatus(tab.key)}
-                className={`flex h-[22px] items-center gap-1 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors ${
-                  status === tab.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                }`}
-              >
-                {tab.label}
-                <span className={`text-[10.5px] tabular-nums ${status === tab.key ? "text-white/70" : "text-[var(--color-muted)]/70"}`}>{counts[tab.key] ?? 0}</span>
-              </button>
-            ))}
-          </div>
+          <PillTabs label="Orders" tabs={STATUS_TABS.map((t) => ({ key: t.key, label: t.label, count: counts[t.key] ?? 0 }))} value={status} onChange={changeStatus} />
           <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto sm:flex-wrap sm:justify-end">
             {(archivedCount > 0 || archived) && (
               <button

@@ -8,6 +8,7 @@ import { useConnection } from "@/lib/useConnection";
 import { currencySymbol } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
+import { PillTabs } from "@/components/PillTabs";
 
 // Account settings in three tabs: the eBay policies every listing carries,
 // how prices are worked out, and the branded description template. Each tab
@@ -659,21 +660,7 @@ export default function AccountSettingsPage() {
             // exactly the left column, so Save sits on that column's edge.
             <div className={tab === "template" ? "max-w-6xl xl:grid xl:grid-cols-[minmax(0,1fr)_460px] xl:gap-6" : "max-w-3xl"}>
               <div className="flex items-center justify-between gap-3">
-                <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-                  {tabs.map((t) => (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => setTab(t.key)}
-                      className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
-                        tab === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                      }`}
-                    >
-                      {t.label}
-                      {t.attention && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
-                    </button>
-                  ))}
-                </div>
+                <PillTabs label="Settings" tabs={tabs.map((t) => ({ key: t.key, label: t.label, attention: t.attention }))} value={tab} onChange={setTab} />
                 {!loading && tab !== "messages" && saveControl}
               </div>
             </div>

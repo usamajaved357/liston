@@ -13,6 +13,7 @@ import { AccountShell } from "@/components/AccountShell";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { useAccountRefresh } from "@/lib/useAccountRefresh";
 import { Alert } from "@/components/Alert";
+import { PillTabs } from "@/components/PillTabs";
 
 // The account's Overview: the same figures as the business Overview — a
 // Sales tab with every money figure and a Listings tab — in the account's
@@ -287,22 +288,7 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
           <p className="text-[13px] text-[var(--color-muted)]">
             Figures for <span className="font-medium text-[var(--color-ink)]">{phrase.replace(/^in /, "")}</span>
           </p>
-          <div role="radiogroup" aria-label="Dates" className="inline-flex max-w-full flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-            {RANGES.map((r) => (
-              <button
-                key={r.key}
-                type="button"
-                role="radio"
-                aria-checked={range === r.key}
-                onClick={() => setRange(r.key)}
-                className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
-                  range === r.key ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
+          <PillTabs role="radiogroup" label="Dates" tabs={RANGES} value={range} onChange={setRange} />
         </div>
 
         <MetricTabs metric={metric} onMetric={setMetric} trailing={metric === "sales" ? <AmountsToggle hidden={amounts.hidden} onToggle={amounts.toggle} /> : undefined} />

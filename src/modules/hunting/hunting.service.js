@@ -62,7 +62,7 @@ async function viewerFor({ userId, ownerId, role }, connectionId) {
 
 // Someone with Listings access but no part in hunting sees the approved
 // products (to draft them) and what became of them, nothing earlier.
-const LISTER_VIEWS = ['approved'];
+const LISTER_VIEWS = ['approved', 'drafted', 'listed'];
 const listerOnly = (viewer) => !viewer.canHunt && !viewer.canReview && viewer.canDraft;
 
 async function loadHunt(auth, huntId) {
@@ -439,7 +439,7 @@ async function draftAgain(auth, huntId) {
 }
 
 /** An account's hunted products for one view, with each view's count. */
-async function list(auth, connectionId, { view, mine, hunter, q, sort, page } = {}) {
+async function list(auth, connectionId, { view, mine, hunter, q, sort, page, minProfit = null, minDemand = null, addedDays = null, unique = false } = {}) {
   const viewer = await viewerFor(auth, connectionId);
   if (!viewer.canHunt && !viewer.canReview && !viewer.canDraft) refuse("You don't have access to hunting on this account.");
   // My hunts (their own finds) for anyone who hunts; someone who only drafts sees what's approved.
@@ -447,9 +447,10 @@ async function list(auth, connectionId, { view, mine, hunter, q, sort, page } = 
   const chosen = allowed.includes(view) ? view : allowed.includes('all') ? 'all' : 'approved';
   const hunterId = mine || chosen === 'mine' ? auth.userId : /^[0-9a-f-]{36}$/i.test(String(hunter || '')) ? hunter : null;
   const offset = Math.max(0, (Number(page) || 1) - 1) * PAGE;
+  const filters = { minProfit, minDemand, addedDays, unique };
   const [{ rows, more }, counts, hunters] = await Promise.all([
-    huntingRepository.list(connectionId, { view: chosen, hunterId, q: String(q || '').trim().slice(0, 100), sort: huntingRepository.SORTS.includes(sort) ? sort : chosen === 'review' ? 'waiting' : 'newest', limit: PAGE, offset }),
-    huntingRepository.counts(connectionId, { hunterId: chosen === 'mine' ? null : hunterId, viewerId: auth.userId }),
+    huntingRepository.list(connectionId, { view: chosen, hunterId, ...filters, q: String(q || '').trim().slice(0, 100), sort: huntingRepository.SORTS.includes(sort) ? sort : chosen === 'review' ? 'waiting' : 'newest', limit: PAGE, offset }),
+    huntingRepository.counts(connectionId, { hunterId: chosen === 'mine' ? null : hunterId, ...filters, viewerId: auth.userId }),
     huntingRepository.huntersOn(connectionId),
   ]);
   const sales = await salesOf(rows).catch(() => new Map());

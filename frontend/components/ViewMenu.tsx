@@ -75,7 +75,7 @@ export function ViewMenu({ sections, title = "View", label }: { sections: ViewMe
         </svg>
       </button>
       {open && !phone && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1.5 w-60 overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 shadow-lg">
+        <div role="menu" className="absolute right-0 top-full z-30 mt-1.5 max-h-[min(70vh,560px)] w-60 overflow-y-auto rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 shadow-lg">
           <Sections sections={sections} onPicked={close} />
         </div>
       )}

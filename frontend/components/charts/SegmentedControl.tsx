@@ -1,13 +1,15 @@
 "use client";
 
+import { PillTabs } from "@/components/PillTabs";
+
 // A row of mutually exclusive options in one capsule — date ranges, chart
-// modes. The same control the Overview uses for its ranges, as a component.
+// modes. Liston's tabs (PillTabs) as a choice of one; `size` is kept for
+// older callers, every capsule now being the one size.
 
 export function SegmentedControl<T extends string>({
   options,
   value,
   onChange,
-  size = "md",
   label,
   disabled = false,
 }: {
@@ -18,28 +20,5 @@ export function SegmentedControl<T extends string>({
   label?: string;
   disabled?: boolean;
 }) {
-  const height = size === "sm" ? "h-6 px-2.5 text-[11.5px]" : "h-7 px-3 text-[12px]";
-  return (
-    <div role="radiogroup" aria-label={label} className="inline-flex flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-      {options.map((o) => {
-        const on = o.key === value;
-        return (
-          <button
-            key={o.key}
-            type="button"
-            role="radio"
-            aria-checked={on}
-            title={o.title}
-            disabled={disabled}
-            onClick={() => !on && onChange(o.key)}
-            className={`${height} rounded-full font-medium transition-colors disabled:opacity-60 ${
-              on ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-            }`}
-          >
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
-  );
+  return <PillTabs role="radiogroup" label={label} tabs={options} value={value} onChange={onChange} disabled={disabled} />;
 }

@@ -203,26 +203,57 @@ test('opening a product with no readings (rejected, or hunted before readings) r
   assert.strictEqual(rows[0].n, 1);
 });
 
-test('the tabs: All, Waiting for review, Approved, Rejected, and My hunts for each person; a drafted product leaves the page', async () => {
+test('the filters: profit a sale, demand, when it was added and not already elsewhere, applied to the tab counts too', async () => {
+  const t = await team();
+  const { hunt: a } = await hunt(t.connectionId, t.hunter.token);
+  const { hunt: b } = await hunt(t.connectionId, t.hunter.token);
+  const { hunt: c } = await hunt(t.connectionId, t.hunter.token);
+  await pool.query(`UPDATE hunted_products SET headline_profit = 6, sold_per_month = 40, check_result = check_result || '{"duplicates": []}'::jsonb WHERE id = $1`, [a.id]);
+  await pool.query(`UPDATE hunted_products SET headline_profit = 2.5, sold_per_month = 8, check_result = check_result || '{"duplicates": [{"type": "similar"}]}'::jsonb WHERE id = $1`, [b.id]);
+  await pool.query(`UPDATE hunted_products SET headline_profit = 1.2, sold_per_month = 150, created_at = now() - interval '40 days', check_result = check_result || '{"duplicates": [{"type": "hunted"}]}'::jsonb WHERE id = $1`, [c.id]);
+  const ids = async (qs) => {
+    const r = await request('GET', `/api/connections/${t.connectionId}/hunting?view=all&sort=newest&${qs}`, undefined, t.reviewer.token);
+    return { ids: r.data.items.map((h) => h.id).sort(), all: r.data.counts.all, review: r.data.counts.review };
+  };
+  assert.deepStrictEqual(await ids('profit=5'), { ids: [a.id], all: 1, review: 1 });
+  assert.deepStrictEqual(await ids('profit=2'), { ids: [a.id, b.id].sort(), all: 2, review: 2 });
+  assert.deepStrictEqual(await ids('demand=30'), { ids: [a.id, c.id].sort(), all: 2, review: 2 });
+  assert.deepStrictEqual(await ids('added=30'), { ids: [a.id, b.id].sort(), all: 2, review: 2 });
+  // A similar title alone isn't a duplicate.
+  assert.deepStrictEqual(await ids('unique=1'), { ids: [a.id, b.id].sort(), all: 2, review: 2 });
+  // A value off the list is ignored.
+  assert.strictEqual((await ids('profit=4')).all, 3);
+});
+
+test('the tabs: All, Waiting for review, Approved, Drafted, Listed, Rejected, and My hunts for each person; a drafted product stays on the page', async () => {
   const t = await team();
   const { hunt: mine } = await hunt(t.connectionId, t.hunter.token);
   await hunt(t.connectionId, t.ownerToken); // the owner's: approved as added
   const list = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.hunter.token);
-  assert.deepStrictEqual(list.data.views, ['all', 'review', 'approved', 'rejected', 'mine']);
+  assert.deepStrictEqual(list.data.views, ['all', 'review', 'approved', 'drafted', 'listed', 'rejected', 'mine']);
   assert.strictEqual(list.data.view, 'mine');
   assert.deepStrictEqual(list.data.items.map((h) => h.id), [mine.id]);
   assert.strictEqual(list.data.counts.mine, 1);
   assert.strictEqual(list.data.counts.all, 2);
-  // Once drafted it's on the Drafts page, so it leaves the Hunting page's tabs (it still opens by its link).
+  // Once drafted it leaves Approved for Drafted, and stays on the page (All and My hunts) with its stage.
   await request('POST', `/api/hunting/${mine.id}/decision`, { decision: 'approve' }, t.reviewer.token);
   const draft = await listingRepository.createDraft({ connectionId: t.connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: 'Earbuds' } });
   await huntingRepository.linkDraft(mine.id, draft.id, t.lister.id);
   const approved = await request('GET', `/api/connections/${t.connectionId}/hunting?view=approved`, undefined, t.reviewer.token);
   assert.strictEqual(approved.data.counts.approved, 1);
   assert.ok(!approved.data.items.some((h) => h.id === mine.id));
-  const gone = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.hunter.token);
-  assert.deepStrictEqual([gone.data.counts.mine, gone.data.items.length], [0, 0]);
-  assert.strictEqual((await request('GET', `/api/hunting/${mine.id}`, undefined, t.hunter.token)).data.stage, 'drafted');
+  const drafted = await request('GET', `/api/connections/${t.connectionId}/hunting?view=drafted`, undefined, t.reviewer.token);
+  assert.deepStrictEqual([drafted.data.counts.drafted, drafted.data.items.map((h) => [h.id, h.stage])], [1, [[mine.id, 'drafted']]]);
+  const kept = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.hunter.token);
+  assert.deepStrictEqual([kept.data.counts.mine, kept.data.items.map((h) => h.stage)], [1, ['drafted']]);
+  assert.strictEqual(kept.data.counts.all, 2);
+  // Live on eBay: Listed.
+  await pool.query(`UPDATE hunted_products SET item_ids = ARRAY['800700000009'] WHERE id = $1`, [mine.id]);
+  const listedTab = await request('GET', `/api/connections/${t.connectionId}/hunting?view=listed`, undefined, t.reviewer.token);
+  assert.deepStrictEqual([listedTab.data.counts.listed, listedTab.data.counts.drafted, listedTab.data.items.map((h) => h.stage)], [1, 0, ['listed']]);
+  // Someone who only drafts sees Approved, Drafted and Listed.
+  const lister = await request('GET', `/api/connections/${t.connectionId}/hunting`, undefined, t.lister.token);
+  assert.deepStrictEqual(lister.data.views, ['approved', 'drafted', 'listed']);
   // The reviewer's own My hunts is empty; a sent-back tab is gone.
   const reviewerMine = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.reviewer.token);
   void reviewerMine;
@@ -232,7 +263,8 @@ test('the tabs: All, Waiting for review, Approved, Rejected, and My hunts for ea
   const search = async (q) => (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all&q=${encodeURIComponent(q)}`, undefined, t.reviewer.token)).data.items.map((h) => h.id);
   const { hunt: found } = await hunt(t.connectionId, t.hunter.token);
   assert.ok((await search('123456789012')).includes(found.id));
-  assert.deepStrictEqual(await search('hunter'), [found.id]);
+  // The hunter's products, the drafted one included (it stays on the page).
+  assert.deepStrictEqual((await search('hunter')).sort(), [found.id, mine.id].sort());
   assert.deepStrictEqual(await search('no such thing anywhere'), []);
   // The Overview's Hunted / Approved / Rejected for the dates, and what waits now.
   const hour = new Date(Date.now() - 3600 * 1000);
@@ -348,7 +380,7 @@ test('a lister sees only approved products, drafts them, and the listing and its
 
   const seen = await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.lister.token);
   assert.strictEqual(seen.status, 200);
-  assert.deepStrictEqual(seen.data.views, ['approved']);
+  assert.deepStrictEqual(seen.data.views, ['approved', 'drafted', 'listed']);
   assert.deepStrictEqual(seen.data.items.map((i) => i.id), [approved.id]);
   assert.strictEqual(seen.data.items[0].permissions.canDraft, true);
   assert.strictEqual((await request('GET', `/api/hunting/${waiting.id}`, undefined, t.lister.token)).status, 404);
@@ -541,7 +573,7 @@ test("a supplier that doesn't sell the eBay listing's variations is rejected by 
   }
 });
 
-test('an approved product drafts itself and leaves the Hunting page; a failed draft stays with the reason and drafts again by hand', async () => {
+test('an approved product drafts itself and moves to the Drafted tab; a failed draft stays in Approved with the reason and drafts again by hand', async () => {
   const t = await team();
   const { mock } = require('node:test');
   const config = require('../../src/config');
@@ -568,15 +600,17 @@ test('an approved product drafts itself and leaves the Hunting page; a failed dr
     assert.deepStrictEqual([input.previewId, input.huntId, input.actorUserId], ['p1', one.id, t.reviewer.id]);
     assert.deepStrictEqual(input.variantSelection, { Color: ['Black', 'White'] }, 'the options that earn');
     assert.deepStrictEqual(input.imageUrls, ['https://ae01.alicdn.com/a.jpg']);
-    // Drafted by hand (it runs in the background): it moves to the Drafts page.
+    // Drafted by hand (it runs in the background): it moves from Approved to Drafted, still on the page.
     fail = false;
     const retry = await request('POST', `/api/hunting/${one.id}/auto-draft`, {}, t.reviewer.token);
     assert.strictEqual(retry.status, 202);
     await huntingService.draftsSettled();
     const done = (await request('GET', `/api/hunting/${one.id}`, undefined, t.reviewer.token)).data;
     assert.deepStrictEqual([done.stage, done.draftState, done.draftError], ['drafted', null, null]);
-    const page = await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.reviewer.token);
+    const page = await request('GET', `/api/connections/${t.connectionId}/hunting?view=approved`, undefined, t.reviewer.token);
     assert.ok(!page.data.items.some((i) => i.id === one.id));
+    const draftedTab = await request('GET', `/api/connections/${t.connectionId}/hunting?view=drafted`, undefined, t.reviewer.token);
+    assert.ok(draftedTab.data.items.some((i) => i.id === one.id && i.stage === 'drafted'));
     // A drafted product isn't drafted again.
     assert.strictEqual((await request('POST', `/api/hunting/${one.id}/auto-draft`, {}, t.reviewer.token)).status, 403);
     // The owner's own find drafts itself as it's added.
