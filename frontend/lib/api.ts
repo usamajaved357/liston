@@ -2030,6 +2030,31 @@ export interface DiscoverWinners {
   at: string;
 }
 
+// A keyword worth hunting across everything explored on the site: its sales a month (a searched
+// keyword's own market; otherwise the titles with it where it sells most), eBay's sold counts, its lift
+// (share of sales over share of titles), how many categories and keywords share it, where it sells most,
+// and once searched its own market (live listings, opportunity).
+export type DiscoverSiteKeywordSort = "sales" | "lift" | "opportunity" | "spread";
+export interface DiscoverSiteKeyword {
+  term: string;
+  perMonth: number;
+  sold: number | null;
+  lift: number | null;
+  salesShare: number | null;
+  inTitles: number | null;
+  subjects: number;
+  from: { kind: "category" | "keyword"; value: string; name: string } | null;
+  searched: { monthlySales: number; live: number; score: number; band: DiscoverOpportunity["band"] } | null;
+}
+export interface DiscoverSiteKeywords {
+  keywords: DiscoverSiteKeyword[];
+  matched: number;
+  searched: number;
+  pool: { subjects: number; listings: number; read: number };
+  market: { id: string; name: string; currency: string };
+  at: string;
+}
+
 export interface DiscoverScorePart {
   key: string;
   label: string;
@@ -2199,7 +2224,7 @@ export interface DiscoverStart {
   topCategories: DiscoverCategoryCard[];
   watches: number;
   // The best products across everything explored on the site, for the start screen.
-  winners: { products: DiscoverProduct[]; total: number; pool: { subjects: number; listings: number; read: number } } | null;
+  winners: { products: DiscoverProduct[]; total: number; keywords?: number; pool: { subjects: number; listings: number; read: number } } | null;
   watchPreview: DiscoverWatch[];
   // What anyone on the site explored in the last few days (shared across accounts).
   recent: { kind: "category" | "keyword"; value: string; name: string; path: string[]; openedAt: string; flag?: DiscoverFlag | null; scanned: { score: number; band: DiscoverOpportunity["band"]; total: number; monthlySales: number } | null }[];
@@ -2538,7 +2563,7 @@ export const api = {
     if (subject.q) q.set("q", subject.q);
     return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
   },
-  discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}) => {
+  discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}, limit?: number) => {
     const q = new URLSearchParams();
     if (f.q) q.set("q", f.q);
     if (f.fit) q.set("fit", "1");
@@ -2551,7 +2576,17 @@ export const api = {
     if (f.minSales) q.set("minSales", String(f.minSales));
     if (f.newOnly) q.set("newOnly", "1");
     if (f.sort) q.set("sort", f.sort);
+    if (limit) q.set("limit", String(limit));
     return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
+  },
+  // The keywords worth hunting across everything explored on the site.
+  discoverKeywords: (connectionId: string, f: { q?: string; sort?: DiscoverSiteKeywordSort; searchedOnly?: boolean; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (f.q) q.set("q", f.q);
+    if (f.sort) q.set("sort", f.sort);
+    if (f.searchedOnly) q.set("searchedOnly", "1");
+    if (f.limit) q.set("limit", String(f.limit));
+    return request<DiscoverSiteKeywords>(`/api/connections/${connectionId}/discover/keywords?${q.toString()}`);
   },
   discoverSuggest: (connectionId: string, q: string) =>
     request<{ categories: { id: string; name: string; path: string[]; leaf: boolean }[] }>(`/api/connections/${connectionId}/discover/suggest?q=${encodeURIComponent(q)}`),

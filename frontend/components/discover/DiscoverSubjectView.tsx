@@ -18,7 +18,7 @@ import {
   filterProducts,
 } from "./DiscoverProductFilters";
 import { DiscoverCompliance } from "./DiscoverCompliance";
-import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { PillTabs } from "@/components/PillTabs";
 import {
   AccountDelivery,
   BAND,
@@ -33,7 +33,7 @@ import {
   StatTile,
 } from "./discover-ui";
 
-type View = "products" | "keywords" | "market";
+type View = "products" | "subcategories" | "keywords" | "market";
 
 // One category or keyword in Discover, laid out like the Analytics page:
 // the headline figures as tiles (with what a supplier may cost at the
@@ -463,24 +463,28 @@ export function DiscoverSubjectView({
         />
       )}
 
-      {/* What to look at: the products (the point), the keywords that sell, or the market picture. */}
+      {/* What to look at, as tabs, so nothing sits below a long list: the products (the point), its
+          subcategories (each with its own products and keywords), the keywords that sell, the market picture. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <SegmentedControl<View>
+        <PillTabs<View>
           label="Show"
           value={view}
           onChange={setView}
-          options={[
-            { key: "products", label: `Products · ${data.products.length}` },
-            { key: "keywords", label: `Keywords · ${data.keywords.length}` },
+          tabs={[
+            { key: "products", label: "Products", count: data.products.length },
+            ...(data.children.length ? [{ key: "subcategories" as View, label: "Subcategories", count: data.children.length }] : []),
+            { key: "keywords", label: "Keywords", count: data.keywords.length },
             { key: "market", label: "Market picture" },
           ]}
         />
         <p className="text-[11.5px] text-[var(--color-muted)]">
           {view === "products"
             ? "The same product under several sellers is one row, scored the way a hunter judges it."
-            : view === "keywords"
-              ? "The phrases of the titles that sell here, and where its listings sit."
-              : "Sales by day, by price and across the leading listings; the score; who's selling and how they deliver."}
+            : view === "subcategories"
+              ? "Open one for its own products, keywords and subcategories: the deeper, the more specific."
+              : view === "keywords"
+                ? "The phrases of the titles that sell here: open one to find its products."
+                : "Sales by day, by price and across the leading listings; the score; who's selling and how they deliver."}
         </p>
       </div>
 
@@ -882,7 +886,7 @@ export function DiscoverSubjectView({
       )}
 
       {/* Subcategories: each one's data fetched on request, then ranked. */}
-      {data.children.length > 0 && (
+      {view === "subcategories" && data.children.length > 0 && (
         <section className="card overflow-hidden">
           <div className="p-4 pb-3">
             <CardHeader

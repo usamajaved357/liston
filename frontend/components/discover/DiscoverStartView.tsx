@@ -1,14 +1,13 @@
 "use client";
 
-import { DiscoverCategoryCard, DiscoverStart, DiscoverSubjectRef, DiscoverWatch } from "@/lib/api";
+import { DiscoverCategoryCard, DiscoverStart, DiscoverSubjectRef } from "@/lib/api";
 import { count } from "@/components/research/format";
-import { DiscoverProducts } from "./DiscoverProducts";
-import { AccountDelivery, BudgetLine, CardHeader, Chevron, FlagTag, perMonth, Quiet, ScoreBadge } from "./discover-ui";
+import { AccountDelivery, BudgetLine, CardHeader, Chevron, FlagTag, Quiet, ScoreBadge } from "./discover-ui";
 
-// Where Discover starts (the search box above is on every screen): the
-// best products across everything explored on the site, what the team
-// explored lately and watches, the account's own categories, and eBay's
-// top-level categories to browse.
+// Where Discover starts (the search box above is on every screen): a slim
+// header with the size of what's been explored, then tabs (DiscoverPanel)
+// for the products, the keywords, the categories, and the watchlist with
+// what the team explored lately. These are the header and two tabs' bodies.
 
 const TILE_TONES = [
   "bg-indigo-50 text-indigo-700 ring-indigo-100",
@@ -93,163 +92,94 @@ function CategoryRow({ category, note, onOpen }: { category: DiscoverCategoryCar
   );
 }
 
-function WatchRow({ watch, onOpen }: { watch: DiscoverWatch; onOpen: () => void }) {
-  return (
-    <li>
-      <button type="button" onClick={onOpen} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--color-paper)]">
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{watch.kind === "keyword" ? `“${watch.label}”` : watch.label}</span>
-          <span className="block truncate text-[11px] text-[var(--color-muted)]">
-            {watch.recent ? (
-              <span className="font-medium text-emerald-700">
-                {count(watch.recent.sold)} sold in {watch.recent.days} day{watch.recent.days === 1 ? "" : "s"}
-              </span>
-            ) : watch.figures ? (
-              `${perMonth(watch.figures.medianPerMonth)} · ${count(watch.figures.total)} live`
-            ) : (
-              "Read tonight"
-            )}
-          </span>
-        </span>
-        {watch.opportunity && <ScoreBadge score={watch.opportunity.score} band={watch.opportunity.band} size="sm" />}
-        <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
-      </button>
-    </li>
-  );
-}
-
 function Stat({ value, label }: { value: string; label: string }) {
   return (
-    <div className="rounded-xl border border-white/60 bg-white/70 px-3.5 py-2.5 backdrop-blur">
-      <p className="text-[20px] font-semibold leading-tight tracking-tight tabular-nums text-[var(--color-ink)]">{value}</p>
-      <p className="text-[11.5px] text-[var(--color-muted)]">{label}</p>
+    <div className="min-w-0 rounded-xl border border-white/60 bg-white/70 px-3 py-2 backdrop-blur">
+      <p className="text-[17px] font-semibold leading-tight tracking-tight tabular-nums text-[var(--color-ink)]">{value}</p>
+      <p className="truncate text-[11px] text-[var(--color-muted)]">{label}</p>
     </div>
   );
 }
 
-export function DiscoverStartView({
-  data,
-  onOpen,
-  onWatchlist,
-  onWinners,
-  onHunt,
-}: {
-  data: DiscoverStart;
-  onOpen: (subject: DiscoverSubjectRef) => void;
-  onWatchlist: () => void;
-  onWinners: () => void;
-  onHunt: (url: string) => void;
-}) {
-  const subjectOf = (w: DiscoverWatch): DiscoverSubjectRef => (w.kind === "category" ? { categoryId: w.value } : { q: w.value });
-  const winners = data.winners;
+/** What Discover does, in two lines, and the size of what's been explored on the site. */
+export function DiscoverHero({ data }: { data: DiscoverStart }) {
+  const w = data.winners;
   return (
-    <div className="space-y-5">
-      {/* The way in: what Discover does, the size of what's been explored, and the winners. */}
-      <section className="card overflow-hidden">
-        <div className="bg-[linear-gradient(135deg,#eef2ff_0%,#f8fafc_55%,#ecfdf5_100%)] p-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0 max-w-2xl">
-              <p className="text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-primary)]">Discover</p>
-              <h2 className="mt-0.5 text-[20px] font-semibold leading-tight text-[var(--color-ink)]">Find the next product to sell on {data.market.name}</h2>
-              <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-                Search a product or keyword, or open a category. Liston reads its leading listings and how many each has sold, groups the same product across sellers, and tells
-                you which ones sell, whether you can match their delivery, what they leave after fees, and whether they&apos;re rising. Everything explored joins one pool of
-                winning products.
-              </p>
-              <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
-                <AccountDelivery account={data.account} />
-              </p>
-            </div>
-            <div className="grid flex-shrink-0 grid-cols-3 gap-2 lg:w-[380px]">
-              <Stat value={winners ? count(winners.total) : "—"} label="products found" />
-              <Stat value={winners ? count(winners.pool.subjects) : "—"} label="categories and keywords" />
-              <Stat value={winners ? count(winners.pool.read) : "—"} label="listings with sold counts" />
-            </div>
-          </div>
+    <section className="card overflow-hidden">
+      <div className="flex flex-col gap-3 bg-[linear-gradient(135deg,#eef2ff_0%,#f8fafc_55%,#ecfdf5_100%)] px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0 max-w-2xl">
+          <h2 className="text-[16px] font-semibold leading-tight text-[var(--color-ink)]">Find the next product to sell on {data.market.name}</h2>
+          <p className="mt-1 text-[12px] leading-relaxed text-[var(--color-muted)]">
+            Search or open a category: Liston reads its leading listings and sold counts, groups the same product across sellers and scores it for you. Everything explored
+            joins one pool of products and keywords. <AccountDelivery account={data.account} />
+          </p>
         </div>
-        {winners && winners.products.length > 0 && (
-          <>
-            <div className="flex flex-wrap items-baseline justify-between gap-2 border-t border-[var(--color-line)] px-4 pb-2 pt-3">
-              <CardHeader title="Winning products right now" note="The best to hunt across everything your team has explored, for this account. The same product under several sellers is one row." />
-              <button type="button" onClick={onWinners} className="text-[12.5px] font-semibold text-[var(--color-primary)] hover:underline">
-                See all {count(winners.total)} with filters
-              </button>
-            </div>
-            <div className="border-t border-[var(--color-line)]">
-              <DiscoverProducts products={winners.products} currency={data.market.currency} onHunt={onHunt} onOpen={onOpen} showFrom empty="" />
-            </div>
-          </>
-        )}
-      </section>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
-        <section className="card flex flex-col p-4">
-          <CardHeader title="Recently explored" note={`What your team opened on ${data.market.name} in the last 3 days, read again nightly`} />
-          {data.recent.length ? (
-            <ul className="-mx-2 mt-2">
-              {data.recent.slice(0, 6).map((r) => (
-                <li key={`${r.kind}:${r.value}`}>
-                  <button type="button" onClick={() => onOpen(r.kind === "category" ? { categoryId: r.value } : { q: r.value })} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--color-paper)]">
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5">
-                        <span className="truncate text-[12.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{r.kind === "keyword" ? `“${r.name}”` : r.name}</span>
-                        <FlagTag flag={r.flag} />
-                      </span>
-                      <span className="block truncate text-[11px] text-[var(--color-muted)]">
-                        {r.kind === "keyword" ? "Keyword" : r.path.join(" › ") || "Category"}
-                        {r.scanned && ` · ${count(Math.round(r.scanned.monthlySales))} sales a month`}
-                      </span>
-                    </span>
-                    {r.scanned && <ScoreBadge score={r.scanned.score} band={r.scanned.band} size="sm" />}
-                    <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <Quiet>Categories and keywords anyone opens show here for three days.</Quiet>
-          )}
-        </section>
-
-        <section className="card flex flex-col p-4">
-          <CardHeader
-            title="Your watchlist"
-            note="Read again every night"
-            aside={
-              data.watches > 0 ? (
-                <button type="button" onClick={onWatchlist} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
-                  See all {data.watches}
-                </button>
-              ) : undefined
-            }
-          />
-          {data.watchPreview.length ? (
-            <ul className="-mx-2 mt-2">{data.watchPreview.map((w) => <WatchRow key={w.id} watch={w} onOpen={() => onOpen(subjectOf(w))} />)}</ul>
-          ) : (
-            <Quiet>Open a category or keyword and press Watch: Liston reads it every night and charts its sales day by day.</Quiet>
-          )}
-        </section>
-
-        <section className="card flex flex-col p-4 lg:col-span-2 xl:col-span-1">
-          <CardHeader title="Your categories" note="Where the listings Liston made for this account sit" />
-          {data.yourCategories.length ? (
-            <ul className="-mx-2 mt-2">{data.yourCategories.slice(0, 6).map((c) => <CategoryRow key={c.id} category={c} note={`${c.listings} of your listings`} onOpen={() => onOpen({ categoryId: c.id })} />)}</ul>
-          ) : (
-            <Quiet>Your categories show here once Liston has made listings for this account.</Quiet>
-          )}
-        </section>
+        <div className="grid flex-shrink-0 grid-cols-3 gap-2 lg:w-[400px]">
+          <Stat value={w ? count(w.total) : "—"} label="products found" />
+          <Stat value={w?.keywords !== undefined ? count(w.keywords) : "—"} label="keywords that sell" />
+          <Stat value={w ? count(w.pool.subjects) : "—"} label="explored" />
+        </div>
       </div>
+    </section>
+  );
+}
 
+/** The Categories tab: the account's own categories, then eBay's top-level ones to browse. */
+export function DiscoverCategoriesTab({ data, onOpen }: { data: DiscoverStart; onOpen: (subject: DiscoverSubjectRef) => void }) {
+  return (
+    <div className="space-y-4">
+      {data.yourCategories.length > 0 && (
+        <section className="card p-4">
+          <CardHeader title="Your categories" note="Where the listings Liston made for this account sit: a good place to find the next product" />
+          <ul className="-mx-2 mt-2 grid grid-cols-1 gap-x-4 md:grid-cols-2 xl:grid-cols-3">
+            {data.yourCategories.map((c) => (
+              <CategoryRow key={c.id} category={c} note={`${c.listings} of your listings`} onOpen={() => onOpen({ categoryId: c.id })} />
+            ))}
+          </ul>
+        </section>
+      )}
       <section className="card p-4">
-        <CardHeader title="Browse eBay's categories" note="Open one to see its products and rank its subcategories; go deeper for more specific products and keywords" />
+        <CardHeader title="Browse eBay's categories" note="Open one for its products, keywords and subcategories; each subcategory has its own, more specific the deeper you go" />
         <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {data.topCategories.map((c) => (
             <CategoryTile key={c.id} category={c} onOpen={() => onOpen({ categoryId: c.id })} />
           ))}
         </ul>
       </section>
-
       <BudgetLine budget={data.budget} />
     </div>
+  );
+}
+
+/** What anyone on the site explored in the last three days, with its opportunity. */
+export function DiscoverRecent({ data, onOpen }: { data: DiscoverStart; onOpen: (subject: DiscoverSubjectRef) => void }) {
+  return (
+    <section className="card p-4">
+      <CardHeader title="Recently explored" note={`What your team opened on ${data.market.name} in the last 3 days, read again nightly`} />
+      {data.recent.length ? (
+        <ul className="-mx-2 mt-2 grid grid-cols-1 gap-x-4 md:grid-cols-2 xl:grid-cols-3">
+          {data.recent.map((r) => (
+            <li key={`${r.kind}:${r.value}`}>
+              <button type="button" onClick={() => onOpen(r.kind === "category" ? { categoryId: r.value } : { q: r.value })} className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--color-paper)]">
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-[12.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{r.kind === "keyword" ? `“${r.name}”` : r.name}</span>
+                    <FlagTag flag={r.flag} />
+                  </span>
+                  <span className="block truncate text-[11px] text-[var(--color-muted)]">
+                    {r.kind === "keyword" ? "Keyword" : r.path.join(" › ") || "Category"}
+                    {r.scanned && ` · ${count(Math.round(r.scanned.monthlySales))} sales a month`}
+                  </span>
+                </span>
+                {r.scanned && <ScoreBadge score={r.scanned.score} band={r.scanned.band} size="sm" />}
+                <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Quiet>Categories and keywords anyone opens show here for three days.</Quiet>
+      )}
+    </section>
   );
 }

@@ -15,6 +15,7 @@ router.get('/review', requireAuth, HUNTERS, discoverController.review);
 router.get('/suggest', requireAuth, HUNTERS, discoverController.suggest);
 router.post('/rank', requireAuth, HUNTERS, discoverController.rank);
 router.get('/winners', requireAuth, HUNTERS, discoverController.winners);
+router.get('/keywords', requireAuth, HUNTERS, discoverController.siteKeywords);
 router.get('/watches', requireAuth, HUNTERS, discoverController.watches);
 router.post('/watches', requireAuth, HUNTERS, discoverController.addWatch);
 router.delete('/watches/:watchId', requireAuth, HUNTERS, discoverController.removeWatch);

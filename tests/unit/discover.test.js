@@ -254,3 +254,27 @@ test('products: the same thing under several sellers is one product, judged on d
   assert.ok(bowl.reasons.some((r) => r.good === false && /little left/.test(r.text)));
   assert.strictEqual(bowl.band, 'weak');
 });
+
+test('the site keywords: one row per term where it sells most, a searched keyword with its own market, nothing blocked', () => {
+  const { poolKeywords } = require('../../src/modules/discover/discover-keywords');
+  const cat = { kind: 'category', value: '1', name: 'Lighting' };
+  const kw = { kind: 'keyword', value: 'fairy lights', name: 'fairy lights' };
+  const rows = poolKeywords(
+    [
+      { term: 'motion sensor', perMonth: 40, sold: 900, salesShare: 20, lift: 1.5, listings: 12, from: cat },
+      { term: 'motion sensor', perMonth: 90, sold: 1500, salesShare: 30, lift: 2, listings: 9, from: kw },
+      { term: 'pocket knife', perMonth: 500, sold: 5000, salesShare: 50, lift: 3, listings: 20, from: cat },
+    ],
+    [
+      { term: 'motion sensor', monthlySales: 300, live: 4200, score: 71, band: 'strong' },
+      { term: 'solar lights', monthlySales: 120, live: 800, score: 64, band: 'fair' },
+    ],
+    { isBlocked: (t) => t.includes('knife') }
+  );
+  const byTerm = Object.fromEntries(rows.map((r) => [r.term, r]));
+  assert.deepStrictEqual(Object.keys(byTerm).sort(), ['motion sensor', 'solar lights']);
+  assert.deepStrictEqual([byTerm['motion sensor'].subjects, byTerm['motion sensor'].from, byTerm['motion sensor'].lift], [2, kw, 2]);
+  assert.deepStrictEqual(byTerm['motion sensor'].searched, { monthlySales: 300, live: 4200, score: 71, band: 'strong' });
+  assert.strictEqual(byTerm['motion sensor'].perMonth, 300, "a searched keyword's own market");
+  assert.deepStrictEqual([byTerm['solar lights'].subjects, byTerm['solar lights'].from, byTerm['solar lights'].perMonth], [0, null, 120]);
+});

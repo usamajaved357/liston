@@ -2,26 +2,35 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, DiscoverExplore, DiscoverOwnKeywords as OwnKeywords, DiscoverStart, DiscoverSubjectRef, DiscoverWatchList, DiscoverWinners, DiscoverWinnersFilters } from "@/lib/api";
+import { api, ApiError, DiscoverExplore, DiscoverOwnKeywords as OwnKeywords, DiscoverSiteKeywords as SiteKeywords, DiscoverStart, DiscoverSubjectRef, DiscoverWatchList, DiscoverWinners, DiscoverWinnersFilters } from "@/lib/api";
 import { Alert } from "@/components/Alert";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { PillTabs } from "@/components/PillTabs";
+import { count } from "@/components/research/format";
 import { DiscoverSearch } from "./DiscoverSearch";
-import { DiscoverStartView } from "./DiscoverStartView";
+import { DiscoverCategoriesTab, DiscoverHero, DiscoverRecent } from "./DiscoverStartView";
+import { DiscoverSiteKeywords, SiteKeywordsQuery } from "./DiscoverSiteKeywords";
 import { DiscoverSubjectView } from "./DiscoverSubjectView";
 import { DiscoverWatchlist } from "./DiscoverWatchlist";
 import { DiscoverWinnersView } from "./DiscoverWinners";
 import { DEFAULT_FILTERS } from "./DiscoverProductFilters";
 import { DiscoverOwnKeywords } from "./DiscoverOwnKeywords";
 
-// The Hunting page's Discover tab: Explore (a category or keyword, from
-// where to start down to what's selling and its keywords), the Watchlist,
-// and Your keywords (from the account's own traffic, for whoever sees its
-// analytics). The category or keyword open is in the address (?dc= or
-// ?dq=), so Back and a shared link land on it.
+// The Hunting page's Discover tab. Its start is tabs, so nothing pushes
+// anything else down the page: Products (the best across everything
+// explored, a page at a time), Keywords (the keywords that sell across it
+// all, and the account's own searches for whoever sees its analytics),
+// Categories (the account's own, and eBay's to browse) and Watchlist
+// (watched, and what the team explored lately). Opening a category or
+// keyword (?dc= or ?dq=) shows its own tabs: its products, subcategories,
+// keywords and market. The start tab is ?dt=, so Back and a shared link
+// land on it.
 
-type Section = "explore" | "winners" | "watchlist" | "keywords";
+type HomeTab = "products" | "keywords" | "categories" | "saved";
+const HOME_TABS: HomeTab[] = ["products", "keywords", "categories", "saved"];
 const RANK_POLL_MS = 2500;
 const READS_STEP = 25;
+const PAGE = 60; // products or keywords a page, on the start's tabs
 
 const subjectKey = (s: DiscoverSubjectRef | null) => (s?.categoryId ? `c:${s.categoryId}` : s?.q ? `q:${s.q.toLowerCase()}` : "");
 
@@ -41,7 +50,10 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   const pathname = usePathname();
   const subject: DiscoverSubjectRef | null = search.get("dc") ? { categoryId: search.get("dc")! } : search.get("dq") ? { q: search.get("dq")! } : null;
   const key = subjectKey(subject);
-  const [section, setSection] = useState<Section>("explore");
+  const homeTab: HomeTab = HOME_TABS.includes(search.get("dt") as HomeTab) ? (search.get("dt") as HomeTab) : "products";
+  const home = !subject;
+  // Keywords: across eBay (everything explored), or the account's own searches.
+  const [keywordSource, setKeywordSource] = useState<"ebay" | "yours">("ebay");
 
   const [start, setStart] = useState<{ data?: DiscoverStart; error?: string } | null>(null);
   const [startTick, setStartTick] = useState(0);
@@ -59,9 +71,22 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   // The AI's brand/VeRO reading, asked for once a subject is on screen without today's.
   const [review, setReview] = useState<{ key: string; compliance?: DiscoverExplore["compliance"]; checked?: boolean; failed?: boolean; hidden?: number } | null>(null);
   const [own, setOwn] = useState<{ range: string; data?: OwnKeywords; error?: string } | null>(null);
-  const [winnersFilters, setWinnersFilters] = useState<DiscoverWinnersFilters>(DEFAULT_FILTERS);
+  const [winnersFilters, setWinnersFiltersState] = useState<DiscoverWinnersFilters>(DEFAULT_FILTERS);
+  const [winnersLimit, setWinnersLimit] = useState(PAGE);
+  const setWinnersFilters = (next: DiscoverWinnersFilters) => {
+    setWinnersFiltersState(next);
+    setWinnersLimit(PAGE);
+  };
   const [winners, setWinners] = useState<{ key: string; data?: DiscoverWinners; error?: string } | null>(null);
-  const winnersKey = JSON.stringify(winnersFilters);
+  const winnersKey = JSON.stringify([winnersFilters, winnersLimit]);
+  const [kwQuery, setKwQueryState] = useState<SiteKeywordsQuery>({ q: "", sort: "sales", searchedOnly: false });
+  const [kwLimit, setKwLimit] = useState(PAGE);
+  const setKwQuery = (next: SiteKeywordsQuery) => {
+    setKwQueryState(next);
+    setKwLimit(PAGE);
+  };
+  const [siteKeywords, setSiteKeywords] = useState<{ key: string; data?: SiteKeywords; error?: string } | null>(null);
+  const kwKey = JSON.stringify([kwQuery, kwLimit]);
 
   const open = useCallback(
     (next: DiscoverSubjectRef | null) => {
@@ -70,15 +95,23 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
       qs.delete("dq");
       if (next?.categoryId) qs.set("dc", next.categoryId);
       else if (next?.q) qs.set("dq", next.q);
-      setSection("explore");
       router.push(`${pathname}?${qs.toString()}`, { scroll: false });
+    },
+    [pathname, router, search]
+  );
+  const changeHomeTab = useCallback(
+    (next: HomeTab) => {
+      const qs = new URLSearchParams(search.toString());
+      if (next === "products") qs.delete("dt");
+      else qs.set("dt", next);
+      router.replace(`${pathname}?${qs.toString()}`, { scroll: false });
     },
     [pathname, router, search]
   );
 
   // Where to start.
   useEffect(() => {
-    if (key || section !== "explore") return;
+    if (key) return;
     let cancelled = false;
     api
       .discoverStart(connectionId)
@@ -87,7 +120,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     return () => {
       cancelled = true;
     };
-  }, [connectionId, key, section, startTick]);
+  }, [connectionId, key, startTick]);
 
   // The open category or keyword.
   useEffect(() => {
@@ -142,14 +175,15 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     return () => clearTimeout(timer);
   }, [ranking, answered]);
 
-  // Winners, when shown: asked again as the filters change (typing waits a moment).
+  // The products, when shown: asked again as the filters change (typing waits a moment) or more are wanted.
+  const showProducts = home && homeTab === "products";
   useEffect(() => {
-    if (section !== "winners") return;
+    if (!showProducts) return;
     let cancelled = false;
     const timer = setTimeout(
       () => {
         api
-          .discoverWinners(connectionId, winnersFilters)
+          .discoverWinners(connectionId, winnersFilters, winnersLimit)
           .then((data) => !cancelled && setWinners({ key: winnersKey, data }))
           .catch((err) => !cancelled && setWinners({ key: winnersKey, error: err instanceof ApiError ? err.message : "Couldn't load the winning products." }));
       },
@@ -159,13 +193,36 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
       cancelled = true;
       clearTimeout(timer);
     };
-    // `winnersFilters` is what `winnersKey` stands for; `winners` only decides the wait.
+    // `winnersFilters` and `winnersLimit` are what `winnersKey` stands for; `winners` only decides the wait.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, section, winnersKey]);
+  }, [connectionId, showProducts, winnersKey]);
+
+  // The keywords across everything explored, when shown.
+  const showSiteKeywords = home && homeTab === "keywords" && keywordSource === "ebay";
+  useEffect(() => {
+    if (!showSiteKeywords) return;
+    let cancelled = false;
+    const timer = setTimeout(
+      () => {
+        api
+          .discoverKeywords(connectionId, { ...kwQuery, limit: kwLimit })
+          .then((data) => !cancelled && setSiteKeywords({ key: kwKey, data }))
+          .catch((err) => !cancelled && setSiteKeywords({ key: kwKey, error: err instanceof ApiError ? err.message : "Couldn't load the keywords." }));
+      },
+      siteKeywords ? 250 : 0
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // `kwQuery` and `kwLimit` are what `kwKey` stands for; `siteKeywords` only decides the wait.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, showSiteKeywords, kwKey]);
 
   // The watchlist and your keywords, when shown.
+  const showSaved = home && homeTab === "saved";
   useEffect(() => {
-    if (section !== "watchlist") return;
+    if (!showSaved) return;
     let cancelled = false;
     api
       .discoverWatches(connectionId)
@@ -174,9 +231,10 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     return () => {
       cancelled = true;
     };
-  }, [connectionId, section, watchTick]);
+  }, [connectionId, showSaved, watchTick]);
+  const showOwn = home && homeTab === "keywords" && keywordSource === "yours" && canSeeTraffic;
   useEffect(() => {
-    if (section !== "keywords") return;
+    if (!showOwn) return;
     let cancelled = false;
     api
       .discoverOwnKeywords(connectionId, range)
@@ -185,7 +243,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     return () => {
       cancelled = true;
     };
-  }, [connectionId, section, range]);
+  }, [connectionId, showOwn, range]);
 
   async function rank() {
     if (!subject?.categoryId) return;
@@ -224,11 +282,12 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   }
 
   const watchCount = start?.data?.watches ?? watchlist?.data?.items.length ?? null;
-  const sections: { key: Section; label: string }[] = [
-    { key: "explore", label: "Explore" },
-    { key: "winners", label: "Winners" },
-    { key: "watchlist", label: watchCount ? `Watchlist · ${watchCount}` : "Watchlist" },
-    ...(canSeeTraffic ? [{ key: "keywords" as Section, label: "Your keywords" }] : []),
+  const w = start?.data?.winners;
+  const homeTabs = [
+    { key: "products" as HomeTab, label: "Products", count: w ? count(w.total) : undefined },
+    { key: "keywords" as HomeTab, label: "Keywords", count: w?.keywords !== undefined ? count(w.keywords) : undefined },
+    { key: "categories" as HomeTab, label: "Categories", count: start?.data ? count(start.data.topCategories.length + start.data.yourCategories.length) : undefined },
+    { key: "saved" as HomeTab, label: "Watchlist and recent", count: watchCount || undefined },
   ];
   // Back goes up one level: a category to the one above it, anything else to Discover's start.
   const path = shown?.data?.subject.kind === "category" ? shown.data.subject.path : [];
@@ -236,93 +295,114 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
 
   return (
     <div className="space-y-4">
-      {/* On every Discover screen: the search box and the sections. */}
-      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-        <DiscoverSearch key={key} connectionId={connectionId} onOpen={open} initial={subject?.q || ""} />
-        <div className="flex flex-wrap items-center gap-2">
-          <SegmentedControl
-            label="Discover"
-            value={section}
-            onChange={(next) => {
-              // Explore again from inside a category or keyword: back to the start.
-              if (next === "explore" && section === "explore" && subject) open(null);
-              setSection(next);
-            }}
-            options={sections}
-          />
-          {section === "keywords" && (
-            <SegmentedControl
-              label="Dates"
-              value={range}
-              onChange={setRange}
-              options={[
-                { key: "7d", label: "7 days" },
-                { key: "30d", label: "30 days" },
-                { key: "90d", label: "90 days" },
-              ]}
+      {/* On every Discover screen: the search box. */}
+      <DiscoverSearch key={key} connectionId={connectionId} onOpen={open} initial={subject?.q || ""} />
+
+      {subject ? (
+        shown?.error && !shown.data ? (
+          <div className="space-y-3">
+            <Alert>{shown.error}</Alert>
+            <button type="button" onClick={() => open(null)} className="text-[12.5px] font-medium text-[var(--color-primary)] hover:underline">
+              Back to Discover
+            </button>
+          </div>
+        ) : shown?.data ? (
+          <>
+            {shown.error && <Alert>{shown.error}</Alert>}
+            <DiscoverSubjectView
+              key={key}
+              data={reviewed?.compliance ? { ...shown.data, compliance: reviewed.compliance } : shown.data}
+              checking={needsReview && !reviewed}
+              onCheck={runReview}
+              aiUnavailable={Boolean(reviewed?.failed)}
+              onOpen={open}
+              onBack={() => open(parent ? { categoryId: parent.id } : null)}
+              backLabel={parent ? parent.name : "Discover"}
+              onHunt={onHunt}
+              onReadMore={() => setReads({ key, n: Math.max(readsWanted, shown.data?.reads.asked || 0) + READS_STEP })}
+              readingMore={!answered && readsWanted > (shown.data.reads.asked || 0)}
+              onRank={rank}
+              onToggleWatch={toggleWatch}
+              watchBusy={watchBusy}
             />
-          )}
-        </div>
-      </div>
+          </>
+        ) : (
+          <Loading first />
+        )
+      ) : (
+        <>
+          {start?.error ? <Alert>{start.error}</Alert> : start?.data ? <DiscoverHero data={start.data} /> : null}
 
-      {section === "explore" &&
-        (subject ? (
-          shown?.error && !shown.data ? (
-            <div className="space-y-3">
-              <Alert>{shown.error}</Alert>
-              <button type="button" onClick={() => open(null)} className="text-[12.5px] font-medium text-[var(--color-primary)] hover:underline">
-                Back to Discover
-              </button>
-            </div>
-          ) : shown?.data ? (
-            <>
-              {shown.error && <Alert>{shown.error}</Alert>}
-              <DiscoverSubjectView
-                data={reviewed?.compliance ? { ...shown.data, compliance: reviewed.compliance } : shown.data}
-                checking={needsReview && !reviewed}
-                onCheck={runReview}
-                aiUnavailable={Boolean(reviewed?.failed)}
-                onOpen={open}
-                onBack={() => open(parent ? { categoryId: parent.id } : null)}
-                backLabel={parent ? parent.name : "Discover"}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <PillTabs label="Discover" tabs={homeTabs} value={homeTab} onChange={changeHomeTab} />
+            {homeTab === "keywords" && canSeeTraffic && (
+              <div className="flex flex-wrap items-center gap-2">
+                <SegmentedControl
+                  label="Keywords from"
+                  value={keywordSource}
+                  onChange={setKeywordSource}
+                  options={[
+                    { key: "ebay", label: "Selling on eBay", title: "The keywords of the titles that sell, across everything explored" },
+                    { key: "yours", label: "Your searches", title: "The words buyers found your own listings by: impressions, clicks and sales" },
+                  ]}
+                />
+                {keywordSource === "yours" && (
+                  <SegmentedControl
+                    label="Dates"
+                    value={range}
+                    onChange={setRange}
+                    options={[
+                      { key: "7d", label: "7 days" },
+                      { key: "30d", label: "30 days" },
+                      { key: "90d", label: "90 days" },
+                    ]}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+
+          {homeTab === "products" &&
+            (winners?.error && !winners.data ? (
+              <Alert>{winners.error}</Alert>
+            ) : (
+              <DiscoverWinnersView
+                data={winners?.data || null}
+                filters={winnersFilters}
+                onFilters={setWinnersFilters}
+                loading={Boolean(winners) && winners?.key !== winnersKey}
                 onHunt={onHunt}
-                onReadMore={() => setReads({ key, n: Math.max(readsWanted, shown.data?.reads.asked || 0) + READS_STEP })}
-                readingMore={!answered && readsWanted > (shown.data.reads.asked || 0)}
-                onRank={rank}
-                onToggleWatch={toggleWatch}
-                watchBusy={watchBusy}
+                onOpen={open}
+                onMore={() => setWinnersLimit((n) => n + PAGE)}
               />
-            </>
-          ) : (
-            <Loading first />
-          )
-        ) : start?.error ? (
-          <Alert>{start.error}</Alert>
-        ) : start?.data ? (
-          <DiscoverStartView data={start.data} onOpen={open} onWatchlist={() => setSection("watchlist")} onWinners={() => setSection("winners")} onHunt={onHunt} />
-        ) : (
-          <Loading first={false} />
-        ))}
+            ))}
 
-      {section === "winners" &&
-        (winners?.error && !winners.data ? (
-          <Alert>{winners.error}</Alert>
-        ) : (
-          <DiscoverWinnersView data={winners?.data || null} filters={winnersFilters} onFilters={setWinnersFilters} loading={Boolean(winners) && winners?.key !== winnersKey} onHunt={onHunt} onOpen={open} />
-        ))}
+          {homeTab === "keywords" &&
+            (keywordSource === "yours" && canSeeTraffic ? (
+              own?.error ? <Alert>{own.error}</Alert> : own?.data && own.range === range ? <DiscoverOwnKeywords data={own.data} onOpen={open} /> : <Loading first={false} />
+            ) : siteKeywords?.error && !siteKeywords.data ? (
+              <Alert>{siteKeywords.error}</Alert>
+            ) : (
+              <DiscoverSiteKeywords
+                data={siteKeywords?.data || null}
+                query={kwQuery}
+                onQuery={setKwQuery}
+                loading={Boolean(siteKeywords) && siteKeywords?.key !== kwKey}
+                onOpen={open}
+                onMore={() => setKwLimit((n) => n + PAGE)}
+              />
+            ))}
 
-      {section === "watchlist" &&
-        (watchlist?.error ? (
-          <Alert>{watchlist.error}</Alert>
-        ) : watchlist?.data ? (
-          <DiscoverWatchlist data={watchlist.data} onOpen={open} onRemove={removeWatch} removing={removing} />
-        ) : (
-          <Loading first={false} />
-        ))}
+          {homeTab === "categories" && (start?.data ? <DiscoverCategoriesTab data={start.data} onOpen={open} /> : !start?.error && <Loading first={false} />)}
 
-      {section === "keywords" &&
-        canSeeTraffic &&
-        (own?.error ? <Alert>{own.error}</Alert> : own?.data && own.range === range ? <DiscoverOwnKeywords data={own.data} onOpen={open} /> : <Loading first={false} />)}
+          {homeTab === "saved" && (
+            <div className="space-y-4">
+              {watchlist?.error ? <Alert>{watchlist.error}</Alert> : watchlist?.data ? <DiscoverWatchlist data={watchlist.data} onOpen={open} onRemove={removeWatch} removing={removing} /> : <Loading first={false} />}
+              {start?.data && <DiscoverRecent data={start.data} onOpen={open} />}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

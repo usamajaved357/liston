@@ -31,6 +31,13 @@ const winnersSchema = z.object({
   minSales: z.coerce.number().int().min(0).max(100000).optional().default(0),
   newOnly: flag,
   sort: z.enum(['score', 'sales', 'rising', 'new', 'price']).optional().default('score'),
+  limit: z.coerce.number().int().min(1).max(300).optional().default(60),
+});
+const siteKeywordsSchema = z.object({
+  q: z.string().trim().max(80).optional().default(''),
+  sort: z.enum(['sales', 'lift', 'opportunity', 'spread']).optional().default('sales'),
+  searchedOnly: flag,
+  limit: z.coerce.number().int().min(1).max(400).optional().default(60),
 });
 
 function parse(schema, input, res) {
@@ -107,4 +114,10 @@ const yourKeywords = handle(async (req, res) => {
   res.status(200).json(await discoverService.yourKeywords(req.ownerId, req.params.id, input));
 });
 
-module.exports = { start, explore, review, suggest, rank, watches, addWatch, removeWatch, winners, yourKeywords };
+const siteKeywords = handle(async (req, res) => {
+  const input = parse(siteKeywordsSchema, req.query, res);
+  if (!input) return;
+  res.status(200).json(await discoverService.siteKeywords(req.ownerId, req.params.id, input));
+});
+
+module.exports = { start, explore, review, suggest, rank, watches, addWatch, removeWatch, winners, siteKeywords, yourKeywords };

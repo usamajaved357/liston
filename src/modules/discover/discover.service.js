@@ -47,7 +47,10 @@ const PRODUCTS_SHOWN = 80; // products on a subject's page (the page filters the
 const WINNERS_SCANS = 200; // scans in the Winners pool (newest first)
 const WINNERS_DAYS = 30; // a scan older than this is out of the pool
 const WINNERS_PER_SCAN = 8;
-const WINNERS_SHOWN = 60;
+const WINNERS_SHOWN = 60; // a page of Winners; "Load more" asks for more, up to WINNERS_MAX
+const WINNERS_MAX = 300;
+const POOL_KEYWORDS_SHOWN = 60; // a page of the site's keywords
+const POOL_KEYWORDS_MAX = 400;
 const WINNERS_CACHE_MS = 5 * 60 * 1000;
 const MAX_CHILDREN = 12; // subcategories ranked at once, busiest first
 const READ_CONCURRENCY = 4;
@@ -529,10 +532,26 @@ async function winnersPool(ownerId, connectionId) {
   const site = await sitePool(ctx.site, ctx.day);
   const seen = new Set();
   const pool = [];
+  // The keywords of the titles that sell under each subject, and each keyword searched with its own market.
+  const found = [];
+  const searched = [];
   let read = 0;
   for (const { scan: s, from } of site.subjects) {
     const listings = trends.summarise(scoring.withPace(placed(s, ctx, site.reads)), site.recent).listings;
     read += listings.filter((l) => l.soldPerMonth !== null).length;
+    const where = { kind: from.kind, value: from.value, name: from.name };
+    // Across the whole site a lone word ("white", "plus") means nothing without its category, so the
+    // site's list keeps phrases of two words or more whose titles sell at least as well as the rest.
+    for (const k of keywords.fromListings(listings, { query: from.name, limit: KEYWORDS_TOP })) {
+      if (k.words >= 2 && (k.lift ?? 0) >= 1) found.push({ term: k.term, perMonth: k.perMonth, sold: k.sold, salesShare: k.salesShare, lift: k.lift, listings: k.listings, from: where });
+    }
+    if (from.kind === 'keyword') {
+      const f = scoring.figures(listings, { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
+      if (f.demand.read) {
+        const o = scoring.opportunity(f, { currency: ctx.site.currency });
+        searched.push({ term: from.value, monthlySales: Math.round(f.demand.monthlySales), live: s.total, score: o.score, band: o.band });
+      }
+    }
     for (const p of products.productsOf(listings, { subject: from.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: WINNERS_PER_SCAN })) {
       // The same product found under two subjects: once, where it scored best.
       if (p.read === 0 || p.itemIds.some((id) => seen.has(id))) continue;
@@ -541,7 +560,9 @@ async function winnersPool(ownerId, connectionId) {
     }
   }
   pool.sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
-  const value = { products: pool, pool: { ...site.pool, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
+  const blocked = (term) => compliance.termsIn(term).restricted.length > 0 || Boolean(compliance.veroBrandIn(term));
+  const siteKeywords = keywords.poolKeywords(found, searched, { isBlocked: blocked }).sort((a, b) => b.perMonth - a.perMonth);
+  const value = { products: pool, keywords: siteKeywords, pool: { ...site.pool, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
   winnersCache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
@@ -553,7 +574,7 @@ const SELLER_SIZES = { small: [0, 1000], medium: [1000, 10000], large: [10000, I
  * this account, filtered the way a hunter filters — delivery it can match,
  * a price band, a minimum of sales a month, new lately — and sorted.
  */
-async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score' } = {}) {
+async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score', limit = WINNERS_SHOWN } = {}) {
   const all = await winnersPool(ownerId, connectionId);
   const words = wordsOfQuery(q);
   const sizeBand = SELLER_SIZES[size] || null;
@@ -583,7 +604,29 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
     price: (a, b) => (b.price?.median ?? 0) - (a.price?.median ?? 0),
   };
   list = [...list].sort(by[sort] || by.score);
-  return { products: list.slice(0, WINNERS_SHOWN), matched: list.length, pool: all.pool, market: all.market, account: all.account, at: all.at };
+  return { products: list.slice(0, Math.min(WINNERS_MAX, Math.max(1, limit))), matched: list.length, pool: all.pool, market: all.market, account: all.account, at: all.at };
+}
+
+/**
+ * The keywords worth hunting across everything explored on the site, for
+ * this account: each with its sales a month, how much better its titles sell
+ * than the rest (lift), and — once it's been searched — its own market (live
+ * listings, opportunity). Searched by words, sorted by sales, lift,
+ * opportunity or how many categories share it, a page at a time. eBay
+ * doesn't share buyers' search volume, so demand is the sales themselves.
+ */
+async function siteKeywords(ownerId, connectionId, { q = '', sort = 'sales', searchedOnly = false, limit = POOL_KEYWORDS_SHOWN } = {}) {
+  const all = await winnersPool(ownerId, connectionId);
+  const words = wordsOfQuery(q);
+  let list = all.keywords.filter((k) => (!words.length || words.every((w) => k.term.toLowerCase().includes(w))) && (!searchedOnly || k.searched));
+  const by = {
+    sales: (a, b) => b.perMonth - a.perMonth,
+    lift: (a, b) => (b.lift ?? 0) - (a.lift ?? 0) || b.perMonth - a.perMonth,
+    opportunity: (a, b) => (b.searched?.score ?? -1) - (a.searched?.score ?? -1) || b.perMonth - a.perMonth,
+    spread: (a, b) => b.subjects - a.subjects || b.perMonth - a.perMonth,
+  };
+  list = [...list].sort(by[sort] || by.sales);
+  return { keywords: list.slice(0, Math.min(POOL_KEYWORDS_MAX, Math.max(1, limit))), matched: list.length, searched: all.keywords.filter((k) => k.searched).length, pool: all.pool, market: all.market, at: all.at };
 }
 
 const wordsOfQuery = (q) =>
@@ -748,7 +791,7 @@ async function start(ownerId, connectionId) {
   return {
     market: marketplaces.summary(ctx.site.id),
     account: ctx.account ? { min: ctx.account.min, max: ctx.account.max, policyName: ctx.account.policyName, serviceName: ctx.account.serviceName } : null,
-    winners: pool ? { products: pool.products.slice(0, 5), total: pool.products.length, pool: pool.pool } : null,
+    winners: pool ? { products: pool.products.slice(0, 5), total: pool.products.length, keywords: pool.keywords.length, pool: pool.pool } : null,
     yourCategories: ownRows.map((c) => ({ ...c, scanned: badge(c.id) })),
     topCategories: top.map((c) => ({ id: c.id, name: c.name, leaf: c.leaf, scanned: badge(c.id) })),
     watches: watched,
@@ -878,6 +921,7 @@ async function yourKeywords(ownerId, connectionId, { range = '30d' } = {}) {
 module.exports = {
   explore,
   winners,
+  siteKeywords,
   rankChildren,
   rankingOf,
   review,

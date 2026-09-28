@@ -178,6 +178,22 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.ok(lately.data.products.every((p) => p.newestDays !== null && p.newestDays <= 30 && p.from.name !== 'Test Lighting'));
   assert.ok((await request('GET', `${base}/winners?listedWithin=90`, undefined, t.hunter)).data.products.some((p) => p.from.name === 'Test Lighting'));
   assert.strictEqual((await request('GET', `${base}/winners?sort=sideways`, undefined, t.hunter)).status, 400);
+  // A page of Winners at a time: "Load more" asks for more.
+  const page = await request('GET', `${base}/winners?limit=1`, undefined, t.hunter);
+  assert.strictEqual(page.data.products.length, 1);
+  assert.ok(page.data.matched >= 1);
+  // The site's keywords: the terms of the titles that sell, best-selling first, each saying where it sells most.
+  const kw = await request('GET', `${base}/keywords`, undefined, t.hunter);
+  assert.strictEqual(kw.status, 200, JSON.stringify(kw.data));
+  const sensor = kw.data.keywords.find((k) => k.term === 'motion sensor');
+  assert.ok(sensor, JSON.stringify(kw.data.keywords.map((k) => k.term)));
+  assert.ok(sensor.perMonth > 0 && sensor.from.name === 'Test Lighting' && sensor.subjects >= 1);
+  const sales = kw.data.keywords.map((k) => k.perMonth);
+  assert.deepStrictEqual(sales, [...sales].sort((a, b) => b - a));
+  // Nothing restricted on eBay is ever pointed at.
+  assert.ok(!kw.data.keywords.some((k) => /knife/i.test(k.term)));
+  assert.ok((await request('GET', `${base}/keywords?q=sensor&limit=5`, undefined, t.hunter)).data.keywords.every((k) => k.term.includes('sensor')));
+  assert.strictEqual((await request('GET', `${base}/keywords?sort=sideways`, undefined, t.hunter)).status, 400);
   // Subcategories, busiest first, not ranked yet.
   assert.deepStrictEqual(d.children.map((c) => [c.id, c.listings, c.scanned]), [[CHILDREN[0], 500, null], [CHILDREN[1], 400, null]]);
 

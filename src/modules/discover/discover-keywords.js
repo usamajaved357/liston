@@ -186,4 +186,39 @@ function trafficFor(rows, keyword) {
   };
 }
 
-module.exports = { fromListings, fromTraffic, trafficFor, termsOf };
+/**
+ * The site's keywords across everything explored, one row per term:
+ * `found` are the terms of each subject's selling titles ([{ term,
+ * perMonth, sold, salesShare, lift, listings, from }]); `searched` the
+ * keywords explored themselves ([{ term, monthlySales, live, score, band }]).
+ * A term found under several subjects keeps the one where it sells most and
+ * counts the subjects; a searched keyword carries its own market (sales a
+ * month across its leading listings, live listings, opportunity) and its
+ * sales a month are that market's. `isBlocked(term)`: a term Discover must
+ * never point at (restricted on eBay, a VeRO brand).
+ */
+function poolKeywords(found, searched, { isBlocked = () => false } = {}) {
+  const rows = new Map();
+  for (const k of found) {
+    const key = k.term.toLowerCase();
+    if (isBlocked(key)) continue;
+    const row = rows.get(key);
+    const own = { term: k.term, perMonth: k.perMonth, sold: k.sold, lift: k.lift, salesShare: k.salesShare, inTitles: k.listings, from: k.from };
+    if (!row) rows.set(key, { ...own, subjects: 1, searched: null });
+    else {
+      row.subjects += 1;
+      if (k.perMonth > row.perMonth) Object.assign(row, own);
+    }
+  }
+  for (const e of searched) {
+    const key = e.term.toLowerCase();
+    if (isBlocked(key)) continue;
+    const market = { monthlySales: e.monthlySales, live: e.live, score: e.score, band: e.band };
+    const row = rows.get(key);
+    if (row) Object.assign(row, { searched: market, perMonth: Math.max(row.perMonth, e.monthlySales) });
+    else rows.set(key, { term: e.term, perMonth: e.monthlySales, sold: null, lift: null, salesShare: null, inTitles: null, from: null, subjects: 0, searched: market });
+  }
+  return [...rows.values()];
+}
+
+module.exports = { fromListings, fromTraffic, trafficFor, termsOf, poolKeywords };
