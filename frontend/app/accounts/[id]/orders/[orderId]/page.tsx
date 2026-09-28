@@ -411,11 +411,6 @@ export default function OrderDetailPage() {
                         Get postage label
                       </a>
                     )}
-                    {!cancelled && !dispatched && (
-                      <button type="button" onClick={guarded(() => setAction("dispatched"))} className="btn btn-secondary btn-sm rounded-full !h-8 !px-3 !text-[12.5px]" title="Mark it dispatched on eBay, no tracking number needed">
-                        Mark as dispatched
-                      </button>
-                    )}
                     <div className="relative">
                       <button
                         type="button"
@@ -543,11 +538,17 @@ export default function OrderDetailPage() {
                       </>
                     )}
                   </div>
+                  {/* The two ways to dispatch, side by side: with a tracking number, or without one. */}
                   {!cancelled && (
-                    <div className="print:hidden">
+                    <div className="flex flex-col items-stretch gap-1.5 sm:w-[160px] print:hidden">
                       <button type="button" onClick={guarded(() => setAction("tracking"))} className="btn btn-secondary btn-sm rounded-full border-[var(--color-primary)] !h-8 !px-3 !text-[12.5px] text-[var(--color-primary)]">
                         {dispatched ? "Edit tracking" : "Add tracking"}
                       </button>
+                      {!dispatched && (
+                        <button type="button" onClick={guarded(() => setAction("dispatched"))} className="btn btn-secondary btn-sm rounded-full !h-8 !px-3 !text-[12.5px]" title="Mark it dispatched on eBay, no tracking number needed">
+                          Mark as dispatched
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

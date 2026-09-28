@@ -202,31 +202,7 @@ function MarkedLine({ order }: { order: Order }) {
   );
 }
 
-// "Mark dispatched" on a waiting order: a press asks once, the second marks it on eBay (no tracking needed).
-function DispatchButton({ order, onDispatch, busy }: { order: Order; onDispatch?: (orderIds: string[]) => void; busy: boolean }) {
-  const [asking, setAsking] = useState(false);
-  if (!onDispatch || order.derivedStatus !== "awaiting_dispatch") return null;
-  if (busy) return <p className="mt-1.5 text-[11.5px] font-medium text-[var(--color-muted)]">Marking…</p>;
-  return asking ? (
-    <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
-      <button type="button" onClick={() => { setAsking(false); onDispatch([order.orderId]); }} className="inline-flex h-6 items-center rounded-full bg-[var(--color-primary)] px-2.5 text-[11px] font-semibold text-white hover:opacity-90">
-        Confirm
-      </button>
-      <button type="button" onClick={() => setAsking(false)} className="text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)]">
-        Cancel
-      </button>
-    </span>
-  ) : (
-    <button type="button" onClick={() => setAsking(true)} title="Mark it dispatched on eBay, no tracking number needed" className="mt-1.5 inline-flex h-6 items-center gap-1 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-2.5 text-[11px] font-semibold text-[var(--color-ink)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]">
-      <svg viewBox="0 0 24 24" fill="none" className="h-3 w-3" aria-hidden>
-        <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      Mark dispatched
-    </button>
-  );
-}
-
-function OrderCard({ order, country, countryName, href, onDispatch, dispatching = false }: { order: Order; country: string | undefined; countryName: string | undefined; href: string; onDispatch?: (orderIds: string[]) => void; dispatching?: boolean }) {
+function OrderCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
   const router = useRouter();
   const timeZone = useAccountTimeZone();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
@@ -250,7 +226,6 @@ function OrderCard({ order, country, countryName, href, onDispatch, dispatching 
       <div className="pt-0.5">
         <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
         <MarkedLine order={order} />
-        <DispatchButton order={order} onDispatch={onDispatch} busy={dispatching} />
         {sourcing && (
           <span className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourcing.className}`} title="Supplier order">
             {sourcing.text}
@@ -322,7 +297,7 @@ function OrderCard({ order, country, countryName, href, onDispatch, dispatching 
 
 // An order on a phone, where the table's six columns don't fit: status and
 // total on top, the order number and date, each item, then who it goes to.
-function OrderMobileCard({ order, country, countryName, href, onDispatch, dispatching = false }: { order: Order; country: string | undefined; countryName: string | undefined; href: string; onDispatch?: (orderIds: string[]) => void; dispatching?: boolean }) {
+function OrderMobileCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
   const router = useRouter();
   const timeZone = useAccountTimeZone();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
@@ -345,8 +320,7 @@ function OrderMobileCard({ order, country, countryName, href, onDispatch, dispat
         <div className="min-w-0">
           <p className={`text-[13px] font-semibold leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
           <MarkedLine order={order} />
-          <DispatchButton order={order} onDispatch={onDispatch} busy={dispatching} />
-          <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">
+            <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">
             <Link href={href} className="font-mono tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2">
               {order.orderId}
             </Link>
@@ -471,31 +445,6 @@ function AccountOrdersContent() {
     setSuppliers((s) => ({ ...s, [status]: next }));
     writeView(supplierKey, { [status]: next });
     setPage(1);
-  }
-  // Orders being marked dispatched right now, and what came of the last try.
-  const [dispatching, setDispatching] = useState<Set<string>>(new Set());
-  const [dispatchNote, setDispatchNote] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
-  const [askAll, setAskAll] = useState(false);
-  async function markDispatched(orderIds: string[]) {
-    if (!connection || !orderIds.length) return;
-    setDispatching((d) => new Set([...d, ...orderIds]));
-    setDispatchNote(null);
-    try {
-      const r = await api.dispatchOrders(connection.id, orderIds);
-      const parts = [];
-      if (r.done.length) parts.push(`${r.done.length} order${r.done.length === 1 ? "" : "s"} marked dispatched on eBay`);
-      if (r.failed.length) parts.push(`${r.failed.length} not: ${r.failed.slice(0, 2).map((f) => `${f.orderId} (${f.reason})`).join("; ")}${r.failed.length > 2 ? "…" : ""}`);
-      setDispatchNote({ tone: r.failed.length ? "warn" : "ok", text: `${parts.join(". ")}.` });
-      setReloadKey((k) => k + 1);
-    } catch (err) {
-      setDispatchNote({ tone: "warn", text: err instanceof Error ? err.message : "Couldn't mark them dispatched. Try again." });
-    } finally {
-      setDispatching((d) => {
-        const next = new Set(d);
-        orderIds.forEach((id) => next.delete(id));
-        return next;
-      });
-    }
   }
   // Orders the team put away (Seller Hub's "Archive"): shown on their own.
   const [archived, setArchived] = useState(false);
@@ -704,38 +653,6 @@ function AccountOrdersContent() {
         </p>
       )}
 
-      {dispatchNote && (
-        <p className={`mb-2 rounded-lg px-3 py-2 text-[12.5px] ${dispatchNote.tone === "ok" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`} role="status">
-          {dispatchNote.text}
-        </p>
-      )}
-      {status === "awaiting_dispatch" && !archived && !loading && !error && orders.length > 0 && (
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-[12.5px]">
-          <span className="text-[var(--color-muted)]">Sent them all? Mark this page&apos;s orders dispatched on eBay in one go. No tracking number needed.</span>
-          {askAll ? (
-            <span className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setAskAll(false);
-                  markDispatched(orders.filter((o) => o.derivedStatus === "awaiting_dispatch").map((o) => o.orderId).slice(0, 50));
-                }}
-                className="btn btn-primary btn-sm !h-7 !px-3 !text-[12px]"
-              >
-                Mark {Math.min(50, orders.length)} dispatched
-              </button>
-              <button type="button" onClick={() => setAskAll(false)} className="text-[12px] font-medium text-[var(--color-muted)] hover:text-[var(--color-ink)]">
-                Cancel
-              </button>
-            </span>
-          ) : (
-            <button type="button" disabled={dispatching.size > 0} onClick={() => setAskAll(true)} className="btn btn-secondary btn-sm !h-7 !px-3 !text-[12px] disabled:opacity-60">
-              {dispatching.size > 0 ? "Marking…" : `Mark ${Math.min(50, orders.length)} on this page dispatched`}
-            </button>
-          )}
-        </div>
-      )}
-
       <div className="card overflow-hidden">
         {error && (
           <div className="p-5">
@@ -757,13 +674,13 @@ function AccountOrdersContent() {
             <div className="min-w-[980px]">
               <OrderTableHeader />
               {orders.map((order) => (
-                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} onDispatch={archived ? undefined : markDispatched} dispatching={dispatching.has(order.orderId)} />
+                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} />
               ))}
             </div>
           </div>
           <div className="md:hidden">
             {orders.map((order) => (
-              <OrderMobileCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} onDispatch={archived ? undefined : markDispatched} dispatching={dispatching.has(order.orderId)} />
+              <OrderMobileCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} />
             ))}
           </div>
           </>

@@ -292,6 +292,11 @@ export default function AccountSettingsPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading: loadingConnection, error: connectionError } = useConnection(params.id);
   const [tab, setTab] = useState<Tab>("policies");
+  // ?tab=messages (or any tab) opens that tab, so other pages can link straight to it.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get("tab");
+    if (wanted === "policies" || wanted === "pricing" || wanted === "template" || wanted === "messages") setTab(wanted);
+  }, []);
 
   const [policies, setPolicies] = useState<ConnectionPolicies | null>(null);
   const [fulfillmentPolicyId, setFulfillmentPolicyId] = useState("");
