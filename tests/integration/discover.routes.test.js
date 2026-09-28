@@ -71,6 +71,7 @@ test.before(async () => {
     return {
       itemId,
       sold: slow ? 0 : Math.max(0, 120 - i * 4),
+      brand: i % 7 === 0 ? 'Lumineo' : 'Unbranded',
       options: i === 0 ? [{ label: 'Warm white', sold: 20, price: 12 }, { label: 'Motion sensor', sold: 100, price: 14 }] : null,
       categoryId: CHILDREN[0],
       startedAt: new Date(Date.now() - 60 * 86400000).toISOString(),
@@ -148,7 +149,7 @@ test('Discover explores a category: its leading listings, their sold counts read
   const d = first.data;
   assert.strictEqual(d.subject.name, 'Test Lighting');
   assert.strictEqual(d.figures.total, 1200);
-  assert.deepStrictEqual(d.reads, { asked: 25, read: 25, more: true, stopped: false, signInFailed: false });
+  assert.deepStrictEqual(d.reads, { asked: 25, read: 25, more: true, stopped: false, signInFailed: false, step: 25 });
   assert.strictEqual(calls.sold, 25, 'the first 25 listings read');
   // Fastest first, with its best-selling option first.
   assert.strictEqual(d.listings[0].itemId, `${PARENT}00`);
@@ -170,8 +171,8 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.ok(winners.data.pool.subjects >= 1 && winners.data.products.length > 0);
   assert.ok(winners.data.products.every((p) => p.perMonth >= 10 && p.from && p.from.name));
   assert.ok(winners.data.products.some((p) => p.from.name === 'Test Lighting'));
-  const priced = await request('GET', `${base}/winners?price=25plus`, undefined, t.hunter);
-  assert.ok(priced.data.products.every((p) => p.price.median >= 25));
+  const priced = await request('GET', `${base}/winners?priceMin=25&brand=unbranded`, undefined, t.hunter);
+  assert.ok(priced.data.products.every((p) => p.price.median >= 25 && p.branded === false), JSON.stringify(priced.data.products.map((p) => [p.price.median, p.branded])));
   assert.strictEqual((await request('GET', `${base}/winners?sort=sideways`, undefined, t.hunter)).status, 400);
   // Subcategories, busiest first, not ranked yet.
   assert.deepStrictEqual(d.children.map((c) => [c.id, c.listings, c.scanned]), [[CHILDREN[0], 500, null], [CHILDREN[1], 400, null]]);
@@ -219,7 +220,7 @@ test('a keyword explores the same way, reads stop when the day’s share is used
     config.discover.tradingDailyCalls = limit;
   }
   const kw = await request('GET', `${base}/explore?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter);
-  assert.strictEqual(kw.data.reads.read, 25);
+  assert.strictEqual(kw.data.reads.read, 29, 'a keyword reads more on opening (every listing here but the hidden one)');
   assert.strictEqual(kw.data.subject.kind, 'keyword');
   assert.ok(!kw.data.keywords.some((k) => k.term === 'fountain'), "the keyword's own words aren't news");
 
@@ -249,7 +250,7 @@ test('a keyword explores the same way, reads stop when the day’s share is used
   const list = await request('GET', `${base}/watches`, undefined, t.ownerToken);
   assert.deepStrictEqual(list.data.items.map((w) => w.kind).sort(), ['category', 'keyword']);
   const watchedKeyword = list.data.items.find((w) => w.kind === 'keyword');
-  assert.strictEqual(watchedKeyword.figures.read, 25);
+  assert.strictEqual(watchedKeyword.figures.read, 29);
   assert.strictEqual(watchedKeyword.createdBy, 'hunter');
   assert.strictEqual((await request('GET', `${base}/explore?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter)).data.watch.id, added.data.id);
   assert.strictEqual((await request('DELETE', `${base}/watches/${added.data.id}`, undefined, t.hunter)).status, 204);

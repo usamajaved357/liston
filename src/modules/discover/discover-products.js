@@ -22,6 +22,7 @@ const compliance = require('./discover-compliance');
 // hides it first); a filtered word is noted, since it's only wording.
 
 const NEW_DAYS = 90;
+const UNBRANDED = /^(unbranded|un-branded|does not apply|n\/a|na|none|no brand|no|generic|unbrand|nobrand|not specified|-)$/i;
 const OVERLAP = 0.5;
 // Variant tokens ("20m", "5m", "2pcs", "12v") tell listings of one product apart; they're not the product.
 const VARIANT = /^\d+(\.\d+)?(m|cm|mm|ml|l|kg|g|w|v|k|pcs|pc|pack|pk|x|ft|inch|in|led|leds|led-|a|ah|mah|hz|gb|tb|mp|p|lm|db|ct|pairs?|pcs)?$/;
@@ -133,6 +134,16 @@ function describe(group, { currency = 'GBP', accountKnown = true, now = Date.now
   else if (isNew) reasons.push({ good: true, text: `New: a listing ${newest.days} days old already sells ${count(newest.pace)} a month` });
   const spread = leaderShare === null ? 3 : leaderShare < 60 ? 5 : leaderShare < 80 ? 3 : 0;
   if (leaderShare !== null && leaderShare >= 80 && n >= 2) reasons.push({ good: false, text: `One seller takes ${leaderShare}% of its sales` });
+  // Its brand (from the readings' Brand specific): the leading listing's, else any listing's named one.
+  const brandOf = (l) => (l.brand && !UNBRANDED.test(l.brand) ? l.brand : null);
+  const brandRead = items.some((x) => x.l.brand !== null && x.l.brand !== undefined);
+  const brand = brandOf(group.leader) || items.map((x) => brandOf(x.l)).find(Boolean) || null;
+  // Sellers: the leading listing's feedback, and the smallest seller that sells it (can a small shop compete?).
+  const leaderSeller = group.leader.seller || {};
+  const smallest = read
+    .filter((x) => x.pace >= 1 && x.l.seller?.feedbackScore !== null && x.l.seller?.feedbackScore !== undefined)
+    .map((x) => Number(x.l.seller.feedbackScore))
+    .sort((a, b) => a - b)[0];
   const hazmat = compliance.termsIn(group.leader.title).hazmat;
   if (hazmat.length) reasons.push({ good: null, text: `“${hazmat[0]}” trips eBay's word filter: word your title around it` });
   const score = Math.max(0, Math.min(100, demand + proven + fit + room + momentum + spread));
@@ -163,6 +174,11 @@ function describe(group, { currency = 'GBP', accountKnown = true, now = Date.now
     parts: { demand, proven, fit, room, momentum, spread },
     reasons,
     flag: compliance.flagOf(group.leader.title),
+    brand,
+    // null until a reading carries the brand specific (older readings don't).
+    branded: brandRead ? Boolean(brand) : null,
+    seller: { username: leaderSeller.username || null, score: leaderSeller.feedbackScore ?? null, percentage: leaderSeller.feedbackPercentage ?? null },
+    smallestSellerScore: smallest ?? null,
   };
 }
 

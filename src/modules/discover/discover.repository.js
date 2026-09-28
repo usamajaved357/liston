@@ -68,7 +68,7 @@ async function dueForRefresh(since, before, limit) {
 async function latestReads(marketplaceId, itemIds, since) {
   if (!itemIds.length) return new Map();
   const { rows } = await query(
-    `SELECT DISTINCT ON (item_id) item_id, to_char(day, 'YYYY-MM-DD') AS day, sold, options, category_id, started_at, read_at
+    `SELECT DISTINCT ON (item_id) item_id, to_char(day, 'YYYY-MM-DD') AS day, sold, options, category_id, started_at, brand, read_at
        FROM discover_listing_reads
       WHERE marketplace_id = $1 AND item_id = ANY($2) AND day >= $3
       ORDER BY item_id, day DESC`,
@@ -88,13 +88,13 @@ async function readsSince(marketplaceId, itemIds, since) {
   return rows;
 }
 
-async function saveRead(marketplaceId, day, { itemId, sold, options, categoryId, startedAt }) {
+async function saveRead(marketplaceId, day, { itemId, sold, options, categoryId, startedAt, brand }) {
   await query(
-    `INSERT INTO discover_listing_reads (marketplace_id, item_id, day, sold, options, category_id, started_at, read_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+    `INSERT INTO discover_listing_reads (marketplace_id, item_id, day, sold, options, category_id, started_at, brand, read_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
      ON CONFLICT (marketplace_id, item_id, day) DO UPDATE
-       SET sold = EXCLUDED.sold, options = EXCLUDED.options, category_id = EXCLUDED.category_id, started_at = EXCLUDED.started_at, read_at = now()`,
-    [marketplaceId, String(itemId), day, sold, options ? JSON.stringify(options) : null, categoryId || null, startedAt || null]
+       SET sold = EXCLUDED.sold, options = EXCLUDED.options, category_id = EXCLUDED.category_id, started_at = EXCLUDED.started_at, brand = EXCLUDED.brand, read_at = now()`,
+    [marketplaceId, String(itemId), day, sold, options ? JSON.stringify(options) : null, categoryId || null, startedAt || null, brand || null]
   );
 }
 

@@ -35,14 +35,15 @@ const researchAnalysis = require('../research/research-analysis');
 
 const SCAN_TTL_MS = 20 * 60 * 60 * 1000;
 const SCAN_SIZE = 100;
-const READS_FIRST = 25; // sold counts read when a subject opens
+const READS_FIRST = 25; // sold counts read when a top-level category opens
+const READS_DEEP = 50; // a subcategory or a keyword: more, for more products
 const READS_STEP = 25; // "Read more"
 const READS_MAX = 100;
 const CHILD_READS = 8; // per subcategory when ranking them (enough for its keywords)
 const CHILD_KEYWORDS = 4; // shown under each ranked subcategory
 const KEYWORDS_TOP = 24; // keywords on a top-level category or a keyword
 const KEYWORDS_MAX = 48; // deeper in, more: a leaf category shows the most
-const PRODUCTS_SHOWN = 12; // products on a subject's page
+const PRODUCTS_SHOWN = 80; // products on a subject's page (the page filters them)
 const WINNERS_SCANS = 200; // scans in the Winners pool (newest first)
 const WINNERS_DAYS = 30; // a scan older than this is out of the pool
 const WINNERS_PER_SCAN = 8;
@@ -143,6 +144,7 @@ async function scanNow(site, subject, { force }) {
   await budget.spend('browse', found.calls);
   const value = { total: found.total, listings: found.items.map(slim), breakdown: found.breakdown };
   await repo.saveScan(site.id, subject.key, value);
+  forgetWinners();
   return { ...value, taken_at: new Date().toISOString(), fresh: true };
 }
 
@@ -188,7 +190,7 @@ async function readSold(ownerId, connectionId, ctx, listings, { max }) {
           const reading = governor
             .withContext({ priority: 'background', connectionId }, () => trading.getItemSales(token.accessToken, id, { siteId: site.siteId }))
             .then(async (read) => {
-              await repo.saveRead(site.id, day, { itemId: id, sold: read.sold, options: read.options, categoryId: read.categoryId, startedAt: read.startedAt });
+              await repo.saveRead(site.id, day, { itemId: id, sold: read.sold, options: read.options, categoryId: read.categoryId, startedAt: read.startedAt, brand: read.brand });
               return read;
             });
           pendingReads.set(key, reading);
@@ -197,7 +199,7 @@ async function readSold(ownerId, connectionId, ctx, listings, { max }) {
         try {
           const read = await pendingReads.get(key);
           if (mine) calls += 1;
-          reads.set(id, { item_id: id, day, sold: read.sold, options: read.options, category_id: read.categoryId, started_at: read.startedAt });
+          reads.set(id, { item_id: id, day, sold: read.sold, options: read.options, category_id: read.categoryId, started_at: read.startedAt, brand: read.brand || null });
         } catch (err) {
           if (err instanceof governor.GovernorError) {
             // The shared allowance needs what's left for orders and listings.
@@ -218,6 +220,7 @@ async function readSold(ownerId, connectionId, ctx, listings, { max }) {
     logger.warn('Discover: sold counts not read with this account', { connectionId, error: err.message });
   });
   await budget.spend('trading', calls);
+  if (calls) forgetWinners();
   return { reads, stopped: halted || signInFailed || queue.length < need.length, signInFailed };
 }
 
@@ -232,6 +235,7 @@ function placed(scanRow, ctx, reads) {
       ...l,
       delivery: window ? { ...window, compared: delivery.compare(window, ctx.account) } : { min: null, max: null, compared: 'unknown' },
       sold: read ? Number(read.sold) : null,
+      brand: read?.brand ?? null,
       options: read?.options || null,
       readDay: read?.day || null,
       // Trading's start time is the listing's; Browse's creation date is the fallback.
@@ -361,9 +365,13 @@ async function ownTraffic(ownerId, connectionId, keyword) {
   }
 }
 
-async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }) {
+// How many sold counts a subject reads on opening: the deeper (a keyword, a subcategory), the more products it's worth.
+const firstReads = (subject, info) => (subject.kind === 'keyword' || info.path.length > 1 ? READS_DEEP : READS_FIRST);
+
+async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic }) {
   const ctx = await context(ownerId, connectionId);
   const info = await subjectInfo(ctx.site, subject);
+  const max = Math.max(asked, firstReads(subject, info));
   const traffic = canSeeTraffic && subject.kind === 'keyword' ? ownTraffic(ownerId, connectionId, subject.q) : Promise.resolve(null);
   const scanRow = await scan(ctx.site, subject);
   // Opened: it's in the nightly shared refresh for a few days, read with this account.
@@ -412,7 +420,7 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
     recent: summary.recent,
     rising: summary.rising.map((l) => shown(l, country)),
     // Its products (the same product under several sellers grouped), best to hunt first, with why.
-    products: products.productsOf(summary.listings, { subject: subject.q || info.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: PRODUCTS_SHOWN }),
+    products: products.productsOf(summary.listings, { subject: subject.q || info.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: PRODUCTS_SHOWN }).filter((p) => p.read > 0),
     listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => ({ ...shown(l, country), flag: flagged(l.title) })),
     // The subject's own words (its category name, or the keyword) aren't news. More the deeper in.
     keywords: keywords.fromListings(listings, { query: subject.q || info.name, limit: keywordLimit(info) }).map((k) => ({ ...k, flag: flagged(k.term) })),
@@ -425,7 +433,7 @@ async function exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }
     // A keyword: the categories its listings sit in, to explore next.
     categories: subject.kind === 'keyword' ? (scanRow.breakdown?.categories || []).slice(0, 8) : [],
     children: children.map((c) => ({ ...c, flag: flagged(c.name) })),
-    reads: { asked: max, read: f.demand.read, more: max < READS_MAX && listings.length > max, stopped: sold.stopped, signInFailed: Boolean(sold.signInFailed) },
+    reads: { asked: max, read: f.demand.read, more: max < READS_MAX && listings.length > max, stopped: sold.stopped, signInFailed: Boolean(sold.signInFailed), step: READS_STEP },
     watch: watch ? { id: watch.id } : null,
     // Subcategories being ranked right now: the page asks again until done.
     ranking: subject.categoryId ? rankingOf(connectionId, subject.categoryId) : null,
@@ -468,6 +476,8 @@ async function review(ownerId, connectionId, input) {
 // ---- winners: the best products across everything explored on the site ----------------
 
 const winnersCache = new Map();
+// New scans or readings change the pool: the next Winners request builds it again.
+const forgetWinners = () => winnersCache.clear();
 
 /**
  * The product pool for an account: every scan on its site from the last
@@ -514,21 +524,28 @@ async function winnersPool(ownerId, connectionId) {
   return value;
 }
 
-const PRICE_BANDS = { under10: [0, 10], '10to25': [10, 25], '25plus': [25, Infinity] };
+const SELLER_SIZES = { small: [0, 1000], medium: [1000, 10000], large: [10000, Infinity] };
 
 /**
  * Winners: the best products across everything explored on the site, for
  * this account, filtered the way a hunter filters — delivery it can match,
  * a price band, a minimum of sales a month, new lately — and sorted.
  */
-async function winners(ownerId, connectionId, { q = '', fit = false, price = null, minSales = 0, newOnly = false, sort = 'score' } = {}) {
+async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', minSales = 0, newOnly = false, sort = 'score' } = {}) {
   const all = await winnersPool(ownerId, connectionId);
   const words = wordsOfQuery(q);
-  const band = price && PRICE_BANDS[price];
+  const sizeBand = SELLER_SIZES[size] || null;
   let list = all.products.filter((p) => {
     if (words.length && !words.every((w) => p.name.toLowerCase().includes(w))) return false;
     if (fit && p.delivery.known && p.delivery.share < 40) return false;
-    if (band && (!p.price || p.price.median < band[0] || p.price.median >= band[1])) return false;
+    if (priceMin !== null && (!p.price || p.price.median < priceMin)) return false;
+    if (priceMax !== null && (!p.price || p.price.median > priceMax)) return false;
+    if (brand === 'unbranded' && p.branded !== false) return false;
+    if (brand === 'branded' && p.branded !== true) return false;
+    if (rating === 'top' && !(p.seller.percentage !== null && p.seller.percentage >= 99)) return false;
+    if (rating === 'good' && !(p.seller.percentage !== null && p.seller.percentage >= 98)) return false;
+    if (rating === 'weak' && !(p.seller.percentage !== null && p.seller.percentage < 98)) return false;
+    if (sizeBand && !(p.smallestSellerScore !== null && p.smallestSellerScore >= sizeBand[0] && p.smallestSellerScore < sizeBand[1])) return false;
     if (minSales && p.perMonth < minSales) return false;
     if (newOnly && p.momentum !== 'new' && p.momentum !== 'rising') return false;
     return true;
@@ -701,9 +718,12 @@ async function start(ownerId, connectionId) {
       })
     )
   ).filter(Boolean);
+  // The best products across everything explored, for the start screen (the Winners pool, cached).
+  const pool = await winnersPool(ownerId, connectionId).catch(() => null);
   return {
     market: marketplaces.summary(ctx.site.id),
     account: ctx.account ? { min: ctx.account.min, max: ctx.account.max, policyName: ctx.account.policyName, serviceName: ctx.account.serviceName } : null,
+    winners: pool ? { products: pool.products.slice(0, 5), total: pool.products.length, pool: pool.pool } : null,
     yourCategories: ownRows.map((c) => ({ ...c, scanned: badge(c.id) })),
     topCategories: top.map((c) => ({ id: c.id, name: c.name, leaf: c.leaf, scanned: badge(c.id) })),
     watches: watched,

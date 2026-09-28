@@ -15,10 +15,18 @@ const exploreSchema = subjectSchema.and(z.object({ reads: z.coerce.number().int(
 const rankSchema = z.object({ categoryId: z.string().regex(/^\d{1,12}$/, 'That category isn’t one eBay knows.') });
 const keywordsSchema = z.object({ range: z.enum(['7d', '30d', '90d']).default('30d') });
 const flag = z.enum(['1', 'true', '0', 'false', '']).optional().transform((v) => v === '1' || v === 'true');
+const amount = z
+  .union([z.literal(''), z.coerce.number().min(0).max(100000)])
+  .optional()
+  .transform((v) => (v === '' || v === undefined ? null : v));
 const winnersSchema = z.object({
   q: z.string().trim().max(80).optional().default(''),
   fit: flag,
-  price: z.enum(['under10', '10to25', '25plus', '']).optional().transform((v) => v || null),
+  priceMin: amount,
+  priceMax: amount,
+  brand: z.enum(['any', 'unbranded', 'branded']).optional().default('any'),
+  rating: z.enum(['any', 'top', 'good', 'weak']).optional().default('any'),
+  size: z.enum(['any', 'small', 'medium', 'large']).optional().default('any'),
   minSales: z.coerce.number().int().min(0).max(100000).optional().default(0),
   newOnly: flag,
   sort: z.enum(['score', 'sales', 'rising', 'new', 'price']).optional().default('score'),

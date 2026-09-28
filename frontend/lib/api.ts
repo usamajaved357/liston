@@ -1966,12 +1966,21 @@ export interface DiscoverProduct {
   parts: { demand: number; proven: number; fit: number; room: number; momentum: number; spread: number };
   reasons: { good: boolean | null; text: string }[];
   flag: DiscoverFlag | null;
+  brand: string | null;
+  branded: boolean | null; // null until a reading carries the brand
+  seller: { username: string | null; score: number | null; percentage: number | null }; // the leading listing's seller
+  smallestSellerScore: number | null; // the smallest seller selling it every month
   from?: { kind: "category" | "keyword"; value: string; name: string; path: string[] };
 }
+// The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
 export interface DiscoverWinnersFilters {
   q?: string;
   fit?: boolean;
-  price?: "under10" | "10to25" | "25plus" | null;
+  priceMin?: number | null;
+  priceMax?: number | null;
+  brand?: "any" | "unbranded" | "branded";
+  rating?: "any" | "top" | "good" | "weak";
+  size?: "any" | "small" | "medium" | "large";
   minSales?: number;
   newOnly?: boolean;
   sort?: "score" | "sales" | "rising" | "new" | "price";
@@ -2132,7 +2141,7 @@ export interface DiscoverExplore {
   brands: { name: string; count: number; unbranded: boolean }[];
   categories: { id: string; name: string; count: number }[];
   children: DiscoverChild[];
-  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean };
+  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number };
   watch: { id: string } | null;
   ranking: { total: number; done: number } | null;
   market: { id: string; name: string; currency: string; country?: string; flag?: string };
@@ -2153,6 +2162,8 @@ export interface DiscoverStart {
   yourCategories: DiscoverCategoryCard[];
   topCategories: DiscoverCategoryCard[];
   watches: number;
+  // The best products across everything explored on the site, for the start screen.
+  winners: { products: DiscoverProduct[]; total: number; pool: { subjects: number; listings: number; read: number } } | null;
   watchPreview: DiscoverWatch[];
   // What anyone on the site explored in the last few days (shared across accounts).
   recent: { kind: "category" | "keyword"; value: string; name: string; path: string[]; openedAt: string; flag?: DiscoverFlag | null; scanned: { score: number; band: DiscoverOpportunity["band"]; total: number; monthlySales: number } | null }[];
@@ -2489,7 +2500,11 @@ export const api = {
     const q = new URLSearchParams();
     if (f.q) q.set("q", f.q);
     if (f.fit) q.set("fit", "1");
-    if (f.price) q.set("price", f.price);
+    if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
+    if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
+    if (f.brand && f.brand !== "any") q.set("brand", f.brand);
+    if (f.rating && f.rating !== "any") q.set("rating", f.rating);
+    if (f.size && f.size !== "any") q.set("size", f.size);
     if (f.minSales) q.set("minSales", String(f.minSales));
     if (f.newOnly) q.set("newOnly", "1");
     if (f.sort) q.set("sort", f.sort);

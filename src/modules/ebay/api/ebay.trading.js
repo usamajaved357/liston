@@ -391,13 +391,14 @@ async function getItemSummary(accessToken, itemId, { siteId } = {}) {
 // categoryPath, startedAt, title }.
 async function getItemSales(accessToken, itemId, { siteId } = {}) {
   const body =
-    `<ItemID>${itemId}</ItemID>` +
+    `<ItemID>${itemId}</ItemID><IncludeItemSpecifics>true</IncludeItemSpecifics>` +
     [
       'Item.ItemID',
       'Item.Title',
       'Item.SellingStatus.QuantitySold',
       'Item.ListingDetails.StartTime',
       'Item.PrimaryCategory',
+      'Item.ItemSpecifics',
       'Item.Variations.Variation.VariationSpecifics',
       'Item.Variations.Variation.SellingStatus.QuantitySold',
       'Item.Variations.Variation.StartPrice',
@@ -414,10 +415,14 @@ async function getItemSales(accessToken, itemId, { siteId } = {}) {
     sold: Number(v.SellingStatus?.QuantitySold ?? 0),
     price: money(v.StartPrice)?.amount ?? null,
   }));
+  // The Brand item specific (a dropshipper wants unbranded products).
+  const brandSpec = toArray(item.ItemSpecifics?.NameValueList).find((nv) => String(nv.Name || '').toLowerCase() === 'brand');
+  const brand = brandSpec ? toArray(brandSpec.Value).map(String).join(', ').trim() || null : null;
   return {
     itemId: String(item.ItemID ?? itemId),
     title: item.Title !== undefined ? String(item.Title) : null,
     sold: Number(item.SellingStatus?.QuantitySold ?? 0),
+    brand,
     options: options.length ? options : null,
     categoryId: item.PrimaryCategory?.CategoryID !== undefined ? String(item.PrimaryCategory.CategoryID) : null,
     categoryPath: item.PrimaryCategory?.CategoryName ? String(item.PrimaryCategory.CategoryName) : null,

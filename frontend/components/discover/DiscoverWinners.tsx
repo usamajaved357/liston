@@ -1,20 +1,14 @@
 "use client";
 
 import { DiscoverSubjectRef, DiscoverWinners as Winners, DiscoverWinnersFilters } from "@/lib/api";
-import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import { ago } from "@/components/hunting/HuntBits";
 import { DiscoverProducts } from "./DiscoverProducts";
+import { DiscoverProductFilters } from "./DiscoverProductFilters";
 import { CardHeader } from "./discover-ui";
 
 // Winners: the best products across everything anyone on the site has
-// explored, for this account, with the filters a hunter reaches for —
-// delivery it can match, a price band, a minimum of sales a month, new or
-// rising lately — and the sort. The pool grows with every category or
-// keyword explored and is read again nightly.
-
-type Sort = NonNullable<DiscoverWinnersFilters["sort"]>;
-type Price = "any" | "under10" | "10to25" | "25plus";
-type Sales = "0" | "10" | "50" | "150";
+// explored, for this account, with a hunter's filters and sort. The pool
+// grows with every category or keyword explored and is read again nightly.
 
 export function DiscoverWinnersView({
   data,
@@ -31,7 +25,6 @@ export function DiscoverWinnersView({
   onHunt: (url: string) => void;
   onOpen: (subject: DiscoverSubjectRef) => void;
 }) {
-  const set = (patch: DiscoverWinnersFilters) => onFilters({ ...filters, ...patch });
   return (
     <div className="space-y-4">
       <section className="card p-4">
@@ -43,78 +36,8 @@ export function DiscoverWinnersView({
               : "The best products to hunt across everything explored on this site."
           }
         />
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <label className="relative min-w-[200px] flex-1 sm:max-w-xs">
-            <span className="sr-only">Filter products</span>
-            <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
-              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
-              <path d="M16 16l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            <input
-              type="search"
-              value={filters.q || ""}
-              onChange={(e) => set({ q: e.target.value })}
-              placeholder="Words in the product"
-              className="h-8 w-full rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-8 pr-3 text-[12.5px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-primary)] focus:outline-none"
-            />
-          </label>
-          <SegmentedControl<Sort>
-            label="Sort"
-            size="sm"
-            value={filters.sort || "score"}
-            onChange={(sort) => set({ sort })}
-            options={[
-              { key: "score", label: "Best to hunt" },
-              { key: "sales", label: "Most sales" },
-              { key: "rising", label: "Rising" },
-              { key: "new", label: "Newest" },
-              { key: "price", label: "Priciest" },
-            ]}
-          />
-          <SegmentedControl<"any" | "fit">
-            label="Delivery"
-            size="sm"
-            value={filters.fit ? "fit" : "any"}
-            onChange={(v) => set({ fit: v === "fit" })}
-            options={[
-              { key: "any", label: "Any delivery" },
-              { key: "fit", label: "I can match", title: "At least 40% of its sales come from sellers delivering like you or slower" },
-            ]}
-          />
-          <SegmentedControl<Price>
-            label="Price"
-            size="sm"
-            value={filters.price || "any"}
-            onChange={(v) => set({ price: v === "any" ? null : v })}
-            options={[
-              { key: "any", label: "Any price" },
-              { key: "under10", label: "Under 10" },
-              { key: "10to25", label: "10–25" },
-              { key: "25plus", label: "25+" },
-            ]}
-          />
-          <SegmentedControl<Sales>
-            label="Sales a month"
-            size="sm"
-            value={String(filters.minSales || 0) as Sales}
-            onChange={(v) => set({ minSales: Number(v) })}
-            options={[
-              { key: "0", label: "Any sales" },
-              { key: "10", label: "10+/mo" },
-              { key: "50", label: "50+/mo" },
-              { key: "150", label: "150+/mo" },
-            ]}
-          />
-          <SegmentedControl<"all" | "new">
-            label="Momentum"
-            size="sm"
-            value={filters.newOnly ? "new" : "all"}
-            onChange={(v) => set({ newOnly: v === "new" })}
-            options={[
-              { key: "all", label: "All" },
-              { key: "new", label: "New or rising", title: "A listing launched in the last 90 days already selling, or selling faster lately than over its life" },
-            ]}
-          />
+        <div className="mt-3 border-t border-[var(--color-line)] pt-3">
+          <DiscoverProductFilters filters={filters} onChange={onFilters} currency={data?.market.currency || "GBP"} />
         </div>
       </section>
 

@@ -1,15 +1,15 @@
 "use client";
 
-import { useMemo } from "react";
-import { DiscoverExplore, DiscoverSubjectRef, DiscoverYourTraffic } from "@/lib/api";
+import { useMemo, useState } from "react";
+import { DiscoverExplore, DiscoverSubjectRef, DiscoverWinnersFilters, DiscoverYourTraffic } from "@/lib/api";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { ShareBar, ShareTone } from "@/components/charts/ShareBar";
 import { count, flag, money } from "@/components/research/format";
 import { ago } from "@/components/hunting/HuntBits";
-import { DiscoverListings } from "./DiscoverListings";
 import { DiscoverProducts } from "./DiscoverProducts";
+import { DEFAULT_FILTERS, DiscoverProductFilters, filterProducts } from "./DiscoverProductFilters";
 import { DiscoverCompliance } from "./DiscoverCompliance";
-import { AccountDelivery, BAND, BudgetLine, CardHeader, Chevron, FlagTag, perMonth, Quiet, ScoreBadge, StarIcon, StatTile } from "./discover-ui";
+import { AccountDelivery, BAND, BudgetLine, CardHeader, Chevron, Collapsible, FlagTag, perMonth, Quiet, ScoreBadge, StarIcon, StatTile } from "./discover-ui";
 
 // One category or keyword in Discover, laid out like the Analytics page:
 // the headline figures as tiles (with what a supplier may cost at the
@@ -128,7 +128,10 @@ export function DiscoverSubjectView({
 }) {
   const { subject, figures: f, market, charts } = data;
   const currency = market.currency;
-  const risingIds = useMemo(() => new Set(data.rising.map((l) => l.itemId)), [data.rising]);
+  const [filters, setFilters] = useState<DiscoverWinnersFilters>(DEFAULT_FILTERS);
+  const [openKeywords, setOpenKeywords] = useState(false);
+  const [openCharts, setOpenCharts] = useState(false);
+  const shownProducts = useMemo(() => filterProducts(data.products, filters), [data.products, filters]);
   const unranked = data.children.filter((c) => !c.scanned && !c.restricted).length;
   const read = f.demand.read;
   // A top-level category is too broad for "Before you hunt": it shows on a keyword or a subcategory.
@@ -274,6 +277,222 @@ export function DiscoverSubjectView({
 
       {specific && <DiscoverCompliance data={data.compliance} checking={checking} onCheck={onCheck} aiUnavailable={aiUnavailable} />}
 
+      {/* The products here, the way a hunter reads them: the page's point. */}
+      <section className="card min-w-0 overflow-hidden">
+        <div className="p-4 pb-3">
+          <CardHeader
+            title="Products here, best to hunt first"
+            note={`The same product under several sellers is one row: its sales a month together, how many sellers make a living from it, what buyers pay, how much of its sales come from sellers delivering like you (whether you can compete), and whether it's rising or new. Each says why.${hiddenText ? ` ${hiddenText}` : ""}`}
+            aside={
+              <span className="text-[12px] tabular-nums text-[var(--color-muted)]">
+                {shownProducts.length === data.products.length ? `${data.products.length} products` : `${shownProducts.length} of ${data.products.length} products`}
+              </span>
+            }
+          />
+          <div className="mt-3 border-t border-[var(--color-line)] pt-3">
+            <DiscoverProductFilters filters={filters} onChange={setFilters} currency={currency} />
+          </div>
+        </div>
+        <div className="border-t border-[var(--color-line)]">
+          <DiscoverProducts
+            products={shownProducts}
+            currency={currency}
+            onHunt={onHunt}
+            empty={!read ? "Products show once sold counts are read." : data.products.length ? "No product here matches these filters. Loosen one, or load more products." : "No product here sells yet."}
+          />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] px-4 py-2.5">
+          <p className="text-[11.5px] text-[var(--color-muted)]">
+            {data.reads.signInFailed
+              ? "Sold counts need this account's eBay sign-in, which didn't work: reconnect the account, or ask the owner to."
+              : data.reads.stopped
+                ? "Today's sold-count reads ran out before every listing was read."
+                : `From the ${read} leading listings read of ${data.listings.length}${data.reads.more ? "; loading more reads the next ones' sold counts" : ""}.`}
+          </p>
+          {data.reads.more && !data.reads.stopped && (
+            <button type="button" onClick={onReadMore} disabled={readingMore} className="btn btn-secondary btn-sm !h-8 !text-[12.5px]">
+              {readingMore ? "Loading…" : `Load more products`}
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* Subcategories: each one's data fetched on request, then ranked. */}
+      {data.children.length > 0 && (
+        <section className="card overflow-hidden">
+          <div className="p-4 pb-3">
+            <CardHeader
+              title="Subcategories"
+              note="Fetch their data to see each one's sales, price and the phrases its selling titles share, best first (its leading listings and the sold counts of its top 8). The deeper you go, the more keywords a category shows."
+              aside={
+                data.ranking ? (
+                  <span className="text-[12px] font-medium text-[var(--color-primary)]">
+                    Fetching {data.ranking.done} of {data.ranking.total}…
+                  </span>
+                ) : unranked > 0 ? (
+                  <button type="button" onClick={onRank} className="btn btn-secondary btn-sm !h-8 !text-[12.5px]">
+                    Fetch data{unranked > 12 ? " for the busiest 12" : unranked === data.children.length ? "" : ` for the other ${unranked}`}
+                  </button>
+                ) : undefined
+              }
+            />
+          </div>
+          <div className="overflow-x-auto border-t border-[var(--color-line)]">
+            <table className="w-full min-w-[860px] table-fixed text-[12.5px]">
+              <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                <tr>
+                  <th className="w-[34%] px-4 py-2 text-left">Subcategory and its keywords</th>
+                  <th className="w-[12%] px-3 py-2 text-center">Opportunity</th>
+                  <th className="px-3 py-2 text-center" title="What its leading listings sell between them a month">
+                    Sales a month
+                  </th>
+                  <th className="px-3 py-2 text-center" title="eBay's sold counts of the leading listings read, in total">
+                    Sold
+                  </th>
+                  <th className="px-3 py-2 text-center" title="Of the leading listings read, how many sell at least one a month">
+                    Selling
+                  </th>
+                  <th className="px-3 py-2 text-center">Live</th>
+                  <th className="px-3 py-2 text-center">Price</th>
+                  <th className="px-4 py-2 text-center">Fits you</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-line)]">
+                {data.children.map((c) => (
+                  <tr key={c.id} onClick={() => onOpen({ categoryId: c.id })} className={`cursor-pointer align-top hover:bg-[var(--color-paper)]/60 ${c.restricted ? "opacity-60" : ""}`}>
+                    <td className="px-4 py-2.5 text-left">
+                      <span className="flex items-center gap-1.5 font-medium text-[var(--color-ink)]">
+                        <span className="truncate">{c.name}</span>
+                        <FlagTag flag={c.flag} />
+                        <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
+                      </span>
+                      {c.restricted ? (
+                        <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">{c.restricted.label}: eBay {c.restricted.kind === "prohibited" ? "doesn't allow these" : "restricts these"}. Not fetched.</span>
+                      ) : c.keywords.length > 0 ? (
+                        <span className="mt-1 flex flex-wrap gap-1">
+                          {c.keywords.map((k) => (
+                            <button
+                              key={k.term}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpen({ q: k.term });
+                              }}
+                              className="inline-flex h-5 items-center gap-1 rounded-full bg-[var(--color-paper)] px-2 text-[11px] font-medium text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-line)] hover:bg-[var(--color-primary-soft)] hover:text-[var(--color-primary)] hover:ring-[var(--color-primary)]/30"
+                              title={`“${k.term}”: ${count(Math.round(k.perMonth))} sales a month across its leading listings. Open it.`}
+                            >
+                              {k.term}
+                              <span className="tabular-nums text-[var(--color-muted)]">{count(Math.round(k.perMonth))}/mo</span>
+                            </button>
+                          ))}
+                        </span>
+                      ) : c.scanned ? (
+                        <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">No phrase stands out yet</span>
+                      ) : null}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">{c.scanned ? <ScoreBadge score={c.scanned.score} band={c.scanned.band} size="sm" /> : <span className="text-[11.5px] text-[var(--color-muted)]">{c.restricted ? "—" : "Not fetched"}</span>}</td>
+                    <td className="px-3 py-2.5 text-center font-semibold tabular-nums text-[var(--color-ink)]">{c.scanned ? count(Math.round(c.scanned.monthlySales)) : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned ? count(c.scanned.soldTotal) : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned ? `${c.scanned.selling} of ${c.scanned.read}` : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.listings !== null ? count(c.listings) : "—"}</td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned?.price !== null && c.scanned?.price !== undefined ? money(c.scanned.price, currency) : "—"}</td>
+                    <td className="px-4 py-2.5 text-center tabular-nums">{c.scanned?.fit !== null && c.scanned?.fit !== undefined ? `${c.scanned.fit}%` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* The rest of the picture, folded away: the keywords, and the charts and score. */}
+      <Collapsible title="Keywords that sell" note="The phrases of the titles that sell here, and where its listings sit" open={openKeywords} onToggle={() => setOpenKeywords((v) => !v)}>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <section className="card min-w-0 overflow-hidden xl:col-span-2">
+          <div className="p-4 pb-3">
+            <CardHeader title="Keywords that sell" note={`Phrases in the titles that sell: their sales a month, eBay's sold counts, their share of the sales next to how many titles use them, and the lift (share of sales over share of titles)${data.subject.kind === "category" && !data.subject.leaf ? ". The deeper the category, the more it shows" : ""}. Open one to see its own figures.`} />
+          </div>
+          {data.keywords.length === 0 ? (
+            <div className="border-t border-[var(--color-line)] px-4">
+              <Quiet>{read ? "No phrase stands out across the listings that sell." : "Keywords show once sold counts are read."}</Quiet>
+            </div>
+          ) : (
+            <div className="overflow-x-auto border-t border-[var(--color-line)]">
+              <table className="w-full min-w-[640px] table-fixed text-[12.5px]">
+                <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                  <tr>
+                    <th className="w-[36%] px-4 py-2 text-left">Keyword</th>
+                    <th className="px-3 py-2 text-center" title="Sales a month of the leading listings with it">
+                      Sales a month
+                    </th>
+                    <th className="px-3 py-2 text-center" title="eBay's sold counts of the leading listings with it, in total">
+                      Sold
+                    </th>
+                    <th className="px-3 py-2 text-center" title="Its share of the leading listings' sales">
+                      Share
+                    </th>
+                    <th className="px-3 py-2 text-center" title="How many of the leading listings' titles use it">
+                      In titles
+                    </th>
+                    <th className="px-4 py-2 text-center" title="Its share of the sales over its share of the listings">
+                      Lift
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-line)]">
+                  {data.keywords.map((k) => (
+                    <tr key={k.term} onClick={() => onOpen({ q: k.term })} className="group cursor-pointer hover:bg-[var(--color-paper)]/60" title={`Open “${k.term}”`}>
+                      <td className="px-4 py-2 text-left">
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{k.term}</span>
+                          <FlagTag flag={k.flag} />
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-center font-semibold tabular-nums text-[var(--color-ink)]">{count(Math.round(k.perMonth))}</td>
+                      <td className="px-3 py-2 text-center tabular-nums">{count(k.sold)}</td>
+                      <td className="px-3 py-2 text-center tabular-nums">{k.salesShare}%</td>
+                      <td className="px-3 py-2 text-center tabular-nums text-[var(--color-muted)]">{k.listingShare}%</td>
+                      <td className={`px-4 py-2 text-center font-semibold tabular-nums ${k.lift !== null && k.lift >= 1.3 ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{k.lift !== null ? `${k.lift}×` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="card flex min-w-0 flex-col p-4">
+          {data.categories.length > 0 && (
+            <div className="mb-5">
+              <CardHeader title="Listed in" note="The eBay categories its listings sit in" />
+              <ul className="-mx-2 mt-2">
+                {data.categories.slice(0, 6).map((c) => (
+                  <li key={c.id}>
+                    <button type="button" onClick={() => onOpen({ categoryId: c.id })} className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--color-paper)]">
+                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{c.name}</span>
+                      <span className="text-center text-[11.5px] tabular-nums text-[var(--color-muted)]">{count(c.count)}</span>
+                      <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <CardHeader title="Brands" note="How the live listings split by brand: unbranded means room for a generic product" />
+          <div className="mt-3">
+            <ShareBar
+              columns={1}
+              items={data.brands.slice(0, 6).map((b, i) => ({ key: b.name, label: b.unbranded ? `${b.name} (no brand)` : b.name, value: b.count, tone: b.unbranded ? "slate" : SELLER_TONES[i % SELLER_TONES.length] }))}
+              format={(v) => count(v)}
+              empty="eBay gave no brand split."
+            />
+          </div>
+        </section>
+      </div>
+
+      </Collapsible>
+
+      <Collapsible title="The market picture" note="Sales by day, by price and across the leading listings; how the score is made; who's selling, delivery and where it ships from" open={openCharts} onToggle={() => setOpenCharts((v) => !v)}>
       {/* Where the sales are, in the app's charts. */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <section className="card flex flex-col p-4">
@@ -379,214 +598,7 @@ export function DiscoverSubjectView({
         </section>
       </div>
 
-      {/* Subcategories: each one's data fetched on request, then ranked. */}
-      {data.children.length > 0 && (
-        <section className="card overflow-hidden">
-          <div className="p-4 pb-3">
-            <CardHeader
-              title="Subcategories"
-              note="Fetch their data to see each one's sales, price and the phrases its selling titles share, best first (its leading listings and the sold counts of its top 8). The deeper you go, the more keywords a category shows."
-              aside={
-                data.ranking ? (
-                  <span className="text-[12px] font-medium text-[var(--color-primary)]">
-                    Fetching {data.ranking.done} of {data.ranking.total}…
-                  </span>
-                ) : unranked > 0 ? (
-                  <button type="button" onClick={onRank} className="btn btn-secondary btn-sm !h-8 !text-[12.5px]">
-                    Fetch data{unranked > 12 ? " for the busiest 12" : unranked === data.children.length ? "" : ` for the other ${unranked}`}
-                  </button>
-                ) : undefined
-              }
-            />
-          </div>
-          <div className="overflow-x-auto border-t border-[var(--color-line)]">
-            <table className="w-full min-w-[860px] table-fixed text-[12.5px]">
-              <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                <tr>
-                  <th className="w-[34%] px-4 py-2 text-left">Subcategory and its keywords</th>
-                  <th className="w-[12%] px-3 py-2 text-center">Opportunity</th>
-                  <th className="px-3 py-2 text-center" title="What its leading listings sell between them a month">
-                    Sales a month
-                  </th>
-                  <th className="px-3 py-2 text-center" title="eBay's sold counts of the leading listings read, in total">
-                    Sold
-                  </th>
-                  <th className="px-3 py-2 text-center" title="Of the leading listings read, how many sell at least one a month">
-                    Selling
-                  </th>
-                  <th className="px-3 py-2 text-center">Live</th>
-                  <th className="px-3 py-2 text-center">Price</th>
-                  <th className="px-4 py-2 text-center">Fits you</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-line)]">
-                {data.children.map((c) => (
-                  <tr key={c.id} onClick={() => onOpen({ categoryId: c.id })} className={`cursor-pointer align-top hover:bg-[var(--color-paper)]/60 ${c.restricted ? "opacity-60" : ""}`}>
-                    <td className="px-4 py-2.5 text-left">
-                      <span className="flex items-center gap-1.5 font-medium text-[var(--color-ink)]">
-                        <span className="truncate">{c.name}</span>
-                        <FlagTag flag={c.flag} />
-                        <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
-                      </span>
-                      {c.restricted ? (
-                        <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">{c.restricted.label}: eBay {c.restricted.kind === "prohibited" ? "doesn't allow these" : "restricts these"}. Not fetched.</span>
-                      ) : c.keywords.length > 0 ? (
-                        <span className="mt-1 flex flex-wrap gap-1">
-                          {c.keywords.map((k) => (
-                            <button
-                              key={k.term}
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onOpen({ q: k.term });
-                              }}
-                              className="inline-flex h-5 items-center gap-1 rounded-full bg-[var(--color-paper)] px-2 text-[11px] font-medium text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-line)] hover:bg-[var(--color-primary-soft)] hover:text-[var(--color-primary)] hover:ring-[var(--color-primary)]/30"
-                              title={`“${k.term}”: ${count(Math.round(k.perMonth))} sales a month across its leading listings. Open it.`}
-                            >
-                              {k.term}
-                              <span className="tabular-nums text-[var(--color-muted)]">{count(Math.round(k.perMonth))}/mo</span>
-                            </button>
-                          ))}
-                        </span>
-                      ) : c.scanned ? (
-                        <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">No phrase stands out yet</span>
-                      ) : null}
-                    </td>
-                    <td className="px-3 py-2.5 text-center">{c.scanned ? <ScoreBadge score={c.scanned.score} band={c.scanned.band} size="sm" /> : <span className="text-[11.5px] text-[var(--color-muted)]">{c.restricted ? "—" : "Not fetched"}</span>}</td>
-                    <td className="px-3 py-2.5 text-center font-semibold tabular-nums text-[var(--color-ink)]">{c.scanned ? count(Math.round(c.scanned.monthlySales)) : "—"}</td>
-                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned ? count(c.scanned.soldTotal) : "—"}</td>
-                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned ? `${c.scanned.selling} of ${c.scanned.read}` : "—"}</td>
-                    <td className="px-3 py-2.5 text-center tabular-nums">{c.listings !== null ? count(c.listings) : "—"}</td>
-                    <td className="px-3 py-2.5 text-center tabular-nums">{c.scanned?.price !== null && c.scanned?.price !== undefined ? money(c.scanned.price, currency) : "—"}</td>
-                    <td className="px-4 py-2.5 text-center tabular-nums">{c.scanned?.fit !== null && c.scanned?.fit !== undefined ? `${c.scanned.fit}%` : "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <section className="card min-w-0 overflow-hidden xl:col-span-2">
-          <div className="p-4 pb-3">
-            <CardHeader title="Keywords that sell" note={`Phrases in the titles that sell: their sales a month, eBay's sold counts, their share of the sales next to how many titles use them, and the lift (share of sales over share of titles)${data.subject.kind === "category" && !data.subject.leaf ? ". The deeper the category, the more it shows" : ""}. Open one to see its own figures.`} />
-          </div>
-          {data.keywords.length === 0 ? (
-            <div className="border-t border-[var(--color-line)] px-4">
-              <Quiet>{read ? "No phrase stands out across the listings that sell." : "Keywords show once sold counts are read."}</Quiet>
-            </div>
-          ) : (
-            <div className="overflow-x-auto border-t border-[var(--color-line)]">
-              <table className="w-full min-w-[640px] table-fixed text-[12.5px]">
-                <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                  <tr>
-                    <th className="w-[36%] px-4 py-2 text-left">Keyword</th>
-                    <th className="px-3 py-2 text-center" title="Sales a month of the leading listings with it">
-                      Sales a month
-                    </th>
-                    <th className="px-3 py-2 text-center" title="eBay's sold counts of the leading listings with it, in total">
-                      Sold
-                    </th>
-                    <th className="px-3 py-2 text-center" title="Its share of the leading listings' sales">
-                      Share
-                    </th>
-                    <th className="px-3 py-2 text-center" title="How many of the leading listings' titles use it">
-                      In titles
-                    </th>
-                    <th className="px-4 py-2 text-center" title="Its share of the sales over its share of the listings">
-                      Lift
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--color-line)]">
-                  {data.keywords.map((k) => (
-                    <tr key={k.term} onClick={() => onOpen({ q: k.term })} className="group cursor-pointer hover:bg-[var(--color-paper)]/60" title={`Open “${k.term}”`}>
-                      <td className="px-4 py-2 text-left">
-                        <span className="flex items-center gap-1.5">
-                          <span className="truncate font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{k.term}</span>
-                          <FlagTag flag={k.flag} />
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-center font-semibold tabular-nums text-[var(--color-ink)]">{count(Math.round(k.perMonth))}</td>
-                      <td className="px-3 py-2 text-center tabular-nums">{count(k.sold)}</td>
-                      <td className="px-3 py-2 text-center tabular-nums">{k.salesShare}%</td>
-                      <td className="px-3 py-2 text-center tabular-nums text-[var(--color-muted)]">{k.listingShare}%</td>
-                      <td className={`px-4 py-2 text-center font-semibold tabular-nums ${k.lift !== null && k.lift >= 1.3 ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{k.lift !== null ? `${k.lift}×` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        <section className="card flex min-w-0 flex-col p-4">
-          {data.categories.length > 0 && (
-            <div className="mb-5">
-              <CardHeader title="Listed in" note="The eBay categories its listings sit in" />
-              <ul className="-mx-2 mt-2">
-                {data.categories.slice(0, 6).map((c) => (
-                  <li key={c.id}>
-                    <button type="button" onClick={() => onOpen({ categoryId: c.id })} className="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--color-paper)]">
-                      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{c.name}</span>
-                      <span className="text-center text-[11.5px] tabular-nums text-[var(--color-muted)]">{count(c.count)}</span>
-                      <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <CardHeader title="Brands" note="How the live listings split by brand: unbranded means room for a generic product" />
-          <div className="mt-3">
-            <ShareBar
-              columns={1}
-              items={data.brands.slice(0, 6).map((b, i) => ({ key: b.name, label: b.unbranded ? `${b.name} (no brand)` : b.name, value: b.count, tone: b.unbranded ? "slate" : SELLER_TONES[i % SELLER_TONES.length] }))}
-              format={(v) => count(v)}
-              empty="eBay gave no brand split."
-            />
-          </div>
-        </section>
-      </div>
-
-      {/* The products here, the way a hunter reads them. */}
-      <section className="card min-w-0 overflow-hidden">
-        <div className="p-4 pb-3">
-          <CardHeader
-            title="Products here, best to hunt first"
-            note={`The same product under several sellers is one row: its sales a month together, how many sellers make a living from it, what buyers pay, how much of its sales come from sellers delivering like you (whether you can compete), and whether it's rising or new. Each says why.${hiddenText ? ` ${hiddenText}` : ""}`}
-          />
-        </div>
-        <div className="border-t border-[var(--color-line)]">
-          <DiscoverProducts products={data.products} currency={currency} onHunt={onHunt} empty={read ? "No product here sells yet." : "Products show once sold counts are read."} />
-        </div>
-      </section>
-
-      <section className="card min-w-0 overflow-hidden">
-        <div className="p-4 pb-3">
-          <CardHeader title="Every leading listing" note={`Fastest-selling first: ${read} read of ${data.listings.length}. Sales a month are over the time each has been live.`} />
-        </div>
-        <div className="border-t border-[var(--color-line)]">
-          <DiscoverListings listings={data.listings} currency={currency} risingIds={risingIds} onHunt={onHunt} />
-        </div>
-        {(data.reads.more || data.reads.stopped) && (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] px-4 py-2.5">
-            <p className="text-[11.5px] text-[var(--color-muted)]">
-              {data.reads.signInFailed
-                ? "Sold counts need this account's eBay sign-in, which didn't work: reconnect the account, or ask the owner to."
-                : data.reads.stopped
-                  ? "Today's sold-count reads ran out before every listing was read."
-                  : `Sold counts read for the top ${data.reads.asked}.`}
-            </p>
-            {data.reads.more && !data.reads.stopped && (
-              <button type="button" onClick={onReadMore} disabled={readingMore} className="btn btn-secondary btn-sm !h-8 !text-[12.5px]">
-                {readingMore ? "Reading…" : "Read 25 more"}
-              </button>
-            )}
-          </div>
-        )}
-      </section>
+      </Collapsible>
 
       <BudgetLine budget={data.budget} />
     </div>

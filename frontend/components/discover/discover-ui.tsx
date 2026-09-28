@@ -1,6 +1,6 @@
 "use client";
 
-import { DiscoverAccount, DiscoverBudget, DiscoverListing, DiscoverOpportunity } from "@/lib/api";
+import { DiscoverAccount, DiscoverBudget, DiscoverOpportunity } from "@/lib/api";
 
 // Pieces Discover's views share, in the Analytics page's style: card
 // headers, quiet empty text, thumbnails, the opportunity badge, delivery
@@ -96,6 +96,28 @@ export function StatTile({
   );
 }
 
+/** A section folded away until asked for: a card header with a chevron, then its body. */
+export function Collapsible({ title, note, open, onToggle, children }: { title: string; note?: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
+  return (
+    <section className={open ? "space-y-4" : ""}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="card flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:border-[var(--color-line-strong)]"
+      >
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] font-semibold text-[var(--color-ink)]">{title}</span>
+          {note && <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{note}</span>}
+        </span>
+        <span className="text-[12px] font-medium text-[var(--color-primary)]">{open ? "Hide" : "Show"}</span>
+        <Chevron className={`h-4 w-4 flex-shrink-0 text-[var(--color-line-strong)] transition-transform ${open ? "-rotate-90" : "rotate-90"}`} />
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
 export function CardHeader({ title, aside, note }: { title: string; aside?: React.ReactNode; note?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
@@ -124,19 +146,6 @@ export function Thumb({ src, size = 36 }: { src: string | null; size?: number })
 
 export const perMonth = (n: number | null | undefined) =>
   n === null || n === undefined ? "—" : `${n >= 100 ? Math.round(n).toLocaleString("en-GB") : Math.round(n * 10) / 10}/mo`;
-
-/** Working days until it arrives, coloured by how it sits next to the account's delivery. */
-export function DeliveryText({ delivery, short = false }: { delivery: DiscoverListing["delivery"]; short?: boolean }) {
-  if (delivery.max === null || delivery.max === undefined) return <span className="text-[var(--color-muted)]">Not given</span>;
-  const days = delivery.min === delivery.max ? `${delivery.max}` : `${delivery.min}–${delivery.max}`;
-  const tone = delivery.compared === "faster" ? "text-amber-700" : delivery.compared === "similar" || delivery.compared === "slower" ? "text-emerald-700" : "text-[var(--color-muted)]";
-  const note = delivery.compared === "faster" ? "faster than you" : delivery.compared === "slower" ? "slower than you" : delivery.compared === "similar" ? "like you" : "";
-  return (
-    <span className={tone} title="Working days until it arrives, per eBay">
-      {days} days{note && !short && ` · ${note}`}
-    </span>
-  );
-}
 
 export function AccountDelivery({ account }: { account: DiscoverAccount | null }) {
   if (!account) return <span>Your postage policy couldn&apos;t be read, so delivery isn&apos;t compared.</span>;

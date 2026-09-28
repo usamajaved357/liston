@@ -10,6 +10,7 @@ import { DiscoverStartView } from "./DiscoverStartView";
 import { DiscoverSubjectView } from "./DiscoverSubjectView";
 import { DiscoverWatchlist } from "./DiscoverWatchlist";
 import { DiscoverWinnersView } from "./DiscoverWinners";
+import { DEFAULT_FILTERS } from "./DiscoverProductFilters";
 import { DiscoverOwnKeywords } from "./DiscoverOwnKeywords";
 
 // The Hunting page's Discover tab: Explore (a category or keyword, from
@@ -58,7 +59,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   // The AI's brand/VeRO reading, asked for once a subject is on screen without today's.
   const [review, setReview] = useState<{ key: string; compliance?: DiscoverExplore["compliance"]; checked?: boolean; failed?: boolean; hidden?: number } | null>(null);
   const [own, setOwn] = useState<{ range: string; data?: OwnKeywords; error?: string } | null>(null);
-  const [winnersFilters, setWinnersFilters] = useState<DiscoverWinnersFilters>({ sort: "score" });
+  const [winnersFilters, setWinnersFilters] = useState<DiscoverWinnersFilters>(DEFAULT_FILTERS);
   const [winners, setWinners] = useState<{ key: string; data?: DiscoverWinners; error?: string } | null>(null);
   const winnersKey = JSON.stringify(winnersFilters);
 
@@ -285,7 +286,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
                 onBack={() => open(parent ? { categoryId: parent.id } : null)}
                 backLabel={parent ? parent.name : "Discover"}
                 onHunt={onHunt}
-                onReadMore={() => setReads({ key, n: readsWanted + READS_STEP })}
+                onReadMore={() => setReads({ key, n: Math.max(readsWanted, shown.data?.reads.asked || 0) + READS_STEP })}
                 readingMore={!answered && readsWanted > (shown.data.reads.asked || 0)}
                 onRank={rank}
                 onToggleWatch={toggleWatch}
@@ -298,7 +299,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
         ) : start?.error ? (
           <Alert>{start.error}</Alert>
         ) : start?.data ? (
-          <DiscoverStartView data={start.data} onOpen={open} onWatchlist={() => setSection("watchlist")} onWinners={() => setSection("winners")} />
+          <DiscoverStartView data={start.data} onOpen={open} onWatchlist={() => setSection("watchlist")} onWinners={() => setSection("winners")} onHunt={onHunt} />
         ) : (
           <Loading first={false} />
         ))}
