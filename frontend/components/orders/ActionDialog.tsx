@@ -107,9 +107,12 @@ export function ActionDialog({
           </>
         )}
         {kind === "dispatched" && (
-          <p>
-            This marks {undispatched === 1 ? "the item" : `all ${undispatched} undispatched items`} dispatched on eBay <span className="font-semibold">without a tracking number</span>. eBay doesn&apos;t recommend it: with no tracking you have no proof of delivery if the buyer opens a case.
-          </p>
+          <>
+            <p>
+              Marks {undispatched === 1 ? "the item" : `all ${undispatched} undispatched items`} dispatched on eBay now. The buyer sees it as dispatched straight away; no tracking number is needed.
+            </p>
+            <p className="text-[12px] text-[var(--color-muted)]">You can add a tracking number later from this order, and eBay shows the buyer the latest one.</p>
+          </>
         )}
         {kind === "refund" && (
           <>

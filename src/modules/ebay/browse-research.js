@@ -80,6 +80,41 @@ async function search({ q, marketplaceId, condition, minPrice, maxPrice, country
   return { ...value, calls };
 }
 
+/**
+ * A category's or a keyword's live fixed-price listings delivered to the
+ * site's country, best match first, with how eBay splits all of them by
+ * category and brand (Discover's scan; it keeps the result itself, so
+ * nothing is kept here). One call, two if eBay won't break the search
+ * down. { total, items, breakdown, calls }.
+ */
+async function searchListings({ q, categoryId, marketplaceId, country, limit = 100 }) {
+  const params = {
+    q: q || undefined,
+    categoryIds: categoryId ? String(categoryId) : undefined,
+    limit: Math.min(SEARCH_LIMIT, limit),
+    filter: 'buyingOptions:{FIXED_PRICE}',
+    deliveryCountry: country || undefined,
+  };
+  let res;
+  let calls = 1;
+  try {
+    res = await ebayBrowse.searchItemSummaries({ ...params, fieldgroups: 'MATCHING_ITEMS,CATEGORY_REFINEMENTS,ASPECT_REFINEMENTS' }, marketplaceId);
+  } catch (err) {
+    if (err.details?.status !== 400) throw err;
+    res = await ebayBrowse.searchItemSummaries(params, marketplaceId);
+    calls = 2;
+  }
+  // A listing with options can come back once per option: keep one.
+  const seen = new Set();
+  const items = (res.itemSummaries || []).map(mapSummary).filter((item) => {
+    const key = item.legacyItemId || item.itemId;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { total: Number(res.total || 0), items, breakdown: breakdownOf(res.refinement), calls };
+}
+
 // "Unbranded", "Generic" and the like: listings without a brand to protect.
 const NO_BRAND = /^(unbranded|generic|unbranded\/generic|no[ -]?brand|non-branded|does not apply|not applicable|not specified|unspecified|n\/a|none|unknown|ohne marke|markenlos|sans marque|sin marca|senza marca)$/i;
 
@@ -134,4 +169,4 @@ function forget() {
   soldCounts.clear();
 }
 
-module.exports = { search, soldCount, keptSold, mapSummary, breakdownOf, forget, SEARCH_LIMIT, NO_BRAND };
+module.exports = { search, searchListings, soldCount, keptSold, mapSummary, breakdownOf, forget, SEARCH_LIMIT, NO_BRAND };

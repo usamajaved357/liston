@@ -76,6 +76,64 @@ async function sourcingStatusesByOrder(connectionId) {
   return new Map(result.rows.map((r) => [r.order_id, r.statuses]));
 }
 
+/**
+ * The orders on an account Liston marked dispatched: orderId → { lines, at,
+ * by, tracked } — how many lines, when the last was, who did it (their name,
+ * else email), and whether any went with a tracking number.
+ */
+async function dispatchesByOrder(connectionId) {
+  const result = await query(
+    `SELECT s.order_id,
+            count(*)::int AS lines,
+            max(s.dispatched_at) AS at,
+            bool_or(s.tracking_number IS NOT NULL) AS tracked,
+            (array_agg(COALESCE(u.name, u.email) ORDER BY s.dispatched_at DESC))[1] AS by_name
+       FROM order_sourcing s LEFT JOIN users u ON u.id = s.dispatched_by
+      WHERE s.connection_id = $1 AND s.dispatched_at IS NOT NULL
+      GROUP BY s.order_id`,
+    [connectionId]
+  );
+  return new Map(result.rows.map((r) => [r.order_id, { lines: r.lines, at: new Date(r.at).toISOString(), by: r.by_name || null, tracked: Boolean(r.tracked) }]));
+}
+
+// ---- messages Liston sent buyers by itself (migration 037) ----------------------
+
+/** The orders on an account already sent (or failed to be sent) a message of this kind. */
+async function messagedOrderIds(connectionId, kind) {
+  const result = await query('SELECT order_id FROM order_messages WHERE connection_id = $1 AND kind = $2', [connectionId, kind]);
+  return new Set(result.rows.map((r) => r.order_id));
+}
+
+/** Records a message sent (or refused): once per order and kind, whatever happens later. */
+async function saveMessage({ connectionId, orderId, kind, status, buyer, itemId, text, error = null, conversationId = null }) {
+  await query(
+    `INSERT INTO order_messages (connection_id, order_id, kind, status, buyer, item_id, text, error, conversation_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (connection_id, order_id, kind) DO NOTHING`,
+    [connectionId, orderId, kind, status, buyer || null, itemId || null, text || null, error ? String(error).slice(0, 500) : null, conversationId]
+  );
+}
+
+async function messagesForOrder(connectionId, orderId) {
+  const result = await query('SELECT kind, status, error, sent_at FROM order_messages WHERE connection_id = $1 AND order_id = $2 ORDER BY sent_at', [connectionId, orderId]);
+  return result.rows.map((r) => ({ kind: r.kind, status: r.status, error: r.error, sentAt: new Date(r.sent_at).toISOString() }));
+}
+
+/** An account's latest messages and how many went and failed in the last 30 days (for Settings). */
+async function recentMessages(connectionId, limit = 8) {
+  const [rows, counts] = await Promise.all([
+    query('SELECT order_id, kind, status, buyer, error, sent_at FROM order_messages WHERE connection_id = $1 ORDER BY sent_at DESC LIMIT $2', [connectionId, limit]),
+    query(
+      `SELECT count(*) FILTER (WHERE status = 'sent')::int AS sent, count(*) FILTER (WHERE status = 'failed')::int AS failed
+         FROM order_messages WHERE connection_id = $1 AND sent_at > now() - interval '30 days'`,
+      [connectionId]
+    ),
+  ]);
+  return {
+    items: rows.rows.map((r) => ({ orderId: r.order_id, kind: r.kind, status: r.status, buyer: r.buyer, error: r.error, sentAt: new Date(r.sent_at).toISOString() })),
+    last30: counts.rows[0],
+  };
+}
+
 async function listSourcingForOrders(connectionId, orderIds) {
   if (!orderIds.length) return [];
   const result = await query(
@@ -190,6 +248,11 @@ async function sourceCostsByOrder(connectionId, orderIds) {
 }
 
 module.exports = {
+  messagedOrderIds,
+  saveMessage,
+  messagesForOrder,
+  recentMessages,
+  dispatchesByOrder,
   sourceCostsByOrder,
   archiveOrder,
   unarchiveOrder,

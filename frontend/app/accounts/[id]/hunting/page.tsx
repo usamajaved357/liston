@@ -2,7 +2,9 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, Connection, HuntList, HuntSort, HuntSummary, HuntView } from "@/lib/api";
+import { api, ApiError, Connection, HuntFilters, HuntList, HuntSort, HuntSummary, HuntView } from "@/lib/api";
+import { ViewMenu } from "@/components/ViewMenu";
+import { currencySymbol } from "@/lib/format";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
@@ -13,15 +15,27 @@ import { HuntPanel } from "@/components/hunting/HuntPanel";
 import { DecisionDialog, Decision } from "@/components/hunting/DecisionDialog";
 import { announceHuntingChange } from "@/components/hunting/HuntBits";
 import { PushPrompt } from "@/components/NotificationBell";
+import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 
 // Product hunting on one eBay account: team members find products (a
 // competitor's listing and the AliExpress product to supply it), Liston
 // works out the profit on every option, and each product waits for a
 // reviewer before anyone may draft it. Reviewers see the queue; listers
 // see what's approved, ready to draft. Each team member's hunting figures
-// are on their own page in the owner's Team area, not here.
+// are on their own page in the owner's Team area, not here. The Discover
+// tab (?tab=discover) is where hunters find what to hunt: categories and
+// keywords, what's selling, a watchlist.
 
-const VIEWS: HuntView[] = ["all", "review", "approved", "rejected", "mine"];
+const VIEWS: HuntView[] = ["all", "review", "approved", "drafted", "listed", "rejected", "mine"];
+
+// The filter menu's choices; the server takes only these values.
+const PROFIT_STEPS = [1, 2, 3, 5, 10];
+const DEMAND_STEPS = [5, 10, 30, 100];
+const ADDED_STEPS: { days: number; label: string; short: string }[] = [
+  { days: 7, label: "Last 7 days", short: "Added in 7 days" },
+  { days: 30, label: "Last 30 days", short: "Added in 30 days" },
+  { days: 90, label: "Last 90 days", short: "Added in 90 days" },
+];
 
 // Where a person starts: reviewers on the queue, listers on what's approved, hunters on My hunts.
 function startingView(connection: Connection): HuntView {
@@ -42,6 +56,8 @@ function HuntingBody() {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<HuntSort | "">("");
+  const [filters, setFilters] = useState<HuntFilters>({});
+  const filtered = Boolean(filters.profit || filters.demand || filters.added || filters.unique || hunter);
   const [data, setData] = useState<HuntList | null>(null);
   const [page, setPage] = useState(1);
   // Which list request last answered: the list is loading until the current one has.
@@ -61,6 +77,9 @@ function HuntingBody() {
   const [showForm, setShowForm] = useState(Boolean(search.get("competitor")));
   // A fresh form after each add.
   const [formKey, setFormKey] = useState(0);
+  // A competitor picked in Discover ("Hunt this"), filled into a fresh form.
+  const [prefill, setPrefill] = useState<string | null>(null);
+  const tab: "products" | "discover" = search.get("tab") === "discover" ? "discover" : "products";
 
   // The page's place in the URL, so a shared or reopened link lands the same.
   const writeUrl = useCallback(
@@ -72,7 +91,6 @@ function HuntingBody() {
       };
       if (next.view !== undefined) put("view", next.view);
       if (next.open !== undefined) put("open", next.open);
-      qs.delete("tab");
       qs.delete("competitor");
       router.replace(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
     },
@@ -85,14 +103,14 @@ function HuntingBody() {
   }, [q]);
 
   const effectiveView = view || (connection ? startingView(connection) : null);
-  const requestKey = JSON.stringify([effectiveView, hunter, query, sort, reload]);
+  const requestKey = JSON.stringify([effectiveView, hunter, query, sort, filters, reload]);
   const listLoading = answered !== requestKey || loadingMore;
 
   useEffect(() => {
     if (!connection || !effectiveView) return;
     let cancelled = false;
     api
-      .huntList(connection.id, { view: effectiveView, hunter: effectiveView === "mine" ? undefined : hunter || undefined, q: query || undefined, sort: sort || undefined })
+      .huntList(connection.id, { view: effectiveView, hunter: effectiveView === "mine" ? undefined : hunter || undefined, q: query || undefined, sort: sort || undefined, ...filters })
       .then((d) => {
         if (cancelled) return;
         // An empty queue on arrival: show everything instead.
@@ -109,13 +127,13 @@ function HuntingBody() {
     return () => {
       cancelled = true;
     };
-  }, [connection, effectiveView, view, hunter, query, sort, reload, requestKey]);
+  }, [connection, effectiveView, view, hunter, query, sort, filters, reload, requestKey]);
 
   async function loadMore() {
     if (!connection || !effectiveView || !data) return;
     setLoadingMore(true);
     try {
-      const next = await api.huntList(connection.id, { view: effectiveView, hunter: effectiveView === "mine" ? undefined : hunter || undefined, q: query || undefined, sort: sort || undefined, page: page + 1 });
+      const next = await api.huntList(connection.id, { view: effectiveView, hunter: effectiveView === "mine" ? undefined : hunter || undefined, q: query || undefined, sort: sort || undefined, ...filters, page: page + 1 });
       setData({ ...next, items: [...data.items, ...next.items] });
       setPage(page + 1);
     } catch (err) {
@@ -137,6 +155,13 @@ function HuntingBody() {
     [writeUrl]
   );
   const refresh = useCallback(() => setReload((n) => n + 1), []);
+  // While an approved product drafts itself, look again every few seconds: it moves to Drafted when done.
+  const draftingNow = Boolean(data?.items.some((h) => h.draftState === "drafting"));
+  useEffect(() => {
+    if (!draftingNow) return;
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
+  }, [draftingNow, refresh]);
 
   function onChecked(next: HuntCheck | null) {
     setChecked(next);
@@ -150,6 +175,29 @@ function HuntingBody() {
     refresh();
   }
   const closePanel = useCallback(() => open(null), [open]);
+
+  // Products (the hunted products) or Discover (what to hunt), in the address.
+  function changeTab(next: "products" | "discover") {
+    const qs = new URLSearchParams(search.toString());
+    if (next === "discover") qs.set("tab", "discover");
+    else qs.delete("tab");
+    // Discover pressed again from inside a category or keyword: back to its start.
+    if (next === "discover" && tab === "discover") {
+      qs.delete("dc");
+      qs.delete("dq");
+    }
+    qs.delete("competitor");
+    router.push(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
+  }
+  // "Hunt this" in Discover: back to the products with the form open and the competitor filled in.
+  function huntFromDiscover(url: string) {
+    setPrefill(url);
+    setFormKey((k) => k + 1);
+    setChecked(null);
+    setAdded(null);
+    setShowForm(true);
+    changeTab("products");
+  }
 
   async function quickApprove(input: { decision: Decision; reason?: string; note?: string }) {
     if (!quick) return;
@@ -167,6 +215,9 @@ function HuntingBody() {
   const perms = connection?.permissions;
   const canHunt = viewer ? viewer.canHunt : !perms || Boolean(perms.hunting || perms.hunting_review);
   const canReview = viewer ? viewer.canReview : !perms || Boolean(perms.hunting_review);
+  // Discover is for whoever hunts or reviews; their own keywords need the account's analytics.
+  const canDiscover = !perms || Boolean(perms.hunting || perms.hunting_review);
+  const canSeeTraffic = !perms || Boolean(perms.analytics);
   const views = useMemo(() => {
     // The same tabs for everyone, in one order (a person who only drafts sees Approved).
     const allowed = data?.views || VIEWS;
@@ -182,6 +233,7 @@ function HuntingBody() {
     );
   }
   const market = connection.marketplace;
+  const money = currencySymbol(market?.currency || "GBP");
 
   return (
     <AccountShell
@@ -199,6 +251,26 @@ function HuntingBody() {
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Find products worth listing on {market?.name ?? "eBay"}. Each one is checked for profit and approved before it&apos;s drafted.</p>
         </div>
       }
+      subheader={
+        canDiscover ? (
+          <div role="tablist" aria-label="Hunting" className="flex gap-x-1 border-b border-[var(--color-line)]">
+            {(["products", "discover"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tab === t}
+                onClick={() => changeTab(t)}
+                className={`-mb-px shrink-0 border-b-2 px-3.5 py-2 text-[13.5px] font-medium transition-colors ${
+                  tab === t ? "border-[var(--color-primary)] text-[var(--color-primary)]" : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                }`}
+              >
+                {t === "products" ? "Hunted products" : "Discover"}
+              </button>
+            ))}
+          </div>
+        ) : undefined
+      }
       footer={checked ? <HuntAddBar key={checked.checkId} connectionId={connection.id} checked={checked} onDiscard={() => setChecked(null)} onAdded={onAdded} /> : undefined}
       pinFooter
       actions={
@@ -208,6 +280,7 @@ function HuntingBody() {
             onClick={() => {
               setShowForm(true);
               setAdded(null);
+              if (tab === "discover") changeTab("products");
             }}
             className="btn btn-primary btn-sm !h-8 gap-1 !px-3 !text-[12.5px]"
           >
@@ -219,6 +292,9 @@ function HuntingBody() {
         ) : undefined
       }
     >
+      {tab === "discover" && canDiscover ? (
+        <DiscoverPanel connectionId={connection.id} canSeeTraffic={canSeeTraffic} onHunt={huntFromDiscover} />
+      ) : (
       <div className="space-y-5">
         {added && !checked && (
           <div className="notice notice-success">
@@ -235,7 +311,7 @@ function HuntingBody() {
             key={formKey}
             connectionId={connection.id}
             marketName={market?.name ?? "eBay"}
-            initialCompetitor={formKey === 0 ? search.get("competitor") : null}
+            initialCompetitor={prefill ?? (formKey === 0 ? search.get("competitor") : null)}
             checked={checked}
             onChecked={onChecked}
             onClose={() => {
@@ -247,38 +323,84 @@ function HuntingBody() {
 
         {/* The list steps aside while a checked product is on screen; it's back after Add or Discard. */}
         {!checked && (
-          <section className="card overflow-hidden">
+          <section className="card">
+            {/* Not clipped, so the filter menu can hang below the card; the rows round their own bottom corners. */}
             {/* One header row: the tabs, then who, search and sort on the right. */}
             <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-3 py-2.5">
               <PipelineTabs views={views} counts={data?.counts || ({} as HuntList["counts"])} value={effectiveView || "all"} onChange={changeView} />
               <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto">
-                {canReview && effectiveView !== "mine" && (data?.hunters.length || 0) > 1 && (
-                  <select value={hunter} onChange={(e) => setHunter(e.target.value)} className="input input-sm !h-8 w-auto !text-[12.5px]" aria-label="Hunter">
-                    <option value="">Everyone</option>
-                    {data?.hunters.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.id === user.id ? "You" : h.name}
-                      </option>
-                    ))}
-                  </select>
+                <ViewMenu
+                  title="Sort and filters"
+                  sections={[
+                    {
+                      label: "Sort",
+                      value: sort || (effectiveView === "review" ? "waiting" : "newest"),
+                      options: (Object.keys(SORT_LABELS) as HuntSort[]).map((k) => ({ key: k, label: SORT_LABELS[k] })),
+                      onChange: (k) => setSort(k === (effectiveView === "review" ? "waiting" : "newest") ? "" : (k as HuntSort)),
+                    },
+                    ...(canReview && effectiveView !== "mine" && (data?.hunters.length || 0) > 1
+                      ? [
+                          {
+                            label: "Hunter",
+                            value: hunter || "any",
+                            hideInSummary: !hunter,
+                            options: [{ key: "any", label: "Everyone" }, ...(data?.hunters || []).map((h) => ({ key: h.id, label: h.id === user.id ? "You" : h.name }))],
+                            onChange: (k: string) => setHunter(k === "any" ? "" : k),
+                          },
+                        ]
+                      : []),
+                    {
+                      label: "Profit a sale",
+                      value: String(filters.profit || 0),
+                      hideInSummary: !filters.profit,
+                      options: [{ key: "0", label: "Any profit" }, ...PROFIT_STEPS.map((n) => ({ key: String(n), label: `${money}${n} or more`, short: `${money}${n}+ profit` }))],
+                      onChange: (k) => setFilters((f) => ({ ...f, profit: Number(k) || null })),
+                    },
+                    {
+                      label: "Demand",
+                      value: String(filters.demand || 0),
+                      hideInSummary: !filters.demand,
+                      options: [{ key: "0", label: "Any demand" }, ...DEMAND_STEPS.map((n) => ({ key: String(n), label: `${n}+ sold a month`, short: `${n}+ sold/mo` }))],
+                      onChange: (k) => setFilters((f) => ({ ...f, demand: Number(k) || null })),
+                    },
+                    {
+                      label: "Added",
+                      value: String(filters.added || 0),
+                      hideInSummary: !filters.added,
+                      options: [{ key: "0", label: "Any time" }, ...ADDED_STEPS.map((a) => ({ key: String(a.days), label: a.label, short: a.short }))],
+                      onChange: (k) => setFilters((f) => ({ ...f, added: Number(k) || null })),
+                    },
+                    {
+                      label: "On your other accounts",
+                      value: filters.unique ? "unique" : "any",
+                      hideInSummary: !filters.unique,
+                      options: [
+                        { key: "any", label: "Show every product" },
+                        { key: "unique", label: "Only ones not already hunted, drafted or live elsewhere", short: "Not elsewhere" },
+                      ],
+                      onChange: (k) => setFilters((f) => ({ ...f, unique: k === "unique" })),
+                    },
+                  ]}
+                />
+                {filtered && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilters({});
+                      setHunter("");
+                    }}
+                    className="flex-shrink-0 text-[12px] font-medium text-[var(--color-primary)] hover:underline"
+                  >
+                    Clear
+                  </button>
                 )}
-                <select value={sort} onChange={(e) => setSort(e.target.value as HuntSort | "")} className="input input-sm !h-8 w-auto flex-shrink-0 !text-[12.5px]" aria-label="Sort">
-                  <option value="">{effectiveView === "review" ? "Longest waiting" : "Newest"}</option>
-                  {(Object.keys(SORT_LABELS) as HuntSort[])
-                    .filter((k) => k !== (effectiveView === "review" ? "waiting" : "newest"))
-                    .map((k) => (
-                      <option key={k} value={k}>
-                        {SORT_LABELS[k]}
-                      </option>
-                    ))}
-                </select>
-                <label className="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
+                <label className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
                   <span className="sr-only">Search</span>
                   <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
                     <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
                     <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
-                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Title, item number, hunter or note" className="input input-sm !h-8 !pl-8 !pr-8 !text-[12.5px]" aria-label="Search products" />
+                  <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Title, item number, hunter or note" className="input input-sm !h-7 rounded-full !pl-8 !pr-8 !text-[12px]" aria-label="Search products" />
                   {q && (
                     <button
                       type="button"
@@ -305,6 +427,7 @@ function HuntingBody() {
                 view={effectiveView || "all"}
                 you={user.id}
                 query={query}
+                filtered={filtered}
                 loading={listLoading}
                 onOpen={open}
                 onEdit={(id) => {
@@ -312,13 +435,13 @@ function HuntingBody() {
                   setEditing(true);
                 }}
                 onApprove={setQuick}
-                onDraft={(h) => router.push(`/accounts/${connection.id}/listings/new?hunt=${h.id}`)}
                 onMore={loadMore}
               />
             )}
           </section>
         )}
       </div>
+      )}
 
       {openId && <HuntPanel key={`${openId}-${editing}`} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} startEditing={editing} />}
       <DecisionDialog decision={quick ? "approve" : null} reasons={data?.reasons || []} title={quick?.title || ""} onClose={() => setQuick(null)} onSubmit={quickApprove} />

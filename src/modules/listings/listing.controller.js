@@ -478,4 +478,5 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, endLive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, regenerateSku, fixPolicyWords, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+module.exports = {
+  listingFacts, generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, endLive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, regenerateSku, fixPolicyWords, reviseImage, acceptImage, uploadImage, downloadImage, publish };

@@ -7,13 +7,17 @@ const { query } = require('../../db/client');
 // an eBay item, drafted while it has a draft, else its review decision.
 const STAGE_SQL = `CASE WHEN cardinality(h.item_ids) > 0 THEN 'listed' WHEN h.listing_id IS NOT NULL THEN 'drafted' ELSE h.status END`;
 
-// The list's tabs. Approved holds what was approved and has since been
-// drafted or listed too; a sent-back product is under All (and My hunts,
-// the person's own finds, whatever their stage, filtered by hunter).
+// The list's tabs. Every product stays on the page for good, whatever
+// happens to it: Approved holds the ones still to be drafted (drafting now,
+// or a failed draft), Drafted the ones with a draft, Listed the ones live on
+// eBay. A sent-back product is under All (and My hunts, the person's own,
+// filtered by hunter).
 const VIEW_SQL = {
   all: 'TRUE',
   review: `${STAGE_SQL} = 'pending'`,
-  approved: `${STAGE_SQL} IN ('approved', 'drafted', 'listed')`,
+  approved: `${STAGE_SQL} = 'approved'`,
+  drafted: `${STAGE_SQL} = 'drafted'`,
+  listed: `${STAGE_SQL} = 'listed'`,
   rejected: `${STAGE_SQL} = 'rejected'`,
   mine: 'TRUE',
 };
@@ -79,19 +83,46 @@ async function findForOwner(id, ownerId) {
   return rows[0] || null;
 }
 
-/**
- * A page of an account's hunted products for a view (all | review |
- * approved | rejected | mine), optionally one hunter's, searched by
- * title, item or product number, link, hunter or note; sorted newest | waiting (longest waiting first) | profit | roi |
- * demand.
- */
-async function list(connectionId, { view = 'all', hunterId = null, q = '', sort = 'newest', limit = 50, offset = 0 } = {}) {
-  const params = [connectionId];
-  let where = `h.connection_id = $1 AND ${VIEW_SQL[view] || 'TRUE'}`;
+// The list's filters, beyond the tab and search: one hunter's; a profit a
+// sale of at least `minProfit`; at least `minDemand` sold a month by the
+// competitor; added in the last `addedDays`; `unique` leaves out a product
+// already hunted, drafted or live elsewhere on the owner's accounts (a
+// similar title alone doesn't count). Applied to the tab counts too, so a
+// tab's number is what it shows.
+function filterSql({ hunterId = null, minProfit = null, minDemand = null, addedDays = null, unique = false } = {}, params) {
+  let where = '';
   if (hunterId) {
     params.push(hunterId);
     where += ` AND h.hunter_user_id = $${params.length}`;
   }
+  if (Number(minProfit) > 0) {
+    params.push(Number(minProfit));
+    where += ` AND h.headline_profit >= $${params.length}`;
+  }
+  if (Number(minDemand) > 0) {
+    params.push(Number(minDemand));
+    where += ` AND h.sold_per_month >= $${params.length}`;
+  }
+  if (Number(addedDays) > 0) {
+    params.push(Number(addedDays));
+    where += ` AND h.created_at >= now() - make_interval(days => $${params.length}::int)`;
+  }
+  if (unique) {
+    where += ` AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(h.check_result->'duplicates') = 'array' THEN h.check_result->'duplicates' ELSE '[]'::jsonb END) d WHERE d->>'type' IS DISTINCT FROM 'similar')`;
+  }
+  return where;
+}
+
+/**
+ * A page of an account's hunted products for a view (all | review |
+ * approved | drafted | listed | rejected | mine), filtered (filterSql),
+ * searched by title, item or product number, link, hunter or note; sorted
+ * newest | waiting (longest waiting first) | profit | roi | demand | sales.
+ */
+async function list(connectionId, { view = 'all', q = '', sort = 'newest', limit = 50, offset = 0, ...filters } = {}) {
+  const params = [connectionId];
+  let where = `h.connection_id = $1 AND ${VIEW_SQL[view] || 'TRUE'}`;
+  where += filterSql(filters, params);
   if (q) {
     // Title, eBay item number, AliExpress product number, either link, the hunter, or a note.
     params.push(`%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`);
@@ -104,14 +135,10 @@ async function list(connectionId, { view = 'all', hunterId = null, q = '', sort 
   return { rows: rows.slice(0, limit), more: rows.length > limit };
 }
 
-/** How many products each view holds on an account (one hunter's, if given); mine: the viewer's own. */
-async function counts(connectionId, { hunterId = null, viewerId = null } = {}) {
+/** How many products each view holds on an account, with the same filters (filterSql); mine: the viewer's own. */
+async function counts(connectionId, { viewerId = null, ...filters } = {}) {
   const params = [connectionId, viewerId];
-  let where = 'h.connection_id = $1';
-  if (hunterId) {
-    params.push(hunterId);
-    where += ` AND h.hunter_user_id = $${params.length}`;
-  }
+  const where = `h.connection_id = $1${filterSql(filters, params)}`;
   const { rows } = await query(
     `SELECT ${VIEWS.map((v) => (v === 'mine' ? `count(*) FILTER (WHERE h.hunter_user_id = $2)::int AS mine` : `count(*) FILTER (WHERE ${VIEW_SQL[v]})::int AS ${v}`)).join(', ')}
        FROM hunted_products h WHERE ${where}`,
@@ -195,7 +222,30 @@ async function deleteById(id) {
 
 /** A draft made from the product (a second draft takes over from the first). */
 async function linkDraft(id, listingId, userId) {
-  await query('UPDATE hunted_products SET listing_id = $2, drafted_by = $3, drafted_at = now(), updated_at = now() WHERE id = $1', [id, listingId, userId || null]);
+  await query(
+    'UPDATE hunted_products SET listing_id = $2, drafted_by = $3, drafted_at = now(), draft_status = NULL, draft_error = NULL, updated_at = now() WHERE id = $1',
+    [id, listingId, userId || null]
+  );
+}
+
+/**
+ * Claims a product for its automatic draft: only one at a time, and only an
+ * approved one with no draft yet (not while another claim is fresh).
+ * True when this call claimed it.
+ */
+async function claimDraft(id, staleBefore) {
+  const { rowCount } = await query(
+    `UPDATE hunted_products SET draft_status = 'drafting', draft_error = NULL, draft_attempted_at = now(), updated_at = now()
+      WHERE id = $1 AND status = 'approved' AND listing_id IS NULL
+        AND (draft_status IS DISTINCT FROM 'drafting' OR draft_attempted_at < $2)`,
+    [id, staleBefore]
+  );
+  return rowCount > 0;
+}
+
+/** The automatic draft failed: why, kept until it's tried again. */
+async function draftFailed(id, error) {
+  await query(`UPDATE hunted_products SET draft_status = 'failed', draft_error = $2, updated_at = now() WHERE id = $1 AND listing_id IS NULL`, [id, String(error || '').slice(0, 500)]);
 }
 
 /** The draft made from a product went live (or was relisted) as this eBay item. */
@@ -365,6 +415,8 @@ async function dueForReading({ limit = 20, hours = 20, days = 90, ownerId = null
 // ---- a competitor's dated sales, pasted from eBay (migration 029) -------------------
 
 module.exports = {
+  claimDraft,
+  draftFailed,
   eventsSince,
   outcomesBetween,
   countForOverview,

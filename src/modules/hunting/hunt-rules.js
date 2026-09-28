@@ -6,8 +6,9 @@
 // figures would be their own to write). A member with Hunting access adds
 // products and, while one waits or has been sent back, can change and
 // improve their own, but never remove one: only a reviewer (the owner
-// included) removes a hunted product, at any stage. Drafting an approved
-// product needs Listings access.
+// included) removes a hunted product, at any stage (a hunter removes their
+// own that Liston rejected). An approved product drafts itself; drafting it
+// by hand, when that failed, needs Listings access or reviewing.
 
 const REJECT_REASONS = [
   { key: 'low_profit', label: 'Low profit' },
@@ -18,7 +19,18 @@ const REJECT_REASONS = [
   { key: 'listed', label: 'Already listed' },
   { key: 'other', label: 'Other' },
 ];
-const reasonLabel = (key) => REJECT_REASONS.find((r) => r.key === key)?.label || null;
+// Reasons only Liston gives (a reviewer can't pick them): the supplier doesn't sell what the eBay listing sells.
+const SYSTEM_REASONS = [{ key: 'mismatch', label: "Supplier doesn't match the eBay listing" }];
+const reasonLabel = (key) => [...REJECT_REASONS, ...SYSTEM_REASONS].find((r) => r.key === key)?.label || null;
+const autoRejected = (hunt) => hunt.status === 'rejected' && hunt.reject_reason === 'mismatch' && !hunt.reviewer_user_id;
+// A draft started more than this long ago and never finished (a restart mid-draft) counts as failed.
+const DRAFT_STUCK_MS = 15 * 60 * 1000;
+/** Where the automatic draft stands: 'drafting', 'failed' or null (not tried, or done). */
+function draftStateOf(hunt, now = Date.now()) {
+  if (hunt.listing_id) return null;
+  if (hunt.draft_status === 'drafting') return hunt.draft_attempted_at && now - new Date(hunt.draft_attempted_at).getTime() > DRAFT_STUCK_MS ? 'failed' : 'drafting';
+  return hunt.draft_status || null;
+}
 
 // Where a product stands: its review decision until it's drafted, then
 // drafted, then listed (drafted and listed follow the draft and the eBay
@@ -38,9 +50,11 @@ const rules = {
   // Fixing and resubmitting are the hunter's own; a reviewer sends it back instead.
   canEdit: (hunt, viewer) => ['pending', 'sent_back'].includes(stageOf(hunt)) && isHunter(hunt, viewer),
   canResubmit: (hunt, viewer) => stageOf(hunt) === 'sent_back' && isHunter(hunt, viewer),
-  canRemove: (hunt, viewer) => Boolean(viewer.canReview),
+  // A reviewer removes any; the hunter removes their own that Liston rejected.
+  canRemove: (hunt, viewer) => Boolean(viewer.canReview) || (autoRejected(hunt) && isHunter(hunt, viewer)),
   canRecheck: (hunt, viewer) => stageOf(hunt) !== 'listed' && (viewer.canHunt || viewer.canReview),
-  canDraft: (hunt, viewer) => viewer.canDraft && ['approved', 'drafted', 'listed'].includes(stageOf(hunt)),
+  // Approved products draft themselves; this is the way to do it by hand when that failed (or never ran).
+  canDraft: (hunt, viewer) => (viewer.canDraft || viewer.canReview) && stageOf(hunt) === 'approved' && draftStateOf(hunt) !== 'drafting',
 };
 
 function permissionsFor(hunt, viewer) {
@@ -66,11 +80,11 @@ function decisionFields({ decision, reason, note }) {
     return { status: 'sent_back', reject_reason: null, decision_note: text };
   }
   if (decision === 'reject') {
-    if (!reasonLabel(reason)) throw new HuntError('Choose why it is rejected.');
+    if (!REJECT_REASONS.some((r) => r.key === reason)) throw new HuntError('Choose why it is rejected.');
     if (reason === 'other' && text.length < 3) throw new HuntError('Say why it is rejected.');
     return { status: 'rejected', reject_reason: reason, decision_note: text || null };
   }
   throw new HuntError('Approve, reject or send it back.');
 }
 
-module.exports = { REJECT_REASONS, reasonLabel, STAGES, stageOf, permissionsFor, decisionFields, HuntError, rules };
+module.exports = { REJECT_REASONS, SYSTEM_REASONS, autoRejected, draftStateOf, DRAFT_STUCK_MS, reasonLabel, STAGES, stageOf, permissionsFor, decisionFields, HuntError, rules };

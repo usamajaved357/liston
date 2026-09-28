@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BuyerMessagesTab } from "@/components/settings/BuyerMessagesTab";
 import { useParams } from "next/navigation";
 import { api, ApiError, ConnectionPolicies, DescriptionLayout, DescriptionTemplate, EbaySettings, LocationAddress, Marketplace, Policy, PricingSettings, StoreReview, TEMPLATE_FONTS } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { currencySymbol } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
+import { PillTabs } from "@/components/PillTabs";
 
 // Account settings in three tabs: the eBay policies every listing carries,
 // how prices are worked out, and the branded description template. Each tab
@@ -119,7 +121,7 @@ const PRESET_PALETTES: { name: string; accentColor: string; darkColor: string }[
   { name: "Gold", accentColor: "#F59E0B", darkColor: "#292524" },
 ];
 
-type Tab = "policies" | "pricing" | "template";
+type Tab = "policies" | "pricing" | "template" | "messages";
 
 function Row({ title, hint, children, last }: { title: string; hint?: string; children: React.ReactNode; last?: boolean }) {
   return (
@@ -291,6 +293,11 @@ export default function AccountSettingsPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading: loadingConnection, error: connectionError } = useConnection(params.id);
   const [tab, setTab] = useState<Tab>("policies");
+  // ?tab=messages (or any tab) opens that tab, so other pages can link straight to it.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get("tab");
+    if (wanted === "policies" || wanted === "pricing" || wanted === "template" || wanted === "messages") setTab(wanted);
+  }, []);
 
   const [policies, setPolicies] = useState<ConnectionPolicies | null>(null);
   const [fulfillmentPolicyId, setFulfillmentPolicyId] = useState("");
@@ -590,6 +597,7 @@ export default function AccountSettingsPage() {
     { key: "policies", label: "Policies", attention: !loading && !policiesReady },
     { key: "pricing", label: "Pricing" },
     { key: "template", label: "Description template" },
+    { key: "messages", label: "Messages" },
   ];
   const setT = (patch: Partial<DescriptionTemplate>) => setTemplate((t) => ({ ...t, ...patch }));
   const setP = (patch: Partial<PricingSettings>) => setPricing((p) => ({ ...p, ...patch }));
@@ -652,22 +660,8 @@ export default function AccountSettingsPage() {
             // exactly the left column, so Save sits on that column's edge.
             <div className={tab === "template" ? "max-w-6xl xl:grid xl:grid-cols-[minmax(0,1fr)_460px] xl:gap-6" : "max-w-3xl"}>
               <div className="flex items-center justify-between gap-3">
-                <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-                  {tabs.map((t) => (
-                    <button
-                      key={t.key}
-                      type="button"
-                      onClick={() => setTab(t.key)}
-                      className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
-                        tab === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                      }`}
-                    >
-                      {t.label}
-                      {t.attention && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
-                    </button>
-                  ))}
-                </div>
-                {!loading && saveControl}
+                <PillTabs label="Settings" tabs={tabs.map((t) => ({ key: t.key, label: t.label, attention: t.attention }))} value={tab} onChange={setTab} />
+                {!loading && tab !== "messages" && saveControl}
               </div>
             </div>
         )
@@ -842,6 +836,8 @@ export default function AccountSettingsPage() {
               </div>
             </div>
           )}
+
+          {tab === "messages" && <BuyerMessagesTab connectionId={connection.id} />}
 
           {tab === "template" && (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">

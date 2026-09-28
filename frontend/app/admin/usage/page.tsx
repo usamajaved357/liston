@@ -7,6 +7,7 @@ import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { Alert } from "@/components/Alert";
+import { PillTabs } from "@/components/PillTabs";
 
 // How much of eBay's shared daily allowance Liston has used today, and
 // where it went. The allowance is per app, not per account, so this is
@@ -359,6 +360,14 @@ function EbayUsageInner() {
   // One allowance per tab; the tab lives in the URL so a reload keeps it.
   const asked = searchParams.get("tab");
   const [tab, setTab] = useState<UsageTab>(asked === "traffic" || asked === "browse" || asked === "claude" ? asked : "trading");
+  // The figure beside each tab: the share of the day's allowance used, or Claude's spend today.
+  function tabFigure(key: (typeof USAGE_TABS)[number]["key"]): string {
+    if (!usage) return "";
+    if (key === "trading") return `${Math.round((usage.used / usage.limit) * 100)}%`;
+    if (key === "traffic") return usage.analytics ? `${Math.round((usage.analytics.used / usage.analytics.limit) * 100)}%` : "";
+    if (key === "browse") return usage.browse ? `${Math.round((usage.browse.used / usage.browse.limit) * 100)}%` : "";
+    return usage.claude ? usd(usage.claude.days[0]?.total ?? 0) : "";
+  }
   function changeTab(next: UsageTab) {
     setTab(next);
     router.replace(`/admin/usage${next === "trading" ? "" : `?tab=${next}`}`, {
@@ -433,37 +442,7 @@ function EbayUsageInner() {
         </div>
       }
       subheader={
-        <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-          {USAGE_TABS.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => changeTab(t.key)}
-              className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
-                tab === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              }`}
-            >
-              {t.label}
-              {usage && (
-                <span className={tab === t.key ? "text-white/70" : "text-[var(--color-muted)]/70"}>
-                  {t.key === "trading"
-                    ? `${Math.round((usage.used / usage.limit) * 100)}%`
-                    : t.key === "traffic"
-                      ? usage.analytics
-                        ? `${Math.round((usage.analytics.used / usage.analytics.limit) * 100)}%`
-                        : ""
-                      : t.key === "browse"
-                        ? usage.browse
-                          ? `${Math.round((usage.browse.used / usage.browse.limit) * 100)}%`
-                          : ""
-                        : usage.claude
-                          ? usd(usage.claude.days[0]?.total ?? 0)
-                          : ""}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <PillTabs label="Usage" tabs={USAGE_TABS.map((t) => ({ key: t.key, label: t.label, count: usage ? tabFigure(t.key) || undefined : undefined }))} value={tab} onChange={changeTab} />
       }
     >
       {error && (

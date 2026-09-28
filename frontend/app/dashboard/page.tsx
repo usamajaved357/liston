@@ -14,6 +14,7 @@ import { useAmounts } from "@/lib/useAmounts";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { currencySymbol } from "@/lib/format";
 import { ebayConnectError } from "@/lib/connect-errors";
+import { PillTabs } from "@/components/PillTabs";
 
 // The business Overview: the money across every connected account for a
 // range, one eBay market at a time (each has its own currency). A Sales tab
@@ -301,27 +302,13 @@ export default function DashboardPage() {
           {/* Which market and which dates. */}
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             {markets.length > 1 ? (
-              <div role="radiogroup" aria-label="Market" className="inline-flex flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-                {[{ id: "all", flag: "", label: "All markets", accounts: o.perAccount.length }, ...markets].map((m) => {
-                  const on = current === m.id;
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={on}
-                      onClick={() => setMarket(m.id)}
-                      className={`flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium transition-colors ${
-                        on ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                      }`}
-                    >
-                      {m.flag && <span aria-hidden>{m.flag}</span>}
-                      {m.label}
-                      <span className={on ? "text-white/70" : "opacity-60"}>{m.accounts}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              <PillTabs
+                role="radiogroup"
+                label="Market"
+                tabs={[{ id: "all", flag: "", label: "All markets", accounts: o.perAccount.length }, ...markets].map((m) => ({ key: m.id, label: m.label, icon: m.flag || undefined, count: m.accounts }))}
+                value={current}
+                onChange={setMarket}
+              />
             ) : (
               <p className="text-[13px] text-[var(--color-muted)]">
                 Sales figures for <span className="font-medium text-[var(--color-ink)]">{rangePhrase.replace(/^in /, "")}</span>
@@ -329,22 +316,7 @@ export default function DashboardPage() {
             )}
             <div className="flex min-w-0 max-w-full items-center gap-3">
               {refreshing && <span className="text-[12px] text-[var(--color-muted)]">Updating…</span>}
-              <div role="radiogroup" aria-label="Dates" className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-                {RANGES.map((r) => (
-                  <button
-                    key={r.key}
-                    type="button"
-                    role="radio"
-                    aria-checked={range === r.key}
-                    onClick={() => changeRange(r.key)}
-                    className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
-                      range === r.key ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                    }`}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
+              <PillTabs role="radiogroup" label="Dates" tabs={RANGES} value={range} onChange={changeRange} />
             </div>
           </div>
 

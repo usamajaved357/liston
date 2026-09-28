@@ -385,6 +385,15 @@ export default function OrderDetailPage() {
                         {order.estimatedDelivery.min && order.estimatedDelivery.max ? ` - ${formatDayMonthYear(order.estimatedDelivery.max, siteTz)}` : ""}
                       </p>
                     )}
+                    {(data?.messages || [])
+                      .filter((m) => m.kind === "delivered")
+                      .map((m) => (
+                        <p key={m.kind} className={`mt-0.5 text-[12.5px] ${m.status === "sent" ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
+                          {m.status === "sent"
+                            ? `Delivered message sent to the buyer ${formatDayMonthYear(m.sentAt, siteTz)}: asked for feedback and invited them to reply with any problem.`
+                            : `The delivered message wasn't sent: ${m.error || "eBay refused it"}.`}
+                        </p>
+                      ))}
                     {!cancelled && !dispatched && daysLeft !== null && (
                       <p className={`mt-0.5 text-[13px] font-semibold ${daysLeft < 0 ? "text-[var(--color-danger)]" : daysLeft <= 1 ? "text-amber-800" : "text-[var(--color-ink)]"}`}>
                         {daysLeft < 0 ? `${-daysLeft} day${-daysLeft === 1 ? "" : "s"} late` : daysLeft === 0 ? "Due today" : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`}
@@ -529,11 +538,17 @@ export default function OrderDetailPage() {
                       </>
                     )}
                   </div>
+                  {/* The two ways to dispatch, side by side: with a tracking number, or without one. */}
                   {!cancelled && (
-                    <div className="print:hidden">
+                    <div className="flex flex-col items-stretch gap-1.5 sm:w-[160px] print:hidden">
                       <button type="button" onClick={guarded(() => setAction("tracking"))} className="btn btn-secondary btn-sm rounded-full border-[var(--color-primary)] !h-8 !px-3 !text-[12.5px] text-[var(--color-primary)]">
                         {dispatched ? "Edit tracking" : "Add tracking"}
                       </button>
+                      {!dispatched && (
+                        <button type="button" onClick={guarded(() => setAction("dispatched"))} className="btn btn-secondary btn-sm rounded-full !h-8 !px-3 !text-[12.5px]" title="Mark it dispatched on eBay, no tracking number needed">
+                          Mark as dispatched
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

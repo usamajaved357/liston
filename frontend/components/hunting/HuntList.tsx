@@ -5,16 +5,19 @@ import { count, money } from "@/components/research/format";
 import { ToneIcon } from "@/components/research/ResearchPanels";
 import { Person, RatingPill, StageChip, Thumb, VERDICT, ago, profitInk, roiText, signedMoney , EDIT_BUTTON, EditIcon } from "./HuntBits";
 import { SalesScorePill } from "./HuntSales";
+import { PillTabs } from "@/components/PillTabs";
 
-// The account's hunted products: the pipeline as tabs (waiting, sent back,
-// approved, drafted and listed, rejected), filters, and a row per product
-// with its profit on the best seller, demand, where it stands, and the
-// one action that moves it on for this person.
+// The account's hunted products: the pipeline as tabs (waiting, approved,
+// drafted, listed, rejected), filters, and a row per product with its
+// profit on the best seller, demand, and where it stands. Every product
+// stays here whatever happens to it; drafting is done from its page.
 
 export const VIEW_LABELS: Record<HuntView, string> = {
   all: "All",
   review: "Waiting for review",
   approved: "Approved",
+  drafted: "Drafted",
+  listed: "Listed",
   rejected: "Rejected",
   mine: "My hunts",
 };
@@ -30,23 +33,33 @@ export const SORT_LABELS: Record<HuntSort, string> = {
 
 const EMPTY: Record<HuntView, { title: string; text: string }> = {
   review: { title: "Nothing waiting for review", text: "New finds from the team land here for a decision." },
-  approved: { title: "No approved products yet", text: "Approved products wait here, ready to draft, and stay here once drafted and listed." },
+  approved: { title: "Nothing approved waiting", text: "Approved products draft themselves and move to Drafted. One whose draft failed stays here with the reason; open it to try again." },
+  drafted: { title: "Nothing drafted yet", text: "Approved products show here once their draft is made, until they go live." },
+  listed: { title: "Nothing listed yet", text: "Products show here once their listing is live on eBay, with their sales." },
   rejected: { title: "Nothing rejected", text: "Rejected products show here with the reason." },
   all: { title: "No products hunted yet", text: "Click Hunt a product to check one for profit, then add it for review." },
-  mine: { title: "You haven't added a product yet", text: "Products you add show here, whatever happens to them: waiting, sent back, approved or rejected." },
+  mine: { title: "You haven't added a product yet", text: "Products you add show here, whatever happens to them: waiting, sent back, approved, drafted, listed or rejected." },
 };
 
 function Status({ hunt }: { hunt: HuntSummary }) {
   let line: string | null = null;
-  if (hunt.stage === "rejected") line = hunt.rejectReasonLabel;
+  if (hunt.stage === "rejected") line = hunt.autoRejected ? `by Liston · ${hunt.rejectReasonLabel}` : hunt.rejectReasonLabel;
   else if (hunt.stage === "sent_back") line = hunt.decisionNote;
   else if (hunt.stage === "pending") line = `waiting ${ago(hunt.submittedAt).replace(" ago", "")}`;
   else if (hunt.stage === "listed") line = hunt.sales ? `${money(hunt.sales.sales, hunt.sales.currency || hunt.currency)} · ${count(hunt.sales.units)} sold` : "No sales yet";
-  else if (hunt.stage === "approved") line = hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;
+  else if (hunt.stage === "drafted") line = [hunt.draftedBy ? `by ${hunt.draftedBy.name}` : null, hunt.draftedAt ? ago(hunt.draftedAt) : null].filter(Boolean).join(" · ") || null;
+  else if (hunt.stage === "approved") line = hunt.draftState === "failed" ? "Draft failed · open to try again" : hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;
   return (
     <div className="flex min-w-0 flex-col items-center text-center">
-      <StageChip stage={hunt.stage} small />
-      {line && <p className="mt-0.5 max-w-[170px] truncate text-[11px] text-[var(--color-muted)]">{line}</p>}
+      {hunt.stage === "approved" && hunt.draftState === "drafting" ? (
+        <span className="inline-flex h-6 items-center gap-1.5 rounded-full bg-sky-50 px-2 text-[11px] font-semibold text-sky-700 ring-1 ring-inset ring-sky-200">
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-sky-600/25 border-t-sky-600" aria-hidden />
+          Drafting
+        </span>
+      ) : (
+        <StageChip stage={hunt.stage} small />
+      )}
+      {line && <p className={`mt-0.5 max-w-[170px] truncate text-[11px] ${hunt.draftState === "failed" && hunt.stage === "approved" ? "font-semibold text-rose-700" : "text-[var(--color-muted)]"}`} title={hunt.draftState === "failed" ? hunt.draftError || undefined : undefined}>{line}</p>}
     </div>
   );
 }
@@ -80,7 +93,8 @@ function Signals({ hunt }: { hunt: HuntSummary }) {
   );
 }
 
-function QuickAction({ hunt, onOpen, onEdit, onApprove, onDraft, wide = false }: { hunt: HuntSummary; onOpen: () => void; onEdit: () => void; onApprove: () => void; onDraft: () => void; wide?: boolean }) {
+// A reviewer's Review / Approve on a waiting product and a hunter's Edit on a sent-back one; nothing else on the row (drafting is done from the product's page).
+function QuickAction({ hunt, onOpen, onEdit, onApprove, wide = false }: { hunt: HuntSummary; onOpen: () => void; onEdit: () => void; onApprove: () => void; wide?: boolean }) {
   const p = hunt.permissions;
   const size = wide ? "flex-1" : "btn-sm !h-7 !px-3 !text-[12px]";
   const act = (fn: () => void) => (e: React.MouseEvent) => {
@@ -98,12 +112,6 @@ function QuickAction({ hunt, onOpen, onEdit, onApprove, onDraft, wide = false }:
         </button>
       </div>
     );
-  if (p.canDraft && hunt.stage === "approved")
-    return (
-      <button type="button" onClick={act(onDraft)} className={`btn btn-primary ${wide ? "w-full" : "btn-sm !h-7 !px-3 !text-[12px]"}`}>
-        Draft
-      </button>
-    );
   if (p.canResubmit)
     return (
       <button type="button" onClick={act(onEdit)} className={`${EDIT_BUTTON} ${wide ? "w-full" : "!h-7 !px-3 !text-[12px]"}`}>
@@ -118,7 +126,7 @@ function QuickAction({ hunt, onOpen, onEdit, onApprove, onDraft, wide = false }:
   );
 }
 
-function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSummary; you: string; onOpen: () => void; onEdit: () => void; onApprove: () => void; onDraft: () => void }) {
+function Row({ hunt, you, onOpen, onEdit, onApprove }: { hunt: HuntSummary; you: string; onOpen: () => void; onEdit: () => void; onApprove: () => void }) {
   const v = VERDICT[hunt.verdict];
   // No competitor: the profit is the target by design, so it reads plain, "at your price".
   const unpriced = hunt.verdict === "unpriced";
@@ -152,14 +160,14 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
               </span>
             )}
           </div>
-          <StageChip stage={hunt.stage} small />
+          <Status hunt={hunt} />
         </div>
         {(hunt.stage === "sent_back" && hunt.decisionNote) || (hunt.stage === "rejected" && hunt.rejectReasonLabel) ? (
           <p className="mt-2 line-clamp-2 rounded-lg bg-[var(--color-paper)] px-2.5 py-1.5 text-[12px] text-[var(--color-ink)]">{hunt.stage === "rejected" ? hunt.rejectReasonLabel : hunt.decisionNote}</p>
         ) : null}
-        {(hunt.permissions.canDecide && hunt.stage === "pending") || (hunt.permissions.canDraft && hunt.stage === "approved") || hunt.permissions.canResubmit ? (
+        {(hunt.permissions.canDecide && hunt.stage === "pending") || hunt.permissions.canResubmit ? (
           <div className="mt-3 flex">
-            <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} onDraft={onDraft} wide />
+            <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} wide />
           </div>
         ) : null}
       </div>
@@ -199,40 +207,26 @@ function Row({ hunt, you, onOpen, onEdit, onApprove, onDraft }: { hunt: HuntSumm
         </div>
         <Status hunt={hunt} />
         <div className="flex justify-end">
-          <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} onDraft={onDraft} />
+          <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} />
         </div>
       </div>
     </li>
   );
 }
 
-// The tabs, as the Orders and Listings pages have them: one rounded bar, the chosen tab filled.
+// The tabs, as every page has them (PillTabs); the review queue's count tinted while anything waits.
 export function PipelineTabs({ views, counts, value, onChange }: { views: HuntView[]; counts: Record<HuntView, number>; value: HuntView; onChange: (v: HuntView) => void }) {
   return (
-    <div className="inline-flex max-w-full flex-shrink-0 items-center overflow-x-auto rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" aria-label="Hunted products">
-      {views.map((v) => {
-        const on = v === value;
-        return (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={on}
-            onClick={() => onChange(v)}
-            className={`flex h-7 flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-[12.5px] font-medium transition-colors ${
-              on ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-            }`}
-          >
-            {VIEW_LABELS[v]}
-            <span className={`tabular-nums ${on ? "text-white/70" : v === "review" && (counts[v] ?? 0) > 0 ? "font-semibold text-indigo-600" : "text-[var(--color-muted)]/70"}`}>{count(counts[v] ?? 0)}</span>
-          </button>
-        );
-      })}
-    </div>
+    <PillTabs
+      label="Hunted products"
+      tabs={views.map((v) => ({ key: v, label: VIEW_LABELS[v], count: count(counts[v] ?? 0), countTone: v === "review" && (counts[v] ?? 0) > 0 ? ("alert" as const) : undefined }))}
+      value={value}
+      onChange={onChange}
+    />
   );
 }
 
-export function HuntRows({ data, view, you, loading, query = "", onOpen, onEdit, onApprove, onDraft, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; query?: string; onOpen: (id: string) => void; onEdit: (id: string) => void; onApprove: (hunt: HuntSummary) => void; onDraft: (hunt: HuntSummary) => void; onMore?: () => void }) {
+export function HuntRows({ data, view, you, loading, query = "", filtered = false, onOpen, onEdit, onApprove, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; query?: string; filtered?: boolean; onOpen: (id: string) => void; onEdit: (id: string) => void; onApprove: (hunt: HuntSummary) => void; onMore?: () => void }) {
   if (!data) {
     return (
       <ul className="divide-y divide-[var(--color-line)]">
@@ -250,7 +244,11 @@ export function HuntRows({ data, view, you, loading, query = "", onOpen, onEdit,
   }
   if (!data.items.length) {
     // A search that finds nothing says so, rather than that nothing was ever hunted.
-    const empty = query.trim() ? { title: `No products match \u201c${query.trim()}\u201d`, text: "Search by title, eBay item number, AliExpress product number, hunter or note." } : EMPTY[view];
+    const empty = query.trim()
+      ? { title: `No products match \u201c${query.trim()}\u201d`, text: "Search by title, eBay item number, AliExpress product number, hunter or note." }
+      : filtered
+        ? { title: "No products match these filters", text: "Loosen or clear a filter to see more." }
+        : EMPTY[view];
     return (
       <div className="flex flex-col items-center px-6 py-10 text-center">
         <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)]">
@@ -265,7 +263,7 @@ export function HuntRows({ data, view, you, loading, query = "", onOpen, onEdit,
     );
   }
   return (
-    <div className={loading ? "opacity-60 transition-opacity" : "transition-opacity"}>
+    <div className={`overflow-hidden rounded-b-[var(--radius-card)] ${loading ? "opacity-60 transition-opacity" : "transition-opacity"}`}>
       <div className="hidden grid-cols-[minmax(0,1fr)_112px_104px_176px_150px] gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)] md:grid">
         <span>Product</span>
         <span className="text-center">Profit per sale</span>
@@ -275,7 +273,7 @@ export function HuntRows({ data, view, you, loading, query = "", onOpen, onEdit,
       </div>
       <ul className="divide-y divide-[var(--color-line)]">
         {data.items.map((hunt) => (
-          <Row key={hunt.id} hunt={hunt} you={you} onOpen={() => onOpen(hunt.id)} onEdit={() => onEdit(hunt.id)} onApprove={() => onApprove(hunt)} onDraft={() => onDraft(hunt)} />
+          <Row key={hunt.id} hunt={hunt} you={you} onOpen={() => onOpen(hunt.id)} onEdit={() => onEdit(hunt.id)} onApprove={() => onApprove(hunt)} />
         ))}
       </ul>
       {data.more && onMore && (

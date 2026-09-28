@@ -17,6 +17,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useAccountTimeZone } from "@/lib/timezone";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
+import { PillTabs } from "@/components/PillTabs";
 
 type Tab = ListingStatusFilter | "draft";
 const TrashIcon = (
@@ -487,21 +488,7 @@ export default function AccountListingsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Same control as the per-page selector in the footer: a bordered
             capsule with the active option filled. */}
-        <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => changeFilter(t.key)}
-              className={`flex h-7 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-medium transition-colors ${
-                filter === t.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              }`}
-            >
-              {t.label}
-              {counts[t.key] !== undefined && <span className={filter === t.key ? "text-white/70" : "text-[var(--color-muted)]/70"}>{counts[t.key]}</span>}
-            </button>
-          ))}
-        </div>
+        <PillTabs label="Listings" tabs={tabs.map((t) => ({ key: t.key, label: t.label, count: counts[t.key] }))} value={filter} onChange={changeFilter} />
         <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto sm:flex-wrap sm:justify-end">
           {filter === "draft" && (
             <Link href={`/accounts/${connection.id}/listings/new`} className="btn btn-primary btn-sm">

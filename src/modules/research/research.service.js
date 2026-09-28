@@ -302,4 +302,4 @@ function resetUsage() {
   states.clear();
 }
 
-module.exports = { search, advice, soldCounts, budget, resetUsage, SOLD_READS, ResearchError };
+module.exports = { search, advice, soldCounts, budget, resetUsage, accountDelivery, SOLD_READS, ResearchError };

@@ -61,8 +61,23 @@ module.exports = {
     if (input) res.status(201).json(await huntingService.add(auth(req), req.params.id, input));
   }),
   list: handle(async (req, res) => {
-    const { view, mine, hunter, q, sort, page } = req.query;
-    res.json(await huntingService.list(auth(req), req.params.id, { view, mine: mine === '1' || mine === 'true', hunter, q, sort, page }));
+    const { view, mine, hunter, q, sort, page, profit, demand, added, unique } = req.query;
+    // The filters: numbers from a short list, anything else ignored.
+    const pick = (value, allowed) => (allowed.includes(Number(value)) ? Number(value) : null);
+    res.json(
+      await huntingService.list(auth(req), req.params.id, {
+        view,
+        mine: mine === '1' || mine === 'true',
+        hunter,
+        q,
+        sort,
+        page,
+        minProfit: pick(profit, [1, 2, 3, 5, 10]),
+        minDemand: pick(demand, [5, 10, 30, 100]),
+        addedDays: pick(added, [7, 30, 90]),
+        unique: unique === '1' || unique === 'true',
+      })
+    );
   }),
   badge: handle(async (req, res) => {
     res.json(await huntingService.badge(auth(req), req.params.id));
@@ -91,5 +106,9 @@ module.exports = {
   }),
   draftStart: handle(async (req, res) => {
     res.json(await huntingService.draftStart(auth(req), req.params.huntId));
+  }),
+  // Drafts an approved product in the background (its automatic draft failed, or never ran).
+  draftAgain: handle(async (req, res) => {
+    res.status(202).json(await huntingService.draftAgain(auth(req), req.params.huntId));
   }),
 };

@@ -27,6 +27,8 @@ router.get('/:id/overview', requireAuth, requireOwner, require('../overview/over
 // A team member's own Overview there: their work on the account, no money (team.service.getOwnWork).
 router.get('/:id/my-work', requireAuth, requireAnyFeature(KNOWN_FEATURES), require('../team/team.controller').getOwnWork);
 router.use('/:id/analytics', require('../analytics/analytics.routes'));
+// Discover, on the Hunting page: what to hunt (categories, keywords, what's selling, a watchlist).
+router.use('/:id/discover', require('../discover/discover.routes'));
 router.post('/:id/refresh', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.refresh);
 router.get('/:id/events', requireAuth, requireAnyFeature(['listings', 'orders', 'analytics']), connectionController.events);
 router.get('/:id/policies', requireAuth, requireOwner, connectionController.getPolicies);
@@ -36,6 +38,9 @@ router.post('/:id/locations', requireAuth, requireOwner, connectionController.cr
 // they're owner-only for the same reason policies are — never delegable.
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);
 router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
+// The message Liston sends a buyer once their order is delivered (off until the owner switches it on).
+router.get('/:id/messages', requireAuth, requireOwner, connectionController.getMessages);
+router.put('/:id/messages', requireAuth, requireOwner, connectionController.updateMessages);
 router.get('/:id/template/palette', requireAuth, requireOwner, connectionController.logoPalette);
 router.get('/:id/template/source', requireAuth, requireOwner, connectionController.templateSource);
 router.post('/:id/template/preview', requireAuth, requireOwner, express.json({ limit: '1mb' }), connectionController.templatePreview);

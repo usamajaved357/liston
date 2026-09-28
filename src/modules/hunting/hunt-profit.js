@@ -166,6 +166,46 @@ function bestMatch(option, variations) {
   return { ...best, quality: best.score >= 0.95 ? 'exact' : 'close' };
 }
 
+// ---- does the supplier sell what the eBay listing sells? ---------------------------------
+
+const { wordsOf } = require('../research/research-analysis');
+const MATCH_MIN = 0.5; // an option this close to a variation is that variation (bestMatch's floor)
+const TITLE_WORDS_MIN = 2; // words the two titles must share to be the same product
+
+/**
+ * Whether the supplier sells what the eBay listing sells, or null when it
+ * does (or there's no competitor to compare with). Every one of the eBay
+ * listing's variations must be among the supplier's options: the supplier
+ * can have more (five colours against the listing's one is fine, as long as
+ * the listing's colour is one of them), never fewer. A listing without
+ * variations is compared on its title: the two must share a few words that
+ * say what the product is.
+ * { kind: 'variations', missing: [label], total, reason } | { kind: 'product', reason }.
+ */
+function matchCheck(competitor, source, currency) {
+  if (!competitor) return null;
+  const variations = competitorVariations(competitor, currency).filter((v) => v.label);
+  if (variations.length) {
+    const options = supplierOptions(source, currency);
+    const missing = variations.filter((v) => !options.some((o) => optionScore(o, v) >= MATCH_MIN)).map((v) => v.label);
+    if (!missing.length) return null;
+    const shown = missing.slice(0, 6).join(', ');
+    return {
+      kind: 'variations',
+      missing,
+      total: variations.length,
+      reason:
+        missing.length === variations.length
+          ? `None of the eBay listing's ${variations.length} variation${variations.length === 1 ? '' : 's'} (${shown}${missing.length > 6 ? '…' : ''}) is among the supplier's options.`
+          : `The eBay listing sells ${missing.length} of its ${variations.length} variations that the supplier doesn't have: ${shown}${missing.length > 6 ? ` and ${missing.length - 6} more` : ''}.`,
+    };
+  }
+  const theirs = new Set(wordsOf(competitor.title).map((w) => w.replace(/(?<=\w{3})s$/, '')));
+  const shared = new Set(wordsOf(source?.title).map((w) => w.replace(/(?<=\w{3})s$/, '')).filter((w) => w.length > 2 && theirs.has(w)));
+  if (!theirs.size || !source?.title || shared.size >= TITLE_WORDS_MIN) return null;
+  return { kind: 'product', missing: [], total: 1, reason: `The supplier's product doesn't look like the eBay listing: their titles share ${shared.size ? `only “${[...shared][0]}”` : 'no words'}.` };
+}
+
 // ---- the check ------------------------------------------------------------------------
 
 /**
@@ -420,6 +460,8 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
     checks: [],
   };
   result.checks = checksFor({ competitor, source, result, refusals, target });
+  // A supplier that doesn't sell what the eBay listing sells: Liston rejects it itself.
+  result.mismatch = matchCheck(competitor, source, currency);
   return result;
 }
 
@@ -641,4 +683,4 @@ function optionLabel(row) {
   return row?.label || 'The product';
 }
 
-module.exports = { analyse, feeRates, priceChanges, draftSelection, salesByVariation, salesReading, shippingAnchor, bestSellerOption, supplierOptions, competitorVariations, optionScore, valueScore, quantityOf, norm, optionLabel, VERSION, MAX_OPTIONS, ENOUGH_ORDERS };
+module.exports = { analyse, matchCheck, feeRates, priceChanges, draftSelection, salesByVariation, salesReading, shippingAnchor, bestSellerOption, supplierOptions, competitorVariations, optionScore, valueScore, quantityOf, norm, optionLabel, VERSION, MAX_OPTIONS, ENOUGH_ORDERS };

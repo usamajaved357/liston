@@ -5,6 +5,7 @@ import { api, ApiError, TeamRange, WorkOverview } from "@/lib/api";
 import { MemberPerformance } from "@/components/team/MemberPerformance";
 import { dayRangeLabel } from "@/components/charts/chart-format";
 import { Alert } from "@/components/Alert";
+import { PillTabs } from "@/components/PillTabs";
 
 // A team member's Overview on an account: their own work there, as their
 // owner sees it on their Team page — a card per area they have access to,
@@ -70,22 +71,7 @@ export function MemberWorkOverview({ connectionId, children }: { connectionId: s
               </>
             )}
           </p>
-          <div role="radiogroup" aria-label="Dates" className="inline-flex max-w-full flex-wrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-            {RANGES.map((r) => (
-              <button
-                key={r.key}
-                type="button"
-                role="radio"
-                aria-checked={range === r.key}
-                onClick={() => setRange(r.key)}
-                className={`h-7 rounded-full px-3 text-[12px] font-medium transition-colors ${
-                  range === r.key ? "bg-[var(--color-primary)] text-white shadow-sm" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
+          <PillTabs role="radiogroup" label="Dates" tabs={RANGES} value={range} onChange={setRange} />
         </div>
         {answered?.error ? <Alert>{answered.error}</Alert> : data ? <MemberPerformance key={`${data.range.from}:${data.range.to}`} data={data} self /> : <Skeleton />}
       </section>

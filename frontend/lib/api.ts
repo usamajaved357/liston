@@ -714,6 +714,8 @@ export interface Order {
   deliveredAt?: string | null;
   lineItems: OrderLineItem[];
   derivedStatus?: OrderStatusFilter;
+  // Marked dispatched from Liston: when, by whom, with tracking or not; `pending` while eBay's feed hasn't caught up.
+  markedDispatched?: { lines: number; at: string; by: string | null; tracked: boolean; pending: boolean } | null;
   // Liston's supplier-order rows for this order (one per line item).
   sourcing?: OrderSourcing[];
 }
@@ -882,7 +884,22 @@ export interface OrderEvent {
   at: string;
 }
 
+// A message Liston sent the buyer by itself (the delivered thank-you).
+export interface OrderMessage {
+  kind: "delivered";
+  status: "sent" | "failed";
+  error: string | null;
+  sentAt: string;
+}
+// The account's buyer-message settings (Settings → Messages).
+export interface BuyerMessageSettings {
+  delivered: { enabled: boolean; text: string | null; enabledAt: string | null; defaultText: string };
+  canMessage: boolean; // the eBay sign-in allows messaging (an older one needs a reconnect)
+  recent: { items: { orderId: string; kind: string; status: "sent" | "failed"; buyer: string | null; error: string | null; sentAt: string }[]; last30: { sent: number; failed: number } };
+}
+
 export interface OrderDetailResponse {
+  messages?: OrderMessage[];
   order: OrderDetail;
   actionsEnabled: boolean;
   source: "fulfillment" | "trading";
@@ -926,6 +943,8 @@ export interface OrderCounts {
   dispatched: number;
   delivered: number;
   cancelled: number;
+  /** Dispatched with no tracking number: also counted in `dispatched`. */
+  marked?: number;
 }
 
 // Where an order's supplier order stands (the Orders page's Supplier filter).
@@ -1368,7 +1387,8 @@ export interface DraftListing {
 
 export type ListingStatusFilter = "active" | "inactive";
 export type OrderRange = "7d" | "30d" | "90d";
-export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "delivered" | "cancelled";
+// "marked": dispatched with no tracking number (marked in Seller Hub, the eBay app or from Liston), a view within Dispatched.
+export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "marked" | "delivered" | "cancelled";
 // ---- listing analytics ---------------------------------------------------------
 // Days are eBay's reporting days (US Pacific), "YYYY-MM-DD".
 
@@ -1624,8 +1644,16 @@ export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "las
 
 export type HuntStage = "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
 // The list's tabs; mine is "My hunts" (the person's own finds, whatever their stage).
-export type HuntView = "all" | "review" | "approved" | "rejected" | "mine";
+export type HuntView = "all" | "review" | "approved" | "drafted" | "listed" | "rejected" | "mine";
 export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand" | "sales";
+// The hunted products' filters: profit a sale at least (1, 2, 3, 5, 10), sold a month at least (5, 10, 30, 100),
+// added in the last 7, 30 or 90 days, and only products not already hunted, drafted or live elsewhere.
+export interface HuntFilters {
+  profit?: number | null;
+  demand?: number | null;
+  added?: number | null;
+  unique?: boolean;
+}
 // unpriced: checked without a competitor, so priced at the target return with no market to judge by.
 export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown";
 // target: no competitor, so the price a draft would list it at.
@@ -1684,6 +1712,8 @@ export interface HuntDuplicate {
 export interface HuntCheckResult {
   version: number;
   currency: string;
+  // The supplier doesn't sell what the eBay listing sells (Liston rejects it): the eBay variations it lacks, or a different product.
+  mismatch?: { kind: "variations" | "product"; missing: string[]; total: number; reason: string } | null;
   targetRoiPercent: number;
   market?: { id: string; name: string; country: string };
   // Null when the product was checked without a competitor.
@@ -1823,6 +1853,11 @@ export interface HuntSummary {
   resubmits: number;
   rejectReason: string | null;
   rejectReasonLabel: string | null;
+  // Rejected by Liston itself: the supplier doesn't match the eBay listing.
+  autoRejected?: boolean;
+  // The automatic draft once approved: running, or failed with why (null: not tried, or done).
+  draftState?: "drafting" | "failed" | null;
+  draftError?: string | null;
   decisionNote: string | null;
   hunterNote: string | null;
   warnings: number;
@@ -1910,6 +1945,335 @@ export interface MemberHunting {
   sales: HuntSales[];
   previousSales: HuntSales[];
   reasons: (HuntReason & { count: number })[];
+}
+
+// ---- Discover (the Hunting page's tab for finding what to hunt) ----------------
+
+export interface DiscoverListing {
+  itemId: string;
+  title: string;
+  image: string | null;
+  url: string | null;
+  price: { value: number; currency: string } | null;
+  shipping: { cost: number; free: boolean } | null;
+  landed: number | null; // price with postage
+  seller: { username: string; feedbackScore: number | null; feedbackPercentage: number | null } | null;
+  overseas: boolean;
+  country: string | null;
+  category: string | null;
+  categoryId: string | null;
+  createdAt: string | null;
+  daysLive: number | null;
+  delivery: { min: number | null; max: number | null; compared: "faster" | "similar" | "slower" | "unknown" };
+  sold: number | null; // eBay's total, null until read
+  soldPerMonth: number | null;
+  options: { label: string; sold: number; price: number | null }[] | null; // best-selling first
+  optionCount: number;
+  readDay: string | null;
+  recent: { sold: number; days: number; from: string; to: string } | null; // sold between two readings
+  lift?: number | null; // rising: selling this many times faster lately than over its life
+  flag?: DiscoverFlag | null;
+}
+// A product: the same thing sold by several sellers, grouped, judged the way a hunter judges it.
+export interface DiscoverProduct {
+  key: string;
+  name: string;
+  image: string | null;
+  url: string | null;
+  category: string | null;
+  categoryId: string | null;
+  listings: number;
+  itemIds: string[];
+  read: number;
+  sellers: number;
+  selling: number; // sellers selling it every month
+  perMonth: number;
+  sold: number;
+  price: { low: number; median: number; high: number } | null;
+  delivery: { known: boolean; share: number | null; sellers: number; perMonth: number | null }; // sales from sellers delivering like you or slower
+  leaderShare: number | null;
+  momentum: "rising" | "new" | "steady" | "quiet";
+  lift: number | null;
+  newestDays: number | null;
+  recent: { sold: number; days: number } | null;
+  score: number;
+  band: DiscoverOpportunity["band"];
+  parts: { demand: number; proven: number; fit: number; room: number; momentum: number; spread: number };
+  reasons: { good: boolean | null; text: string }[];
+  flag: DiscoverFlag | null;
+  brand: string | null;
+  branded: boolean | null; // null until a reading carries the brand
+  seller: { username: string | null; score: number | null; percentage: number | null }; // the leading listing's seller
+  smallestSellerScore: number | null; // the smallest seller selling it every month
+  from?: { kind: "category" | "keyword"; value: string; name: string; path: string[] };
+  // What the owner already has of it: their live listing is among its listings, a listing Liston made
+  // came from it, it was hunted (and where that got to), or a live listing has a very similar title.
+  mine?: { kind: "selling" | "listed" | "drafted" | "hunted" | "rejected" | "similar"; text: string } | null;
+  // Other Liston sellers who hunted it in the last two weeks (counted from two; never who).
+  crowd?: number;
+}
+// The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
+export interface DiscoverWinnersFilters {
+  q?: string;
+  fit?: boolean;
+  priceMin?: number | null;
+  priceMax?: number | null;
+  brand?: "any" | "unbranded" | "branded";
+  rating?: "any" | "top" | "good" | "weak";
+  size?: "any" | "small" | "medium" | "large";
+  listedWithin?: number | null; // days: its youngest listing with a sold count is at most this old
+  minSales?: number;
+  newOnly?: boolean;
+  sort?: "score" | "sales" | "rising" | "new" | "price";
+  // Products the owner already has: shown and marked, or left out (a similar title is only ever marked).
+  mine?: "show" | "hide";
+}
+export interface DiscoverWinners {
+  products: DiscoverProduct[];
+  matched: number;
+  mineHidden?: number;
+  pool: { subjects: number; listings: number; read: number };
+  market: { id: string; name: string; currency: string };
+  account: { min: number; max: number } | null;
+  at: string;
+}
+
+// A keyword worth hunting across everything explored on the site: its sales a month (a searched
+// keyword's own market; otherwise the titles with it where it sells most), eBay's sold counts, its lift
+// (share of sales over share of titles), how many categories and keywords share it, where it sells most,
+// and once searched its own market (live listings, opportunity).
+export type DiscoverSiteKeywordSort = "sales" | "lift" | "opportunity" | "spread";
+export interface DiscoverSiteKeyword {
+  term: string;
+  perMonth: number;
+  sold: number | null;
+  lift: number | null;
+  salesShare: number | null;
+  inTitles: number | null;
+  subjects: number;
+  from: { kind: "category" | "keyword"; value: string; name: string } | null;
+  searched: { monthlySales: number; live: number; score: number; band: DiscoverOpportunity["band"] } | null;
+}
+export interface DiscoverSiteKeywords {
+  keywords: DiscoverSiteKeyword[];
+  matched: number;
+  searched: number;
+  pool: { subjects: number; listings: number; read: number };
+  market: { id: string; name: string; currency: string };
+  at: string;
+}
+
+export interface DiscoverScorePart {
+  key: string;
+  label: string;
+  points: number;
+  max: number;
+  value: string;
+  full: string;
+  detail: string;
+}
+export interface DiscoverOpportunity {
+  score: number;
+  band: "strong" | "fair" | "weak";
+  parts: DiscoverScorePart[];
+}
+export interface DiscoverFigures {
+  total: number;
+  sample: number;
+  demand: { read: number; selling: number; monthlySales: number; sellThrough: number | null; medianPerMonth: number | null; topPerMonth: number | null; soldTotal: number };
+  competition: { sellers: number; topSeller: { username: string; share: number } | null };
+  price: { low: number; median: number; high: number } | null;
+  fit: { sellers: number; canMatch: number; share: number; overseas: number } | null;
+}
+export interface DiscoverKeyword {
+  term: string;
+  words: number;
+  listings: number;
+  selling: number;
+  listingShare: number;
+  salesShare: number;
+  lift: number | null;
+  perMonth: number;
+  sold: number; // eBay's total for the listings read with it
+  flag?: DiscoverFlag | null;
+}
+export interface DiscoverChild {
+  flag?: DiscoverFlag | null;
+  id: string;
+  name: string;
+  leaf: boolean;
+  listings: number | null;
+  restricted: { kind: "prohibited" | "restricted"; label: string } | null;
+  keywords: { term: string; perMonth: number; sold: number }[];
+  scanned: {
+    score: number;
+    band: DiscoverOpportunity["band"];
+    medianPerMonth: number | null;
+    monthlySales: number;
+    soldTotal: number;
+    selling: number;
+    read: number;
+    price: number | null;
+    fit: number | null;
+    topSeller: number | null;
+    hidden: number;
+    takenAt: string;
+  } | null;
+}
+export interface DiscoverBudget {
+  trading: number;
+  browse: number;
+  tradingPaused: boolean;
+  used: { trading: number; browse: number };
+  limits: { trading: number; browse: number };
+  resetAt: string;
+}
+export interface DiscoverAccount {
+  min: number;
+  max: number;
+  policyName: string | null;
+  serviceName: string | null;
+}
+export interface DiscoverSubjectRef {
+  categoryId?: string;
+  q?: string;
+}
+export interface DiscoverGroup {
+  key: string;
+  label?: string;
+  listings: number;
+  perMonth: number;
+  domestic?: boolean;
+}
+export interface DiscoverCharts {
+  priceBands: { from: number; to: number | null; listings: number; perMonth: number }[];
+  delivery: DiscoverGroup[];
+  countries: DiscoverGroup[];
+  sellers: DiscoverGroup[];
+  demandCurve: { itemId: string; title: string; perMonth: number }[];
+}
+// Your own listings with a keyword: their traffic (measured ones) and sales (all), last 30 days.
+export interface DiscoverYourTraffic {
+  listings: number;
+  measured?: number;
+  impressions?: number;
+  views?: number;
+  sold?: number;
+  ctr?: number | null;
+  conversion?: number | null;
+  range?: { from: string; to: string };
+}
+// A flag on a keyword, category or listing title: an eBay-restricted item, a word eBay's filter reacts to, or a brand.
+export interface DiscoverFlag {
+  restricted: { kind: "prohibited" | "restricted"; label: string } | null;
+  hazmat: string | null;
+  brand: string | null;
+}
+export type DiscoverRisk = { level: "none" | "low" | "high"; reason: string; brands?: string[] };
+export interface DiscoverCompliance {
+  level: "clear" | "check" | "risky";
+  subject: { hazmat: string[]; restricted: { key: string; kind: "prohibited" | "restricted"; label: string; words: string[] }[] };
+  titles: {
+    hazmat: { word: string; listings: number; share: number; safer: string | null }[];
+    restricted: { key: string; kind: "prohibited" | "restricted"; label: string; words: string[]; listings: number; share: number }[];
+  };
+  brands: { branded: number | null; top: { name: string; count: number; share: number | null }[] };
+  ai: { brand: DiscoverRisk | null; safety: DiscoverRisk | null; summary: string | null } | null;
+  // The leading listings hidden because they'd break eBay's rules: a restricted item, or a VeRO brand as the product.
+  hidden: { count: number; restricted: number; brand: number; brands: string[] };
+}
+export interface DiscoverPrice {
+  recommended: number;
+  low: number;
+  high: number;
+  salesMiddle: number;
+  basis: "sales" | "listings";
+  confidence: "high" | "medium" | "low";
+  afterFees: number;
+  maxCost: number;
+  targetRoiPercent: number;
+}
+export interface DiscoverExplore {
+  compliance: DiscoverCompliance;
+  price: DiscoverPrice | null;
+  charts: DiscoverCharts;
+  trend: { day: string; value: number | null }[] | null;
+  yourTraffic: DiscoverYourTraffic | null;
+  subject: { kind: "category" | "keyword"; categoryId: string | null; q: string | null; name: string; path: { id: string; name: string }[]; leaf: boolean; takenAt: string; stale: boolean };
+  figures: DiscoverFigures;
+  opportunity: DiscoverOpportunity;
+  recent: { sold: number; days: number; listings: number } | null;
+  rising: DiscoverListing[];
+  products: DiscoverProduct[];
+  listings: DiscoverListing[];
+  keywords: DiscoverKeyword[];
+  brands: { name: string; count: number; unbranded: boolean }[];
+  categories: { id: string; name: string; count: number }[];
+  children: DiscoverChild[];
+  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number };
+  watch: { id: string } | null;
+  ranking: { total: number; done: number } | null;
+  market: { id: string; name: string; currency: string; country?: string; flag?: string };
+  account: DiscoverAccount | null;
+  budget: DiscoverBudget;
+}
+export interface DiscoverCategoryCard {
+  id: string;
+  name: string;
+  path?: string[];
+  leaf?: boolean;
+  listings?: number;
+  scanned: { score: number; band: DiscoverOpportunity["band"]; total: number } | null;
+}
+export interface DiscoverStart {
+  market: { id: string; name: string; currency: string };
+  account: DiscoverAccount | null;
+  yourCategories: DiscoverCategoryCard[];
+  topCategories: DiscoverCategoryCard[];
+  watches: number;
+  // The best products across everything explored on the site, for the start screen.
+  winners: { products: DiscoverProduct[]; total: number; keywords?: number; pool: { subjects: number; listings: number; read: number } } | null;
+  watchPreview: DiscoverWatch[];
+  // What anyone on the site explored in the last few days (shared across accounts).
+  recent: { kind: "category" | "keyword"; value: string; name: string; path: string[]; openedAt: string; flag?: DiscoverFlag | null; scanned: { score: number; band: DiscoverOpportunity["band"]; total: number; monthlySales: number } | null }[];
+  budget: DiscoverBudget;
+}
+export interface DiscoverWatch {
+  id: string;
+  kind: "category" | "keyword";
+  value: string;
+  label: string;
+  createdAt: string;
+  createdBy: string | null;
+  lastReadAt: string | null;
+  takenAt?: string;
+  figures: { total: number; medianPerMonth: number | null; selling: number; read: number; price: number | null } | null;
+  opportunity?: { score: number; band: DiscoverOpportunity["band"] };
+  recent?: { sold: number; days: number; listings: number } | null;
+  rising?: DiscoverListing[];
+}
+export interface DiscoverWatchList {
+  items: DiscoverWatch[];
+  limit: number;
+  market: { id: string; name: string; currency: string };
+}
+export interface DiscoverOwnKeyword {
+  term: string;
+  words: number;
+  listings: number;
+  measured: number; // of them, the ones eBay measured traffic for
+  impressions: number;
+  views: number;
+  sold: number;
+  ctr: number | null;
+  conversion: number | null;
+}
+export interface DiscoverOwnKeywords {
+  status: string;
+  range: { key: string; from?: string; to?: string };
+  listings: number;
+  measured: number;
+  keywords: DiscoverOwnKeyword[];
 }
 
 export interface AppNotification {
@@ -2114,6 +2478,8 @@ export const api = {
   // Seller Hub's "More actions", done from Liston.
   dispatchOrder: (connectionId: string, orderId: string, input: { trackingNumber?: string; carrier?: string; lineItemIds?: string[] }) =>
     request<{ fulfillmentId: string | null; lines: number }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/dispatch`, { method: "POST", body: JSON.stringify(input) }),
+  dispatchOrders: (connectionId: string, orderIds: string[]) =>
+    request<{ done: string[]; failed: { orderId: string; reason: string }[] }>(`/api/connections/${connectionId}/orders/dispatch`, { method: "POST", body: JSON.stringify({ orderIds }) }),
   refundOrder: (connectionId: string, orderId: string, input: { amount?: string | null; reason: string; comment?: string }) =>
     request<{ refundId: string | null; status: string | null; amount: Amount | null }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/refund`, { method: "POST", body: JSON.stringify(input) }),
   cancelOrder: (connectionId: string, orderId: string, input: { reason?: string }) =>
@@ -2178,15 +2544,69 @@ export const api = {
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
   huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
     request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
-  huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } = {}) => {
+  huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } & HuntFilters = {}) => {
     const query = new URLSearchParams();
     if (params.view) query.set("view", params.view);
     if (params.hunter) query.set("hunter", params.hunter);
     if (params.q) query.set("q", params.q);
     if (params.sort) query.set("sort", params.sort);
+    if (params.profit) query.set("profit", String(params.profit));
+    if (params.demand) query.set("demand", String(params.demand));
+    if (params.added) query.set("added", String(params.added));
+    if (params.unique) query.set("unique", "1");
     if (params.page && params.page > 1) query.set("page", String(params.page));
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },
+  discoverStart: (connectionId: string) => request<DiscoverStart>(`/api/connections/${connectionId}/discover`),
+  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number) => {
+    const q = new URLSearchParams();
+    if (subject.categoryId) q.set("categoryId", subject.categoryId);
+    if (subject.q) q.set("q", subject.q);
+    if (reads) q.set("reads", String(reads));
+    return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
+  },
+  discoverReview: (connectionId: string, subject: DiscoverSubjectRef) => {
+    const q = new URLSearchParams();
+    if (subject.categoryId) q.set("categoryId", subject.categoryId);
+    if (subject.q) q.set("q", subject.q);
+    return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
+  },
+  discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}, limit?: number) => {
+    const q = new URLSearchParams();
+    if (f.q) q.set("q", f.q);
+    if (f.fit) q.set("fit", "1");
+    if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
+    if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
+    if (f.brand && f.brand !== "any") q.set("brand", f.brand);
+    if (f.rating && f.rating !== "any") q.set("rating", f.rating);
+    if (f.size && f.size !== "any") q.set("size", f.size);
+    if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
+    if (f.minSales) q.set("minSales", String(f.minSales));
+    if (f.newOnly) q.set("newOnly", "1");
+    if (f.sort) q.set("sort", f.sort);
+    if (f.mine) q.set("mine", f.mine);
+    if (limit) q.set("limit", String(limit));
+    return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
+  },
+  // The keywords worth hunting across everything explored on the site.
+  discoverKeywords: (connectionId: string, f: { q?: string; sort?: DiscoverSiteKeywordSort; searchedOnly?: boolean; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (f.q) q.set("q", f.q);
+    if (f.sort) q.set("sort", f.sort);
+    if (f.searchedOnly) q.set("searchedOnly", "1");
+    if (f.limit) q.set("limit", String(f.limit));
+    return request<DiscoverSiteKeywords>(`/api/connections/${connectionId}/discover/keywords?${q.toString()}`);
+  },
+  discoverSuggest: (connectionId: string, q: string) =>
+    request<{ categories: { id: string; name: string; path: string[]; leaf: boolean }[] }>(`/api/connections/${connectionId}/discover/suggest?q=${encodeURIComponent(q)}`),
+  discoverRank: (connectionId: string, categoryId: string) =>
+    request<{ total: number; done: number }>(`/api/connections/${connectionId}/discover/rank`, { method: "POST", body: JSON.stringify({ categoryId }) }),
+  discoverWatches: (connectionId: string) => request<DiscoverWatchList>(`/api/connections/${connectionId}/discover/watches`),
+  discoverWatch: (connectionId: string, subject: DiscoverSubjectRef) =>
+    request<{ id: string }>(`/api/connections/${connectionId}/discover/watches`, { method: "POST", body: JSON.stringify(subject) }),
+  discoverUnwatch: (connectionId: string, watchId: string) => request<void>(`/api/connections/${connectionId}/discover/watches/${watchId}`, { method: "DELETE" }),
+  discoverOwnKeywords: (connectionId: string, range: "7d" | "30d" | "90d") =>
+    request<DiscoverOwnKeywords>(`/api/connections/${connectionId}/discover/your-keywords?range=${range}`),
   huntBadge: (connectionId: string) => request<HuntBadge>(`/api/connections/${connectionId}/hunting/badge`),
   huntDetail: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}`),
   huntRecheck: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}/recheck`, { method: "POST" }),
@@ -2208,6 +2628,8 @@ export const api = {
     request<Record<string, never>>("/api/notifications/push", { method: "POST", body: JSON.stringify(subscription) }),
   pushUnsubscribe: (endpoint: string) => request<Record<string, never>>("/api/notifications/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
   huntDraftStart: (huntId: string) => request<HuntDraftStart>(`/api/hunting/${huntId}/draft`, { method: "POST" }),
+  // Drafts an approved product in the background (its automatic draft failed, or never ran).
+  huntDraftAgain: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}/auto-draft`, { method: "POST" }),
 
   getAccountOverview: (id: string, range: string) => request<AccountOverview>(`/api/connections/${id}/overview?range=${range}`),
 
@@ -2268,6 +2690,9 @@ export const api = {
       `/api/connections/${id}/template/palette${logoUrl ? `?url=${encodeURIComponent(logoUrl)}` : ""}`
     ),
 
+  getConnectionMessages: (id: string) => request<BuyerMessageSettings>(`/api/connections/${id}/messages`),
+  updateConnectionMessages: (id: string, delivered: { enabled: boolean; text: string | null }) =>
+    request<BuyerMessageSettings>(`/api/connections/${id}/messages`, { method: "PUT", body: JSON.stringify({ delivered }) }),
   updateConnectionTemplate: (id: string, template: DescriptionTemplate) =>
     request<{ settings: { template: DescriptionTemplate } }>(`/api/connections/${id}/template`, {
       method: "PUT",

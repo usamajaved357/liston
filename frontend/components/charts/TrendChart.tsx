@@ -44,6 +44,8 @@ export function TrendChart({
   showPrevious = true,
   legend = true,
   height = HEIGHT,
+  xLabel = dayLabel,
+  xTitle = dayLabelLong,
 }: {
   points: TrendPoint[];
   format: (v: number | null) => string;
@@ -55,6 +57,9 @@ export function TrendChart({
   showPrevious?: boolean;
   legend?: boolean; // false when the card shows a ChartLegend in its heading
   height?: number;
+  // Points that aren't days (price bands, a ranking): their axis label and tooltip heading.
+  xLabel?: (key: string) => string;
+  xTitle?: (key: string) => string;
 }) {
   const [boxRef, measured] = useWidth<HTMLDivElement>();
   const width = Math.max(240, measured || 640);
@@ -189,7 +194,7 @@ export function TrendChart({
         ))}
         {xLabels.map(({ i, day }) => (
           <text key={day} x={x(i)} y={height - 8} textAnchor={i === 0 && variant !== "bars" ? "start" : i === n - 1 && variant !== "bars" ? "end" : "middle"} className="fill-[var(--color-muted)] text-[11px]">
-            {dayLabel(day)}
+            {xLabel(day)}
           </text>
         ))}
 
@@ -284,7 +289,7 @@ export function TrendChart({
           role="status"
         >
           <p className="font-medium text-[var(--color-muted)]">
-            {dayLabelLong(activePoint.day)}
+            {xTitle(activePoint.day)}
             {activePoint.partial && <span className="ml-1 text-[var(--color-primary)]">· so far</span>}
           </p>
           <div className="mt-1.5 flex items-center justify-between gap-4">
@@ -300,7 +305,7 @@ export function TrendChart({
                 <svg width="12" height="4" aria-hidden>
                   <line x1="0" y1="2" x2="12" y2="2" stroke="var(--color-muted)" strokeWidth="1.5" strokeDasharray="2 2" />
                 </svg>
-                {activePoint.previousDay ? dayLabel(activePoint.previousDay) : previousLabel}
+                {activePoint.previousDay ? xLabel(activePoint.previousDay) : previousLabel}
               </span>
               <span className="font-medium tabular-nums text-[var(--color-ink)]">{format(activePoint.previous ?? null)}</span>
             </div>

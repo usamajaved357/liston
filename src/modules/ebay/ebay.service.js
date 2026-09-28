@@ -545,18 +545,23 @@ async function draftVariationListing(credentials, { groupKey, commonTitle, commo
 // Right after its items are built, eBay sometimes answers a publish with
 // "Seller Inventory Service can not publish the data. Product not found."
 // — its inventory hasn't caught up with the items yet — and the same
-// publish goes through a few seconds later. One more try, after a pause.
+// publish goes through a few seconds later. "Availability not found" is the
+// same lag for the items' stock (seen on a second site of an account, where a
+// many-variation group took longer to settle). Tried again after a pause,
+// twice, the second wait longer; a failed publish creates nothing on eBay,
+// so trying again is safe.
 let productNotFoundDelayMs = 4000;
-const isProductNotFound = (err) => /product not found/i.test(err?.message || '');
+const isNotCaughtUp = (err) => /(product|availability) not found/i.test(err?.message || '');
 
 async function publishWhenReady(publishCall) {
-  try {
-    return await publishCall();
-  } catch (err) {
-    if (!isProductNotFound(err)) throw err;
-    logger.warn('eBay had not caught up with the new items. Publishing again', { error: err.message });
-    if (productNotFoundDelayMs) await new Promise((resolve) => setTimeout(resolve, productNotFoundDelayMs));
-    return publishCall();
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await publishCall();
+    } catch (err) {
+      if (!isNotCaughtUp(err) || attempt > 2) throw err;
+      logger.warn('eBay had not caught up with the new items. Publishing again', { error: err.message, attempt });
+      if (productNotFoundDelayMs) await new Promise((resolve) => setTimeout(resolve, productNotFoundDelayMs * attempt * attempt));
+    }
   }
 }
 
@@ -2323,6 +2328,16 @@ function classifyOrderStatus(order) {
 
 const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatched', 'delivered', 'cancelled'];
 
+// "Marked dispatched": on its way by the seller's word alone — dispatched
+// (not yet delivered) with no tracking number on any line, whether marked in
+// Seller Hub or from Liston. A view within Dispatched, not a status of its
+// own, so its orders stay counted under Dispatched too.
+function isMarkedDispatched(order) {
+  if (order.derivedStatus !== 'dispatched') return false;
+  if (order.markedDispatched?.tracked) return false;
+  return !(order.lineItems || []).some((li) => li.trackingNumber);
+}
+
 /**
  * The Orders page's data source: fetches every order in the range, tags each
  * with a derived status, filters by status/search text, sorts it
@@ -2337,7 +2352,10 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
 // supplier order stands (orders/order-supplier.js); `supplier` keeps one
 // state. The tab counts don't depend on it; `supplierCounts` count each
 // state within the chosen tab.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null }) {
+// `dispatches` are the orders Liston marked dispatched (orders.dispatchLookup): orderId → { lines, at,
+// by, tracked }. eBay's order feed shows a dispatch minutes later; until it does, an order whose every
+// line Liston dispatched counts as dispatched now. Either way the order says who marked it.
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null, dispatches = null }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2345,14 +2363,20 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   const archivedSet = new Set(archivedOrderIds);
   const tagged = rawOrders
     .filter((order) => archivedSet.has(order.orderId) === Boolean(archived))
-    .map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order), archived: archivedSet.has(order.orderId) }));
+    .map((order) => {
+      const marked = dispatches?.get(order.orderId) || null;
+      const waiting = marked && !order.shippedTime && marked.lines >= (order.lineItems || []).length;
+      const seen = waiting ? { ...order, shippedTime: marked.at } : order;
+      return { ...seen, derivedStatus: classifyOrderStatus(seen), archived: archivedSet.has(order.orderId), markedDispatched: marked ? { ...marked, pending: Boolean(waiting) } : null };
+    });
 
   const counts = { all: tagged.length };
   for (const key of ORDER_STATUS_FILTERS) {
     counts[key] = tagged.filter((o) => o.derivedStatus === key).length;
   }
+  counts.marked = tagged.filter(isMarkedDispatched).length;
 
-  let filtered = status && status !== 'all' ? tagged.filter((o) => o.derivedStatus === status) : tagged;
+  let filtered = status === 'marked' ? tagged.filter(isMarkedDispatched) : status && status !== 'all' ? tagged.filter((o) => o.derivedStatus === status) : tagged;
 
   // What needs doing among the paid orders waiting to ship: past their
   // dispatch-by date, and not yet ordered from the supplier.
@@ -2587,6 +2611,7 @@ module.exports = {
   dispatchOrder,
   EbayError,
   ensureValidAccessToken,
+  getOrdersLast90Cached,
   analyticsInputs,
   createOfferWithRetry,
   buildInventoryItem,

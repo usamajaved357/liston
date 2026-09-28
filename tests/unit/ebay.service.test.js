@@ -274,7 +274,7 @@ test('listOrdersDetailed classifies orders by payment/dispatch state and reports
   const result = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-1', range: '30d', status: 'all', search: '', page: 1, perPage: 25 });
 
   // A delivered order leaves Dispatched for its own tab.
-  assert.deepStrictEqual(result.counts, { all: 5, awaiting_payment: 1, awaiting_dispatch: 1, dispatched: 1, delivered: 1, cancelled: 1 });
+  assert.deepStrictEqual(result.counts, { all: 5, awaiting_payment: 1, awaiting_dispatch: 1, dispatched: 1, delivered: 1, cancelled: 1, marked: 1 });
   assert.strictEqual(result.totalEntries, 5);
   assert.strictEqual(result.orders[0].lineItems[0].imageUrl, 'https://example.com/pic.jpg');
 });
@@ -488,6 +488,65 @@ test('a second orders read asks eBay only for orders modified since the last syn
   assert.strictEqual(second.counts.all, 2);
   assert.strictEqual(second.counts.awaiting_dispatch, 0);
   assert.strictEqual(second.counts.dispatched, 2);
+});
+
+test('an order Liston marked dispatched counts as dispatched at once, and says who marked it, before eBay\'s feed catches up', async () => {
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'upsertOrders', async () => {});
+  mock.method(mirror, 'pruneOrdersBefore', async () => {});
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  mock.method(mirror, 'loadItemSummaries', async () => new Map());
+  mock.method(mirror, 'saveItemSummary', async () => {});
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const now = new Date().toISOString();
+  mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [
+      makeOrder({ orderId: 'MARKED', shippedTime: null, createdAt: now, paidTime: now }),
+      makeOrder({ orderId: 'WAITING', shippedTime: null, createdAt: now, paidTime: now }),
+      makeOrder({ orderId: 'SHIPPED', createdAt: now, paidTime: now }),
+    ],
+    totalEntries: 3,
+    totalPages: 1,
+  }));
+  const at = new Date(Date.now() - 60000).toISOString();
+  const dispatches = new Map([
+    ['MARKED', { lines: 1, at, by: 'Sam', tracked: false }],
+    ['SHIPPED', { lines: 1, at, by: 'Ali', tracked: true }],
+  ]);
+  const out = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-marked', range: '90d', status: 'all', search: '', page: 1, perPage: 25, dispatches });
+  const byId = new Map(out.orders.map((o) => [o.orderId, o]));
+  assert.deepStrictEqual([out.counts.awaiting_dispatch, out.counts.dispatched], [1, 2]);
+  assert.strictEqual(byId.get('MARKED').derivedStatus, 'dispatched');
+  assert.deepStrictEqual(byId.get('MARKED').markedDispatched, { lines: 1, at, by: 'Sam', tracked: false, pending: true });
+  assert.strictEqual(byId.get('SHIPPED').markedDispatched.pending, false, "eBay's feed already has it");
+  assert.strictEqual(byId.get('WAITING').markedDispatched, null);
+});
+
+test('Marked dispatched: dispatched orders with no tracking, marked in Seller Hub or from Liston, still counted under Dispatched', async () => {
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const now = new Date().toISOString();
+  const tracked = [{ itemId: '111', title: 'Widget', quantityPurchased: 1, price: null, variation: [], trackingCarrier: 'Royal Mail', trackingNumber: 'RM123456789GB', handleByTime: null }];
+  mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [
+      makeOrder({ orderId: 'HUB-MARKED', createdAt: now, paidTime: now }),
+      makeOrder({ orderId: 'LISTON-MARKED', shippedTime: null, createdAt: now, paidTime: now }),
+      makeOrder({ orderId: 'TRACKED', createdAt: now, paidTime: now, lineItems: tracked }),
+      makeOrder({ orderId: 'LISTON-TRACKED', shippedTime: null, createdAt: now, paidTime: now }),
+      makeOrder({ orderId: 'DELIVERED', createdAt: now, paidTime: now, deliveredAt: now }),
+      makeOrder({ orderId: 'WAITING', shippedTime: null, createdAt: now, paidTime: now }),
+    ],
+    totalEntries: 6,
+    totalPages: 1,
+  }));
+  const at = new Date(Date.now() - 60000).toISOString();
+  const dispatches = new Map([
+    ['LISTON-MARKED', { lines: 1, at, by: 'Sam', tracked: false }],
+    ['LISTON-TRACKED', { lines: 1, at, by: 'Ali', tracked: true }],
+  ]);
+  const out = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-marked-tab', range: '90d', status: 'marked', search: '', page: 1, perPage: 25, dispatches });
+  assert.deepStrictEqual(out.orders.map((o) => o.orderId).sort(), ['HUB-MARKED', 'LISTON-MARKED']);
+  assert.strictEqual(out.counts.marked, 2);
+  assert.strictEqual(out.counts.dispatched, 4);
 });
 
 // --- targeted background sync ---------------------------------------------
@@ -847,6 +906,29 @@ test('a publish eBay answers with "Product not found" is tried once more, and th
   const result = await ebayService.publishGroup(freshCredentials(), 'Liston-group', 'EBAY_GB');
   assert.strictEqual(calls, 2);
   assert.strictEqual(result.externalProductId, '800700000001');
+});
+
+test('a publish eBay answers with "Availability not found" is tried again, up to twice, and then goes live', async () => {
+  ebayService.setProductNotFoundDelay(0);
+  let calls = 0;
+  mock.method(ebayClient, 'publishOfferByInventoryItemGroup', async () => {
+    calls += 1;
+    if (calls <= 2) throw new ebayClient.EbayApiError('Input error. Seller Inventory Service can not publish the data. Availability not found. Please try again or contact customer support..', 502, []);
+    return { listingId: '800700000002' };
+  });
+
+  const result = await ebayService.publishGroup(freshCredentials(), 'Liston-group', 'EBAY_US');
+  assert.strictEqual(calls, 3);
+  assert.strictEqual(result.externalProductId, '800700000002');
+});
+
+test('eBay still not caught up after three tries: its reason is passed on', async () => {
+  ebayService.setProductNotFoundDelay(0);
+  const publish = mock.method(ebayClient, 'publishOfferByInventoryItemGroup', async () => {
+    throw new ebayClient.EbayApiError('Input error. Seller Inventory Service can not publish the data. Availability not found. Please try again or contact customer support..', 502, []);
+  });
+  await assert.rejects(ebayService.publishGroup(freshCredentials(), 'Liston-group', 'EBAY_US'), /Availability not found/);
+  assert.strictEqual(publish.mock.calls.length, 3);
 });
 
 test('any other publish refusal is not retried', async () => {

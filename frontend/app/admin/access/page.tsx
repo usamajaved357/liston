@@ -9,6 +9,7 @@ import { cacheUser, useCachedUser } from "@/lib/session";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDateTime } from "@/lib/format";
+import { PillTabs } from "@/components/PillTabs";
 
 function initials(r: AccessRequest) {
   const source = (r.name || r.email).trim();
@@ -220,27 +221,18 @@ export default function AccessRequestsPage() {
                   <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">Recently reviewed</h2>
                   <span className="text-[12px] text-[var(--color-muted)]">last 30 days</span>
                 </div>
-                <div className="inline-flex rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
-                  {(
+                <PillTabs
+                  label="Reviewed"
+                  tabs={(
                     [
                       ["all", "All"],
                       ["active", "Approved"],
                       ["rejected", "Revoked"],
                     ] as const
-                  ).map(([key, label]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => setFilter(key)}
-                      className={`flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium transition-colors ${
-                        filter === key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-                      }`}
-                    >
-                      {label}
-                      <span className={filter === key ? "text-white/70" : "text-[var(--color-muted)]/70"}>{counts[key]}</span>
-                    </button>
-                  ))}
-                </div>
+                  ).map(([key, label]) => ({ key, label, count: counts[key] }))}
+                  value={filter}
+                  onChange={setFilter}
+                />
               </div>
 
               <div className="card divide-y divide-[var(--color-line)]">

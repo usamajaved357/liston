@@ -169,7 +169,13 @@ async function salesExtras(connection, { range, timeZone, orders, recent }) {
   return { trend, bestSellers };
 }
 
+// Every account's day is its own eBay site's (Europe/London for eBay UK),
+// as eBay's Seller Hub and the account's own Overview count it — never the
+// viewer's: an owner in Pakistan opening Today at 04:00 would otherwise see
+// the UK's evening before as "today". The viewer's time zone (`timeZone`)
+// is taken but not used for counting.
 async function getOverview(ownerId, viewer, { range = 'today', timeZone = null } = {}) {
+  void timeZone;
   const effectiveRange = RANGES.has(range) ? range : 'today';
   const { connections } = await connectionService.listConnections(ownerId, viewer);
   const ebayConnections = connections.filter((c) => c.platform_key === 'ebay');
@@ -178,7 +184,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
     ebayConnections.map(async (connection) => {
       const base = { id: connection.id, label: connection.label, status: connection.status, marketplace: connection.marketplace || null };
       try {
-        return { ...base, ok: true, ...(await accountFigures(connection, ownerId, { range: effectiveRange, timeZone, extras: true })) };
+        return { ...base, ok: true, ...(await accountFigures(connection, ownerId, { range: effectiveRange, timeZone: null, extras: true })) };
       } catch (err) {
         logger.warn('Overview: account could not be read', { connectionId: connection.id, error: err.message });
         return { ...base, ok: false, error: err.message, activeListings: 0, listings: null, money: null, financesPending: false, financesAccess: true };

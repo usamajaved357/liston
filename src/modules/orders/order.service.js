@@ -90,10 +90,11 @@ async function getOrder(connectionId, userId, orderId) {
   const detail = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
     ebayService.getOrderDetail(credentials, { connectionId, orderId })
   );
-  const [sourcingRows, eventRows, archived] = await Promise.all([
+  const [sourcingRows, eventRows, archived, messages] = await Promise.all([
     orderRepository.listSourcingForOrder(connectionId, orderId),
     orderRepository.listEvents(connectionId, orderId),
     orderRepository.findArchived(connectionId, orderId),
+    orderRepository.messagesForOrder(connectionId, orderId).catch(() => []),
   ]);
   const sourcingByLine = new Map(sourcingRows.map((r) => [r.line_item_id, sourcingView(r)]));
   const lineItems = (await marginFor(connectionId, detail.order.lineItems)).map((li, index) => ({
@@ -109,6 +110,8 @@ async function getOrder(connectionId, userId, orderId) {
     actionsEnabled: detail.actionsEnabled,
     source: detail.source,
     events,
+    // Messages Liston sent the buyer by itself (the delivered thank-you).
+    messages,
     carriers: CARRIERS.map((c) => ({ code: c.code, label: c.label })),
     cancelReasons: Object.entries(SELLER_CANCEL_REASONS).map(([code, label]) => ({ code, label })),
     refundReasons: Object.entries(REFUND_REASONS).map(([code, label]) => ({ code, label })),
@@ -170,6 +173,34 @@ async function dispatchOrder(connectionId, userId, actorId, orderId, { trackingN
     actorUserId: actorId,
   });
   return { fulfillmentId: result.fulfillmentId, lines: lines.length };
+}
+
+const BULK_DISPATCH_MAX = 50;
+
+/**
+ * "Mark as dispatched" for several orders at once, from the orders list: each
+ * order's undispatched lines, no tracking number (eBay allows it). One at a
+ * time, so eBay's limits and one order's failure don't stop the rest:
+ * { done: [orderId], failed: [{ orderId, reason }] }.
+ */
+async function dispatchOrders(connectionId, userId, actorId, orderIds) {
+  const ids = [...new Set((orderIds || []).map(String))].slice(0, BULK_DISPATCH_MAX);
+  const done = [];
+  const failed = [];
+  for (const orderId of ids) {
+    try {
+      await dispatchOrder(connectionId, userId, actorId, orderId, {});
+      done.push(orderId);
+    } catch (err) {
+      failed.push({ orderId, reason: err.expose || err.statusCode < 500 ? err.message : "eBay didn't take it. Try again." });
+    }
+  }
+  return { done, failed };
+}
+
+/** The orders on an account Liston marked dispatched (for the orders list): orderId → { lines, at, by, tracked }. */
+async function dispatchLookup(connectionId) {
+  return orderRepository.dispatchesByOrder(connectionId);
 }
 
 // eBay's reasons for a refund, with Seller Hub's wording.
@@ -467,4 +498,4 @@ async function supplierStateLookup(connectionId) {
     });
 }
 
-module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, supplierStateLookup, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };
+module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, dispatchOrders, dispatchLookup, BULK_DISPATCH_MAX, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, supplierStateLookup, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };

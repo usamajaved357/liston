@@ -207,3 +207,25 @@ test('respondToInquiry sends the tracking with a detected carrier', async () => 
   assert.strictEqual(sent.carrier, 'Yodel');
   await assert.rejects(() => orderService.respondToInquiry(CONNECTION, USER, 'actor', 'o', { inquiryId: 'i-1', action: 'shipment', trackingNumber: '' }), /tracking number/);
 });
+
+test('dispatchOrders marks several orders dispatched without tracking, one at a time; one failure does not stop the rest', async () => {
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't', marketplaceId: 'EBAY_GB' }, {}));
+  mock.method(ebayService, 'getOrderDetail', async (credentials, { orderId }) =>
+    orderId === 'done-already'
+      ? fulfillmentOrder({ orderId, lineItems: [{ lineItemId: 'x', quantity: 1, fulfillmentStatus: 'FULFILLED' }] })
+      : fulfillmentOrder({ orderId, lineItems: [{ lineItemId: `li-${orderId}`, quantity: 1, fulfillmentStatus: 'NOT_STARTED' }] })
+  );
+  const sent = [];
+  mock.method(ebayService, 'dispatchOrder', async (credentials, input) => {
+    sent.push(input);
+    return { fulfillmentId: `f-${input.orderId}` };
+  });
+  mock.method(orderRepository, 'upsertSourcing', async (row) => row);
+  mock.method(orderRepository, 'addEvent', async (e) => e);
+
+  const out = await orderService.dispatchOrders(CONNECTION, USER, 'actor', ['a', 'done-already', 'b', 'a']);
+  assert.deepStrictEqual(out.done, ['a', 'b'], 'each order once');
+  assert.deepStrictEqual(out.failed.map((f) => f.orderId), ['done-already']);
+  assert.match(out.failed[0].reason, /already dispatched/);
+  assert.ok(sent.every((s) => s.trackingNumber === undefined && s.carrier === undefined), 'no tracking needed');
+});
