@@ -193,16 +193,17 @@ async function getOrders(req, res, next) {
     const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
     const supplier = SUPPLIER_FILTERS.includes(req.query.supplier) ? req.query.supplier : 'any';
     const orderService = require('../orders/order.service');
-    const [archivedOrderIds, supplierStateOf] = await Promise.all([
+    const [archivedOrderIds, supplierStateOf, dispatches] = await Promise.all([
       orderService.archivedOrderIds(req.params.id).catch(() => []),
       orderService.supplierStateLookup(req.params.id).catch(() => null),
+      orderService.dispatchLookup(req.params.id).catch(() => null),
     ]);
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
         throw new connectionService.ConnectionError(`Orders aren't available for ${connection.platform_name} yet`, 400);
       }
-      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived, supplier, supplierStateOf });
+      return ebayService.listOrdersDetailed(credentials, { connectionId: req.params.id, range, status, search, sort, page, perPage, push: ebayService.pushEnabled(connection), archivedOrderIds, archived, supplier, supplierStateOf, dispatches });
     });
 
     // Each row's supplier-order state, so the list can show it and take a
@@ -559,6 +560,27 @@ async function logoPalette(req, res, next) {
   }
 }
 
+// ---- Messages Liston sends buyers by itself (the delivered thank-you) ----
+const messagesSchema = z.object({ delivered: z.object({ enabled: z.boolean(), text: z.string().max(2000, 'Keep the message under 2,000 characters.').nullable().optional() }) });
+
+async function getMessages(req, res, next) {
+  try {
+    res.status(200).json(await require('../orders/order-messages.service').getSettings(req.params.id, req.ownerId));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateMessages(req, res, next) {
+  try {
+    const parsed = messagesSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    res.status(200).json(await require('../orders/order-messages.service').updateSettings(req.params.id, req.ownerId, parsed.data.delivered));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function updateTemplate(req, res, next) {
   try {
     const parsed = updateTemplateSchema.safeParse(req.body);
@@ -692,6 +714,8 @@ async function addStoreCategory(req, res, next) {
 }
 
 module.exports = {
+  getMessages,
+  updateMessages,
   list,
   listPlatforms,
   getOne,

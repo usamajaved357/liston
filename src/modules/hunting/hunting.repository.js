@@ -7,15 +7,17 @@ const { query } = require('../../db/client');
 // an eBay item, drafted while it has a draft, else its review decision.
 const STAGE_SQL = `CASE WHEN cardinality(h.item_ids) > 0 THEN 'listed' WHEN h.listing_id IS NOT NULL THEN 'drafted' ELSE h.status END`;
 
-// The list's tabs. Approved holds what was approved and has since been
-// drafted or listed too; a sent-back product is under All (and My hunts,
-// the person's own finds, whatever their stage, filtered by hunter).
+// The list's tabs. A drafted product has moved to the Drafts page (and a
+// listed one to Listings), so no tab holds them; an approved product stays
+// until its draft is made — a failed draft keeps its place. A sent-back
+// product is under All (and My hunts, the person's own, filtered by hunter).
+const ON_PAGE = `${STAGE_SQL} NOT IN ('drafted', 'listed')`;
 const VIEW_SQL = {
-  all: 'TRUE',
+  all: ON_PAGE,
   review: `${STAGE_SQL} = 'pending'`,
-  approved: `${STAGE_SQL} IN ('approved', 'drafted', 'listed')`,
+  approved: `${STAGE_SQL} = 'approved'`,
   rejected: `${STAGE_SQL} = 'rejected'`,
-  mine: 'TRUE',
+  mine: ON_PAGE,
 };
 const VIEWS = Object.keys(VIEW_SQL);
 
@@ -113,7 +115,7 @@ async function counts(connectionId, { hunterId = null, viewerId = null } = {}) {
     where += ` AND h.hunter_user_id = $${params.length}`;
   }
   const { rows } = await query(
-    `SELECT ${VIEWS.map((v) => (v === 'mine' ? `count(*) FILTER (WHERE h.hunter_user_id = $2)::int AS mine` : `count(*) FILTER (WHERE ${VIEW_SQL[v]})::int AS ${v}`)).join(', ')}
+    `SELECT ${VIEWS.map((v) => (v === 'mine' ? `count(*) FILTER (WHERE h.hunter_user_id = $2 AND ${ON_PAGE})::int AS mine` : `count(*) FILTER (WHERE ${VIEW_SQL[v]})::int AS ${v}`)).join(', ')}
        FROM hunted_products h WHERE ${where}`,
     params
   );
@@ -195,7 +197,30 @@ async function deleteById(id) {
 
 /** A draft made from the product (a second draft takes over from the first). */
 async function linkDraft(id, listingId, userId) {
-  await query('UPDATE hunted_products SET listing_id = $2, drafted_by = $3, drafted_at = now(), updated_at = now() WHERE id = $1', [id, listingId, userId || null]);
+  await query(
+    'UPDATE hunted_products SET listing_id = $2, drafted_by = $3, drafted_at = now(), draft_status = NULL, draft_error = NULL, updated_at = now() WHERE id = $1',
+    [id, listingId, userId || null]
+  );
+}
+
+/**
+ * Claims a product for its automatic draft: only one at a time, and only an
+ * approved one with no draft yet (not while another claim is fresh).
+ * True when this call claimed it.
+ */
+async function claimDraft(id, staleBefore) {
+  const { rowCount } = await query(
+    `UPDATE hunted_products SET draft_status = 'drafting', draft_error = NULL, draft_attempted_at = now(), updated_at = now()
+      WHERE id = $1 AND status = 'approved' AND listing_id IS NULL
+        AND (draft_status IS DISTINCT FROM 'drafting' OR draft_attempted_at < $2)`,
+    [id, staleBefore]
+  );
+  return rowCount > 0;
+}
+
+/** The automatic draft failed: why, kept until it's tried again. */
+async function draftFailed(id, error) {
+  await query(`UPDATE hunted_products SET draft_status = 'failed', draft_error = $2, updated_at = now() WHERE id = $1 AND listing_id IS NULL`, [id, String(error || '').slice(0, 500)]);
 }
 
 /** The draft made from a product went live (or was relisted) as this eBay item. */
@@ -365,6 +390,8 @@ async function dueForReading({ limit = 20, hours = 20, days = 90, ownerId = null
 // ---- a competitor's dated sales, pasted from eBay (migration 029) -------------------
 
 module.exports = {
+  claimDraft,
+  draftFailed,
   eventsSince,
   outcomesBetween,
   countForOverview,

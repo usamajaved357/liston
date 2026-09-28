@@ -66,6 +66,18 @@ async function dispatchOrder(req, res, next) {
   }
 }
 
+const dispatchManySchema = z.object({ orderIds: z.array(z.string().min(1).max(40)).min(1, 'Pick at least one order.').max(50, 'Up to 50 orders at a time.') });
+
+async function dispatchOrders(req, res, next) {
+  try {
+    const parsed = dispatchManySchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Pick the orders to mark dispatched.' });
+    res.status(200).json(await orderService.dispatchOrders(req.params.id, req.ownerId, req.userId, parsed.data.orderIds));
+  } catch (err) {
+    next(err);
+  }
+}
+
 const refundSchema = z.object({
   amount: z.union([z.number(), z.string()]).nullable().optional(),
   reason: z.string().max(60),
@@ -200,4 +212,4 @@ async function updateSourceAccount(req, res, next) {
   }
 }
 
-module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, refundOrder, cancelOrder, setArchived, getCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, listSourceAccounts, createSourceAccount, updateSourceAccount };
+module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, dispatchOrders, refundOrder, cancelOrder, setArchived, getCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, listSourceAccounts, createSourceAccount, updateSourceAccount };

@@ -2337,7 +2337,10 @@ const ORDER_STATUS_FILTERS = ['awaiting_payment', 'awaiting_dispatch', 'dispatch
 // supplier order stands (orders/order-supplier.js); `supplier` keeps one
 // state. The tab counts don't depend on it; `supplierCounts` count each
 // state within the chosen tab.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null }) {
+// `dispatches` are the orders Liston marked dispatched (orders.dispatchLookup): orderId → { lines, at,
+// by, tracked }. eBay's order feed shows a dispatch minutes later; until it does, an order whose every
+// line Liston dispatched counts as dispatched now. Either way the order says who marked it.
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null, dispatches = null }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2345,7 +2348,12 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   const archivedSet = new Set(archivedOrderIds);
   const tagged = rawOrders
     .filter((order) => archivedSet.has(order.orderId) === Boolean(archived))
-    .map((order) => ({ ...order, derivedStatus: classifyOrderStatus(order), archived: archivedSet.has(order.orderId) }));
+    .map((order) => {
+      const marked = dispatches?.get(order.orderId) || null;
+      const waiting = marked && !order.shippedTime && marked.lines >= (order.lineItems || []).length;
+      const seen = waiting ? { ...order, shippedTime: marked.at } : order;
+      return { ...seen, derivedStatus: classifyOrderStatus(seen), archived: archivedSet.has(order.orderId), markedDispatched: marked ? { ...marked, pending: Boolean(waiting) } : null };
+    });
 
   const counts = { all: tagged.length };
   for (const key of ORDER_STATUS_FILTERS) {
@@ -2587,6 +2595,7 @@ module.exports = {
   dispatchOrder,
   EbayError,
   ensureValidAccessToken,
+  getOrdersLast90Cached,
   analyticsInputs,
   createOfferWithRetry,
   buildInventoryItem,

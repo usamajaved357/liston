@@ -563,6 +563,13 @@ export function HuntResult({ result }: { result: HuntCheckResult }) {
   const postage = c?.postage ? (c.postage.cost ? `+ ${money(c.postage.cost, currency)} postage` : "Free postage") : null;
   return (
     <div className="space-y-4">
+      {result.mismatch && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-[13px] text-rose-900" role="alert">
+          <p className="font-semibold">{result.mismatch.kind === "variations" ? "The supplier doesn't sell every variation of the eBay listing" : "The supplier's product doesn't match the eBay listing"}</p>
+          <p className="mt-0.5">{result.mismatch.reason}</p>
+          <p className="mt-1 text-[12px] text-rose-800/80">Liston rejects a product like this automatically. The supplier can have more options than the eBay listing, never fewer.</p>
+        </div>
+      )}
       <Verdict result={result} />
       <Duplicates items={result.duplicates || []} />
       <Checks result={result} />

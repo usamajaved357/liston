@@ -24,6 +24,7 @@ router.post('/:huntId/recheck', ...guard, huntingController.recheck);
 router.post('/:huntId/resubmit', ...guard, huntingController.resubmit);
 router.post('/:huntId/decision', ...guard, huntingController.decide);
 router.post('/:huntId/draft', ...guard, huntingController.draftStart);
+router.post('/:huntId/auto-draft', ...guard, huntingController.draftAgain);
 
 module.exports = router;
 module.exports.HUNTING_ACCESS = HUNTING_ACCESS;

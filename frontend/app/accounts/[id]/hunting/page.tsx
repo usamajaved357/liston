@@ -142,6 +142,13 @@ function HuntingBody() {
     [writeUrl]
   );
   const refresh = useCallback(() => setReload((n) => n + 1), []);
+  // While an approved product drafts itself, look again every few seconds: it leaves the list when done.
+  const draftingNow = Boolean(data?.items.some((h) => h.draftState === "drafting"));
+  useEffect(() => {
+    if (!draftingNow) return;
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
+  }, [draftingNow, refresh]);
 
   function onChecked(next: HuntCheck | null) {
     setChecked(next);
@@ -367,7 +374,13 @@ function HuntingBody() {
                   setEditing(true);
                 }}
                 onApprove={setQuick}
-                onDraft={(h) => router.push(`/accounts/${connection.id}/listings/new?hunt=${h.id}`)}
+                onDraft={(h) => {
+                  // Drafted in the background; the row shows "Drafting…" until it moves to the Drafts page.
+                  api
+                    .huntDraftAgain(h.id)
+                    .then(refresh)
+                    .catch((err) => setListError(err instanceof ApiError ? err.message : "Couldn't start the draft. Try again."));
+                }}
                 onMore={loadMore}
               />
             )}

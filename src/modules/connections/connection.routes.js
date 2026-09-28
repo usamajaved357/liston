@@ -38,6 +38,9 @@ router.post('/:id/locations', requireAuth, requireOwner, connectionController.cr
 // they're owner-only for the same reason policies are — never delegable.
 router.put('/:id/pricing', requireAuth, requireOwner, connectionController.updatePricing);
 router.put('/:id/template', requireAuth, requireOwner, connectionController.updateTemplate);
+// The message Liston sends a buyer once their order is delivered (off until the owner switches it on).
+router.get('/:id/messages', requireAuth, requireOwner, connectionController.getMessages);
+router.put('/:id/messages', requireAuth, requireOwner, connectionController.updateMessages);
 router.get('/:id/template/palette', requireAuth, requireOwner, connectionController.logoPalette);
 router.get('/:id/template/source', requireAuth, requireOwner, connectionController.templateSource);
 router.post('/:id/template/preview', requireAuth, requireOwner, express.json({ limit: '1mb' }), connectionController.templatePreview);

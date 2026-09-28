@@ -73,3 +73,29 @@ test("the business Overview shows each market's sales by day and best sellers, w
   assert.strictEqual(o.combined.trend.at(-1).values.units, 6, 'units add up across markets, not converted');
   assert.deepStrictEqual(o.combined.bestSellers.map((b) => [b.itemId, b.currency]), [['333', 'AUD'], ['111', 'GBP'], ['222', 'GBP']]);
 });
+
+test("the business Overview's Today is each account's own eBay site's day, not the viewer's: an owner in Pakistan at dawn doesn't see the UK's evening before as today", async () => {
+  const uk = { id: crypto.randomUUID(), label: 'Walexo', status: 'active', platform_key: 'ebay', marketplace: { id: 'EBAY_GB' } };
+  // 23:00 last night in London: today in Karachi (four or five hours ahead), yesterday for eBay UK.
+  const londonMidnight = ebayService.resolveRangeWindow('today', null, null, 'Europe/London')[0];
+  const lastNight = { ...order('late', 20, 'GBP', [['111', 1, 20]]), createdAt: new Date(londonMidnight.getTime() - 3600e3).toISOString() };
+  mock.method(connectionService, 'listConnections', async () => ({ connections: [uk] }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, owner, action) => action({ marketplaceId: 'EBAY_GB' }));
+  mock.method(ebayService, 'syncOrderFinances', async () => ({ skipped: 'fresh' }));
+  mock.method(ebayService, 'countActiveListings', async () => ({ totalEntries: 1 }));
+  const asked = mock.method(ebayService, 'ordersInRange', async () => []);
+  mock.method(ebayService, 'overviewSales', async () => ({ orders: [lastNight], listings: new Map() }));
+  mock.method(listingRepository, 'countListingWork', async () => ({ drafted: 0, published: 0, waiting: 0 }));
+  mock.method(mirror, 'loadOrderFinances', async () => new Map());
+  mock.method(mirror, 'loadAccountCharges', async () => []);
+  mock.method(mirror, 'loadItemSummaries', async () => new Map());
+  mock.method(orderRepository, 'sourceCostsByOrder', async () => new Map());
+  mock.method(orderRepository, 'listArchivedOrderIds', async () => []);
+  mock.method(exchangeRates, 'ratesFor', async () => ({ rates: {}, date: '2026-09-25' }));
+
+  const o = await overviewService.getOverview('owner', null, { range: 'today', timeZone: 'Asia/Karachi' });
+  assert.ok(!asked.mock.calls[0].arguments[1].timeZone, "orders are windowed in the account's site's time zone, not the viewer's");
+  const trend = o.markets[0].trend;
+  assert.deepStrictEqual([trend.at(-1).partial, trend.at(-1).values.orders], [true, 0], 'nothing yet today in the UK');
+  assert.strictEqual(trend.at(-2).values.orders, 1, "last night's order is on eBay UK's yesterday");
+});

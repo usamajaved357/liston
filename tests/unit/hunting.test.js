@@ -217,12 +217,46 @@ test('nobody but the owner decides on their own find; hunters edit their own wai
   assert.strictEqual(rules.rules.canEdit({ ...byHunter, status: 'sent_back' }, OWNER), false);
 });
 
-test('drafting needs an approved product and Listings access; a drafted one is settled', () => {
+test('an approved product drafts itself; drafting by hand (Listings access or reviewing) is for when that failed; a drafted one is settled', () => {
   const approved = { status: 'approved', hunter_user_id: 'h', listing_id: null, item_ids: [] };
   assert.strictEqual(rules.rules.canDraft(approved, LISTER), true);
-  assert.strictEqual(rules.rules.canDraft(approved, REVIEWER), false);
+  assert.strictEqual(rules.rules.canDraft(approved, REVIEWER), true, 'a reviewer can retry the draft they started');
   assert.strictEqual(rules.rules.canDraft({ ...approved, status: 'pending' }, LISTER), false);
+  assert.strictEqual(rules.rules.canDraft({ ...approved, listing_id: 'x' }, LISTER), false, 'drafted: it is on the Drafts page now');
+  // While its automatic draft runs, no second one; one stuck for 15 minutes counts as failed.
+  const drafting = { ...approved, draft_status: 'drafting', draft_attempted_at: new Date().toISOString() };
+  assert.strictEqual(rules.draftStateOf(drafting), 'drafting');
+  assert.strictEqual(rules.rules.canDraft(drafting, LISTER), false);
+  assert.strictEqual(rules.draftStateOf({ ...drafting, draft_attempted_at: new Date(Date.now() - 20 * 60000).toISOString() }), 'failed');
+  assert.strictEqual(rules.draftStateOf({ ...approved, draft_status: 'failed' }), 'failed');
+  assert.strictEqual(rules.draftStateOf({ ...approved, draft_status: 'failed', listing_id: 'x' }), null);
   assert.strictEqual(rules.rules.canDecide({ ...approved, listing_id: 'x' }, OWNER), false);
+  // Liston's own rejection: the hunter may remove it (they can't remove anything else).
+  const byListon = { status: 'rejected', reject_reason: 'mismatch', reviewer_user_id: null, hunter_user_id: HUNTER.userId, listing_id: null, item_ids: [] };
+  assert.strictEqual(rules.autoRejected(byListon), true);
+  assert.strictEqual(rules.rules.canRemove(byListon, HUNTER), true);
+  assert.strictEqual(rules.rules.canRemove({ ...byListon, reject_reason: 'low_profit', reviewer_user_id: 'r' }, HUNTER), false);
+  assert.strictEqual(rules.reasonLabel('mismatch'), "Supplier doesn't match the eBay listing");
+  assert.throws(() => rules.decisionFields({ decision: 'reject', reason: 'mismatch' }), /Choose why/, 'only Liston gives that reason');
+});
+
+test("the supplier must sell every one of the eBay listing's variations (more is fine); a listing without variations is compared on its title", () => {
+  const ebay = (variants, title = 'Wireless earbuds bluetooth headphones') => ({ title, priceText: 'GBP 12.99', postage: { cost: 0 }, variants: variants.map((v) => ({ attributes: v, priceText: 'GBP 12.99' })) });
+  const ali = (variants, title = 'TWS wireless earbuds bluetooth 5.3') => ({ title, priceText: 'GBP 3.00', variants: variants.map((v, i) => ({ attributes: v, priceText: 'GBP 3.00', skuId: String(i) })) });
+  // eBay has one colour; the supplier has five including it: a match.
+  assert.strictEqual(huntProfit.matchCheck(ebay([{ Colour: 'Black' }]), ali([{ Color: 'Black' }, { Color: 'White' }, { Color: 'Red' }, { Color: 'Blue' }, { Color: 'Pink' }]), 'GBP'), null);
+  // eBay sells a colour the supplier doesn't have: a mismatch, naming it.
+  const missing = huntProfit.matchCheck(ebay([{ Colour: 'Black' }, { Colour: 'Green' }]), ali([{ Color: 'Black' }, { Color: 'White' }]), 'GBP');
+  assert.strictEqual(missing.kind, 'variations');
+  assert.deepStrictEqual(missing.missing, ['Green']);
+  assert.match(missing.reason, /1 of its 2 variations that the supplier doesn't have: Green/);
+  // Sizes spelt differently are the same size.
+  assert.strictEqual(huntProfit.matchCheck(ebay([{ Size: 'Large' }, { Size: 'XL' }]), ali([{ Size: 'L' }, { Size: 'Extra Large' }]), 'GBP'), null);
+  // No variations on eBay: the titles must share what the product is.
+  assert.strictEqual(huntProfit.matchCheck(ebay([]), ali([{ Color: 'Black' }]), 'GBP'), null);
+  const other = huntProfit.matchCheck(ebay([], 'Cat water fountain 2L automatic'), ali([], 'LED strip lights 5m RGB'), 'GBP');
+  assert.strictEqual(other.kind, 'product');
+  assert.strictEqual(huntProfit.matchCheck(null, ali([]), 'GBP'), null, 'no competitor: nothing to compare with');
 });
 
 test('decisionFields needs a reason to reject and a note to send back', () => {
@@ -440,7 +474,11 @@ const push = require('../../src/modules/notifications/push');
 
 test('the hunter is told what the reviewer did, with the reason and the note', () => {
   const approved = noticeFor('hunt.approved', { title: 'Wireless earbuds', by: 'Sara' });
-  assert.deepStrictEqual([approved.title, approved.body], ['Approved: Wireless earbuds', "Sara approved your product. It's ready to draft."]);
+  assert.deepStrictEqual([approved.title, approved.body], ['Approved: Wireless earbuds', 'Sara approved your product. Liston is drafting it now.']);
+  // Liston's own rejection says so, with the reason and what's missing.
+  const byListon = noticeFor('hunt.rejected', { title: 'Wireless earbuds', reason: "Supplier doesn't match the eBay listing", note: 'Missing: Green', system: true });
+  assert.deepStrictEqual([byListon.title, byListon.body], ['Rejected by Liston: Wireless earbuds', "Liston rejected it automatically: Supplier doesn't match the eBay listing. “Missing: Green”"]);
+  assert.strictEqual(byListon.detail.system, true);
   const rejected = noticeFor('hunt.rejected', { title: 'Wireless earbuds', by: 'Sara', reason: 'Low demand', note: 'Too few sales' });
   assert.deepStrictEqual([rejected.title, rejected.body], ['Rejected: Wireless earbuds', 'Sara rejected it: Low demand. “Too few sales”']);
   // Its parts too, for the bell to lay out.

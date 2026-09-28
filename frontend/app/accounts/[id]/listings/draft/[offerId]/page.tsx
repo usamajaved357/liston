@@ -806,11 +806,14 @@ function VariationsTable({
   onQuantityChange: (index: number, value: string) => void;
   onImageChange: (indexes: number[], url: string) => void;
   onUploadImage: (index: number, file: File) => void;
-  onApplyAll: (field: "price" | "quantity", value: string) => void;
+  // Sets a price or quantity on the rows given (every listed row, or one option's: all the Reds, all the size Ms).
+  onApplyAll: (field: "price" | "quantity", value: string, indexes?: number[]) => void;
   disabled: boolean;
 }) {
   const [bulkPrice, setBulkPrice] = useState("");
   const [bulkQty, setBulkQty] = useState("");
+  // Which rows the bulk price and quantity go to: "all", or "axis\u0000value" for one option's rows.
+  const [bulkScope, setBulkScope] = useState("all");
   const [pickerFor, setPickerFor] = useState<number | null>(null);
   const [adding, setAdding] = useState<{ axis: string; value: string } | null>(null);
   // Names as the seller has renamed them (unsaved), falling back to the draft's.
@@ -835,6 +838,16 @@ function VariationsTable({
     removedIndexes.has(index) || Object.entries(variant.aspects).some(([axis, values]) => axisRemoved(axis, values[0]));
   const axes = specifications.map((s) => s.name);
   const remaining = variants.filter((v, i) => !isRowGone(v, i)).length;
+  // The listed rows a bulk price or quantity goes to: all of them, or one option's (every size of Red; every colour in M).
+  const scopeRows = (scope: string) => {
+    const [axis, value] = scope === "all" ? [null, null] : scope.split("\u0000");
+    return variants.map((v, i) => (!isRowGone(v, i) && (axis === null || v.aspects[axis]?.[0] === value) ? i : -1)).filter((i) => i >= 0);
+  };
+  const scopeLabel = (() => {
+    if (bulkScope === "all") return "every listed row";
+    const [axis, value] = bulkScope.split("\u0000");
+    return `every ${showValue(axis, value)} row`;
+  })();
   // eBay shows one photo per option of one attribute (Colour, usually): on
   // a Colour × Size listing, every size of Red shows Red's photo. So a photo
   // picked on one row goes to every row with that option. Same rule as the
@@ -871,17 +884,41 @@ function VariationsTable({
         </h3>
         {!disabled && (
           <div className="flex flex-wrap items-center gap-1.5 text-[11.5px]">
-            <span className="text-[var(--color-muted)]">All rows:</span>
+            <label className="flex items-center gap-1.5">
+              <span className="text-[var(--color-muted)]">Set for</span>
+              <select
+                value={bulkScope}
+                onChange={(e) => setBulkScope(e.target.value)}
+                aria-label="Which variations the price or quantity goes to"
+                className="h-7 max-w-[180px] rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-2.5 pr-7 text-[12px] font-medium text-[var(--color-ink)] focus:border-[var(--color-primary)] focus:outline-none"
+              >
+                <option value="all">All {remaining} rows</option>
+                {specifications.map((spec) => (
+                  <optgroup key={spec.name} label={`Only one ${showAxis(spec.name)}`}>
+                    {spec.values
+                      .filter((value) => !axisRemoved(spec.name, value))
+                      .map((value) => {
+                        const n = scopeRows(`${spec.name}\u0000${value}`).length;
+                        return (
+                          <option key={value} value={`${spec.name}\u0000${value}`} disabled={!n}>
+                            {showAxis(spec.name)}: {showValue(spec.name, value)} ({n})
+                          </option>
+                        );
+                      })}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
             <div className="flex items-center overflow-hidden rounded-full border border-[var(--color-line)]">
               <span className="pl-2.5 text-[var(--color-muted)]">{currencySymbol(currency)}</span>
               <input type="number" step="0.01" min="0" placeholder="price" value={bulkPrice} onChange={(e) => setBulkPrice(e.target.value)} className="h-7 w-16 bg-transparent px-1.5 text-[12.5px] focus:outline-none" />
-              <button type="button" disabled={!bulkPrice} onClick={() => { onApplyAll("price", bulkPrice); setBulkPrice(""); }} className="h-7 border-l border-[var(--color-line)] px-2.5 font-semibold text-[var(--color-primary)] disabled:opacity-40">
+              <button type="button" disabled={!bulkPrice || !scopeRows(bulkScope).length} onClick={() => { onApplyAll("price", bulkPrice, scopeRows(bulkScope)); setBulkPrice(""); }} title={`Set this price on ${scopeLabel}`} className="h-7 border-l border-[var(--color-line)] px-2.5 font-semibold text-[var(--color-primary)] disabled:opacity-40">
                 Set
               </button>
             </div>
             <div className="flex items-center overflow-hidden rounded-full border border-[var(--color-line)]">
               <input type="number" step="1" min="0" placeholder="qty" value={bulkQty} onChange={(e) => setBulkQty(e.target.value)} className="h-7 w-14 bg-transparent px-2.5 text-[12.5px] focus:outline-none" />
-              <button type="button" disabled={!bulkQty} onClick={() => { onApplyAll("quantity", bulkQty); setBulkQty(""); }} className="h-7 border-l border-[var(--color-line)] px-2.5 font-semibold text-[var(--color-primary)] disabled:opacity-40">
+              <button type="button" disabled={!bulkQty || !scopeRows(bulkScope).length} onClick={() => { onApplyAll("quantity", bulkQty, scopeRows(bulkScope)); setBulkQty(""); }} title={`Set this quantity on ${scopeLabel}`} className="h-7 border-l border-[var(--color-line)] px-2.5 font-semibold text-[var(--color-primary)] disabled:opacity-40">
                 Set
               </button>
             </div>
@@ -2649,14 +2686,19 @@ export default function DraftEditorPage() {
     }
   }
 
-  function applyToAllVariants(field: "price" | "quantity", value: string) {
+  // A price or quantity for many rows at once: every row (an AI revision, or "All rows"), or the
+  // rows given (one option's: all the Reds, all the Ms). Other rows keep what they had.
+  function applyToAllVariants(field: "price" | "quantity", value: string, indexes?: number[]) {
     if (!variation) return;
-    const next: Record<number, string> = {};
-    variation.variants.forEach((_, i) => {
-      next[i] = value;
+    const rows = indexes ?? variation.variants.map((_, i) => i);
+    const set = field === "price" ? setPriceOverrides : setQuantityOverrides;
+    set((current) => {
+      const next = { ...current };
+      rows.forEach((i) => {
+        next[i] = value;
+      });
+      return next;
     });
-    if (field === "price") setPriceOverrides(next);
-    else setQuantityOverrides(next);
   }
 
   if (loading) {

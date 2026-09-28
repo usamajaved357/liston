@@ -203,7 +203,7 @@ test('opening a product with no readings (rejected, or hunted before readings) r
   assert.strictEqual(rows[0].n, 1);
 });
 
-test('the tabs: All, Waiting for review, Approved (drafted ones too), Rejected, and My hunts for each person', async () => {
+test('the tabs: All, Waiting for review, Approved, Rejected, and My hunts for each person; a drafted product leaves the page', async () => {
   const t = await team();
   const { hunt: mine } = await hunt(t.connectionId, t.hunter.token);
   await hunt(t.connectionId, t.ownerToken); // the owner's: approved as added
@@ -213,21 +213,26 @@ test('the tabs: All, Waiting for review, Approved (drafted ones too), Rejected, 
   assert.deepStrictEqual(list.data.items.map((h) => h.id), [mine.id]);
   assert.strictEqual(list.data.counts.mine, 1);
   assert.strictEqual(list.data.counts.all, 2);
-  // Approved holds a product once drafted too.
+  // Once drafted it's on the Drafts page, so it leaves the Hunting page's tabs (it still opens by its link).
   await request('POST', `/api/hunting/${mine.id}/decision`, { decision: 'approve' }, t.reviewer.token);
   const draft = await listingRepository.createDraft({ connectionId: t.connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: 'Earbuds' } });
   await huntingRepository.linkDraft(mine.id, draft.id, t.lister.id);
   const approved = await request('GET', `/api/connections/${t.connectionId}/hunting?view=approved`, undefined, t.reviewer.token);
-  assert.strictEqual(approved.data.counts.approved, 2);
-  assert.ok(approved.data.items.some((h) => h.id === mine.id && h.stage === 'drafted'));
+  assert.strictEqual(approved.data.counts.approved, 1);
+  assert.ok(!approved.data.items.some((h) => h.id === mine.id));
+  const gone = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.hunter.token);
+  assert.deepStrictEqual([gone.data.counts.mine, gone.data.items.length], [0, 0]);
+  assert.strictEqual((await request('GET', `/api/hunting/${mine.id}`, undefined, t.hunter.token)).data.stage, 'drafted');
   // The reviewer's own My hunts is empty; a sent-back tab is gone.
   const reviewerMine = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.reviewer.token);
+  void reviewerMine;
   assert.strictEqual(reviewerMine.data.items.length, 0);
   assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/hunting?view=sent_back`, undefined, t.reviewer.token)).data.view, 'all');
   // Search finds a product by its eBay item number, the hunter's name or a note, not only its title.
   const search = async (q) => (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all&q=${encodeURIComponent(q)}`, undefined, t.reviewer.token)).data.items.map((h) => h.id);
-  assert.ok((await search('123456789012')).includes(mine.id));
-  assert.deepStrictEqual(await search('hunter'), [mine.id]);
+  const { hunt: found } = await hunt(t.connectionId, t.hunter.token);
+  assert.ok((await search('123456789012')).includes(found.id));
+  assert.deepStrictEqual(await search('hunter'), [found.id]);
   assert.deepStrictEqual(await search('no such thing anywhere'), []);
   // The Overview's Hunted / Approved / Rejected for the dates, and what waits now.
   const hour = new Date(Date.now() - 3600 * 1000);
@@ -235,8 +240,8 @@ test('the tabs: All, Waiting for review, Approved (drafted ones too), Rejected, 
   const { hunt: third } = await hunt(t.connectionId, t.hunter.token);
   await request('POST', `/api/hunting/${third.id}/decision`, { decision: 'reject', reason: 'low_profit' }, t.reviewer.token);
   await hunt(t.connectionId, t.hunter.token);
-  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, hour, soon), { hunted: 4, approved: 2, rejected: 1, reviewing: 1 });
-  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, new Date(Date.now() - 7200 * 1000), hour), { hunted: 0, approved: 0, rejected: 0, reviewing: 1 });
+  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, hour, soon), { hunted: 5, approved: 2, rejected: 1, reviewing: 2 });
+  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, new Date(Date.now() - 7200 * 1000), hour), { hunted: 0, approved: 0, rejected: 0, reviewing: 2 });
 });
 
 test('a bad link is refused before anything is read', async () => {
@@ -495,4 +500,94 @@ test("the hunter is notified when a reviewer approves, rejects or sends back the
   assert.strictEqual(tested.status, 200);
   assert.strictEqual(tested.data.items[0].kind, 'test');
   assert.strictEqual(tested.data.unread, 1);
+});
+
+const huntingService = require('../../src/modules/hunting/hunting.service');
+const notificationsRepo = { list: async (userId) => (await pool.query('SELECT kind, title, body, actor_user_id FROM notifications WHERE user_id = $1 ORDER BY created_at DESC', [userId])).rows };
+
+test("a supplier that doesn't sell the eBay listing's variations is rejected by Liston, with the reason, and the hunter is told and can remove it", async () => {
+  const t = await team();
+  // The supplier has Black only; the eBay listing sells Black and White.
+  aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, variants: [SOURCE.variants[0]], sourceUrl: url });
+  try {
+    const checked = await request('POST', `/api/connections/${t.connectionId}/hunting/check`, { competitorUrl: COMPETITOR_URL, sourceUrl: SOURCE_URL }, t.hunter.token);
+    assert.strictEqual(checked.data.result.mismatch.kind, 'variations', 'the check says so before it is added');
+    assert.deepStrictEqual(checked.data.result.mismatch.missing, ['White']);
+    const added = await request('POST', `/api/connections/${t.connectionId}/hunting`, { checkId: checked.data.checkId }, t.hunter.token);
+    const h = added.data;
+    assert.deepStrictEqual([h.stage, h.rejectReason, h.autoRejected, h.reviewer], ['rejected', 'mismatch', true, null]);
+    assert.match(h.decisionNote, /White/);
+    const rejected = await request('GET', `/api/connections/${t.connectionId}/hunting?view=rejected`, undefined, t.reviewer.token);
+    assert.ok(rejected.data.items.some((i) => i.id === h.id && i.rejectReasonLabel === "Supplier doesn't match the eBay listing"));
+    const told = await notificationsRepo.list(t.hunter.id);
+    assert.strictEqual(told[0].kind, 'hunt.rejected');
+    assert.match(told[0].title, /^Rejected by Liston: /);
+    assert.match(told[0].body, /White/);
+    assert.strictEqual(told[0].actor_user_id, null);
+    // The owner's own find is rejected the same way, not approved.
+    const ownerCheck = await request('POST', `/api/connections/${t.connectionId}/hunting/check`, { competitorUrl: COMPETITOR_URL, sourceUrl: SOURCE_URL }, t.ownerToken);
+    const ownerAdded = await request('POST', `/api/connections/${t.connectionId}/hunting`, { checkId: ownerCheck.data.checkId }, t.ownerToken);
+    assert.strictEqual(ownerAdded.data.stage, 'rejected');
+    // Rechecked once the supplier has White too, it goes back in for review.
+    aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, sourceUrl: url });
+    const again = await request('POST', `/api/hunting/${h.id}/recheck`, {}, t.hunter.token);
+    assert.strictEqual(again.data.stage, 'pending');
+    // …and one rejected by Liston again, the hunter removes it themselves.
+    aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, variants: [SOURCE.variants[0]], sourceUrl: url });
+    await request('POST', `/api/hunting/${h.id}/recheck`, {}, t.hunter.token);
+    assert.strictEqual((await request('DELETE', `/api/hunting/${h.id}`, undefined, t.hunter.token)).status, 204);
+  } finally {
+    aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, sourceUrl: url });
+  }
+});
+
+test('an approved product drafts itself and leaves the Hunting page; a failed draft stays with the reason and drafts again by hand', async () => {
+  const t = await team();
+  const { mock } = require('node:test');
+  const config = require('../../src/config');
+  config.hunting.autoDraft = true;
+  let fail = true;
+  const previews = mock.method(listingService, 'previewDraftSources', async () => ({ previewId: 'p1', source: { axes: [{ name: 'Color', values: [{ value: 'Black' }, { value: 'White' }] }], imageUrls: ['https://ae01.alicdn.com/a.jpg'] } }));
+  const drafts = mock.method(listingService, 'generateEbayDraftFromUrls', async (connectionId, ownerId, input) => {
+    if (fail) throw Object.assign(new Error('Choose your business policies in Settings before drafting a listing.'), { statusCode: 400 });
+    const draft = await listingRepository.createDraft({ connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: 'Earbuds' } });
+    await huntingRepository.linkDraft(input.huntId, draft.id, input.actorUserId);
+    return draft;
+  });
+  try {
+    const { hunt: one } = await hunt(t.connectionId, t.hunter.token);
+    const approved = await request('POST', `/api/hunting/${one.id}/decision`, { decision: 'approve' }, t.reviewer.token);
+    assert.strictEqual(approved.status, 200);
+    await huntingService.draftsSettled();
+    // It failed: it stays, approved, with why, and the button to try again.
+    const failed = (await request('GET', `/api/hunting/${one.id}`, undefined, t.reviewer.token)).data;
+    assert.deepStrictEqual([failed.stage, failed.draftState], ['approved', 'failed']);
+    assert.match(failed.draftError, /business policies/);
+    assert.strictEqual(failed.permissions.canDraft, true);
+    const input = drafts.mock.calls[0].arguments[2];
+    assert.deepStrictEqual([input.previewId, input.huntId, input.actorUserId], ['p1', one.id, t.reviewer.id]);
+    assert.deepStrictEqual(input.variantSelection, { Color: ['Black', 'White'] }, 'the options that earn');
+    assert.deepStrictEqual(input.imageUrls, ['https://ae01.alicdn.com/a.jpg']);
+    // Drafted by hand (it runs in the background): it moves to the Drafts page.
+    fail = false;
+    const retry = await request('POST', `/api/hunting/${one.id}/auto-draft`, {}, t.reviewer.token);
+    assert.strictEqual(retry.status, 202);
+    await huntingService.draftsSettled();
+    const done = (await request('GET', `/api/hunting/${one.id}`, undefined, t.reviewer.token)).data;
+    assert.deepStrictEqual([done.stage, done.draftState, done.draftError], ['drafted', null, null]);
+    const page = await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.reviewer.token);
+    assert.ok(!page.data.items.some((i) => i.id === one.id));
+    // A drafted product isn't drafted again.
+    assert.strictEqual((await request('POST', `/api/hunting/${one.id}/auto-draft`, {}, t.reviewer.token)).status, 403);
+    // The owner's own find drafts itself as it's added.
+    fail = false;
+    const { hunt: own } = await hunt(t.connectionId, t.ownerToken);
+    await huntingService.draftsSettled();
+    assert.strictEqual((await request('GET', `/api/hunting/${own.id}`, undefined, t.ownerToken)).data.stage, 'drafted');
+    assert.strictEqual(previews.mock.calls.length, 3);
+  } finally {
+    config.hunting.autoDraft = false;
+    previews.mock.restore();
+    drafts.mock.restore();
+  }
 });

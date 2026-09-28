@@ -155,6 +155,10 @@ const config = {
     // that shouldn't spend the shared allowance.
     trackCalls: parseInt(process.env.HUNT_TRACK_DAILY_CALLS || '300', 10),
     trackerEnabled: process.env.HUNT_TRACKER !== 'off',
+    // An approved product drafts itself (the AI and photo steps, as the
+    // draft screen would). HUNTING_AUTO_DRAFT=off leaves it to the Draft
+    // button; off under tests unless a test turns it on.
+    autoDraft: process.env.HUNTING_AUTO_DRAFT ? process.env.HUNTING_AUTO_DRAFT !== 'off' : !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test',
   },
   // Discover, the Hunting page's tab for finding what to hunt
   // (discover/discover-budget.js). Sold counts come from Trading GetItem, a

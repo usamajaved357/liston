@@ -714,6 +714,8 @@ export interface Order {
   deliveredAt?: string | null;
   lineItems: OrderLineItem[];
   derivedStatus?: OrderStatusFilter;
+  // Marked dispatched from Liston: when, by whom, with tracking or not; `pending` while eBay's feed hasn't caught up.
+  markedDispatched?: { lines: number; at: string; by: string | null; tracked: boolean; pending: boolean } | null;
   // Liston's supplier-order rows for this order (one per line item).
   sourcing?: OrderSourcing[];
 }
@@ -882,7 +884,22 @@ export interface OrderEvent {
   at: string;
 }
 
+// A message Liston sent the buyer by itself (the delivered thank-you).
+export interface OrderMessage {
+  kind: "delivered";
+  status: "sent" | "failed";
+  error: string | null;
+  sentAt: string;
+}
+// The account's buyer-message settings (Settings → Messages).
+export interface BuyerMessageSettings {
+  delivered: { enabled: boolean; text: string | null; enabledAt: string | null; defaultText: string };
+  canMessage: boolean; // the eBay sign-in allows messaging (an older one needs a reconnect)
+  recent: { items: { orderId: string; kind: string; status: "sent" | "failed"; buyer: string | null; error: string | null; sentAt: string }[]; last30: { sent: number; failed: number } };
+}
+
 export interface OrderDetailResponse {
+  messages?: OrderMessage[];
   order: OrderDetail;
   actionsEnabled: boolean;
   source: "fulfillment" | "trading";
@@ -1684,6 +1701,8 @@ export interface HuntDuplicate {
 export interface HuntCheckResult {
   version: number;
   currency: string;
+  // The supplier doesn't sell what the eBay listing sells (Liston rejects it): the eBay variations it lacks, or a different product.
+  mismatch?: { kind: "variations" | "product"; missing: string[]; total: number; reason: string } | null;
   targetRoiPercent: number;
   market?: { id: string; name: string; country: string };
   // Null when the product was checked without a competitor.
@@ -1823,6 +1842,11 @@ export interface HuntSummary {
   resubmits: number;
   rejectReason: string | null;
   rejectReasonLabel: string | null;
+  // Rejected by Liston itself: the supplier doesn't match the eBay listing.
+  autoRejected?: boolean;
+  // The automatic draft once approved: running, or failed with why (null: not tried, or done).
+  draftState?: "drafting" | "failed" | null;
+  draftError?: string | null;
   decisionNote: string | null;
   hunterNote: string | null;
   warnings: number;
@@ -2410,6 +2434,8 @@ export const api = {
   // Seller Hub's "More actions", done from Liston.
   dispatchOrder: (connectionId: string, orderId: string, input: { trackingNumber?: string; carrier?: string; lineItemIds?: string[] }) =>
     request<{ fulfillmentId: string | null; lines: number }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/dispatch`, { method: "POST", body: JSON.stringify(input) }),
+  dispatchOrders: (connectionId: string, orderIds: string[]) =>
+    request<{ done: string[]; failed: { orderId: string; reason: string }[] }>(`/api/connections/${connectionId}/orders/dispatch`, { method: "POST", body: JSON.stringify({ orderIds }) }),
   refundOrder: (connectionId: string, orderId: string, input: { amount?: string | null; reason: string; comment?: string }) =>
     request<{ refundId: string | null; status: string | null; amount: Amount | null }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/refund`, { method: "POST", body: JSON.stringify(input) }),
   cancelOrder: (connectionId: string, orderId: string, input: { reason?: string }) =>
@@ -2543,6 +2569,8 @@ export const api = {
     request<Record<string, never>>("/api/notifications/push", { method: "POST", body: JSON.stringify(subscription) }),
   pushUnsubscribe: (endpoint: string) => request<Record<string, never>>("/api/notifications/push", { method: "DELETE", body: JSON.stringify({ endpoint }) }),
   huntDraftStart: (huntId: string) => request<HuntDraftStart>(`/api/hunting/${huntId}/draft`, { method: "POST" }),
+  // Drafts an approved product in the background (its automatic draft failed, or never ran).
+  huntDraftAgain: (huntId: string) => request<HuntDetail>(`/api/hunting/${huntId}/auto-draft`, { method: "POST" }),
 
   getAccountOverview: (id: string, range: string) => request<AccountOverview>(`/api/connections/${id}/overview?range=${range}`),
 
@@ -2603,6 +2631,9 @@ export const api = {
       `/api/connections/${id}/template/palette${logoUrl ? `?url=${encodeURIComponent(logoUrl)}` : ""}`
     ),
 
+  getConnectionMessages: (id: string) => request<BuyerMessageSettings>(`/api/connections/${id}/messages`),
+  updateConnectionMessages: (id: string, delivered: { enabled: boolean; text: string | null }) =>
+    request<BuyerMessageSettings>(`/api/connections/${id}/messages`, { method: "PUT", body: JSON.stringify({ delivered }) }),
   updateConnectionTemplate: (id: string, template: DescriptionTemplate) =>
     request<{ settings: { template: DescriptionTemplate } }>(`/api/connections/${id}/template`, {
       method: "PUT",

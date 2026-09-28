@@ -490,6 +490,38 @@ test('a second orders read asks eBay only for orders modified since the last syn
   assert.strictEqual(second.counts.dispatched, 2);
 });
 
+test('an order Liston marked dispatched counts as dispatched at once, and says who marked it, before eBay\'s feed catches up', async () => {
+  mock.method(mirror, 'loadSnapshot', async () => null);
+  mock.method(mirror, 'upsertOrders', async () => {});
+  mock.method(mirror, 'pruneOrdersBefore', async () => {});
+  mock.method(mirror, 'saveSnapshot', async () => {});
+  mock.method(mirror, 'loadItemSummaries', async () => new Map());
+  mock.method(mirror, 'saveItemSummary', async () => {});
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const now = new Date().toISOString();
+  mock.method(ebayTrading, 'getOrders', async () => ({
+    orders: [
+      makeOrder({ orderId: 'MARKED', shippedTime: null, createdAt: now, paidTime: now }),
+      makeOrder({ orderId: 'WAITING', shippedTime: null, createdAt: now, paidTime: now }),
+      makeOrder({ orderId: 'SHIPPED', createdAt: now, paidTime: now }),
+    ],
+    totalEntries: 3,
+    totalPages: 1,
+  }));
+  const at = new Date(Date.now() - 60000).toISOString();
+  const dispatches = new Map([
+    ['MARKED', { lines: 1, at, by: 'Sam', tracked: false }],
+    ['SHIPPED', { lines: 1, at, by: 'Ali', tracked: true }],
+  ]);
+  const out = await ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-marked', range: '90d', status: 'all', search: '', page: 1, perPage: 25, dispatches });
+  const byId = new Map(out.orders.map((o) => [o.orderId, o]));
+  assert.deepStrictEqual([out.counts.awaiting_dispatch, out.counts.dispatched], [1, 2]);
+  assert.strictEqual(byId.get('MARKED').derivedStatus, 'dispatched');
+  assert.deepStrictEqual(byId.get('MARKED').markedDispatched, { lines: 1, at, by: 'Sam', tracked: false, pending: true });
+  assert.strictEqual(byId.get('SHIPPED').markedDispatched.pending, false, "eBay's feed already has it");
+  assert.strictEqual(byId.get('WAITING').markedDispatched, null);
+});
+
 // --- targeted background sync ---------------------------------------------
 
 test('syncAccount re-reads only the requested kinds and coalesces a burst into one round', async () => {

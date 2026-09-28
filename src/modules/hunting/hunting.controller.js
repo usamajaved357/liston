@@ -92,4 +92,8 @@ module.exports = {
   draftStart: handle(async (req, res) => {
     res.json(await huntingService.draftStart(auth(req), req.params.huntId));
   }),
+  // Drafts an approved product in the background (its automatic draft failed, or never ran).
+  draftAgain: handle(async (req, res) => {
+    res.status(202).json(await huntingService.draftAgain(auth(req), req.params.huntId));
+  }),
 };

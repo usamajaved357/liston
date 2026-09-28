@@ -30,7 +30,7 @@ export const SORT_LABELS: Record<HuntSort, string> = {
 
 const EMPTY: Record<HuntView, { title: string; text: string }> = {
   review: { title: "Nothing waiting for review", text: "New finds from the team land here for a decision." },
-  approved: { title: "No approved products yet", text: "Approved products wait here, ready to draft, and stay here once drafted and listed." },
+  approved: { title: "Nothing approved waiting", text: "Approved products draft themselves and move to the Drafts page. One whose draft failed stays here with the reason and a button to try again." },
   rejected: { title: "Nothing rejected", text: "Rejected products show here with the reason." },
   all: { title: "No products hunted yet", text: "Click Hunt a product to check one for profit, then add it for review." },
   mine: { title: "You haven't added a product yet", text: "Products you add show here, whatever happens to them: waiting, sent back, approved or rejected." },
@@ -38,15 +38,15 @@ const EMPTY: Record<HuntView, { title: string; text: string }> = {
 
 function Status({ hunt }: { hunt: HuntSummary }) {
   let line: string | null = null;
-  if (hunt.stage === "rejected") line = hunt.rejectReasonLabel;
+  if (hunt.stage === "rejected") line = hunt.autoRejected ? `by Liston · ${hunt.rejectReasonLabel}` : hunt.rejectReasonLabel;
   else if (hunt.stage === "sent_back") line = hunt.decisionNote;
   else if (hunt.stage === "pending") line = `waiting ${ago(hunt.submittedAt).replace(" ago", "")}`;
   else if (hunt.stage === "listed") line = hunt.sales ? `${money(hunt.sales.sales, hunt.sales.currency || hunt.currency)} · ${count(hunt.sales.units)} sold` : "No sales yet";
-  else if (hunt.stage === "approved") line = hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;
+  else if (hunt.stage === "approved") line = hunt.draftState === "drafting" ? "Drafting now…" : hunt.draftState === "failed" ? "Draft failed" : hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;
   return (
     <div className="flex min-w-0 flex-col items-center text-center">
       <StageChip stage={hunt.stage} small />
-      {line && <p className="mt-0.5 max-w-[170px] truncate text-[11px] text-[var(--color-muted)]">{line}</p>}
+      {line && <p className={`mt-0.5 max-w-[170px] truncate text-[11px] ${hunt.draftState === "failed" && hunt.stage === "approved" ? "font-semibold text-rose-700" : "text-[var(--color-muted)]"}`} title={hunt.draftState === "failed" ? hunt.draftError || undefined : undefined}>{line}</p>}
     </div>
   );
 }
@@ -98,10 +98,18 @@ function QuickAction({ hunt, onOpen, onEdit, onApprove, onDraft, wide = false }:
         </button>
       </div>
     );
+  if (hunt.stage === "approved" && hunt.draftState === "drafting")
+    return (
+      <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium text-[var(--color-muted)] ${wide ? "w-full justify-center" : ""}`}>
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-primary)]/25 border-t-[var(--color-primary)]" aria-hidden />
+        Drafting…
+      </span>
+    );
+  // Approved products draft themselves: the button is for one whose draft failed (or never ran).
   if (p.canDraft && hunt.stage === "approved")
     return (
-      <button type="button" onClick={act(onDraft)} className={`btn btn-primary ${wide ? "w-full" : "btn-sm !h-7 !px-3 !text-[12px]"}`}>
-        Draft
+      <button type="button" onClick={act(onDraft)} title={hunt.draftError || "Draft it now"} className={`btn btn-primary ${wide ? "w-full" : "btn-sm !h-7 !px-3 !text-[12px]"}`}>
+        {hunt.draftState === "failed" ? "Draft again" : "Draft now"}
       </button>
     );
   if (p.canResubmit)

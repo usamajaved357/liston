@@ -5,7 +5,7 @@ const huntDuplicates = require('./hunt-duplicates');
 const huntSales = require('./hunt-sales');
 const salesHistory = require('../ebay/sales-history');
 const logger = require('../../utils/logger');
-const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, HuntError, rules } = require('./hunt-rules');
+const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, HuntError, rules, autoRejected, draftStateOf, DRAFT_STUCK_MS } = require('./hunt-rules');
 const stats = require('./hunting-stats');
 const { noticeFor } = require('./hunt-notice');
 const analyticsDays = require('../analytics/analytics-days');
@@ -234,6 +234,11 @@ function summaryOf(row, viewer, sales = []) {
     resubmits: row.resubmits,
     rejectReason: row.reject_reason,
     rejectReasonLabel: reasonLabel(row.reject_reason),
+    // Rejected by Liston itself (the supplier doesn't match the eBay listing), not by a reviewer.
+    autoRejected: autoRejected(row),
+    // The automatic draft: 'drafting', 'failed' (with why) or null.
+    draftState: draftStateOf(row),
+    draftError: draftStateOf(row) === 'failed' ? row.draft_error || 'Drafting stopped before it finished.' : null,
     decisionNote: row.decision_note,
     hunterNote: row.hunter_note,
     warnings: levelCount(result),
@@ -311,17 +316,21 @@ async function add(auth, connectionId, { checkId, note }) {
   const kept = checks.get(checkId);
   if (!kept || kept.userId !== auth.userId || kept.connectionId !== String(connectionId)) throw new HuntError('That check has expired. Check the product again.');
   const columns = checkColumns(kept.read);
+  // A supplier that doesn't sell what the eBay listing sells is rejected by Liston, whoever adds it.
+  const mismatch = kept.read.result?.mismatch || null;
+  const approved = viewer.isOwner && !mismatch;
   const id = await huntingRepository.insert({
     ...columns,
     ownerId: auth.ownerId,
     connectionId,
     hunterId: auth.userId,
-    status: viewer.isOwner ? 'approved' : 'pending',
-    reviewerId: viewer.isOwner ? auth.userId : null,
-    decidedAt: viewer.isOwner ? new Date() : null,
+    status: approved ? 'approved' : 'pending',
+    reviewerId: approved ? auth.userId : null,
+    decidedAt: approved ? new Date() : null,
     note: typeof note === 'string' ? note.trim().slice(0, 1000) : null,
   });
   checks.delete(checkId);
+  if (mismatch) await rejectMismatch(auth.ownerId, id, mismatch);
   await recordReading(id, kept.read).catch((err) => logger.warn('Hunting: sales reading not kept', { error: err.message }));
   await activityRepository.record({
     actorUserId: auth.userId,
@@ -330,9 +339,103 @@ async function add(auth, connectionId, { checkId, note }) {
     subjectType: 'hunt',
     subjectId: id,
     title: columns.title,
-    detail: { profit: columns.headlineProfit, roi: columns.headlineRoi, autoApproved: viewer.isOwner },
+    detail: { profit: columns.headlineProfit, roi: columns.headlineRoi, autoApproved: approved, autoRejected: Boolean(mismatch) },
   });
+  if (approved && config.hunting.autoDraft) startDraft(auth.ownerId, id, auth.userId);
   return detail(auth, id);
+}
+
+/**
+ * Liston rejects a product whose supplier doesn't sell what its eBay
+ * listing sells (hunt-profit.matchCheck), with the reason spelled out, and
+ * tells the hunter. It stays under Rejected: a reviewer can still approve
+ * it, and the hunter can remove it.
+ */
+async function rejectMismatch(ownerId, huntId, mismatch) {
+  await huntingRepository.setDecision(huntId, { status: 'rejected', reject_reason: 'mismatch', decision_note: mismatch.reason }, null);
+  const hunt = await huntingRepository.findForOwner(huntId, ownerId);
+  if (!hunt?.hunter_user_id) return;
+  const notice = noticeFor('hunt.rejected', { title: hunt.title, reason: reasonLabel('mismatch'), note: mismatch.reason, system: true });
+  await notificationsService.notify({ userId: hunt.hunter_user_id, actorUserId: null, kind: 'hunt.rejected', ...notice, url: `/accounts/${hunt.connection_id}/hunting?open=${hunt.id}`, subjectType: 'hunt', subjectId: hunt.id });
+}
+
+// ---- drafting approved products by themselves ------------------------------------------
+
+// Drafting runs the AI and uploads photos (up to a minute each), so a few at a time.
+const DRAFT_CONCURRENCY = 2;
+const draftQueue = [];
+let drafting = 0;
+
+/**
+ * Drafts an approved product in the background, the way the draft screen
+ * would: both listings read again, the options that earn (hunt-profit's
+ * draftSelection, else every option), every supplier photo. The product
+ * follows its draft to the Drafts page; a failure keeps it on the Hunting
+ * page with the reason and a button to try again. Never throws.
+ */
+function startDraft(ownerId, huntId, actorId) {
+  draftQueue.push({ ownerId, huntId, actorId });
+  pumpDrafts();
+}
+
+/** Resolves once no automatic draft is queued or running (for tests and shutdown). */
+async function draftsSettled() {
+  while (drafting || draftQueue.length) await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+function pumpDrafts() {
+  while (drafting < DRAFT_CONCURRENCY && draftQueue.length) {
+    const job = draftQueue.shift();
+    drafting += 1;
+    draftNow(job)
+      .catch((err) => logger.warn('Hunting: automatic draft failed', { huntId: job.huntId, error: err.message }))
+      .finally(() => {
+        drafting -= 1;
+        pumpDrafts();
+      });
+  }
+}
+
+async function draftNow({ ownerId, huntId, actorId }) {
+  if (!(await huntingRepository.claimDraft(huntId, new Date(Date.now() - DRAFT_STUCK_MS)))) return null;
+  const hunt = await huntingRepository.findForOwner(huntId, ownerId);
+  if (!hunt) return null;
+  try {
+    // Required here, not at the top: listing.service marks hunts drafted and listed through this module's repository.
+    const listingService = require('../listings/listing.service');
+    const preview = await listingService.previewDraftSources(hunt.connection_id, ownerId, { competitorUrl: hunt.competitor_url || undefined, sourceUrl: hunt.source_url });
+    const suggested = huntProfit.draftSelection(hunt.check_result?.options || [], preview.source?.axes || []);
+    const variantSelection = {};
+    for (const axis of preview.source?.axes || []) {
+      const values = axis.values.map((v) => v.value);
+      const keep = (suggested?.[axis.name] || []).filter((v) => values.includes(v));
+      variantSelection[axis.name] = keep.length ? keep : values;
+    }
+    const listing = await listingService.generateEbayDraftFromUrls(hunt.connection_id, ownerId, {
+      previewId: preview.previewId,
+      variantSelection,
+      imageUrls: preview.source?.imageUrls?.length ? preview.source.imageUrls : undefined,
+      huntId,
+      actorUserId: actorId,
+    });
+    // Counted as a draft made, like one drafted on the draft screen, for whoever approved it.
+    const { listingFacts } = require('../listings/listing.controller');
+    await activityRepository
+      .record({ actorUserId: actorId, connectionId: hunt.connection_id, kind: 'listing.drafted', subjectType: 'draft', subjectId: listing.id, ...listingFacts(listing.generated_data), detail: { huntId, automatic: true } })
+      .catch(() => {});
+    return listing;
+  } catch (err) {
+    await huntingRepository.draftFailed(huntId, err.statusCode && err.statusCode < 500 ? err.message : `Drafting stopped: ${err.message}`);
+    throw err;
+  }
+}
+
+/** Drafts an approved product by hand: when its automatic draft failed, or never ran. Answers at once. */
+async function draftAgain(auth, huntId) {
+  const { hunt, viewer } = await loadHunt(auth, huntId);
+  if (!rules.canDraft(hunt, viewer)) refuse(stageOf(hunt) === 'approved' ? 'It is being drafted already.' : 'Only an approved product can be drafted.');
+  startDraft(auth.ownerId, hunt.id, auth.userId);
+  return detail(auth, huntId);
 }
 
 /** An account's hunted products for one view, with each view's count. */
@@ -395,8 +498,21 @@ async function recheck(auth, huntId) {
   const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: hunt.competitor_url, sourceUrl: hunt.source_url }, { excludeId: hunt.id });
   await huntingRepository.setCheck(hunt.id, checkColumns(read));
   await recordReading(hunt.id, read);
+  await rejudgeMatch(auth.ownerId, hunt, read.result?.mismatch || null);
   const previous = hunt.check_result?.summary?.headline || {};
   return { ...(await detail(auth, huntId)), previous: { profit: previous.profit ?? null, roi: previous.roi ?? null } };
+}
+
+/**
+ * After a fresh read: a product that no longer matches its eBay listing is
+ * rejected by Liston (before it's drafted); one Liston rejected that now
+ * matches goes back in for review.
+ */
+async function rejudgeMatch(ownerId, hunt, mismatch) {
+  const stage = stageOf(hunt);
+  if (mismatch && ['pending', 'sent_back', 'approved'].includes(stage) && draftStateOf(hunt) !== 'drafting') return rejectMismatch(ownerId, hunt.id, mismatch);
+  if (!mismatch && autoRejected(hunt)) return huntingRepository.resubmit(hunt.id);
+  return null;
 }
 
 /**
@@ -414,6 +530,7 @@ async function update(auth, huntId, { competitorUrl, sourceUrl, note }) {
     const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: nextCompetitor, sourceUrl: nextSource }, { excludeId: hunt.id });
     await huntingRepository.setCheck(hunt.id, checkColumns(read));
     await recordReading(hunt.id, read);
+    await rejudgeMatch(auth.ownerId, hunt, read.result?.mismatch || null);
   }
   if (typeof note === 'string') await huntingRepository.setNote(hunt.id, note.trim().slice(0, 1000));
   await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.updated', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { links: Boolean(links) } });
@@ -451,6 +568,8 @@ async function decide(auth, huntId, input) {
     detail: { reason: fields.reject_reason, note: fields.decision_note, from: stageOf(hunt) },
   });
   await tellHunter(auth, hunt, kind, { reason: reasonLabel(fields.reject_reason), note: fields.decision_note, url: `/accounts/${hunt.connection_id}/hunting?open=${hunt.id}` });
+  // Approved: drafted straight away, in the background.
+  if (fields.status === 'approved' && config.hunting.autoDraft) startDraft(auth.ownerId, hunt.id, auth.userId);
   return detail(auth, huntId);
 }
 
@@ -465,7 +584,7 @@ async function tellHunter(auth, hunt, kind, { reason = null, note = null, url })
 /** Only a reviewer (the owner included) removes a hunted product, whatever its stage; hunters edit theirs instead. */
 async function remove(auth, huntId) {
   const { hunt, viewer } = await loadHunt(auth, huntId);
-  if (!rules.canRemove(hunt, viewer)) refuse("Only a reviewer can remove a hunted product. You can edit and improve yours instead.");
+  if (!rules.canRemove(hunt, viewer)) refuse('Only a reviewer can remove a hunted product (or its hunter, once Liston rejected it). You can edit and improve yours instead.');
   await huntingRepository.deleteById(hunt.id);
   await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.removed', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { stage: stageOf(hunt) } });
   await tellHunter(auth, hunt, 'hunt.removed', { url: `/accounts/${hunt.connection_id}/hunting` });
@@ -640,4 +759,9 @@ function forgetChecks() {
   checks.clear();
 }
 
-module.exports = { convertingByDay, readDueSales, check, add, list, detail, recheck, update, resubmit, decide, remove, badge, draftStart, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };
+module.exports = {
+  draftAgain,
+  draftsSettled,
+  startDraft,
+  draftNow,
+  rejectMismatch, convertingByDay, readDueSales, check, add, list, detail, recheck, update, resubmit, decide, remove, badge, draftStart, memberFigures, viewerFor, readProduct, forgetChecks, HuntError };

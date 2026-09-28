@@ -50,7 +50,16 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
         </Banner>
       );
     case "rejected":
-      return (
+      return hunt.autoRejected ? (
+        <Banner tone="rose">
+          <b className="font-semibold">Rejected automatically by Liston</b> {ago(hunt.decidedAt)} · {hunt.rejectReasonLabel}.
+          {hunt.decisionNote && <Quote text={hunt.decisionNote} />}
+          <p className="mt-1.5 text-[12.5px] text-rose-900/80">
+            The supplier must sell every variation the eBay listing sells (it can have more). Change the supplier link and check it again, or remove it.
+            {hunt.permissions.canDecide && " A reviewer can still approve it."}
+          </p>
+        </Banner>
+      ) : (
         <Banner tone="rose">
           <b className="font-semibold">Rejected</b> by {who(hunt.reviewer)} {ago(hunt.decidedAt)}
           {hunt.rejectReasonLabel ? ` · ${hunt.rejectReasonLabel}` : ""}.
@@ -62,7 +71,13 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
         <Banner tone="emerald">
           <b className="font-semibold">Approved</b> {hunt.autoApproved ? "as the owner added it" : `by ${who(hunt.reviewer)}`} {ago(hunt.decidedAt)}.
           {hunt.decisionNote && <Quote text={hunt.decisionNote} />}
-          {hunt.permissions.canDraft && <p className="mt-1 text-[12.5px] text-emerald-900/80">Ready to draft: the draft screen opens with the options that earn already ticked.</p>}
+          {hunt.draftState === "drafting" && <p className="mt-1 text-[12.5px] text-emerald-900/80">Liston is drafting it now, with the options that earn. It moves to the Drafts page when it&apos;s done.</p>}
+          {hunt.draftState === "failed" && (
+            <p className="mt-1.5 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[12.5px] text-rose-800">
+              <b className="font-semibold">The draft didn&apos;t finish:</b> {hunt.draftError}
+            </p>
+          )}
+          {!hunt.draftState && hunt.permissions.canDraft && <p className="mt-1 text-[12.5px] text-emerald-900/80">Not drafted yet. Draft it now, and it moves to the Drafts page.</p>}
         </Banner>
       );
     case "drafted":
@@ -453,22 +468,43 @@ export function HuntPanel({ huntId, you, onClose, onChanged, startEditing = fals
                     {busy === "resubmit" ? "Resubmitting…" : "Resubmit for review"}
                   </button>
                 )}
+                {/* Approved products draft themselves; this is for one whose draft failed (or never ran). */}
                 {p?.canDraft && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setBusy("draft");
-                      router.push(`/accounts/${hunt.connectionId}/listings/new?hunt=${hunt.id}`);
-                    }}
-                    disabled={busy !== null}
-                    className={primaryAction}
-                  >
-                    <ActionIcon kind="draft" />
-                    {busy === "draft" ? "Opening…" : hunt.stage === "approved" ? "Draft this product" : "Draft it again"}
-                    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 opacity-80" aria-hidden>
-                      <path d="M7.5 5l5 5-5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
+                  <>
+                    {hunt.draftState === "failed" && hunt.viewer.canDraft && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBusy("draft");
+                          router.push(`/accounts/${hunt.connectionId}/listings/new?hunt=${hunt.id}`);
+                        }}
+                        disabled={busy !== null}
+                        className="inline-flex h-10 items-center justify-center rounded-full border border-[var(--color-line)] bg-white px-4 text-[13.5px] font-semibold text-[var(--color-ink)] hover:border-[var(--color-line-strong)] disabled:opacity-50"
+                        title="Open the draft screen and choose the options and photos yourself"
+                      >
+                        Choose options myself
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setBusy("draft");
+                        setError(null);
+                        try {
+                          update(await api.huntDraftAgain(huntId));
+                        } catch (err) {
+                          setError(err instanceof ApiError ? err.message : "Couldn't start the draft. Try again.");
+                        } finally {
+                          setBusy(null);
+                        }
+                      }}
+                      disabled={busy !== null}
+                      className={primaryAction}
+                    >
+                      <ActionIcon kind="draft" />
+                      {busy === "draft" ? "Starting…" : hunt.draftState === "failed" ? "Draft again" : "Draft now"}
+                    </button>
+                  </>
                 )}
               </div>
             </div>

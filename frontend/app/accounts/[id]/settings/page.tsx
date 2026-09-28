@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BuyerMessagesTab } from "@/components/settings/BuyerMessagesTab";
 import { useParams } from "next/navigation";
 import { api, ApiError, ConnectionPolicies, DescriptionLayout, DescriptionTemplate, EbaySettings, LocationAddress, Marketplace, Policy, PricingSettings, StoreReview, TEMPLATE_FONTS } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
@@ -119,7 +120,7 @@ const PRESET_PALETTES: { name: string; accentColor: string; darkColor: string }[
   { name: "Gold", accentColor: "#F59E0B", darkColor: "#292524" },
 ];
 
-type Tab = "policies" | "pricing" | "template";
+type Tab = "policies" | "pricing" | "template" | "messages";
 
 function Row({ title, hint, children, last }: { title: string; hint?: string; children: React.ReactNode; last?: boolean }) {
   return (
@@ -590,6 +591,7 @@ export default function AccountSettingsPage() {
     { key: "policies", label: "Policies", attention: !loading && !policiesReady },
     { key: "pricing", label: "Pricing" },
     { key: "template", label: "Description template" },
+    { key: "messages", label: "Messages" },
   ];
   const setT = (patch: Partial<DescriptionTemplate>) => setTemplate((t) => ({ ...t, ...patch }));
   const setP = (patch: Partial<PricingSettings>) => setPricing((p) => ({ ...p, ...patch }));
@@ -667,7 +669,7 @@ export default function AccountSettingsPage() {
                     </button>
                   ))}
                 </div>
-                {!loading && saveControl}
+                {!loading && tab !== "messages" && saveControl}
               </div>
             </div>
         )
@@ -842,6 +844,8 @@ export default function AccountSettingsPage() {
               </div>
             </div>
           )}
+
+          {tab === "messages" && <BuyerMessagesTab connectionId={connection.id} />}
 
           {tab === "template" && (
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">
