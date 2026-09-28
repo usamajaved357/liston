@@ -943,6 +943,8 @@ export interface OrderCounts {
   dispatched: number;
   delivered: number;
   cancelled: number;
+  /** Dispatched with no tracking number: also counted in `dispatched`. */
+  marked?: number;
 }
 
 // Where an order's supplier order stands (the Orders page's Supplier filter).
@@ -1385,7 +1387,8 @@ export interface DraftListing {
 
 export type ListingStatusFilter = "active" | "inactive";
 export type OrderRange = "7d" | "30d" | "90d";
-export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "delivered" | "cancelled";
+// "marked": dispatched with no tracking number (marked in Seller Hub, the eBay app or from Liston), a view within Dispatched.
+export type OrderStatusFilter = "all" | "awaiting_payment" | "awaiting_dispatch" | "dispatched" | "marked" | "delivered" | "cancelled";
 // ---- listing analytics ---------------------------------------------------------
 // Days are eBay's reporting days (US Pacific), "YYYY-MM-DD".
 

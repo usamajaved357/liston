@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter, SupplierFilter } from "@/lib/api";
@@ -61,6 +61,7 @@ const STATUS_TABS: { key: OrderStatusFilter; label: string }[] = [
   { key: "all", label: "All orders" },
   { key: "awaiting_dispatch", label: "Awaiting dispatch" },
   { key: "dispatched", label: "Dispatched" },
+  { key: "marked", label: "Marked dispatched" },
   { key: "delivered", label: "Delivered" },
   { key: "cancelled", label: "Cancelled" },
 ];
@@ -72,6 +73,7 @@ const STATUS_TEXT_STYLES: Record<OrderStatusFilter, string> = {
   awaiting_payment: "text-amber-700",
   awaiting_dispatch: "text-[var(--color-ink)]",
   dispatched: "text-emerald-700",
+  marked: "text-emerald-700",
   delivered: "text-emerald-800",
   cancelled: "text-[var(--color-danger)]",
 };
@@ -190,10 +192,20 @@ function sourcingSummary(order: Order) {
   return { ...SOURCING_LABELS[lowest], partial };
 }
 
-// Who marked an order dispatched from Liston, and how: "Marked by Sam · no tracking".
+// Dispatched on the seller's word alone: no tracking number on any line.
+function markedWithoutTracking(order: Order): boolean {
+  return order.derivedStatus === "dispatched" && !order.markedDispatched?.tracked && !order.lineItems.some((li) => li.trackingNumber);
+}
+
+// Who marked an order dispatched, and how: "Marked by Sam · no tracking"
+// from Liston, or "Marked dispatched · no tracking" when it was marked in
+// Seller Hub or the eBay app.
 function MarkedLine({ order }: { order: Order }) {
   const m = order.markedDispatched;
-  if (!m) return null;
+  if (!m) {
+    if (!markedWithoutTracking(order)) return null;
+    return <p className="mt-1 text-[11px] leading-snug text-[var(--color-muted)]">Marked dispatched · no tracking</p>;
+  }
   return (
     <p className="mt-1 text-[11px] leading-snug text-[var(--color-muted)]" title={m.pending ? "Marked dispatched on eBay from Liston; eBay's order list shows it within a few minutes" : undefined}>
       Marked{m.by ? ` by ${m.by}` : " from Liston"} · {m.tracked ? "with tracking" : "no tracking"}
@@ -399,7 +411,7 @@ function AccountOrdersContent() {
   const initialRange = searchParams.get("range");
   const initialStatus = searchParams.get("status");
   const VALID_RANGES: OrderRange[] = ["7d", "30d", "90d"];
-  const VALID_STATUSES: OrderStatusFilter[] = ["all", "awaiting_payment", "awaiting_dispatch", "dispatched", "delivered", "cancelled"];
+  const VALID_STATUSES: OrderStatusFilter[] = ["all", "awaiting_payment", "awaiting_dispatch", "dispatched", "marked", "delivered", "cancelled"];
 
   const [range, setRange] = useState<OrderRange>(
     initialRange && VALID_RANGES.includes(initialRange as OrderRange) ? (initialRange as OrderRange) : "7d"
@@ -407,6 +419,11 @@ function AccountOrdersContent() {
   const [status, setStatus] = useState<OrderStatusFilter>(
     initialStatus && VALID_STATUSES.includes(initialStatus as OrderStatusFilter) ? (initialStatus as OrderStatusFilter) : "all"
   );
+  // On a phone the tabs scroll sideways: the chosen one is kept in view.
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    tabsRef.current?.querySelector<HTMLElement>("[data-active]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [status, connection]);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -548,17 +565,18 @@ function AccountOrdersContent() {
       }
       subheader={
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex flex-shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
+          <div ref={tabsRef} className="inline-flex flex-shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] p-0.5">
             {STATUS_TABS.map((tab) => (
               <button
                 key={tab.key}
+                data-active={status === tab.key || undefined}
                 onClick={() => changeStatus(tab.key)}
-                className={`flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-medium transition-colors ${
+                className={`flex h-[22px] items-center gap-1 whitespace-nowrap rounded-full px-2.5 text-[11.5px] font-medium transition-colors ${
                   status === tab.key ? "bg-[var(--color-primary)] text-white" : "text-[var(--color-muted)] hover:text-[var(--color-ink)]"
                 }`}
               >
                 {tab.label}
-                <span className={status === tab.key ? "text-white/70" : "text-[var(--color-muted)]/70"}>{counts[tab.key]}</span>
+                <span className={`text-[10.5px] tabular-nums ${status === tab.key ? "text-white/70" : "text-[var(--color-muted)]/70"}`}>{counts[tab.key] ?? 0}</span>
               </button>
             ))}
           </div>
@@ -591,8 +609,8 @@ function AccountOrdersContent() {
                 { label: "Sort", value: sort, options: (Object.keys(SORT_LABELS) as OrderSort[]).map((key) => ({ key, label: SORT_LABELS[key] })), onChange: (k) => changeSort(k as OrderSort) },
               ]}
             />
-            <form onSubmit={handleSearchSubmit} className="relative min-w-0 flex-1 sm:w-56 sm:min-w-[160px] sm:flex-none sm:flex-shrink">
-              <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-muted)]">
+            <form onSubmit={handleSearchSubmit} className="relative min-w-0 flex-1 sm:w-48 sm:min-w-[150px] sm:flex-none sm:flex-shrink">
+              <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]">
                 <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.8" />
                 <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
               </svg>
@@ -602,7 +620,7 @@ function AccountOrdersContent() {
                 onChange={(e) => handleSearchChange(e.target.value)}
                 placeholder="Order ID or item title"
                 autoComplete="off"
-                className="input input-sm !pl-10"
+                className="input input-sm !h-7 rounded-full !pl-8 !text-[12px]"
               />
             </form>
           </div>
@@ -628,6 +646,11 @@ function AccountOrdersContent() {
         ) : null
       }
     >
+      {status === "marked" && (
+        <p className="mb-2 text-xs leading-relaxed text-[var(--color-muted)]">
+          Orders marked dispatched without a tracking number, in Seller Hub, the eBay app or from Liston. The buyer can&apos;t follow these parcels and eBay can&apos;t confirm their delivery, so add tracking from the order page once you have it.
+        </p>
+      )}
       {supplier !== "any" && !loading && (
         <p className="mb-2 text-xs text-[var(--color-muted)]">
           Showing {totalEntries} of {counts[status]} {status === "all" ? "" : `${STATUS_TABS.find((t) => t.key === status)?.label.toLowerCase()} `}order{counts[status] === 1 ? "" : "s"}, {SUPPLIER_PHRASE[supplier]} ·{" "}

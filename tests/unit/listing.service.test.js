@@ -314,6 +314,22 @@ test('publish leaves a failed listing editable and retryable, with eBay reason r
   assert.match(updateStatusMock.mock.calls[0].arguments[2].errorMessage, /Invalid category/);
 });
 
+test("publish says to press Publish again when eBay still hadn't caught up with the items' stock", async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () =>
+    pendingDraft({ marketplaceId: 'EBAY_US', imageUrls: ['https://i.ebayimg.com/a.jpg'] })
+  );
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 't' }, ebayConnection()));
+  mock.method(ebayService, 'draftListing', async () => ({ offerId: 'offer-1' }));
+  mock.method(ebayService, 'publishDraft', async () => {
+    throw new Error('Input error. Seller Inventory Service can not publish the data. Availability not found. Please try again or contact customer support..');
+  });
+  const updateStatusMock = mock.method(listingRepository, 'updateStatus', async (id, status, extra) => ({ id, status, ...extra }));
+
+  await assert.rejects(() => listingService.publish('listing-1', USER_ID), (err) => err.statusCode === 400 && /press Publish again/.test(err.message));
+  assert.strictEqual(updateStatusMock.mock.calls[0].arguments[1], 'pending_review');
+  assert.match(updateStatusMock.mock.calls[0].arguments[2].errorMessage, /nothing went live/);
+});
+
 test('publish retries once with "Does not apply" when the category requires an EAN the draft lacks', async () => {
   mock.method(listingRepository, 'findByIdForUser', async () =>
     pendingDraft({ marketplaceId: 'EBAY_GB', skuBase: 'AE1', title: 'Tracker', imageUrls: ['https://i.ebayimg.com/a.jpg'] })

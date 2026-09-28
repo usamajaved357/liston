@@ -1960,6 +1960,13 @@ async function publishNow(listing, id, userId) {
       err.message = explainRejectedAxisValue(rejected, readied.unmatched);
       err.statusCode = 400;
     }
+    // eBay still hadn't caught up with the new items after the waits in
+    // publishWhenReady: nothing went live and the draft is intact, so the
+    // seller is told to press Publish again rather than "contact support".
+    if (/(product|availability) not found/i.test(err.message || '') && /seller inventory service/i.test(err.message || '')) {
+      err.message = "eBay hadn't finished setting up this listing's items and stock yet, so nothing went live. Wait a minute, then press Publish again.";
+      err.statusCode = 400;
+    }
     // Anything else eBay refused about the draft itself (a value it won't
     // take, a field it wants) is the seller's to fix: a 400 with eBay's
     // words, not a server error.

@@ -137,7 +137,7 @@ async function remove(req, res, next) {
 }
 
 const LIST_ORDER_RANGES = ['7d', '30d', '90d'];
-const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'delivered', 'cancelled'];
+const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'marked', 'delivered', 'cancelled'];
 const { FILTERS: SUPPLIER_FILTERS } = require('../orders/order-supplier');
 const ORDER_PAGE_SIZES = [25, 50, 100, 200];
 const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month', 'custom', 'all_time'];
