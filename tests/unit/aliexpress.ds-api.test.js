@@ -323,3 +323,35 @@ test('a dropped connection to AliExpress is tried once more, then explained inst
   await assert.rejects(dsApi.postGateway('a=1', { fetchImpl: slow, retryDelayMs: 0 }), (err) => err instanceof ScrapingError && err.statusCode === 504);
   assert.strictEqual(calls, 1);
 });
+
+test("search results' photos are served from AliExpress's main image host", () => {
+  const dsApi = require('../../src/modules/sourcing/aliexpress/ds-api');
+  assert.strictEqual(dsApi.photoUrl('https://ae-pic-a1.aliexpress-media.com/kf/Sabc.jpg'), 'https://ae01.alicdn.com/kf/Sabc.jpg');
+  assert.strictEqual(dsApi.photoUrl('https://ae01.alicdn.com/kf/Sabc.jpg'), 'https://ae01.alicdn.com/kf/Sabc.jpg');
+  assert.strictEqual(dsApi.photoUrl(null), null);
+});
+
+test('downloadViaOtherDns fetches the photo from the address another resolver gave, not the local DNS answer', async () => {
+  const net = require('net');
+  let connected = 0;
+  const server = net.createServer((socket) => {
+    connected += 1;
+    socket.destroy();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    // photo.invalid never resolves locally; the connection can only come from the address given.
+    await assert.rejects(aliexpressSource.downloadViaOtherDns(`https://photo.invalid:${port}/s-l500.jpg`, async (host) => {
+      assert.strictEqual(host, 'photo.invalid');
+      return ['127.0.0.1'];
+    }));
+    assert.strictEqual(connected, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test('downloadViaOtherDns fails plainly when the other resolvers give no address', async () => {
+  await assert.rejects(aliexpressSource.downloadViaOtherDns('https://i.ebayimg.com/images/g/x/s-l500.jpg', async () => []), /no other address/);
+});

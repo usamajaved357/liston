@@ -12,6 +12,7 @@ import { AccountPageSkeleton } from "@/components/Skeleton";
 import { HuntAddBar, HuntCheck, HuntForm } from "@/components/hunting/HuntForm";
 import { HuntRows, PipelineTabs, SORT_LABELS } from "@/components/hunting/HuntList";
 import { HuntPanel } from "@/components/hunting/HuntPanel";
+import { AutoSourceDialog } from "@/components/hunting/AutoSourceDialog";
 import { PushPrompt } from "@/components/NotificationBell";
 import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 
@@ -186,7 +187,9 @@ function HuntingBody() {
     qs.delete("competitor");
     router.push(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
   }
-  // "Hunt this" in Discover: back to the products with the form open and the competitor filled in.
+  // "Hunt" in Discover: Liston looks for the AliExpress supplier itself (AutoSourceDialog).
+  const [sourcing, setSourcing] = useState<string | null>(null);
+  // No supplier found (or the seller would rather choose): back to the products with the form open and the competitor filled in.
   function huntFromDiscover(url: string) {
     setPrefill(url);
     setFormKey((k) => k + 1);
@@ -278,7 +281,7 @@ function HuntingBody() {
       }
     >
       {tab === "discover" && canDiscover ? (
-        <DiscoverPanel connectionId={connection.id} canSeeTraffic={canSeeTraffic} onHunt={huntFromDiscover} />
+        <DiscoverPanel connectionId={connection.id} canSeeTraffic={canSeeTraffic} onHunt={setSourcing} />
       ) : (
       <div className="space-y-5">
         {added && !checked && (
@@ -427,6 +430,24 @@ function HuntingBody() {
       </div>
       )}
 
+      {sourcing && (
+        <AutoSourceDialog
+          key={sourcing}
+          connectionId={connection.id}
+          competitorUrl={sourcing}
+          currency={connection.marketplace?.currency || "GBP"}
+          onClose={() => setSourcing(null)}
+          onOpenHunt={(id) => {
+            setSourcing(null);
+            refresh();
+            open(id);
+          }}
+          onManual={(url) => {
+            setSourcing(null);
+            huntFromDiscover(url);
+          }}
+        />
+      )}
       {openId && <HuntPanel key={`${openId}-${editing}`} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} startEditing={editing} />}
     </AccountShell>
   );

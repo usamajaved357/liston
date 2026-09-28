@@ -7,7 +7,10 @@
 // products and, while one waits or has been sent back, can change and
 // improve their own, but never remove one: only a reviewer (the owner
 // included) removes a hunted product, at any stage (a hunter removes their
-// own that Liston rejected). A rejected product can be edited (by its hunter
+// own that Liston rejected). A product Liston's supplier search found is
+// never approved as it's added, the owner's included: a person opens it and
+// approves or rejects it, the reviewer who added it too (Liston found it, not
+// they). A rejected product can be edited (by its hunter
 // or a reviewer) and goes back in for review. An approved product drafts itself; drafting it
 // by hand, when that failed, needs Listings access or reviewing.
 
@@ -47,7 +50,7 @@ const isHunter = (hunt, viewer) => Boolean(hunt.hunter_user_id) && hunt.hunter_u
 const beforeDraft = (hunt) => !['drafted', 'listed'].includes(stageOf(hunt));
 
 const rules = {
-  canDecide: (hunt, viewer) => viewer.canReview && beforeDraft(hunt) && (viewer.isOwner || !isHunter(hunt, viewer)),
+  canDecide: (hunt, viewer) => viewer.canReview && beforeDraft(hunt) && (viewer.isOwner || !isHunter(hunt, viewer) || Boolean(hunt.found_by_liston)),
   // Fixing and resubmitting are the hunter's own while it waits; a reviewer sends it back instead.
   // A rejected product can be fixed by its hunter or a reviewer, and goes in for review again.
   canEdit: (hunt, viewer) => (['pending', 'sent_back'].includes(stageOf(hunt)) && isHunter(hunt, viewer)) || (stageOf(hunt) === 'rejected' && (isHunter(hunt, viewer) || Boolean(viewer.canReview))),

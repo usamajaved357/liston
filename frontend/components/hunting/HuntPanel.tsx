@@ -38,7 +38,11 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
         <Banner tone="indigo">
           <b className="font-semibold">Waiting for review</b> since {ago(hunt.submittedAt)}
           {hunt.resubmits ? ` · resubmitted ${hunt.resubmits === 1 ? "once" : `${hunt.resubmits} times`}` : ""}.
-          {hunt.hunter?.id === you && " The owner or a reviewer decides on it."}
+          {hunt.foundByListon
+            ? hunt.permissions.canDecide
+              ? " Liston found its supplier; it's approved only when you approve it here."
+              : " Liston found its supplier; the owner or a reviewer approves or rejects it."
+            : hunt.hunter?.id === you && " The owner or a reviewer decides on it."}
         </Banner>
       );
     case "sent_back":
@@ -55,7 +59,7 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
           <b className="font-semibold">Rejected automatically by Liston</b> {ago(hunt.decidedAt)} · {hunt.rejectReasonLabel}.
           {hunt.decisionNote && <Quote text={hunt.decisionNote} />}
           <p className="mt-1.5 text-[12.5px] text-rose-900/80">
-            The supplier must sell every variation of the eBay listing that has sold (it can have more, and variations nobody buys don&apos;t count).
+            The supplier must sell the eBay listing&apos;s best-selling variations, the ones that make most of its sales (it can have more, and variations few or none buy don&apos;t count).
             {hunt.permissions.canResubmit
               ? " Edit and fix it with another supplier link, or resubmit it once the supplier has them: Liston checks it again first."
               : hunt.permissions.canEdit
@@ -153,6 +157,7 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
               <p className="text-[var(--color-ink)]">
                 <b className="font-semibold">{EVENT_WORDS[e.kind]}</b>
                 {e.by ? ` by ${e.by.id === you ? "you" : e.by.name}` : e.system ? " by Liston" : ""}
+                {e.byListon ? " (supplier found by Liston)" : ""}
                 {e.auto ? " (the owner's own find, approved as added)" : ""}
                 {e.reason ? ` · ${e.reason}` : ""}
                 <span className="text-[var(--color-muted)]"> · {new Date(e.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>

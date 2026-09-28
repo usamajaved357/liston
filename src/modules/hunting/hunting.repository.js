@@ -49,8 +49,8 @@ const SELECT = `
 async function insert(fields) {
   const { rows } = await query(
     `INSERT INTO hunted_products (owner_user_id, connection_id, hunter_user_id, status, competitor_url, competitor_item_id, source_url, source_product_id,
-       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at, sales_score)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at, sales_score, found_by_liston)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
      RETURNING id`,
     [
       fields.ownerId,
@@ -72,6 +72,7 @@ async function insert(fields) {
       fields.reviewerId || null,
       fields.decidedAt || null,
       fields.salesScore ?? null,
+      Boolean(fields.foundByListon),
     ]
   );
   return rows[0].id;

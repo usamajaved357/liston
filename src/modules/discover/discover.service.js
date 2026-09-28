@@ -36,16 +36,18 @@ const researchAnalysis = require('../research/research-analysis');
 // are read again every night (discover.scheduler).
 
 const SCAN_TTL_MS = 20 * 60 * 60 * 1000;
-const SCAN_SIZE = 100;
-const READS_FIRST = 25; // sold counts read when a top-level category opens
-const READS_DEEP = 50; // a subcategory or a keyword: more, for more products
-const READS_STEP = 25; // "Read more"
-const READS_MAX = 100;
+const SCAN_SIZE = 200; // eBay's page: one Browse call either way
+const READS_FIRST = 50; // sold counts read when a top-level category opens
+const READS_DEEP = 100; // a subcategory or a keyword: more, for more products
+const READS_STEP = 50; // "Load more products"
+const READS_MAX = 200;
+// A reading this recent stands (sold counts barely move in a day; the nightly refresh reads opened ones again).
+const READ_FRESH_DAYS = 1;
 const CHILD_READS = 8; // per subcategory when ranking them (enough for its keywords)
 const CHILD_KEYWORDS = 4; // shown under each ranked subcategory
 const KEYWORDS_TOP = 24; // keywords on a top-level category or a keyword
 const KEYWORDS_MAX = 48; // deeper in, more: a leaf category shows the most
-const PRODUCTS_SHOWN = 80; // products on a subject's page (the page filters them)
+const PRODUCTS_SHOWN = 150; // products on a subject's page (the page filters them)
 const WINNERS_SCANS = 200; // scans in the Winners pool (newest first)
 const WINNERS_DAYS = 30; // a scan older than this is out of the pool
 const BEST_CATEGORIES_MAX = 100; // explored categories the Categories tab ranks
@@ -56,7 +58,30 @@ const POOL_KEYWORDS_SHOWN = 60; // a page of the site's keywords
 const POOL_KEYWORDS_MAX = 400;
 const WINNERS_CACHE_MS = 5 * 60 * 1000;
 const MAX_CHILDREN = 12; // subcategories ranked at once, busiest first
-const READ_CONCURRENCY = 4;
+const READ_CONCURRENCY = 6;
+// A subject answers within this with what's known; the rest of its sold counts are read on, and the page asks again.
+const QUICK_MS = 2500;
+let quickMs = QUICK_MS;
+const soldJobs = new Map(); // sold-count reads under way, by site, subject, reads asked and account
+
+/**
+ * The subject's sold counts, read in the background: the job's answer if
+ * it's done within QUICK_MS, else what's been read so far ({ reads,
+ * reading: true }) while the job reads on and saves each one. One job per
+ * subject, reads asked and account, whoever asks.
+ */
+async function soldSoFar(ownerId, connectionId, ctx, listings, max, subjectKey) {
+  const key = `${ctx.site.id}:${subjectKey}:${max}:${connectionId}`;
+  let job = soldJobs.get(key);
+  if (!job) {
+    job = readSold(ownerId, connectionId, ctx, listings, { max }).finally(() => soldJobs.delete(key));
+    soldJobs.set(key, job);
+  }
+  const done = await Promise.race([job, new Promise((resolve) => setTimeout(() => resolve(null), quickMs))]);
+  if (done) return done;
+  const reads = await repo.latestReads(ctx.site.id, listings.map(idOf), analyticsDays.addDays(ctx.day, -READ_FALLBACK_DAYS));
+  return { reads, stopped: false, reading: true };
+}
 const LISTINGS_SHOWN = 60;
 const WATCH_LIMIT = 30;
 const READ_FALLBACK_DAYS = 7; // an older read stands in when today's can't be made
@@ -171,7 +196,9 @@ async function readSold(ownerId, connectionId, ctx, listings, { max }) {
   const { site, day } = ctx;
   const wanted = listings.slice(0, max).map(idOf);
   const reads = await repo.latestReads(site.id, listings.map(idOf), analyticsDays.addDays(day, -READ_FALLBACK_DAYS));
-  const need = wanted.filter((id) => reads.get(id)?.day !== day);
+  // Read today or yesterday: it stands, so opening more spends the day's reads on listings not read yet.
+  const fresh = new Set([day, ...Array.from({ length: READ_FRESH_DAYS }, (_, i) => analyticsDays.addDays(day, -(i + 1)))]);
+  const need = wanted.filter((id) => !fresh.has(reads.get(id)?.day));
   if (!need.length) return { reads, stopped: false };
   const left = await budget.left();
   if (left.trading <= 0 || left.tradingPaused) return { reads, stopped: true };
@@ -379,7 +406,11 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
   const info = await subjectInfo(ctx.site, subject);
   const max = Math.max(asked, firstReads(subject, info));
   const traffic = canSeeTraffic && subject.kind === 'keyword' ? ownTraffic(ownerId, connectionId, subject.q) : Promise.resolve(null);
-  const scanRow = await scan(ctx.site, subject);
+  let scanRow = await scan(ctx.site, subject);
+  // Asked for more than a kept scan holds (one taken before scans were 200): searched again, when eBay has more.
+  if (max > scanRow.listings.length && scanRow.listings.length < SCAN_SIZE && scanRow.total > scanRow.listings.length) {
+    scanRow = await scan(ctx.site, subject, { force: true }).catch(() => scanRow);
+  }
   // Opened: it's in the nightly shared refresh for a few days, read with this account.
   await repo.touchScan(ctx.site.id, subject.key, connectionId).catch(() => {});
   // The AI's brand/VeRO and restricted reading, when today's is kept (else the page asks for it).
@@ -388,8 +419,11 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
   // hidden, not read, and not counted: Discover never points anyone at them.
   const brandNames = veroBrands(advice);
   const { kept, hidden } = compliance.partition(scanRow.listings, brandNames);
-  const sold = await readSold(ownerId, connectionId, ctx, kept, { max });
+  // Answered within a moment with what's read; the rest read on while the page asks again.
+  const sold = await soldSoFar(ownerId, connectionId, ctx, kept, max, subject.key);
   const listings = scoring.withPace(placed({ ...scanRow, listings: kept }, ctx, sold.reads));
+  const wantedIds = kept.slice(0, max).map(idOf);
+  const readOf = wantedIds.filter((id) => sold.reads.get(id)?.day === ctx.day || sold.reads.get(id)?.day === analyticsDays.addDays(ctx.day, -1)).length;
 
   const f = scoring.figures(listings, { total: scanRow.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
   // Two weeks of readings: recent sales per listing, and the subject's sales day by day.
@@ -439,7 +473,17 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
     // A keyword: the categories its listings sit in, to explore next.
     categories: subject.kind === 'keyword' ? (scanRow.breakdown?.categories || []).slice(0, 8) : [],
     children: children.map((c) => ({ ...c, flag: flagged(c.name) })),
-    reads: { asked: max, read: f.demand.read, more: max < READS_MAX && listings.length > max, stopped: sold.stopped, signInFailed: Boolean(sold.signInFailed), step: READS_STEP },
+    reads: {
+      asked: max,
+      read: f.demand.read,
+      more: max < READS_MAX && (listings.length > max || (scanRow.listings.length < SCAN_SIZE && scanRow.total > scanRow.listings.length)),
+      stopped: sold.stopped,
+      signInFailed: Boolean(sold.signInFailed),
+      step: READS_STEP,
+      // Still reading sold counts in the background: how far it's got (the page asks again until done).
+      reading: Boolean(sold.reading),
+      progress: { done: readOf, of: wantedIds.length },
+    },
     watch: watch ? { id: watch.id } : null,
     // Subcategories being ranked right now: the page asks again until done.
     ranking: subject.categoryId ? rankingOf(connectionId, subject.categoryId) : null,
@@ -1031,7 +1075,18 @@ async function yourKeywords(ownerId, connectionId, { range = '30d' } = {}) {
   };
 }
 
+/** Test hook: how long a subject waits for its sold counts before answering with what's read. */
+function _quickMs(ms = QUICK_MS) {
+  quickMs = ms;
+}
+/** Test hook: resolves once no sold-count job is running. */
+async function _soldSettled() {
+  while (soldJobs.size) await Promise.all([...soldJobs.values()]).catch(() => {});
+}
+
 module.exports = {
+  _quickMs,
+  _soldSettled,
   explore,
   forgetOwner,
   winners,

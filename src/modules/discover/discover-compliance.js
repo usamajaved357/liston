@@ -44,6 +44,7 @@ const VERO_BRANDS = [
   'nike', 'adidas', 'puma', 'reebok', 'under armour', 'new balance', 'the north face', 'north face', 'canada goose', 'ugg', 'crocs', 'birkenstock', 'lululemon', 'gymshark',
   'gucci', 'louis vuitton', 'chanel', 'prada', 'dior', 'burberry', 'hermes', 'hermès', 'versace', 'balenciaga', 'fendi', 'rolex', 'cartier', 'tiffany', 'swarovski', 'pandora', 'michael kors', 'ray-ban', 'ray ban', 'oakley',
   'disney', 'marvel', 'pokemon', 'pokémon', 'nintendo', 'playstation', 'xbox', 'lego', 'barbie', 'hot wheels', 'hello kitty', 'harry potter', 'star wars', 'peppa pig', 'paw patrol', 'bluey', 'squishmallows', 'funko',
+  'longchamp', 'labubu', 'pop mart', 'jellycat', 'sonny angel', 'kpop demon hunters', 'k-pop demon hunters',
   'stanley', 'yeti', 'hydro flask', 'oral-b', 'gillette', 'olaplex', 'kylie', 'charlotte tilbury', 'estee lauder', 'estée lauder', 'mac cosmetics', 'nespresso', 'kitchenaid', 'le creuset', 'tefal', 'thermomix',
 ];
 // A brand right after one of these is what the product fits, not the product.

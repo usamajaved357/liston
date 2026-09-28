@@ -8,6 +8,7 @@ const logger = require('../../utils/logger');
 const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, HuntError, rules, autoRejected, draftStateOf, DRAFT_STUCK_MS } = require('./hunt-rules');
 const stats = require('./hunting-stats');
 const { noticeFor } = require('./hunt-notice');
+const sourcing = require('./hunt-sourcing');
 const analyticsDays = require('../analytics/analytics-days');
 const notificationsService = require('../notifications/notifications.service');
 const connectionService = require('../connections/connection.service');
@@ -104,7 +105,8 @@ async function duplicatesFor(ownerId, { productId, itemId, title, titles, connec
  * { competitorUrl, sourceUrl, itemId, productId, result } (result is
  * hunt-profit's, with the duplicates found).
  */
-async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, { excludeId = null } = {}) {
+// `known`: the competitor already read ({ competitor, ebaySales }), so checking several suppliers against one listing reads it once.
+async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, { excludeId = null, known = null } = {}) {
   const connection = await connectionService.getConnectionSummary(connectionId, ownerId);
   if (connection.platform_key !== 'ebay') throw new HuntError('Product hunting needs an eBay account.');
   const site = marketplaces.byId(connection.marketplace?.id) || marketplaces.byId(connection.settings?.ebay?.marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
@@ -112,12 +114,12 @@ async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, 
   // from eBay and each option is priced at the account's target return.
   const itemId = competitorUrl ? ebaySource.legacyItemIdFromUrl(competitorUrl) : null;
   const productId = aliexpressSource.productIdFromUrl(sourceUrl);
-  if (competitorUrl) await ensureAllowance();
+  if (competitorUrl && !known) await ensureAllowance();
 
   // AliExpress is the slower read: started first, awaited after eBay's.
   const sourcePromise = aliexpressSource.fetchProduct(sourceUrl, { shipTo: site.country, currency: site.currency });
   sourcePromise.catch(() => {});
-  const competitor = competitorUrl ? await browseUsage.as('hunting', () => ebaySource.fetchListing(competitorUrl, site.id)) : null;
+  const competitor = known ? known.competitor : competitorUrl ? await browseUsage.as('hunting', () => ebaySource.fetchListing(competitorUrl, site.id)) : null;
   const source = await sourcePromise;
 
   const pricing = { ...(connection.settings?.pricing || {}), currency: site.currency };
@@ -135,7 +137,7 @@ async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, 
   if (postage) result.shipping.forOption = anchor.label;
   // eBay's dated sales for the listing, once eBay grants Liston its sales
   // history (Marketplace Insights): sold in the last 90 days and when last.
-  result.sales.ebay = competitor ? await ebaySoldHistory(competitor, itemId, site.id) : null;
+  result.sales.ebay = known ? known.ebaySales : competitor ? await ebaySoldHistory(competitor, itemId, site.id) : null;
   result.salesScore = huntSales.salesScore({ demand: result.demand, variations: result.sales.variations });
   result.market = { id: site.id, name: site.name, country: site.country };
   result.duplicates = await duplicatesFor(ownerId, { productId, itemId, title: competitor?.title || source.title, titles: [competitor?.title, source.title], connectionId, excludeId });
@@ -226,7 +228,9 @@ function summaryOf(row, viewer, sales = []) {
     options: result.summary?.total ?? null,
     hunter: personOf(row.hunter_user_id, row.hunter_name, row.hunter_email),
     reviewer: personOf(row.reviewer_user_id, row.reviewer_name, row.reviewer_email),
-    autoApproved: Boolean(row.reviewer_user_id && row.reviewer_user_id === row.hunter_user_id),
+    // Found by Liston's supplier search (Discover's Hunt, Find with Liston): never approved as added.
+    foundByListon: Boolean(row.found_by_liston),
+    autoApproved: Boolean(!row.found_by_liston && row.reviewer_user_id && row.reviewer_user_id === row.hunter_user_id),
     createdAt: row.created_at,
     submittedAt: row.submitted_at,
     decidedAt: row.decided_at,
@@ -276,6 +280,8 @@ function timelineOf(row, events) {
       reason: reasonLabel(e.detail?.reason),
       note: e.detail?.note || null,
       auto: Boolean(e.detail?.autoApproved),
+      // Added from Liston's own supplier search.
+      byListon: Boolean(e.detail?.foundByListon),
     }));
   // Liston's own rejection isn't a member's action, so it isn't in the activity record.
   if (autoRejected(row) && row.decided_at) out.push({ kind: 'rejected', at: row.decided_at, by: null, system: true, reason: reasonLabel(row.reject_reason), note: row.decision_note || null, auto: false });
@@ -310,6 +316,137 @@ async function check(auth, connectionId, { competitorUrl, sourceUrl }) {
   return { checkId, result: read.result, autoApproves: viewer.isOwner };
 }
 
+/**
+ * Discover's Hunt: finds an AliExpress supplier for an eBay listing by
+ * itself and adds the product. The listing is read once; AliExpress is
+ * searched by its photo and by its title's words; up to six of the products
+ * found are checked in full, as a hunter's check would (prices, postage,
+ * the account's fees and target return); one rated 4.0 stars or more that
+ * sells what the listing sells and earns the target is added the usual way
+ * (waiting for review; the owner's approved and drafted). Otherwise nothing
+ * is added: { found: false, reason, tried }.
+ */
+const SOURCE_CONCURRENCY = 4;
+// `add: false` (the add form's "Find with Liston"): the supplier found is kept as a check and returned,
+// { found, checkId, result, autoApproves, sourceUrl, supplier, tried }, for the hunter to add with their note.
+async function autoSource(auth, connectionId, { competitorUrl, add: addIt = true }) {
+  const viewer = await viewerFor(auth, connectionId);
+  if (!viewer.canHunt) refuse("You don't have access to hunting on this account.");
+  const connection = await connectionService.getConnectionSummary(connectionId, auth.ownerId);
+  if (connection.platform_key !== 'ebay') throw new HuntError('Product hunting needs an eBay account.');
+  const site = marketplaces.byId(connection.marketplace?.id) || marketplaces.byId(connection.settings?.ebay?.marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
+  const itemId = ebaySource.legacyItemIdFromUrl(competitorUrl);
+  await ensureAllowance();
+  const competitor = await browseUsage.as('hunting', () => ebaySource.fetchListing(competitorUrl, site.id));
+  const known = { competitor, ebaySales: await ebaySoldHistory(competitor, itemId, site.id) };
+
+  let found;
+  try {
+    found = await aliexpressSource.findSuppliers({
+      imageUrl: sourcing.searchImage((competitor.referenceImages || [])[0] || competitor.imageUrl),
+      words: sourcing.searchWords(competitor.title),
+      shipTo: site.country,
+      currency: site.currency,
+    });
+  } catch (err) {
+    return { found: false, reason: err.message, tried: [] };
+  }
+  const { check: candidates, skipped } = sourcing.candidatesToCheck(found, competitor.title);
+  // Said with the answer when a search couldn't run (eBay's photo not reachable just now, say).
+  const note = found.errors.some((e) => e.startsWith('Image search'))
+    ? "Photo search wasn't available just now (eBay's photo couldn't be fetched), so it searched by the title only."
+    : found.errors.length
+      ? `Part of the search failed: ${found.errors.join('; ')}.`
+      : null;
+  const skippedRows = skipped.slice(0, 6).map((c) => ({ title: c.title, url: c.url, imageUrl: c.imageUrl, via: c.via, rating: c.rating ?? null, profit: null, roi: null, ok: false, why: c.why }));
+  if (!candidates.length) {
+    const searched = found.image.length + found.text.length;
+    return {
+      found: false,
+      reason: searched
+        ? `AliExpress has ${searched} products for it, but none looks like the same product (its title's words and size).`
+        : found.errors.length
+          ? `AliExpress couldn't be searched just now (${found.errors.join('; ')}).`
+          : 'AliExpress has nothing that looks like this listing.',
+      tried: skippedRows,
+      note,
+    };
+  }
+
+  // Each candidate checked in full, a few at a time.
+  const checked = [];
+  let next = 0;
+  async function worker() {
+    while (next < candidates.length) {
+      const order = next++;
+      const c = candidates[order];
+      try {
+        const read = await readProduct(auth.ownerId, connectionId, { competitorUrl, sourceUrl: c.url }, { known });
+        checked.push({ candidate: c, order, read, result: read.result, verdict: sourcing.judge(read.result) });
+      } catch (err) {
+        checked.push({ candidate: c, order, read: null, result: null, verdict: { ok: false, why: `Couldn't be read: ${err.message}` } });
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(SOURCE_CONCURRENCY, candidates.length) }, worker));
+  const tried = candidates.map((c) => {
+    const x = checked.find((k) => k.candidate === c);
+    // The figures it was judged on (hunt-sourcing.judgedOn).
+    return { title: c.title, url: c.url, imageUrl: c.imageUrl, via: c.via, rating: x?.result?.source?.supplier?.rating ?? c.rating ?? null, profit: x?.verdict.profit ?? null, roi: x?.verdict.roi ?? null, ok: Boolean(x?.verdict.ok), belowTarget: Boolean(x?.verdict.belowTarget), why: x?.verdict.why || null };
+  });
+  const winner = sourcing.best(checked);
+  // None at the target return: the best that matches and earns less, shown to add by hand.
+  const near = winner ? null : sourcing.best(checked, { belowTarget: true });
+  // What it made of each, for when a seller asks why nothing was found.
+  logger.info('Hunting: supplier search', {
+    connectionId,
+    itemId,
+    found: Boolean(winner),
+    belowTarget: Boolean(near),
+    photo: found.image.length,
+    text: found.text.length,
+    errors: found.errors,
+    tried: tried.map((t) => `${t.via}:${t.ok ? 'ok' : t.belowTarget ? `below target (${t.why})` : t.why}`),
+    skipped: skipped.length,
+  });
+  const via = (pick) => (pick.candidate.via === 'image' ? 'image' : 'text');
+  if (near) {
+    // Kept as a check, never added by itself: the seller sees its figures and adds it if it'll do.
+    pruneChecks();
+    const checkId = crypto.randomUUID();
+    checks.set(checkId, { read: near.read, userId: auth.userId, connectionId: String(connectionId), byListon: true, expiresAt: Date.now() + CHECK_TTL_MS });
+    const target = Number(near.result.targetRoiPercent) || 0;
+    return {
+      found: true,
+      belowTarget: true,
+      targetRoi: target,
+      checkId,
+      result: near.result,
+      autoApproves: false,
+      sourceUrl: near.candidate.url,
+      supplier: tried.find((t) => t.url === near.candidate.url),
+      tried,
+      note,
+      addNote: `Supplier found by Liston (AliExpress ${via(near)} search): rated ${near.result.source.supplier.rating} stars, free postage, ${near.verdict.roi}% return at the competitor's price, under the ${target}% target.`,
+    };
+  }
+  if (!winner) {
+    return { found: false, reason: `None of the ${candidates.length} AliExpress products that look like it is rated 4.0 stars or more, with free postage, sells what the listing sells and makes money at its price.`, tried: [...tried, ...skippedRows].slice(0, 10), note };
+  }
+
+  // Added the way a hunter's check is: kept, then added, always waiting for review (Liston found it).
+  pruneChecks();
+  const checkId = crypto.randomUUID();
+  checks.set(checkId, { read: winner.read, userId: auth.userId, connectionId: String(connectionId), byListon: true, expiresAt: Date.now() + CHECK_TTL_MS });
+  const supplier = tried.find((t) => t.url === winner.candidate.url);
+  if (!addIt) return { found: true, checkId, result: winner.result, autoApproves: false, sourceUrl: winner.candidate.url, supplier, tried, note };
+  const hunt = await add(auth, connectionId, {
+    checkId,
+    note: `Supplier found by Liston (AliExpress ${via(winner)} search): rated ${winner.result.source.supplier.rating} stars, free postage, ${winner.verdict.roi}% return at the competitor's price.`,
+  });
+  return { found: true, hunt, supplier, tried, note };
+}
+
 /** Adds a checked product to the account's hunting list. The owner's own are approved as they're added. */
 async function add(auth, connectionId, { checkId, note }) {
   const viewer = await viewerFor(auth, connectionId);
@@ -320,7 +457,9 @@ async function add(auth, connectionId, { checkId, note }) {
   const columns = checkColumns(kept.read);
   // A supplier that doesn't sell what the eBay listing sells is rejected by Liston, whoever adds it.
   const mismatch = kept.read.result?.mismatch || null;
-  const approved = viewer.isOwner && !mismatch;
+  // Liston's own find waits for a person to approve it, whoever adds it (the owner included).
+  const byListon = Boolean(kept.byListon);
+  const approved = viewer.isOwner && !mismatch && !byListon;
   const id = await huntingRepository.insert({
     ...columns,
     ownerId: auth.ownerId,
@@ -330,6 +469,7 @@ async function add(auth, connectionId, { checkId, note }) {
     reviewerId: approved ? auth.userId : null,
     decidedAt: approved ? new Date() : null,
     note: typeof note === 'string' ? note.trim().slice(0, 1000) : null,
+    foundByListon: byListon,
   });
   checks.delete(checkId);
   if (mismatch) await rejectMismatch(auth.ownerId, id, mismatch);
@@ -341,7 +481,7 @@ async function add(auth, connectionId, { checkId, note }) {
     subjectType: 'hunt',
     subjectId: id,
     title: columns.title,
-    detail: { profit: columns.headlineProfit, roi: columns.headlineRoi, autoApproved: approved, autoRejected: Boolean(mismatch) },
+    detail: { profit: columns.headlineProfit, roi: columns.headlineRoi, autoApproved: approved, autoRejected: Boolean(mismatch), foundByListon: byListon },
   });
   if (approved && config.hunting.autoDraft) startDraft(auth.ownerId, id, auth.userId);
   // Discover marks it as the owner's at once. Required here: Discover's module reads this one's tables.
@@ -795,6 +935,7 @@ function forgetChecks() {
 }
 
 module.exports = {
+  autoSource,
   draftAgain,
   draftsSettled,
   startDraft,

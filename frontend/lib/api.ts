@@ -1846,6 +1846,8 @@ export interface HuntSummary {
   hunter: HuntPerson | null;
   reviewer: HuntPerson | null;
   autoApproved: boolean;
+  // Found by Liston's supplier search: never approved as it's added, a person approves or rejects it.
+  foundByListon: boolean;
   createdAt: string;
   submittedAt: string;
   decidedAt: string | null;
@@ -1895,10 +1897,39 @@ export interface HuntTimelineEvent {
   reason?: string | null;
   note?: string | null;
   auto?: boolean;
+  // Added from Liston's own supplier search (Discover's Hunt, Find with Liston).
+  byListon?: boolean;
   // Rejected by Liston itself (the supplier doesn't match), not a member.
   system?: boolean;
   itemId?: string | null;
 }
+
+// Discover's Hunt: the AliExpress products Liston looked at for a listing, and what it made of each.
+export interface HuntSourceTry {
+  title: string;
+  url: string;
+  imageUrl: string | null;
+  via: "image" | "text";
+  rating: number | null;
+  profit: number | null;
+  roi: number | null;
+  ok: boolean;
+  // Matches and earns, but under the account's target return.
+  belowTarget?: boolean;
+  why: string | null;
+}
+// A supplier that matches but earns under the target return: kept as a check, never added by itself.
+export type HuntBelowTarget = { found: true; belowTarget: true; targetRoi: number; checkId: string; result: HuntCheckResult; autoApproves: boolean; sourceUrl: string; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null; addNote: string };
+// `note`: said when part of the search couldn't run (photo search unavailable just now, say).
+export type HuntAutoSource =
+  | { found: true; belowTarget?: false; hunt: HuntDetail; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null }
+  | HuntBelowTarget
+  | { found: false; reason: string; tried: HuntSourceTry[]; note?: string | null };
+// The add form's "Find with Liston": the supplier found, kept as a check for the hunter to add.
+export type HuntFoundSupplier =
+  | { found: true; belowTarget?: false; checkId: string; result: HuntCheckResult; autoApproves: boolean; sourceUrl: string; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null }
+  | HuntBelowTarget
+  | { found: false; reason: string; tried: HuntSourceTry[]; note?: string | null };
 
 export interface HuntDetail extends HuntSummary {
   connectionLabel: string;
@@ -2218,7 +2249,8 @@ export interface DiscoverExplore {
   brands: { name: string; count: number; unbranded: boolean }[];
   categories: { id: string; name: string; count: number }[];
   children: DiscoverChild[];
-  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number };
+  // `reading`: sold counts still being read in the background (the page asks again); `progress`: how far.
+  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number; reading?: boolean; progress?: { done: number; of: number } };
   watch: { id: string } | null;
   ranking: { total: number; done: number } | null;
   market: { id: string; name: string; currency: string; country?: string; flag?: string };
@@ -2570,6 +2602,11 @@ export const api = {
   // Product hunting: check a product, add it for review, decide, draft.
   huntCheck: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
+  // Discover's Hunt: Liston finds an AliExpress supplier for the listing and adds it, or says why not.
+  huntAutoSource: (connectionId: string, competitorUrl: string) =>
+    request<HuntAutoSource>(`/api/connections/${connectionId}/hunting/auto-source`, { method: "POST", body: JSON.stringify({ competitorUrl }) }),
+  huntFindSupplier: (connectionId: string, competitorUrl: string) =>
+    request<HuntFoundSupplier>(`/api/connections/${connectionId}/hunting/auto-source`, { method: "POST", body: JSON.stringify({ competitorUrl, add: false }) }),
   huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
     request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
   huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } & HuntFilters = {}) => {

@@ -45,7 +45,7 @@ function Status({ hunt }: { hunt: HuntSummary }) {
   let line: string | null = null;
   if (hunt.stage === "rejected") line = hunt.autoRejected ? `by Liston · ${hunt.rejectReasonLabel}` : hunt.rejectReasonLabel;
   else if (hunt.stage === "sent_back") line = hunt.decisionNote;
-  else if (hunt.stage === "pending") line = `waiting ${ago(hunt.submittedAt).replace(" ago", "")}`;
+  else if (hunt.stage === "pending") line = `${hunt.foundByListon ? "Found by Liston · " : ""}waiting ${ago(hunt.submittedAt).replace(" ago", "")}`;
   else if (hunt.stage === "listed") line = hunt.sales ? `${money(hunt.sales.sales, hunt.sales.currency || hunt.currency)} · ${count(hunt.sales.units)} sold` : "No sales yet";
   else if (hunt.stage === "drafted") line = [hunt.draftedBy ? `by ${hunt.draftedBy.name}` : null, hunt.draftedAt ? ago(hunt.draftedAt) : null].filter(Boolean).join(" · ") || null;
   else if (hunt.stage === "approved") line = hunt.draftState === "failed" ? "Draft failed · open to try again" : hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;

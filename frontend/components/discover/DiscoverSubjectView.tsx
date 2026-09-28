@@ -238,6 +238,26 @@ export function DiscoverSubjectView({
     () => filterProducts(data.products, filters),
     [data.products, filters],
   );
+  // "Load more": what it found, said once the page answers (new products, and how many pass the filters).
+  const [loadedFrom, setLoadedFrom] = useState<{ asked: number; products: number; shown: number } | null>(null);
+  const loadMore = () => {
+    setLoadedFrom({ asked: data.reads.asked, products: data.products.length, shown: shownProducts.length });
+    onReadMore();
+  };
+  const loadNote =
+    loadedFrom && data.reads.asked > loadedFrom.asked
+      ? (() => {
+          const found = Math.max(0, data.products.length - loadedFrom.products);
+          const passing = Math.max(0, shownProducts.length - loadedFrom.shown);
+          if (!found) return { text: "The next listings added no new products: they're more of the same ones.", hidden: false };
+          return {
+            text: `${found} new product${found === 1 ? "" : "s"} found${passing ? `, ${passing} matching your filters` : ", none matching your filters"}.`,
+            hidden: passing === 0,
+          };
+        })()
+      : null;
+  // Everything read, filters loosened but still VeRO safe: for when the defaults leave few.
+  const showAll = () => setFilters({ ...DEFAULT_FILTERS, q: filters.q, sort: filters.sort, priceMin: null, minSales: 0, fit: false, brand: "any", mine: "show" });
   // Subcategories best-selling first (or by opportunity, or by live listings): the ones fetched ranked,
   // then the rest by how many listings they hold, a restricted one last. The top seller is marked.
   const [childSort, setChildSort] = useState<"sales" | "score" | "live">("sales");
@@ -520,9 +540,16 @@ export function DiscoverSubjectView({
               note={`Sales a month together, how many sellers make a living from it, what buyers pay, how much of its sales come from sellers delivering like you, and whether it's rising or new. Each says why.${hiddenText ? ` ${hiddenText}` : ""}`}
               aside={
                 <span className="text-[12px] tabular-nums text-[var(--color-muted)]">
-                  {shownProducts.length === data.products.length
-                    ? `${data.products.length} products`
-                    : `${shownProducts.length} of ${data.products.length} products`}
+                  {shownProducts.length === data.products.length ? (
+                    `${data.products.length} products`
+                  ) : (
+                    <>
+                      {shownProducts.length} of {data.products.length} products match{" "}
+                      <button type="button" onClick={showAll} className="font-medium text-[var(--color-primary)] hover:underline">
+                        Show all
+                      </button>
+                    </>
+                  )}
                 </span>
               }
             />
@@ -545,26 +572,52 @@ export function DiscoverSubjectView({
                   ? "Products show once sold counts are read."
                   : data.products.length
                     ? "No product here matches these filters. Loosen one, or load more products."
-                    : "No product here sells yet."
+                    : data.reads.reading
+                      ? "Reading sold counts: products appear here as they're read."
+                      : "No product here sells yet."
               }
             />
           </div>
+          {/* Sold counts still being read in the background: how far, the products filling in above. */}
+          {data.reads.reading && data.reads.progress && (
+            <div className="border-t border-[var(--color-line)] px-4 py-2" aria-live="polite">
+              <div className="flex items-center justify-between gap-3 text-[11.5px] text-[var(--color-muted)]">
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-primary)]/25 border-t-[var(--color-primary)]" aria-hidden />
+                  Reading sold counts: {data.reads.progress.done} of {data.reads.progress.of} listings. Products fill in as they&apos;re read.
+                </span>
+              </div>
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--color-paper)]">
+                <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-500" style={{ width: `${Math.round((100 * data.reads.progress.done) / Math.max(1, data.reads.progress.of))}%` }} />
+              </div>
+            </div>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] px-4 py-2.5">
             <p className="text-[11.5px] text-[var(--color-muted)]">
+              {loadNote && (
+                <span className="mr-1.5 font-medium text-[var(--color-ink)]">
+                  {loadNote.text}
+                  {loadNote.hidden && (
+                    <button type="button" onClick={showAll} className="ml-1 font-medium text-[var(--color-primary)] hover:underline">
+                      Show all products
+                    </button>
+                  )}
+                </span>
+              )}
               {data.reads.signInFailed
                 ? "Sold counts need this account's eBay sign-in, which didn't work: reconnect the account, or ask the owner to."
                 : data.reads.stopped
                   ? "Today's sold-count reads ran out before every listing was read."
                   : `From the ${read} leading listings read of ${data.listings.length}${data.reads.more ? "; loading more reads the next ones' sold counts" : ""}.`}
             </p>
-            {data.reads.more && !data.reads.stopped && (
+            {data.reads.more && !data.reads.stopped && !data.reads.reading && (
               <button
                 type="button"
-                onClick={onReadMore}
+                onClick={loadMore}
                 disabled={readingMore}
                 className="btn btn-secondary btn-sm !h-8 !text-[12.5px]"
               >
-                {readingMore ? "Loading…" : `Load more products`}
+                {readingMore ? "Reading the next listings…" : `Load more products (the next ${data.reads.step} listings)`}
               </button>
             )}
           </div>

@@ -75,6 +75,7 @@ router.get('/:id/hunting', requireAuth, requireAnyFeature(HUNTING_ACCESS), hunti
 router.get('/:id/hunting/badge', requireAuth, requireAnyFeature(KNOWN_FEATURES), huntingController.badge);
 router.post('/:id/hunting/check', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.check);
 router.post('/:id/hunting', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.add);
+router.post('/:id/hunting/auto-source', requireAuth, requireAnyFeature(['hunting', 'hunting_review']), huntingController.autoSource);
 // A competitor's dated sales, pasted from eBay's purchase history page
 // (tens of KB of text, well within the app-wide JSON limit).
 

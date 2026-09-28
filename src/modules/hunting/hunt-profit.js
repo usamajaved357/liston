@@ -185,16 +185,32 @@ function coverScore(option, variant) {
   return theirs.reduce((sum, value) => sum + Math.max(0, ...mine.map((other) => valueScore(value, other))), 0) / theirs.length;
 }
 const COVER_MIN = 0.75;
+// The variations a supplier must have: the best sellers that make this share of the listing's sold units.
+const SALES_COVERED = 0.8;
+/** The listing's variations that make most of its sales (SALES_COVERED of units sold, the best seller at least), best first. */
+function mainSellers(sold) {
+  const total = sold.reduce((sum, v) => sum + (v.sold || 0), 0);
+  const out = [];
+  let covered = 0;
+  for (const v of [...sold].sort((a, b) => (b.sold || 0) - (a.sold || 0))) {
+    if (out.length && covered >= total * SALES_COVERED) break;
+    out.push(v);
+    covered += v.sold || 0;
+  }
+  return out;
+}
 const sellsIt = (options, variant) => options.some((o) => optionScore(o, variant) >= MATCH_MIN || coverScore(o, variant) >= COVER_MIN);
 
 /**
  * Whether the supplier sells what the eBay listing sells, or null when it
- * does (or there's no competitor to compare with). Every variation of the
- * eBay listing that has sold must be among the supplier's options: the
- * supplier can have more (five colours against the listing's one is fine,
- * as long as the listing's colour is one of them), and variations nobody
- * buys don't count (a listing of ten colours that only sells Black needs
- * Black). Only when no sold counts are known must every variation be there.
+ * does (or there's no competitor to compare with). The listing's variations
+ * that make most of its sales (the best sellers covering 80% of units
+ * sold) must be among the supplier's options: the supplier can have more
+ * (five colours against the listing's one is fine, as long as the listing's
+ * colour is one of them), and variations few or none buy don't count (a
+ * listing of ten colours that only sells Black needs Black; a stray option
+ * with a handful of sales among thousands doesn't decide it). Only when no
+ * sold counts are known must every variation be there.
  * A listing without variations is compared on its title: the two must
  * share a few words that say what the product is.
  * { kind: 'variations', missing: [label], total, selling, reason } | { kind: 'product', reason }.
@@ -204,13 +220,13 @@ function matchCheck(competitor, source, currency) {
   const all = competitorVariations(competitor, currency).filter((v) => v.label);
   if (all.length) {
     const sold = all.filter((v) => (v.sold || 0) > 0);
-    const variations = sold.length ? sold : all;
+    const variations = sold.length ? mainSellers(sold) : all;
     const selling = Boolean(sold.length);
     const options = supplierOptions(source, currency);
     const missing = variations.filter((v) => !sellsIt(options, v)).map((v) => v.label);
     if (!missing.length) return null;
     const shown = missing.slice(0, 6).join(', ');
-    const what = selling ? `variation${variations.length === 1 ? '' : 's'} with sales` : `variation${variations.length === 1 ? '' : 's'}`;
+    const what = selling ? `best-selling variation${variations.length === 1 ? '' : 's'}` : `variation${variations.length === 1 ? '' : 's'}`;
     return {
       kind: 'variations',
       missing,

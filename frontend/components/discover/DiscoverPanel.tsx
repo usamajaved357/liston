@@ -30,6 +30,7 @@ import { DiscoverOwnKeywords } from "./DiscoverOwnKeywords";
 type HomeTab = "products" | "keywords" | "categories" | "saved";
 const HOME_TABS: HomeTab[] = ["products", "keywords", "categories", "saved"];
 const RANK_POLL_MS = 2500;
+const READ_POLL_MS = 1500; // while sold counts are read in the background
 const READS_STEP = 25;
 const PAGE = 60; // products or keywords a page, on the start's tabs
 
@@ -168,13 +169,14 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     return () => clearTimeout(timer);
   }, [needsReview, review?.key, key, runReview]);
 
-  // A ranking under way: ask again until it's done.
+  // A ranking under way, or sold counts still being read: ask again until done (the products fill in).
   const ranking = shown?.data?.ranking;
+  const readingOn = Boolean(shown?.data?.reads.reading);
   useEffect(() => {
-    if (!ranking || !answered) return;
-    const timer = setTimeout(() => setPoll((n) => n + 1), RANK_POLL_MS);
+    if ((!ranking && !readingOn) || !answered) return;
+    const timer = setTimeout(() => setPoll((n) => n + 1), readingOn && !ranking ? READ_POLL_MS : RANK_POLL_MS);
     return () => clearTimeout(timer);
-  }, [ranking, answered]);
+  }, [ranking, readingOn, answered, poll]);
 
   // The products, when shown: asked again as the filters change (typing waits a moment) or more are wanted.
   const showProducts = home && homeTab === "products";
@@ -320,8 +322,8 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
               onBack={() => open(parent ? { categoryId: parent.id } : null)}
               backLabel={parent ? parent.name : "Discover"}
               onHunt={onHunt}
-              onReadMore={() => setReads({ key, n: Math.max(readsWanted, shown.data?.reads.asked || 0) + READS_STEP })}
-              readingMore={!answered && readsWanted > (shown.data.reads.asked || 0)}
+              onReadMore={() => setReads({ key, n: Math.max(readsWanted, shown.data?.reads.asked || 0) + (shown.data?.reads.step || READS_STEP) })}
+              readingMore={(!answered && readsWanted > (shown.data.reads.asked || 0)) || Boolean(shown.data.reads.reading)}
               onRank={rank}
               onToggleWatch={toggleWatch}
               watchBusy={watchBusy}

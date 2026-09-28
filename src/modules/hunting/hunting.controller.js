@@ -19,6 +19,9 @@ const note = z.string().max(1000, 'Keep the note under 1,000 characters.');
 
 // The competitor is optional, as in drafting.
 const checkSchema = z.object({ competitorUrl: z.preprocess(blankToUndefined, competitorUrl.optional()), sourceUrl: z.preprocess(blankToUndefined, sourceUrl) });
+// Discover's Hunt: Liston finds the supplier itself.
+// `add: false`: found and returned as a check, for the hunter to add from the form.
+const autoSourceSchema = z.object({ competitorUrl, add: z.boolean().optional().default(true) });
 const addSchema = z.object({ checkId: z.string().uuid('Check the product first.'), note: note.optional() });
 // A blank or null competitor takes it away; leaving it out keeps it.
 const blankToNull = (v) => (v === null || (typeof v === 'string' && v.trim() === '') ? null : typeof v === 'string' ? v.trim() : v);
@@ -52,6 +55,12 @@ const handle = (fn) => async (req, res, next) => {
 };
 
 module.exports = {
+  autoSource: handle(async (req, res) => {
+    const input = parse(autoSourceSchema, req.body, res);
+    if (!input) return;
+    const out = await huntingService.autoSource(auth(req), req.params.id, input);
+    res.status(out.found && out.hunt ? 201 : 200).json(out);
+  }),
   check: handle(async (req, res) => {
     const input = parse(checkSchema, req.body, res);
     if (input) res.json(await huntingService.check(auth(req), req.params.id, input));

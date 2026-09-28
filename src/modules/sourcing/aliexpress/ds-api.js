@@ -598,4 +598,97 @@ async function fetchShipping(productId, skuId, { shipTo, currency } = {}) {
   return { ...chosen, options: options.length };
 }
 
-module.exports = { fetchProduct, fetchShipping, deliveryOption, supplierOf, postGateway, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };
+// ---- finding a supplier ----------------------------------------------------------------
+
+const PRODUCT_URL = (id) => `https://www.aliexpress.com/item/${id}.html`;
+// Search results give photos on ae-pic-*.aliexpress-media.com, which doesn't answer from every network;
+// AliExpress's main image host serves the same /kf/ file.
+const photoUrl = (url) => (url ? String(url).replace(/^https?:\/\/ae-pic-[a-z0-9]+\.aliexpress-media\.com\/kf\//i, 'https://ae01.alicdn.com/kf/') : null);
+const numberIn = (v) => {
+  const n = Number(String(v ?? '').replace(/[^0-9.]/g, ''));
+  return String(v ?? '').trim() && Number.isFinite(n) ? n : null;
+};
+
+/**
+ * AliExpress products for some words (aliexpress.ds.text.search, best match
+ * first): [{ productId, title, imageUrl, price, rating (stars), orders, url,
+ * via: 'text' }]. LIVE-VERIFIED 2026-09-29: products under
+ * data.products.selection_search_product, the rating as `score` ("4.3").
+ */
+async function searchByText(keyWord, { shipTo, currency, pageSize = 10 } = {}) {
+  const country = shipTo || config.aliexpress.shipToCountry;
+  const raw = await call('aliexpress.ds.text.search', {
+    keyWord: String(keyWord).slice(0, 120),
+    local: `en_${country}`,
+    countryCode: country,
+    currency: currency || config.aliexpress.targetCurrency,
+    pageSize,
+    pageIndex: 1,
+  });
+  raiseIfError(raw);
+  const data = raw?.aliexpress_ds_text_search_response?.data || unwrapEnvelope(raw);
+  return asArray(data.products, 'selection_search_product')
+    .filter((p) => p && p.itemId)
+    .map((p) => ({
+      productId: String(p.itemId),
+      title: String(p.title || ''),
+      imageUrl: photoUrl(p.itemMainPic),
+      price: numberIn(p.targetSalePrice),
+      rating: numberIn(p.score),
+      orders: p.orders ? String(p.orders) : null,
+      url: PRODUCT_URL(p.itemId),
+      via: 'text',
+    }));
+}
+
+/**
+ * AliExpress products that look like a photo (aliexpress.ds.image.search,
+ * the image uploaded as a file: file parameters are sent as multipart and
+ * left out of the signature): [{ productId, title, imageUrl, price,
+ * positive (feedback %), orders, url, via: 'image' }]. LIVE-VERIFIED
+ * 2026-09-29: products under data.products.traffic_image_product_d_t_o.
+ */
+async function searchByImage(imageBytes, { shipTo, currency, count = 10, fetchImpl = fetch } = {}) {
+  await assertConfigured();
+  const accessToken = await getValidAccessToken();
+  const { appKey, appSecret } = config.aliexpress;
+  const params = {
+    app_key: appKey,
+    timestamp: String(Date.now()),
+    sign_method: 'sha256',
+    method: 'aliexpress.ds.image.search',
+    access_token: accessToken,
+    shpt_to: shipTo || config.aliexpress.shipToCountry,
+    target_currency: currency || config.aliexpress.targetCurrency,
+    target_language: 'EN',
+    product_cnt: String(count),
+  };
+  params.sign = sign(params, appSecret);
+  const form = new FormData();
+  for (const [key, value] of Object.entries(params)) form.append(key, value);
+  form.append('image_file_bytes', new Blob([imageBytes], { type: 'image/jpeg' }), 'image.jpg');
+  let res;
+  try {
+    res = await fetchImpl(IOP_GATEWAY, { method: 'POST', body: form, signal: AbortSignal.timeout(30 * 1000) });
+  } catch (err) {
+    throw new ScrapingError("Couldn't reach AliExpress's image search just now. Try again in a moment.", { source: 'aliexpress' });
+  }
+  if (!res.ok) throw new ScrapingError(`AliExpress image search failed (${res.status})`, { source: 'aliexpress' });
+  const raw = await res.json();
+  raiseIfError(raw);
+  const data = raw?.aliexpress_ds_image_search_response?.data || unwrapEnvelope(raw);
+  return asArray(data.products, 'traffic_image_product_d_t_o')
+    .filter((p) => p && p.product_id)
+    .map((p) => ({
+      productId: String(p.product_id),
+      title: String(p.product_title || ''),
+      imageUrl: photoUrl(p.product_main_image_url),
+      price: numberIn(p.target_sale_price),
+      positive: numberIn(p.evaluate_rate),
+      orders: p.lastest_volume !== undefined ? String(p.lastest_volume) : null,
+      url: PRODUCT_URL(p.product_id),
+      via: 'image',
+    }));
+}
+
+module.exports = { photoUrl, searchByText, searchByImage, fetchProduct, fetchShipping, deliveryOption, supplierOf, postGateway, sign, raiseIfError, unwrapEnvelope, normalizeProduct, packageOf, decodeSkuOptions, deriveVariantAxes, getValidAccessToken, authorizeUrl, exchangeCode, startTokenKeepAlive };

@@ -36,7 +36,7 @@ const calls = { search: 0, sold: 0 };
 // different sellers; the keyword ones have "cat water fountain" in their titles.
 function listingsFor({ categoryId, q }) {
   const base = categoryId || `7${run}`;
-  return Array.from({ length: 30 }, (_, i) => ({
+  return Array.from({ length: 80 }, (_, i) => ({
     itemId: `v1|${base}${String(i).padStart(2, '0')}|0`,
     legacyItemId: `${base}${String(i).padStart(2, '0')}`,
     // The last one names a restricted item: Discover hides it and doesn't read it.
@@ -144,13 +144,13 @@ test('Discover explores a category: its leading listings, their sold counts read
     request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter),
   ]);
   assert.strictEqual(first.status, 200, JSON.stringify(first.data));
-  assert.strictEqual(twin.data.reads.read, 25);
+  assert.strictEqual(twin.data.reads.read, 50);
   assert.strictEqual(calls.search, 1);
   const d = first.data;
   assert.strictEqual(d.subject.name, 'Test Lighting');
   assert.strictEqual(d.figures.total, 1200);
-  assert.deepStrictEqual(d.reads, { asked: 25, read: 25, more: true, stopped: false, signInFailed: false, step: 25 });
-  assert.strictEqual(calls.sold, 25, 'the first 25 listings read');
+  assert.deepStrictEqual(d.reads, { asked: 50, read: 50, more: true, stopped: false, signInFailed: false, step: 50, reading: false, progress: { done: 50, of: 50 } });
+  assert.strictEqual(calls.sold, 50, 'the first 50 listings read');
   // Fastest first, with its best-selling option first.
   assert.strictEqual(d.listings[0].itemId, `${PARENT}00`);
   assert.deepStrictEqual(d.listings[0].options.map((o) => o.label), ['Motion sensor', 'Warm white']);
@@ -210,10 +210,15 @@ test('Discover explores a category: its leading listings, their sold counts read
   // Opening it again spends nothing: the scan and today's readings are kept.
   const searches = calls.search;
   await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter);
-  assert.deepStrictEqual([calls.search, calls.sold], [searches, 25]);
+  assert.deepStrictEqual([calls.search, calls.sold], [searches, 50]);
   // Read more: the next listings only.
-  const more = await request('GET', `${base}/explore?categoryId=${PARENT}&reads=50`, undefined, t.hunter);
-  assert.deepStrictEqual([more.data.reads.read, calls.sold], [29, 29], 'every listing but the hidden one');
+  const more = await request('GET', `${base}/explore?categoryId=${PARENT}&reads=100`, undefined, t.hunter);
+  assert.deepStrictEqual([more.data.reads.read, calls.sold], [79, 79], 'every listing but the hidden one');
+  // Yesterday's readings stand: opening it again the next day reads nothing new.
+  await pool.query(`UPDATE discover_listing_reads SET day = day - 1 WHERE item_id LIKE $1`, [`${PARENT}%`]);
+  const soldBefore = calls.sold;
+  const nextDay = await request('GET', `${base}/explore?categoryId=${PARENT}&reads=100`, undefined, t.hunter);
+  assert.deepStrictEqual([nextDay.data.reads.read, calls.sold], [79, soldBefore], "yesterday's readings are used, not bought again");
 
   // Ranking the subcategories answers at once and runs on; explore shows how far it has got.
   const rank = await request('POST', `${base}/rank`, { categoryId: PARENT }, t.hunter);
@@ -250,7 +255,7 @@ test('a keyword explores the same way, reads stop when the day’s share is used
     config.discover.tradingDailyCalls = limit;
   }
   const kw = await request('GET', `${base}/explore?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter);
-  assert.strictEqual(kw.data.reads.read, 29, 'a keyword reads more on opening (every listing here but the hidden one)');
+  assert.strictEqual(kw.data.reads.read, 79, 'a keyword reads more on opening (every listing here but the hidden one)');
   assert.strictEqual(kw.data.subject.kind, 'keyword');
   assert.ok(!kw.data.keywords.some((k) => k.term === 'fountain'), "the keyword's own words aren't news");
 
@@ -280,7 +285,7 @@ test('a keyword explores the same way, reads stop when the day’s share is used
   const list = await request('GET', `${base}/watches`, undefined, t.ownerToken);
   assert.deepStrictEqual(list.data.items.map((w) => w.kind).sort(), ['category', 'keyword']);
   const watchedKeyword = list.data.items.find((w) => w.kind === 'keyword');
-  assert.strictEqual(watchedKeyword.figures.read, 29);
+  assert.strictEqual(watchedKeyword.figures.read, 79);
   assert.strictEqual(watchedKeyword.createdBy, 'hunter');
   assert.strictEqual((await request('GET', `${base}/explore?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter)).data.watch.id, added.data.id);
   assert.strictEqual((await request('DELETE', `${base}/watches/${added.data.id}`, undefined, t.hunter)).status, 204);
@@ -420,4 +425,35 @@ test("Discover keeps products at risk of a takedown out by default: one like a d
   const all = (await request('GET', `${base}/winners?safety=all&limit=300`, undefined, t.hunter)).data;
   assert.strictEqual(all.products.find((p) => p.key === product.key)?.risk?.kind, 'refused');
   assert.strictEqual((await request('GET', `${base}/winners?safety=maybe`, undefined, t.hunter)).status, 400);
+});
+
+test('a subject answers at once with what is read, reads the rest in the background, and fills in when asked again', async () => {
+  const t = await team();
+  const base = `/api/connections/${t.connectionId}/discover`;
+  // A subcategory (it reads 100 on opening), only its few ranking reads made so far.
+  const sub = CHILDREN[1];
+  const real = trading.getItemSales;
+  discoverService._quickMs(50);
+  // Slow reads: 50 listings at 30ms each, six at a time, take longer than the page waits.
+  const slow = mock.method(trading, 'getItemSales', async (token, itemId) => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return { itemId, sold: 40, brand: 'Unbranded', options: null, categoryId: CHILDREN[1], startedAt: new Date(Date.now() - 60 * 86400000).toISOString() };
+  });
+  try {
+    const first = await request('GET', `${base}/explore?categoryId=${sub}`, undefined, t.hunter);
+    assert.strictEqual(first.status, 200, JSON.stringify(first.data));
+    assert.strictEqual(first.data.reads.reading, true, 'still reading when it answers');
+    assert.ok(first.data.reads.progress.done < first.data.reads.progress.of);
+    await discoverService._soldSettled();
+    const again = await request('GET', `${base}/explore?categoryId=${sub}`, undefined, t.hunter);
+    assert.strictEqual(again.data.reads.reading, false);
+    assert.strictEqual(again.data.reads.progress.done, again.data.reads.progress.of);
+    assert.ok(again.data.reads.read > first.data.reads.read, 'filled in');
+    const calls = slow.mock.callCount();
+    assert.ok(calls <= again.data.reads.progress.of, 'each listing read once, not again for the second ask');
+  } finally {
+    slow.mock.restore();
+    trading.getItemSales = real;
+    discoverService._quickMs();
+  }
 });
