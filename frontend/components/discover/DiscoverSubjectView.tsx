@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
+  DiscoverChild,
   DiscoverExplore,
   DiscoverSubjectRef,
   DiscoverWinnersFilters,
@@ -19,6 +20,7 @@ import {
 } from "./DiscoverProductFilters";
 import { DiscoverCompliance } from "./DiscoverCompliance";
 import { PillTabs } from "@/components/PillTabs";
+import { SegmentedControl } from "@/components/charts/SegmentedControl";
 import {
   AccountDelivery,
   BAND,
@@ -236,6 +238,25 @@ export function DiscoverSubjectView({
     () => filterProducts(data.products, filters),
     [data.products, filters],
   );
+  // Subcategories best-selling first (or by opportunity, or by live listings): the ones fetched ranked,
+  // then the rest by how many listings they hold, a restricted one last. The top seller is marked.
+  const [childSort, setChildSort] = useState<"sales" | "score" | "live">("sales");
+  const kids = data.children;
+  const children = useMemo(() => {
+    const key = (c: DiscoverChild) => (childSort === "sales" ? (c.scanned?.monthlySales ?? -1) : childSort === "score" ? (c.scanned?.score ?? -1) : (c.listings ?? -1));
+    return [...kids].sort(
+      (a, b) =>
+        Number(Boolean(a.restricted)) - Number(Boolean(b.restricted)) ||
+        (childSort === "live" ? 0 : Number(Boolean(b.scanned)) - Number(Boolean(a.scanned))) ||
+        key(b) - key(a) ||
+        (b.listings ?? -1) - (a.listings ?? -1),
+    );
+  }, [kids, childSort]);
+  const bestSellerId = useMemo(() => {
+    const fetched = kids.filter((c) => c.scanned && !c.restricted);
+    const top = [...fetched].sort((a, b) => (b.scanned?.monthlySales ?? 0) - (a.scanned?.monthlySales ?? 0))[0];
+    return top && fetched.length > 1 && (top.scanned?.monthlySales ?? 0) > 0 ? top.id : null;
+  }, [kids]);
   const unranked = data.children.filter(
     (c) => !c.scanned && !c.restricted,
   ).length;
@@ -894,9 +915,20 @@ export function DiscoverSubjectView({
           <div className="p-4 pb-3">
             <CardHeader
               title="Subcategories"
-              note="Fetch their data to see each one's sales, price and the phrases its selling titles share, best first (its leading listings and the sold counts of its top 8). The deeper you go, the more keywords a category shows."
+              note="Best selling first once their data is fetched: each one's sales a month, price and the phrases its selling titles share (its leading listings and the sold counts of its top 8). Open one and its own subcategories rank the same way, more specific the deeper you go."
               aside={
-                data.ranking ? (
+                <div className="flex flex-wrap items-center gap-2">
+                <SegmentedControl<"sales" | "score" | "live">
+                  label="Rank subcategories by"
+                  value={childSort}
+                  onChange={setChildSort}
+                  options={[
+                    { key: "sales", label: "Best selling" },
+                    { key: "score", label: "Best opportunity" },
+                    { key: "live", label: "Most listings" },
+                  ]}
+                />
+                {data.ranking ? (
                   <span className="text-[12px] font-medium text-[var(--color-primary)]">
                     Fetching {data.ranking.done} of {data.ranking.total}…
                   </span>
@@ -913,7 +945,8 @@ export function DiscoverSubjectView({
                         ? ""
                         : ` for the other ${unranked}`}
                   </button>
-                ) : undefined
+                ) : null}
+                </div>
               }
             />
           </div>
@@ -949,7 +982,7 @@ export function DiscoverSubjectView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-line)]">
-                {data.children.map((c) => (
+                {children.map((c) => (
                   <tr
                     key={c.id}
                     onClick={() => onOpen({ categoryId: c.id })}
@@ -958,6 +991,11 @@ export function DiscoverSubjectView({
                     <td className="px-4 py-2.5 text-left">
                       <span className="flex items-center gap-1.5 font-medium text-[var(--color-ink)]">
                         <span className="truncate">{c.name}</span>
+                        {c.id === bestSellerId && (
+                          <span className="inline-flex h-[18px] flex-shrink-0 items-center rounded-full bg-emerald-50 px-1.5 text-[10.5px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200" title="Sells the most a month of the subcategories fetched">
+                            Best seller
+                          </span>
+                        )}
                         <FlagTag flag={c.flag} />
                         <Chevron className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-line-strong)]" />
                       </span>

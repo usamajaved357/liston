@@ -32,6 +32,8 @@ const winnersSchema = z.object({
   newOnly: flag,
   sort: z.enum(['score', 'sales', 'rising', 'new', 'price']).optional().default('score'),
   mine: z.enum(['show', 'hide']).optional().default('show'),
+  // VeRO and the owner's eBay history: 'safe' hides a product at risk, 'all' shows it marked.
+  safety: z.enum(['safe', 'all']).optional().default('safe'),
   limit: z.coerce.number().int().min(1).max(300).optional().default(60),
 });
 const siteKeywordsSchema = z.object({

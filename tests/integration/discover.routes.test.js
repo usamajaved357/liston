@@ -194,6 +194,16 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.ok(!kw.data.keywords.some((k) => /knife/i.test(k.term)));
   assert.ok((await request('GET', `${base}/keywords?q=sensor&limit=5`, undefined, t.hunter)).data.keywords.every((k) => k.term.includes('sensor')));
   assert.strictEqual((await request('GET', `${base}/keywords?sort=sideways`, undefined, t.hunter)).status, 400);
+  // The Categories tab's best sellers: every category explored on the site, by what it sells a month.
+  const bestSelling = (await request('GET', base, undefined, t.hunter)).data.bestCategories;
+  const lighting = bestSelling.find((c) => c.id === PARENT);
+  assert.ok(lighting, JSON.stringify(bestSelling.map((c) => c.name)));
+  assert.deepStrictEqual([lighting.name, lighting.path], ['Test Lighting', []]);
+  assert.ok(lighting.monthlySales > 0 && lighting.selling > 0 && lighting.products > 0 && lighting.total === 1200);
+  assert.ok(Number.isInteger(lighting.rising) && lighting.rising <= lighting.products, 'its new or rising products: trending');
+  assert.ok(lighting.keyword && !/knife/i.test(lighting.keyword));
+  const monthly = bestSelling.map((c) => c.monthlySales);
+  assert.deepStrictEqual(monthly, [...monthly].sort((a, b) => b - a), 'best-selling first');
   // Subcategories, busiest first, not ranked yet.
   assert.deepStrictEqual(d.children.map((c) => [c.id, c.listings, c.scanned]), [[CHILDREN[0], 500, null], [CHILDREN[1], 400, null]]);
 
@@ -384,4 +394,30 @@ test("Discover says what the owner already has, how many other Liston sellers hu
   const usKeywords = await request('GET', `/api/connections/${us.id}/discover/keywords?limit=400`, undefined, t.ownerToken);
   assert.ok(!usKeywords.data.keywords.some((k) => k.from?.name === 'Test Lighting'));
   assert.strictEqual(usKeywords.data.market.id, 'EBAY_US');
+});
+
+test("Discover keeps products at risk of a takedown out by default: one like a draft eBay refused the owner for, or their team rejected for brand risk; shown marked when asked", async () => {
+  const listingRepository = require('../../src/modules/listings/listing.repository');
+  const t = await team();
+  const base = `/api/connections/${t.connectionId}/discover`;
+  const first = (await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter)).data;
+  const product = first.products[0];
+  assert.ok(product && first.products.every((p) => p.risk === null), 'nothing at risk yet');
+
+  // eBay refused one of the owner's drafts for this product, for VeRO.
+  const draft = await listingRepository.createDraft({ connectionId: t.connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: product.name } });
+  await pool.query("UPDATE listings SET error_message = $2 WHERE id = $1", [draft.id, 'eBay: This listing may be in violation of the VeRO programme (intellectual property).']);
+  discoverService.forgetOwner(t.ownerId);
+
+  const again = (await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter)).data;
+  const risky = again.products.find((p) => p.key === product.key);
+  assert.deepStrictEqual([risky.risk.kind, risky.risk.level], ['refused', 'bad']);
+  assert.match(risky.risk.text, /brand or intellectual-property/);
+  // Winners hides it unless asked, and says how many it hid.
+  const safe = (await request('GET', `${base}/winners?limit=300`, undefined, t.hunter)).data;
+  assert.ok(!safe.products.some((p) => p.key === product.key));
+  assert.ok(safe.riskHidden >= 1);
+  const all = (await request('GET', `${base}/winners?safety=all&limit=300`, undefined, t.hunter)).data;
+  assert.strictEqual(all.products.find((p) => p.key === product.key)?.risk?.kind, 'refused');
+  assert.strictEqual((await request('GET', `${base}/winners?safety=maybe`, undefined, t.hunter)).status, 400);
 });

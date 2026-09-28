@@ -48,6 +48,7 @@ const KEYWORDS_MAX = 48; // deeper in, more: a leaf category shows the most
 const PRODUCTS_SHOWN = 80; // products on a subject's page (the page filters them)
 const WINNERS_SCANS = 200; // scans in the Winners pool (newest first)
 const WINNERS_DAYS = 30; // a scan older than this is out of the pool
+const BEST_CATEGORIES_MAX = 100; // explored categories the Categories tab ranks
 const WINNERS_PER_SCAN = 8;
 const WINNERS_SHOWN = 60; // a page of Winners; "Load more" asks for more, up to WINNERS_MAX
 const WINNERS_MAX = 300;
@@ -451,14 +452,15 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
 // A subject's products scored for this account (its taste, how crowded each is) and marked with what
 // the owner already has, best first.
 async function subjectProducts(ownerId, connectionId, ctx, list) {
-  const [taste, crowd, owned] = await Promise.all([
+  const [taste, crowd, owned, safety] = await Promise.all([
     tasteFor(connectionId),
     repo.othersHunting(ownerId, list.flatMap((p) => p.itemIds), new Date(Date.now() - personal.CROWD_DAYS * 86400000)),
     ownedFor(ownerId),
+    safetyFor(ownerId),
   ]);
   return list
     .map((p) => personal.personalise(p, { taste, crowd: personal.crowdOf(p, crowd), currency: ctx.site.currency }))
-    .map((p) => ({ ...p, mine: personal.ownedOf(p, owned) }))
+    .map((p) => ({ ...p, mine: personal.ownedOf(p, owned), risk: compliance.productRisk(p, safety) }))
     .sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
 }
 
@@ -557,9 +559,22 @@ async function ownedFor(ownerId) {
   ownedCache.set(ownerId, { at: Date.now(), value });
   return value;
 }
+// The owner's takedown history for productRisk: eBay's refusals of their drafts and their team's brand-risk rejections.
+const safetyCache = new Map();
+async function safetyFor(ownerId) {
+  const hit = safetyCache.get(ownerId);
+  if (hit && Date.now() - hit.at < TASTE_CACHE_MS) return hit.value;
+  // Required here: listings reads Discover's neighbours, and this is the only use.
+  const listingRepository = require('../listings/listing.repository');
+  const [refusals, rejected] = await Promise.all([listingRepository.findPolicyRefusals(ownerId).catch(() => []), repo.ownerBrandRejections(ownerId).catch(() => [])]);
+  const value = { refusals, rejected };
+  safetyCache.set(ownerId, { at: Date.now(), value });
+  return value;
+}
 /** Forgets what's kept about an owner (after they hunt or list something, so Discover says so at once). */
 function forgetOwner(ownerId) {
   ownedCache.delete(ownerId);
+  safetyCache.delete(ownerId);
 }
 
 /**
@@ -577,6 +592,8 @@ async function winnersPool(ownerId, connectionId) {
   // The keywords of the titles that sell under each subject, and each keyword searched with its own market.
   const found = [];
   const searched = [];
+  // Every category explored at any depth, with what its leading listings sell a month: the best-selling ones.
+  const categoryRows = [];
   let read = 0;
   for (const { scan: s, from } of site.subjects) {
     const listings = trends.summarise(scoring.withPace(placed(s, ctx, site.reads)), site.recent).listings;
@@ -584,8 +601,29 @@ async function winnersPool(ownerId, connectionId) {
     const where = { kind: from.kind, value: from.value, name: from.name };
     // Across the whole site a lone word ("white", "plus") means nothing without its category, so the
     // site's list keeps phrases of two words or more whose titles sell at least as well as the rest.
-    for (const k of keywords.fromListings(listings, { query: from.name, limit: KEYWORDS_TOP })) {
+    const subjectKeywords = keywords.fromListings(listings, { query: from.name, limit: KEYWORDS_TOP });
+    for (const k of subjectKeywords) {
       if (k.words >= 2 && (k.lift ?? 0) >= 1) found.push({ term: k.term, perMonth: k.perMonth, sold: k.sold, salesShare: k.salesShare, lift: k.lift, listings: k.listings, from: where });
+    }
+    if (from.kind === 'category') {
+      const f = scoring.figures(listings, { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
+      if (f.demand.read) {
+        const o = scoring.opportunity(f, { currency: ctx.site.currency });
+        const top = subjectKeywords.find((k) => k.words >= 2) || subjectKeywords[0] || null;
+        categoryRows.push({
+          id: from.value,
+          name: from.name,
+          path: from.path || [],
+          monthlySales: Math.round(f.demand.monthlySales),
+          selling: f.demand.selling,
+          read: f.demand.read,
+          total: s.total,
+          price: f.price?.median ?? null,
+          score: o.score,
+          band: o.band,
+          keyword: top ? top.term : null,
+        });
+      }
     }
     if (from.kind === 'keyword') {
       const f = scoring.figures(listings, { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
@@ -607,7 +645,19 @@ async function winnersPool(ownerId, connectionId) {
   scored.sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
   const blocked = (term) => compliance.termsIn(term).restricted.length > 0 || Boolean(compliance.veroBrandIn(term));
   const siteKeywords = keywords.poolKeywords(found, searched, { isBlocked: blocked }).sort((a, b) => b.perMonth - a.perMonth);
-  const value = { products: scored, keywords: siteKeywords, pool: { ...site.pool, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
+  // How many of the pool's products each category holds, and how many of those are new or rising
+  // (trending: eBay doesn't share buyers' search volume, so momentum stands in); the best-selling first.
+  const productCount = new Map();
+  const risingCount = new Map();
+  for (const p of pool) {
+    if (p.from.kind !== 'category') continue;
+    productCount.set(p.from.value, (productCount.get(p.from.value) || 0) + 1);
+    if (p.momentum === 'rising' || p.momentum === 'new') risingCount.set(p.from.value, (risingCount.get(p.from.value) || 0) + 1);
+  }
+  const categories = categoryRows
+    .map((c) => ({ ...c, products: productCount.get(c.id) || 0, rising: risingCount.get(c.id) || 0 }))
+    .sort((a, b) => b.monthlySales - a.monthlySales || b.score - a.score);
+  const value = { products: scored, keywords: siteKeywords, categories, pool: { ...site.pool, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
   winnersCache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
@@ -619,15 +669,17 @@ const SELLER_SIZES = { small: [0, 1000], medium: [1000, 10000], large: [10000, I
  * this account, filtered the way a hunter filters — delivery it can match,
  * a price band, a minimum of sales a month, new lately — and sorted.
  */
-async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score', mine = 'show', limit = WINNERS_SHOWN } = {}) {
+async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score', mine = 'show', safety = 'safe', limit = WINNERS_SHOWN } = {}) {
   const all = await winnersPool(ownerId, connectionId);
   const words = wordsOfQuery(q);
   const sizeBand = SELLER_SIZES[size] || null;
   // What the owner already has of each (a similar title is only marked: it may be another product).
-  const owned = await ownedFor(ownerId);
-  const marked = all.products.map((p) => ({ ...p, mine: personal.ownedOf(p, owned) }));
+  // And its takedown risk: a VeRO brand specific, eBay's refusals of the owner's drafts, the team's brand-risk rejections.
+  const [owned, safetyHistory] = await Promise.all([ownedFor(ownerId), safetyFor(ownerId)]);
+  const marked = all.products.map((p) => ({ ...p, mine: personal.ownedOf(p, owned), risk: compliance.productRisk(p, safetyHistory) }));
   const isMine = (p) => Boolean(p.mine && p.mine.kind !== 'similar');
   let mineHidden = 0;
+  let riskHidden = 0;
   let list = marked.filter((p) => {
     if (words.length && !words.every((w) => p.name.toLowerCase().includes(w))) return false;
     if (fit && p.delivery.known && p.delivery.share < 40) return false;
@@ -644,7 +696,11 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
     if (sizeBand && !(p.smallestSellerScore !== null && p.smallestSellerScore >= sizeBand[0] && p.smallestSellerScore < sizeBand[1])) return false;
     if (minSales && p.perMonth < minSales) return false;
     if (newOnly && p.momentum !== 'new' && p.momentum !== 'rising') return false;
-    // Last, so "hidden as yours" counts only what the other filters would have shown.
+    // Last, so the hidden counts are only what the other filters would have shown.
+    if (safety === 'safe' && p.risk) {
+      riskHidden += 1;
+      return false;
+    }
     if (mine === 'hide' && isMine(p)) {
       mineHidden += 1;
       return false;
@@ -659,7 +715,7 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
     price: (a, b) => (b.price?.median ?? 0) - (a.price?.median ?? 0),
   };
   list = [...list].sort(by[sort] || by.score);
-  return { products: list.slice(0, Math.min(WINNERS_MAX, Math.max(1, limit))), matched: list.length, mineHidden, pool: all.pool, market: all.market, account: all.account, at: all.at };
+  return { products: list.slice(0, Math.min(WINNERS_MAX, Math.max(1, limit))), matched: list.length, mineHidden, riskHidden, pool: all.pool, market: all.market, account: all.account, at: all.at };
 }
 
 /**
@@ -847,6 +903,8 @@ async function start(ownerId, connectionId) {
     market: marketplaces.summary(ctx.site.id),
     account: ctx.account ? { min: ctx.account.min, max: ctx.account.max, policyName: ctx.account.policyName, serviceName: ctx.account.serviceName } : null,
     winners: pool ? { products: pool.products.slice(0, 5), total: pool.products.length, keywords: pool.keywords.length, pool: pool.pool } : null,
+    // Every category explored on the site (any depth), best-selling first, for the Categories tab.
+    bestCategories: pool ? pool.categories.slice(0, BEST_CATEGORIES_MAX) : [],
     yourCategories: ownRows.map((c) => ({ ...c, scanned: badge(c.id) })),
     topCategories: top.map((c) => ({ id: c.id, name: c.name, leaf: c.leaf, scanned: badge(c.id) })),
     watches: watched,

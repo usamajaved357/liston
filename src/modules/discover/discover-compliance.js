@@ -1,4 +1,6 @@
 const { HAZMAT_TRIGGERS, REPLACEMENTS } = require('../listings/policy-words');
+const { aboutProduct, refusalKind } = require('../research/research-analysis');
+const { titleSimilarity, SIMILAR_AT } = require('../hunting/hunt-duplicates');
 
 // Whether a category or keyword is safe to hunt in, before anyone spends
 // time on it. Pure: names, titles, eBay's brand split and (when there is
@@ -189,4 +191,33 @@ function check({ name, listings = [], brands = [], total = 0, advice = null, hid
   return { level: risky ? 'risky' : check_ ? 'check' : 'clear', subject, titles, brands: brandInfo, ai, hidden: hidden || { count: 0, restricted: 0, brand: 0, brands: [] } };
 }
 
-module.exports = { check, termsIn, flagOf, violationOf, veroBrandIn, partition, RESTRICTED, VERO_BRANDS };
+/**
+ * A product's takedown risk for this owner, or null. Listings whose titles
+ * name a VeRO brand or a restricted item are already hidden (partition);
+ * this looks further, at what a title doesn't say:
+ *   - its Brand item specific is a VeRO brand ('vero', bad);
+ *   - eBay refused one of the owner's drafts for a product like it, for
+ *     brand or intellectual-property reasons ('refused', bad) or another
+ *     policy ('refused', warn) — eBay publishes no one's violation history
+ *     (its Compliance API closed in March 2026), so the owner's own is it;
+ *   - their team rejected a product like it for brand or VeRO risk
+ *     ('rejected', warn).
+ * `refusals`: listing.repository.findPolicyRefusals rows ({ title, message });
+ * `rejected`: { itemId, title } of hunts rejected for brand risk.
+ * { kind, level: 'bad' | 'warn', text }.
+ */
+function productRisk(product, { refusals = [], rejected = [] } = {}) {
+  const brand = product.brand ? veroBrandIn(product.brand) : null;
+  if (brand) return { kind: 'vero', level: 'bad', text: `Its listings' brand is ${brand}, whose owner takes listings down through VeRO` };
+  const past = refusals.filter((r) => refusalKind(r.message) !== 'words' && aboutProduct(r.title, product.name));
+  const ip = past.filter((r) => refusalKind(r.message) === 'ip');
+  if (ip.length) return { kind: 'refused', level: 'bad', text: `eBay refused ${ip.length === 1 ? 'one of your drafts' : `${ip.length} of your drafts`} for a product like this, for brand or intellectual-property reasons` };
+  const ids = new Set((product.itemIds || []).map(String));
+  if (rejected.some((h) => (h.itemId && ids.has(String(h.itemId))) || titleSimilarity(h.title || '', product.name || '') >= SIMILAR_AT)) {
+    return { kind: 'rejected', level: 'warn', text: 'Your team rejected a product like this for brand or VeRO risk' };
+  }
+  if (past.length) return { kind: 'refused', level: 'warn', text: `eBay refused ${past.length === 1 ? 'one of your drafts' : `${past.length} of your drafts`} for a product like this, for a listing policy` };
+  return null;
+}
+
+module.exports = { check, termsIn, flagOf, violationOf, veroBrandIn, partition, productRisk, RESTRICTED, VERO_BRANDS };

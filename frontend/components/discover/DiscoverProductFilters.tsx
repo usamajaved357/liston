@@ -7,7 +7,10 @@ import { ViewMenu } from "@/components/ViewMenu";
 // from the bottom on a phone): Price, Demand, Delivery, Brand, and More for
 // the rest. They start at what a dropshipper wants, not as filters to
 // apply: priced £10 and over, 10+ sold a month, delivery that matches the
-// account's postage policy, unbranded, nothing they already have. Reset
+// account's postage policy, unbranded, VeRO safe (no VeRO brand specific,
+// nothing like what eBay refused the owner for), nothing they already have.
+// A listing whose title names a VeRO brand or a restricted item is never
+// shown at all (the server hides it before this). Reset
 // puts them back. The same bar on a subject's page (where `filterProducts`
 // applies it to the products loaded) and in Winners (where the server
 // applies it to the pool). The words to look for are the search beside the
@@ -27,6 +30,7 @@ export const DEFAULT_FILTERS: DiscoverWinnersFilters = {
   listedWithin: null,
   newOnly: false,
   mine: "hide",
+  safety: "safe",
   rating: "any",
   size: "any",
 };
@@ -70,6 +74,8 @@ export function filterProducts(products: DiscoverProduct[], f: DiscoverWinnersFi
     if (size && !(p.smallestSellerScore !== null && p.smallestSellerScore >= size[0] && p.smallestSellerScore < size[1])) return false;
     if (f.minSales && p.perMonth < f.minSales) return false;
     if (f.newOnly && p.momentum !== "new" && p.momentum !== "rising") return false;
+    // At risk of a takedown: a VeRO brand specific, or eBay refused (or the team rejected) one like it.
+    if ((f.safety ?? "safe") === "safe" && p.risk) return false;
     // Already theirs (a similar title is only marked: it may be another product).
     if (f.mine === "hide" && p.mine && p.mine.kind !== "similar") return false;
     return true;
@@ -97,6 +103,7 @@ export function changedFromDefault(f: DiscoverWinnersFilters): boolean {
     !same(f.listedWithin || null, d.listedWithin) ||
     Boolean(f.newOnly) !== Boolean(d.newOnly) ||
     (f.mine || "show") !== d.mine ||
+    (f.safety || "safe") !== d.safety ||
     (f.rating || "any") !== "any" ||
     (f.size || "any") !== "any"
   );
@@ -183,7 +190,7 @@ export function DiscoverProductFilters({
       />
 
       <ViewMenu
-        title="Brand"
+        title="Brand and VeRO"
         sections={[
           {
             label: "Brand",
@@ -193,6 +200,17 @@ export function DiscoverProductFilters({
               { key: "unbranded", label: "Unbranded" },
               { key: "branded", label: "Branded" },
               { key: "any", label: "All", short: "Branded and unbranded" },
+            ],
+          },
+          {
+            label: "VeRO and your eBay history",
+            value: filters.safety || "safe",
+            // Safe is where everyone starts: the button only says so once risky ones are shown.
+            hideInSummary: (filters.safety || "safe") === "safe",
+            onChange: (safety) => set({ safety: safety as "safe" | "all" }),
+            options: [
+              { key: "safe", label: "Safe only: no VeRO brand, nothing eBay refused you for", short: "VeRO safe" },
+              { key: "all", label: "Show risky ones too, marked", short: "Risky shown" },
             ],
           },
         ]}

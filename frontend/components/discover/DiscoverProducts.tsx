@@ -21,9 +21,15 @@ const MOMENTUM: Record<DiscoverProduct["momentum"], { label: string; cls: string
 
 // What the owner already has of it, and how many other Liston sellers hunt it (never who).
 function Marks({ product }: { product: DiscoverProduct }) {
-  if (!product.mine && !product.crowd) return null;
+  if (!product.mine && !product.crowd && !product.risk) return null;
   return (
     <span className="mt-1 flex flex-wrap items-center gap-1.5">
+      {product.risk && (
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${product.risk.level === "bad" ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-amber-50 text-amber-800 ring-amber-200"}`} title={product.risk.text}>
+          <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden />
+          {product.risk.kind === "vero" ? "VeRO risk" : product.risk.kind === "refused" ? "eBay refused one like it" : "Rejected before for brand risk"}
+        </span>
+      )}
       {product.mine && (
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${product.mine.kind === "similar" ? "bg-slate-50 text-slate-700 ring-slate-200" : "bg-indigo-50 text-indigo-700 ring-indigo-200"}`} title="Already on your accounts">
           <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden />

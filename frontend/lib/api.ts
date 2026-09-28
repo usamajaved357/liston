@@ -2014,6 +2014,8 @@ export interface DiscoverProduct {
   mine?: { kind: "selling" | "listed" | "drafted" | "hunted" | "rejected" | "similar"; text: string } | null;
   // Other Liston sellers who hunted it in the last two weeks (counted from two; never who).
   crowd?: number;
+  // Its takedown risk for this owner: a VeRO brand specific, eBay's refusals of their drafts, their team's brand-risk rejections.
+  risk?: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string } | null;
 }
 // The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
 export interface DiscoverWinnersFilters {
@@ -2030,11 +2032,14 @@ export interface DiscoverWinnersFilters {
   sort?: "score" | "sales" | "rising" | "new" | "price";
   // Products the owner already has: shown and marked, or left out (a similar title is only ever marked).
   mine?: "show" | "hide";
+  // VeRO and the owner's eBay history: products at risk hidden ("safe") or shown marked ("all").
+  safety?: "safe" | "all";
 }
 export interface DiscoverWinners {
   products: DiscoverProduct[];
   matched: number;
   mineHidden?: number;
+  riskHidden?: number;
   pool: { subjects: number; listings: number; read: number };
   market: { id: string; name: string; currency: string };
   account: { min: number; max: number } | null;
@@ -2228,8 +2233,26 @@ export interface DiscoverCategoryCard {
   listings?: number;
   scanned: { score: number; band: DiscoverOpportunity["band"]; total: number } | null;
 }
+// A category explored on the site (any depth), with what its leading listings sell: the Categories tab's best sellers.
+export interface DiscoverBestCategory {
+  id: string;
+  name: string;
+  path: string[];
+  monthlySales: number;
+  selling: number;
+  read: number;
+  total: number;
+  price: number | null;
+  score: number;
+  band: DiscoverOpportunity["band"];
+  keyword: string | null;
+  products: number;
+  // Of its products, how many are new or rising: trending.
+  rising: number;
+}
 export interface DiscoverStart {
   market: { id: string; name: string; currency: string };
+  bestCategories?: DiscoverBestCategory[];
   account: DiscoverAccount | null;
   yourCategories: DiscoverCategoryCard[];
   topCategories: DiscoverCategoryCard[];
@@ -2590,6 +2613,7 @@ export const api = {
     if (f.newOnly) q.set("newOnly", "1");
     if (f.sort) q.set("sort", f.sort);
     if (f.mine) q.set("mine", f.mine);
+    if (f.safety) q.set("safety", f.safety);
     if (limit) q.set("limit", String(limit));
     return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
   },

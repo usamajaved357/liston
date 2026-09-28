@@ -222,7 +222,18 @@ async function othersHunting(ownerId, itemIds, since) {
   return out;
 }
 
+/** The owner's hunted products a reviewer rejected for brand or VeRO risk: { itemId, title }. */
+async function ownerBrandRejections(ownerId) {
+  const { rows } = await query(
+    `SELECT competitor_item_id AS item_id, title FROM hunted_products
+      WHERE owner_user_id = $1 AND status = 'rejected' AND reject_reason = 'brand_risk'`,
+    [ownerId]
+  );
+  return rows.map((r) => ({ itemId: r.item_id, title: r.title }));
+}
+
 module.exports = {
+  ownerBrandRejections,
   ownerHunts,
   ownerListonCompetitors,
   livePrices,

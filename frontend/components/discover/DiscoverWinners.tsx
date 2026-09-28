@@ -35,8 +35,11 @@ export function DiscoverWinnersView({
         <div className="min-w-0 grow basis-full sm:basis-0">
           <DiscoverProductFilters filters={filters} onChange={onFilters} currency={data?.market.currency || "GBP"} delivery={data?.account || null} />
         </div>
-        <p className="text-[11.5px] text-[var(--color-muted)]">
-          {data ? `${count(data.matched)} product${data.matched === 1 ? "" : "s"}${data.mineHidden ? ` · ${count(data.mineHidden)} of yours hidden` : ""} · read ${ago(data.at)}` : ""}
+        <p
+          className="min-w-0 text-[11.5px] leading-snug text-[var(--color-muted)] sm:max-w-[220px] sm:text-right"
+          title={data ? `Read ${ago(data.at)}${data.riskHidden ? ". VeRO risk hidden: a VeRO brand on its listings, or like a draft eBay refused you for (Brand and VeRO shows them)" : ""}` : undefined}
+        >
+          {data ? `${count(data.matched)} product${data.matched === 1 ? "" : "s"}${data.riskHidden ? ` · ${count(data.riskHidden)} VeRO risk hidden` : ""}${data.mineHidden ? ` · ${count(data.mineHidden)} of yours hidden` : ""}` : ""}
           {loading && data ? " · Updating…" : ""}
         </p>
       </div>

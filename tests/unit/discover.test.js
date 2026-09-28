@@ -316,3 +316,19 @@ test("personal: points for the account's categories and usual prices, a few off 
   // One other seller isn't a crowd.
   assert.deepStrictEqual([personal.personalise(base, { crowd: 1 }).score, personal.personalise(base, { crowd: 1 }).crowd], [60, 0]);
 });
+
+test('productRisk: a VeRO brand specific, eBay refusing a draft like it, or the team rejecting one like it for brand risk', () => {
+  const compliance = require('../../src/modules/discover/discover-compliance');
+  const product = { name: 'Cordless Stick Vacuum Cleaner 25kPa Lightweight', brand: null, itemIds: ['111'] };
+  assert.strictEqual(compliance.productRisk(product), null);
+  assert.deepStrictEqual(compliance.productRisk({ ...product, brand: 'Dyson' }).kind, 'vero');
+  assert.strictEqual(compliance.productRisk({ ...product, brand: 'Unbranded' }), null);
+  const ip = { title: 'Cordless Stick Vacuum Cleaner 25kPa Lightweight Handheld', message: 'This listing may be in violation of the VeRO programme' };
+  assert.deepStrictEqual(Object.values(compliance.productRisk(product, { refusals: [ip] })).slice(0, 2), ['refused', 'bad']);
+  // A word-filter refusal is about the wording, not the product: not a risk.
+  assert.strictEqual(compliance.productRisk(product, { refusals: [{ ...ip, message: 'PI_HAZ improper words' }] }), null);
+  assert.strictEqual(compliance.productRisk(product, { refusals: [{ ...ip, message: 'Listing policy: not allowed' }] }).level, 'warn');
+  // A refusal for another product doesn't count.
+  assert.strictEqual(compliance.productRisk(product, { refusals: [{ ...ip, title: 'Silicone chair leg caps' }] }), null);
+  assert.strictEqual(compliance.productRisk(product, { rejected: [{ itemId: '111', title: 'x' }] }).kind, 'rejected');
+});
