@@ -178,6 +178,23 @@ test('draftSelection starts a draft with the values some earning, in-stock optio
   const axes = [{ name: 'Color', values: [{ value: 'Black' }, { value: 'Red' }, { value: 'Blue' }] }, { name: 'Size', values: [{ value: 'M' }, { value: 'L' }] }];
   assert.deepStrictEqual(huntProfit.draftSelection(rows, axes), { Color: ['Black'], Size: ['M'] });
   assert.strictEqual(huntProfit.draftSelection(rows.map((r) => ({ ...r, profit: -1 })), axes), null);
+  assert.strictEqual(huntProfit.draftBasis(rows), 'earning', 'no sold counts matched: every option that earns');
+});
+
+test('draftSelection drops the variations that never sold on the competitor listing', () => {
+  // Ten colours listed, only Black ever sold: the draft is Black.
+  const colours = ['Black', 'White', 'Red', 'Blue'];
+  const rows = colours.map((c) => ({ attributes: { Color: c }, profit: 2, stock: 10, match: { label: c, sold: c === 'Black' ? 40 : 0, quality: 'exact' } }));
+  const axes = [{ name: 'Color', values: colours.map((value) => ({ value })) }];
+  assert.strictEqual(huntProfit.draftBasis(rows), 'selling');
+  assert.deepStrictEqual(huntProfit.draftSelection(rows, axes), { Color: ['Black'] });
+  // An option only priced at the listing's lowest price isn't proof it sells.
+  const lowest = rows.map((r) => ({ ...r, match: { label: null, sold: null, quality: 'lowest' } }));
+  assert.strictEqual(huntProfit.draftSelection(lowest, axes), null, 'every value kept: nothing to leave out');
+  // The one that sold doesn't earn: the options that earn, as before.
+  const blackLoses = rows.map((r) => (r.attributes.Color === 'Black' ? { ...r, profit: -1 } : r));
+  assert.strictEqual(huntProfit.draftBasis(blackLoses), 'earning');
+  assert.deepStrictEqual(huntProfit.draftSelection(blackLoses, axes), { Color: ['White', 'Red', 'Blue'] });
 });
 
 // ---- rules ----------------------------------------------------------------------------------
@@ -215,6 +232,18 @@ test('nobody but the owner decides on their own find; hunters edit their own wai
   assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, REVIEWER), false);
   assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, OWNER), false);
   assert.strictEqual(rules.rules.canEdit({ ...byHunter, status: 'sent_back' }, OWNER), false);
+  // A rejected product can be fixed by its hunter or a reviewer (the owner included), not anyone else.
+  const rejected = { ...byHunter, status: 'rejected', reject_reason: 'low_profit', reviewer_user_id: 'r' };
+  assert.strictEqual(rules.rules.canEdit(rejected, HUNTER), true);
+  assert.strictEqual(rules.rules.canEdit(rejected, REVIEWER), true);
+  assert.strictEqual(rules.rules.canEdit(rejected, OWNER), true);
+  assert.strictEqual(rules.rules.canEdit(rejected, LISTER), false);
+  assert.strictEqual(rules.rules.canEdit({ ...rejected, hunter_user_id: 'someone' }, HUNTER), false);
+  // Resubmitting a rejected product is the hunter's alone.
+  assert.strictEqual(rules.rules.canResubmit(rejected, HUNTER), true);
+  assert.strictEqual(rules.rules.canResubmit(rejected, REVIEWER), false);
+  assert.strictEqual(rules.rules.canResubmit(rejected, OWNER), false);
+  assert.strictEqual(rules.rules.canResubmit({ ...rejected, status: 'approved' }, HUNTER), false);
 });
 
 test('an approved product drafts itself; drafting by hand (Listings access or reviewing) is for when that failed; a drafted one is settled', () => {
@@ -249,7 +278,7 @@ test("the supplier must sell every one of the eBay listing's variations (more is
   const missing = huntProfit.matchCheck(ebay([{ Colour: 'Black' }, { Colour: 'Green' }]), ali([{ Color: 'Black' }, { Color: 'White' }]), 'GBP');
   assert.strictEqual(missing.kind, 'variations');
   assert.deepStrictEqual(missing.missing, ['Green']);
-  assert.match(missing.reason, /1 of its 2 variations that the supplier doesn't have: Green/);
+  assert.match(missing.reason, /1 of the eBay listing's 2 variations isn't among the supplier's options: Green/);
   // Sizes spelt differently are the same size.
   assert.strictEqual(huntProfit.matchCheck(ebay([{ Size: 'Large' }, { Size: 'XL' }]), ali([{ Size: 'L' }, { Size: 'Extra Large' }]), 'GBP'), null);
   // No variations on eBay: the titles must share what the product is.
@@ -257,6 +286,23 @@ test("the supplier must sell every one of the eBay listing's variations (more is
   const other = huntProfit.matchCheck(ebay([], 'Cat water fountain 2L automatic'), ali([], 'LED strip lights 5m RGB'), 'GBP');
   assert.strictEqual(other.kind, 'product');
   assert.strictEqual(huntProfit.matchCheck(null, ali([]), 'GBP'), null, 'no competitor: nothing to compare with');
+});
+
+test('only the variations that sold must be among the supplier options; an option with extra axes still covers one', () => {
+  const ebay = (variants) => ({ title: 'Smart speaker', priceText: 'GBP 30', postage: { cost: 0 }, variants: variants.map(([attributes, sold]) => ({ attributes, priceText: 'GBP 30', sold })) });
+  const ali = (variants) => ({ title: 'Smart speaker', priceText: 'GBP 9', variants: variants.map((v, i) => ({ attributes: v, priceText: 'GBP 9', skuId: String(i) })) });
+  // Four colours listed, only Charcoal sold: a supplier with Charcoal is enough.
+  const listing = ebay([[{ Colour: 'Charcoal' }, 25], [{ Colour: 'Glacier White' }, 0], [{ Colour: 'Deep Sea Blue' }, 0], [{ Colour: 'Lilac' }, 0]]);
+  assert.strictEqual(huntProfit.matchCheck(listing, ali([{ Color: 'Charcoal' }]), 'GBP'), null);
+  // Without the one that sells, it's a mismatch that says it's the selling one.
+  const missing = huntProfit.matchCheck(listing, ali([{ Color: 'Glacier White' }, { Color: 'Lilac' }]), 'GBP');
+  assert.deepStrictEqual([missing.missing, missing.selling, missing.total], [['Charcoal'], true, 1]);
+  assert.match(missing.reason, /variation with sales/);
+  // No sold counts at all: every variation must be there, as before.
+  assert.deepStrictEqual(huntProfit.matchCheck(ebay([[{ Colour: 'Black' }, null], [{ Colour: 'Red' }, null]]), ali([{ Color: 'Black' }]), 'GBP').missing, ['Red']);
+  // "Black / UK plug / 2 pcs" covers the listing's "Black".
+  assert.strictEqual(huntProfit.matchCheck(ebay([[{ Colour: 'Black' }, 9]]), ali([{ Color: 'Black', Plug: 'UK', Quantity: '2 pcs' }]), 'GBP'), null);
+  assert.ok(huntProfit.coverScore({ attributes: { Color: 'Black', Plug: 'UK', Quantity: '2 pcs' } }, { attributes: { Colour: 'Black' } }) >= 0.75);
 });
 
 test('decisionFields needs a reason to reject and a note to send back', () => {

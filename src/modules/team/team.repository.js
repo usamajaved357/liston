@@ -6,8 +6,9 @@ const { query } = require('../../db/client');
 // member is created and (b) decide whether a connection has "any" access at
 // all for a member. Add a new feature here once its routes are wired up.
 // 'hunting' adds products for review; 'hunting_review' reviews them (and
-// includes hunting).
-const KNOWN_FEATURES = ['orders', 'listings', 'analytics', 'inbox', 'campaigns', 'hunting', 'hunting_review'];
+// includes hunting). 'listings_publish' puts drafts live on eBay (on top of
+// 'listings', which drafts and edits).
+const KNOWN_FEATURES = ['orders', 'listings', 'listings_publish', 'analytics', 'inbox', 'campaigns', 'hunting', 'hunting_review'];
 
 async function listMembers(ownerId) {
   const result = await query(

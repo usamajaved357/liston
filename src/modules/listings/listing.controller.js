@@ -3,6 +3,7 @@ const listingService = require('./listing.service');
 const activityRepository = require('../team/activity.repository');
 const logger = require('../../utils/logger');
 const { validationMessage } = require('../../utils/validation-message');
+const { canPublishListings } = require('../../middleware/feature.middleware');
 
 // One route, one way to draft: this replaces an earlier hand-typed form
 // (title/description/price/category typed in by the user) — that's exactly
@@ -121,7 +122,9 @@ async function removeInactive(req, res, next) {
 async function getOne(req, res, next) {
   try {
     const { listing, policies, category, policyWords } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
-    res.status(200).json({ listing, policies, category, policyWords });
+    // Whether this person's Publish button shows (a live listing's changes don't need it).
+    const canPublish = await canPublishListings(req, listing?.connection_id || req.listingRow?.connection_id);
+    res.status(200).json({ listing, policies, category, policyWords, canPublish });
   } catch (err) {
     next(err);
   }

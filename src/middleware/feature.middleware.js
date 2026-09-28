@@ -67,4 +67,15 @@ function requireAnyFeature(features, { resolveConnectionId } = {}) {
   };
 }
 
-module.exports = { requireOwner, requireFeature, requireAnyFeature };
+/**
+ * Whether this person may put listings live on this account: publishing a
+ * draft (or relisting an ended listing) needs "Publish listings" on top of
+ * Listings, so a member can draft and edit without anything going live
+ * before someone trusted presses Publish. The owner always may.
+ */
+async function canPublishListings(req, connectionId) {
+  if (req.role === 'owner') return true;
+  return Boolean(connectionId && (await teamRepository.resolvePermission(req.userId, connectionId, 'listings_publish')));
+}
+
+module.exports = { requireOwner, requireFeature, requireAnyFeature, canPublishListings };

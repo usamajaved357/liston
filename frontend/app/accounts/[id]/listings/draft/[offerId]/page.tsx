@@ -1789,6 +1789,8 @@ export default function DraftEditorPage() {
   // Words eBay's hazardous-materials filter refuses (from the server), so
   // the seller sees a "lead clip" problem while typing, not at publish.
   const [policyWords, setPolicyWords] = useState<string[]>([]);
+  // A draft (or an ended listing) goes live only for someone with Publish listings access; the owner always.
+  const [mayPublish, setMayPublish] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [shopPickerOpen, setShopPickerOpen] = useState(false);
   // The Shop's departments, read once per page (cached server-side): for
@@ -1939,6 +1941,7 @@ export default function DraftEditorPage() {
         categoryInfoRef.current = data.category;
         setCategoryInfo(data.category);
         setPolicyWords(data.policyWords || []);
+        setMayPublish(data.canPublish !== false);
         resetFrom(data.listing);
         loadSecondaryPath((data.listing.generated_data as DraftContent).secondaryCategoryId);
       })
@@ -3374,7 +3377,13 @@ export default function DraftEditorPage() {
               )}
             </div>
             <div className="flex items-center gap-3">
+              {(!isLiveEdit || isRelist) && !mayPublish && (
+                <span className="max-w-[340px] text-right text-xs leading-snug text-[var(--color-muted)] max-sm:hidden">
+                  Saved as you go. Someone with Publish listings access puts it on eBay.
+                </span>
+              )}
               {isRelist ? (
+                mayPublish && (
                 <>
                   <span className="text-xs text-[var(--color-muted)] max-sm:hidden">{dirty ? "Relisted with your changes" : "Change anything first, or relist it as it was"}</span>
                   <button
@@ -3387,6 +3396,7 @@ export default function DraftEditorPage() {
                     {publishing ? "Relisting…" : "Relist on eBay"}
                   </button>
                 </>
+                )
               ) : isLiveEdit ? (
                 <>
                   {dirty && <span className="text-xs text-[var(--color-muted)] max-sm:hidden">Changes go live on eBay when you publish</span>}
@@ -3400,7 +3410,7 @@ export default function DraftEditorPage() {
                     {publishing ? "Updating…" : "Publish changes"}
                   </button>
                 </>
-              ) : (
+              ) : !mayPublish ? null : (
                 <>
                   <button
                     type="button"

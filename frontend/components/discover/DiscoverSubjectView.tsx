@@ -29,6 +29,7 @@ import {
   perMonth,
   Quiet,
   ScoreBadge,
+  SearchBox,
   StarIcon,
   StatTile,
 } from "./discover-ui";
@@ -465,7 +466,8 @@ export function DiscoverSubjectView({
 
       {/* What to look at, as tabs, so nothing sits below a long list: the products (the point), its
           subcategories (each with its own products and keywords), the keywords that sell, the market picture. */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {view === "products" && <SearchBox value={filters.q || ""} onChange={(q) => setFilters({ ...filters, q })} placeholder="Words in the product" />}
         <PillTabs<View>
           label="Show"
           value={view}
@@ -477,7 +479,7 @@ export function DiscoverSubjectView({
             { key: "market", label: "Market picture" },
           ]}
         />
-        <p className="text-[11.5px] text-[var(--color-muted)]">
+        <p className="ml-auto text-[11.5px] text-[var(--color-muted)]">
           {view === "products"
             ? "The same product under several sellers is one row, scored the way a hunter judges it."
             : view === "subcategories"
@@ -490,7 +492,7 @@ export function DiscoverSubjectView({
 
       {/* The products here, the way a hunter reads them: the page's point. */}
       {view === "products" && (
-        <section className="card min-w-0 overflow-hidden">
+        <section className="card min-w-0">
           <div className="p-4 pb-3">
             <CardHeader
               title="Products here, best to hunt first"
@@ -508,6 +510,7 @@ export function DiscoverSubjectView({
                 filters={filters}
                 onChange={setFilters}
                 currency={currency}
+                delivery={data.account}
               />
             </div>
           </div>

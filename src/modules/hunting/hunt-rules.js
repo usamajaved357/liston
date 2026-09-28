@@ -7,7 +7,8 @@
 // products and, while one waits or has been sent back, can change and
 // improve their own, but never remove one: only a reviewer (the owner
 // included) removes a hunted product, at any stage (a hunter removes their
-// own that Liston rejected). An approved product drafts itself; drafting it
+// own that Liston rejected). A rejected product can be edited (by its hunter
+// or a reviewer) and goes back in for review. An approved product drafts itself; drafting it
 // by hand, when that failed, needs Listings access or reviewing.
 
 const REJECT_REASONS = [
@@ -47,9 +48,11 @@ const beforeDraft = (hunt) => !['drafted', 'listed'].includes(stageOf(hunt));
 
 const rules = {
   canDecide: (hunt, viewer) => viewer.canReview && beforeDraft(hunt) && (viewer.isOwner || !isHunter(hunt, viewer)),
-  // Fixing and resubmitting are the hunter's own; a reviewer sends it back instead.
-  canEdit: (hunt, viewer) => ['pending', 'sent_back'].includes(stageOf(hunt)) && isHunter(hunt, viewer),
-  canResubmit: (hunt, viewer) => stageOf(hunt) === 'sent_back' && isHunter(hunt, viewer),
+  // Fixing and resubmitting are the hunter's own while it waits; a reviewer sends it back instead.
+  // A rejected product can be fixed by its hunter or a reviewer, and goes in for review again.
+  canEdit: (hunt, viewer) => (['pending', 'sent_back'].includes(stageOf(hunt)) && isHunter(hunt, viewer)) || (stageOf(hunt) === 'rejected' && (isHunter(hunt, viewer) || Boolean(viewer.canReview))),
+  // The hunter sends their own back in for review: one sent back, or one rejected (as it is, or after fixing it).
+  canResubmit: (hunt, viewer) => ['sent_back', 'rejected'].includes(stageOf(hunt)) && isHunter(hunt, viewer),
   // A reviewer removes any; the hunter removes their own that Liston rejected.
   canRemove: (hunt, viewer) => Boolean(viewer.canReview) || (autoRejected(hunt) && isHunter(hunt, viewer)),
   canRecheck: (hunt, viewer) => stageOf(hunt) !== 'listed' && (viewer.canHunt || viewer.canReview),

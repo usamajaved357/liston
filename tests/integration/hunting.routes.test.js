@@ -625,3 +625,99 @@ test('an approved product drafts itself and moves to the Drafted tab; a failed d
     drafts.mock.restore();
   }
 });
+
+test('a rejected product can be fixed by its hunter or a reviewer and goes back in for review; Liston rejects it again while the supplier still lacks what sells', async () => {
+  const t = await team();
+  // Rejected by a reviewer: the hunter fixes it with a note, and it waits for review again.
+  const { hunt: one } = await hunt(t.connectionId, t.hunter.token);
+  await request('POST', `/api/hunting/${one.id}/decision`, { decision: 'reject', reason: 'low_profit' }, t.reviewer.token);
+  const rejected = (await request('GET', `/api/hunting/${one.id}`, undefined, t.hunter.token)).data;
+  assert.deepStrictEqual([rejected.stage, rejected.permissions.canEdit], ['rejected', true]);
+  assert.strictEqual((await request('GET', `/api/hunting/${one.id}`, undefined, t.lister.token)).status, 404, 'a lister never sees a rejected product');
+  const fixed = await request('PATCH', `/api/hunting/${one.id}`, { note: 'Found a cheaper supplier price' }, t.hunter.token);
+  assert.strictEqual(fixed.status, 200, JSON.stringify(fixed.data));
+  assert.deepStrictEqual([fixed.data.stage, fixed.data.resubmits, fixed.data.rejectReason, fixed.data.hunterNote], ['pending', 1, null, 'Found a cheaper supplier price']);
+  assert.deepStrictEqual(fixed.data.timeline.map((e) => e.kind), ['hunted', 'rejected', 'updated', 'resubmitted']);
+  // A reviewer can fix one too.
+  await request('POST', `/api/hunting/${one.id}/decision`, { decision: 'reject', reason: 'supplier' }, t.reviewer.token);
+  assert.strictEqual((await request('PATCH', `/api/hunting/${one.id}`, { sourceUrl: SOURCE_URL }, t.reviewer.token)).data.stage, 'pending');
+
+  // Rejected by Liston: the rejection shows in its history, by Liston.
+  aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, variants: [SOURCE.variants[0]], sourceUrl: url });
+  try {
+    const { hunt: two } = await hunt(t.connectionId, t.hunter.token);
+    assert.strictEqual(two.stage, 'rejected');
+    const listonEvent = two.timeline.find((e) => e.kind === 'rejected');
+    assert.deepStrictEqual([listonEvent.system, listonEvent.by, listonEvent.reason], [true, null, "Supplier doesn't match the eBay listing"]);
+    // Saved while the supplier still lacks White (which sells): still rejected, and the hunter isn't told what they just saw.
+    const before = (await notificationsRepo.list(t.hunter.id)).length;
+    const still = await request('PATCH', `/api/hunting/${two.id}`, { note: 'Tried again' }, t.hunter.token);
+    assert.deepStrictEqual([still.data.stage, still.data.autoRejected], ['rejected', true]);
+    assert.strictEqual((await notificationsRepo.list(t.hunter.id)).length, before);
+    // With a supplier that has it, it goes in for review.
+    aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, sourceUrl: url });
+    const matched = await request('PATCH', `/api/hunting/${two.id}`, { sourceUrl: 'https://www.aliexpress.com/item/1005009999999999.html' }, t.hunter.token);
+    assert.deepStrictEqual([matched.data.stage, matched.data.sourceUrl], ['pending', 'https://www.aliexpress.com/item/1005009999999999.html']);
+  } finally {
+    aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, sourceUrl: url });
+  }
+});
+
+test('publishing a draft needs Publish listings access on top of Listings; changes to a live listing need Listings alone', async () => {
+  const t = await team();
+  const { mock } = require('node:test');
+  const published = mock.method(listingService, 'publish', async (id) => ({ listing: { id, status: 'published' } }));
+  try {
+    const draft = await listingRepository.createDraft({ connectionId: t.connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: 'Earbuds' } });
+    const seen = await request('GET', `/api/listings/${draft.id}`, undefined, t.lister.token);
+    assert.strictEqual(seen.status, 200);
+    assert.strictEqual(seen.data.canPublish, false, 'the editor hides Publish');
+    const refused = await request('POST', `/api/listings/${draft.id}/publish`, {}, t.lister.token);
+    assert.strictEqual(refused.status, 403);
+    assert.match(refused.data.error, /Publish listings/);
+    assert.strictEqual(published.mock.callCount(), 0);
+    assert.strictEqual((await request('GET', `/api/listings/${draft.id}`, undefined, t.ownerToken)).data.canPublish, true, 'the owner always may');
+    // A live listing's working copy: its changes go out with Listings access.
+    const liveEdit = await listingRepository.createDraft({ connectionId: t.connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: 'Live' } });
+    await pool.query('UPDATE listings SET edit_of_item_id = $2 WHERE id = $1', [liveEdit.id, '998877665544']);
+    assert.strictEqual((await request('POST', `/api/listings/${liveEdit.id}/publish`, {}, t.lister.token)).status, 200);
+    // Given the access, the lister publishes.
+    const ownerToken = t.ownerToken;
+    const grant = await request('PUT', `/api/team/members/${t.lister.id}/permissions`, { permissions: [{ connectionId: null, feature: 'listings_publish', allowed: true }] }, ownerToken);
+    assert.strictEqual(grant.status, 200, JSON.stringify(grant.data));
+    assert.strictEqual((await request('GET', `/api/listings/${draft.id}`, undefined, t.lister.token)).data.canPublish, true);
+    assert.strictEqual((await request('POST', `/api/listings/${draft.id}/publish`, {}, t.lister.token)).status, 200);
+    assert.strictEqual(published.mock.callCount(), 2);
+    // A member with Publish listings on one account only can't publish on another.
+    const other = await listingRepository.createDraft({ connectionId: t.otherId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: 'Other' } });
+    await request('PUT', `/api/team/members/${t.lister.id}/permissions`, { permissions: [{ connectionId: t.otherId, feature: 'listings_publish', allowed: false }] }, ownerToken);
+    assert.strictEqual((await request('POST', `/api/listings/${other.id}/publish`, {}, t.lister.token)).status, 403);
+  } finally {
+    published.mock.restore();
+  }
+});
+
+test('the hunter resubmits a rejected product for review; one Liston rejected is checked again first and stays rejected while the supplier lacks what sells', async () => {
+  const t = await team();
+  const { hunt: one } = await hunt(t.connectionId, t.hunter.token);
+  await request('POST', `/api/hunting/${one.id}/decision`, { decision: 'reject', reason: 'low_demand' }, t.reviewer.token);
+  const rejected = (await request('GET', `/api/hunting/${one.id}`, undefined, t.hunter.token)).data;
+  assert.strictEqual(rejected.permissions.canResubmit, true);
+  assert.strictEqual((await request('GET', `/api/hunting/${one.id}`, undefined, t.reviewer.token)).data.permissions.canResubmit, false, "a reviewer fixes it or approves it, the hunter resubmits");
+  assert.strictEqual((await request('POST', `/api/hunting/${one.id}/resubmit`, {}, t.reviewer.token)).status, 403);
+  const again = await request('POST', `/api/hunting/${one.id}/resubmit`, { note: 'Sales picked up this week' }, t.hunter.token);
+  assert.strictEqual(again.status, 200, JSON.stringify(again.data));
+  assert.deepStrictEqual([again.data.stage, again.data.resubmits, again.data.rejectReason, again.data.hunterNote], ['pending', 1, null, 'Sales picked up this week']);
+  assert.strictEqual(again.data.timeline.at(-1).kind, 'resubmitted');
+
+  aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, variants: [SOURCE.variants[0]], sourceUrl: url });
+  try {
+    const { hunt: two } = await hunt(t.connectionId, t.hunter.token);
+    const still = await request('POST', `/api/hunting/${two.id}/resubmit`, {}, t.hunter.token);
+    assert.deepStrictEqual([still.status, still.data.stage, still.data.autoRejected], [200, 'rejected', true]);
+    aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, sourceUrl: url });
+    assert.strictEqual((await request('POST', `/api/hunting/${two.id}/resubmit`, {}, t.hunter.token)).data.stage, 'pending', 'the supplier has White now');
+  } finally {
+    aliexpressSource.fetchProduct = async (url) => ({ ...SOURCE, sourceUrl: url });
+  }
+});

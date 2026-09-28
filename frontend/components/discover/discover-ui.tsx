@@ -191,3 +191,23 @@ export function FlagTag({ flag }: { flag: import("@/lib/api").DiscoverFlag | nul
     </span>
   );
 }
+
+// The search beside a tab row: words in whatever the open tab lists (products, keywords).
+export function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (next: string) => void; placeholder: string }) {
+  return (
+    <label className="relative min-w-[180px] flex-1 sm:max-w-[260px] sm:flex-none sm:basis-[240px]">
+      <span className="sr-only">{placeholder}</span>
+      <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
+        <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
+        <path d="M16 16l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="h-[26px] w-full rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-8 pr-3 text-[12px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-primary)] focus:outline-none"
+      />
+    </label>
+  );
+}

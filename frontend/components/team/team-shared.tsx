@@ -10,6 +10,7 @@ import { api, ApiError, Connection, TeamMember, PermissionUpdate } from "@/lib/a
 export const FEATURE_LABELS: Record<string, string> = {
   orders: "Orders",
   listings: "Listings",
+  listings_publish: "Publish listings",
   analytics: "Analytics",
   inbox: "Inbox",
   campaigns: "Campaigns",
@@ -273,7 +274,8 @@ export function timeAgo(iso: string | null | undefined): string {
  */
 const FEATURE_NOTES: Record<string, string> = {
   orders: "Orders: sourcing, dispatch, refunds and cases",
-  listings: "Drafting, publishing and editing listings",
+  listings: "Drafting and editing listings, and changes to live ones",
+  listings_publish: "Putting drafts live on eBay (with Listings)",
   analytics: "Traffic, listing health and figures",
   inbox: "Buyer messages",
   campaigns: "Promoted Listings",
@@ -284,6 +286,7 @@ const FEATURE_NOTES: Record<string, string> = {
 const FEATURE_ICON: Record<string, React.ReactNode> = {
   orders: <path d="M3.5 7L10 3.5 16.5 7v6.5L10 17l-6.5-3.5V7zM3.5 7L10 10.5 16.5 7M10 10.5V17" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />,
   listings: <path d="M4 9.5V5a1 1 0 011-1h4.5l6.5 6.5-5.5 5.5L4 9.5zM7.3 7.3h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />,
+  listings_publish: <path d="M10 13.5V4M6.5 7.5L10 4l3.5 3.5M4 12.5v2a1.5 1.5 0 001.5 1.5h9a1.5 1.5 0 001.5-1.5v-2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />,
   analytics: <path d="M4 16V9M8.5 16V4M13 16v-5M17 16H3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />,
   inbox: <path d="M3.5 6A1.5 1.5 0 015 4.5h10A1.5 1.5 0 0116.5 6v8a1.5 1.5 0 01-1.5 1.5H5A1.5 1.5 0 013.5 14V6zM4 6l6 4.5L16 6" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />,
   campaigns: <path d="M4 8.5v3a1 1 0 001 1h1.5l4.5 3V4.5l-4.5 3H5a1 1 0 00-1 1zM14 7.5a3.5 3.5 0 010 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />,

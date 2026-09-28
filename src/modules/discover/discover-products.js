@@ -168,6 +168,9 @@ function describe(group, { currency = 'GBP', accountKnown = true, now = Date.now
     momentum: rising ? 'rising' : isNew ? 'new' : perMonth >= 1 ? 'steady' : 'quiet',
     lift,
     newestDays: newest ? newest.days : null,
+    // How long its oldest listing with a sold count has been live: what `sold` was sold in. Under a month,
+    // sales a month is the sold count itself (a listing counts as a month old at least).
+    oldestDays: read.some((x) => x.days !== null) ? Math.max(...read.filter((x) => x.days !== null).map((x) => x.days)) : null,
     recent: recent.length ? { sold: recentSold, days: recentDays } : null,
     score,
     band: score >= 65 ? 'strong' : score >= 45 ? 'fair' : 'weak',

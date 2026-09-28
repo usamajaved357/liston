@@ -344,7 +344,11 @@ export default function DraftListingPage() {
                   <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">
                     {hunt.hunter ? `Hunted by ${hunt.hunter.name}. ` : ""}
                     {hunt.headline?.profit !== null && hunt.headline?.profit !== undefined ? `${money(hunt.headline.profit, hunt.currency)} profit per sale on the ${hunt.headline.basis === "best_seller" ? "best seller" : "best option"}. ` : ""}
-                    {hunt.selection ? "Only the options that earn at the competitor's price are ticked; tick any others you want." : "The draft is tied to the hunt, so its listing and sales count for the hunter."}
+                    {hunt.selection
+                      ? hunt.selectionBasis === "selling"
+                        ? "Only the options that have sold on the competitor's listing and earn at its price are ticked; tick any others you want."
+                        : "Only the options that earn at the competitor's price are ticked; tick any others you want."
+                      : "The draft is tied to the hunt, so its listing and sales count for the hunter."}
                   </p>
                 </div>
               </div>

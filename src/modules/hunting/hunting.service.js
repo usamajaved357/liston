@@ -277,6 +277,8 @@ function timelineOf(row, events) {
       note: e.detail?.note || null,
       auto: Boolean(e.detail?.autoApproved),
     }));
+  // Liston's own rejection isn't a member's action, so it isn't in the activity record.
+  if (autoRejected(row) && row.decided_at) out.push({ kind: 'rejected', at: row.decided_at, by: null, system: true, reason: reasonLabel(row.reject_reason), note: row.decision_note || null, auto: false });
   if (row.drafted_at) out.push({ kind: 'drafted', at: row.drafted_at, by: personOf(row.drafted_by, row.drafted_by_name, row.drafted_by_email) });
   if (row.listed_at) out.push({ kind: 'listed', at: row.listed_at, by: null, itemId: (row.item_ids || [])[0] || null });
   return out.sort((a, b) => new Date(a.at) - new Date(b.at));
@@ -353,10 +355,11 @@ async function add(auth, connectionId, { checkId, note }) {
  * tells the hunter. It stays under Rejected: a reviewer can still approve
  * it, and the hunter can remove it.
  */
-async function rejectMismatch(ownerId, huntId, mismatch) {
+async function rejectMismatch(ownerId, huntId, mismatch, { actorId = null } = {}) {
   await huntingRepository.setDecision(huntId, { status: 'rejected', reject_reason: 'mismatch', decision_note: mismatch.reason }, null);
   const hunt = await huntingRepository.findForOwner(huntId, ownerId);
-  if (!hunt?.hunter_user_id) return;
+  // Not the hunter who's just saved it: the page tells them.
+  if (!hunt?.hunter_user_id || hunt.hunter_user_id === actorId) return;
   const notice = noticeFor('hunt.rejected', { title: hunt.title, reason: reasonLabel('mismatch'), note: mismatch.reason, system: true });
   await notificationsService.notify({ userId: hunt.hunter_user_id, actorUserId: null, kind: 'hunt.rejected', ...notice, url: `/accounts/${hunt.connection_id}/hunting?open=${hunt.id}`, subjectType: 'hunt', subjectId: hunt.id });
 }
@@ -370,8 +373,9 @@ let drafting = 0;
 
 /**
  * Drafts an approved product in the background, the way the draft screen
- * would: both listings read again, the options that earn (hunt-profit's
- * draftSelection, else every option), every supplier photo. The product
+ * would: both listings read again, the options matched to a variation of
+ * the competitor's that has sold and that earn (hunt-profit's draftSelection:
+ * unsold variations are dropped), else every option, every supplier photo. The product
  * follows its draft to the Drafts page; a failure keeps it on the Hunting
  * page with the reason and a button to try again. Never throws.
  */
@@ -521,32 +525,59 @@ async function rejudgeMatch(ownerId, hunt, mismatch) {
 /**
  * The hunter changes a waiting (or sent back) product: other links, which
  * re-reads it, or their note. `competitorUrl: null` takes the competitor
- * away (undefined leaves it as it is).
+ * away (undefined leaves it as it is). A rejected product (its hunter or a
+ * reviewer fixing it) is always read again and goes back in for review,
+ * unless the supplier still doesn't match its eBay listing, when Liston
+ * rejects it again with the reason.
  */
 async function update(auth, huntId, { competitorUrl, sourceUrl, note }) {
   const { hunt, viewer } = await loadHunt(auth, huntId);
-  if (!rules.canEdit(hunt, viewer)) refuse('Only the hunter can change it, and only while it waits for review or has been sent back.');
+  if (!rules.canEdit(hunt, viewer)) refuse('Only the hunter can change it while it waits for review or has been sent back; a rejected product can be fixed by its hunter or a reviewer.');
+  const wasRejected = stageOf(hunt) === 'rejected';
   const nextCompetitor = competitorUrl === undefined ? hunt.competitor_url : competitorUrl || null;
   const nextSource = sourceUrl || hunt.source_url;
   const links = nextCompetitor !== hunt.competitor_url || nextSource !== hunt.source_url;
-  if (links) {
+  let mismatch = null;
+  if (links || wasRejected) {
     const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: nextCompetitor, sourceUrl: nextSource }, { excludeId: hunt.id });
     await huntingRepository.setCheck(hunt.id, checkColumns(read));
     await recordReading(hunt.id, read);
-    await rejudgeMatch(auth.ownerId, hunt, read.result?.mismatch || null);
+    mismatch = read.result?.mismatch || null;
+    if (!wasRejected) await rejudgeMatch(auth.ownerId, hunt, mismatch);
   }
   if (typeof note === 'string') await huntingRepository.setNote(hunt.id, note.trim().slice(0, 1000));
   await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.updated', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { links: Boolean(links) } });
+  if (wasRejected) {
+    if (mismatch) {
+      await rejectMismatch(auth.ownerId, hunt.id, mismatch, { actorId: auth.userId });
+    } else {
+      await huntingRepository.resubmit(hunt.id);
+      await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.resubmitted', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { from: 'rejected' } });
+    }
+  }
   return detail(auth, huntId);
 }
 
-/** A product sent back goes in for review again. */
+/**
+ * The hunter sends their product in for review again: one sent back, or one
+ * rejected. One Liston rejected is read again first, so it can't skip the
+ * match: while the supplier still lacks what sells, it stays rejected.
+ */
 async function resubmit(auth, huntId, { note } = {}) {
   const { hunt, viewer } = await loadHunt(auth, huntId);
-  if (!rules.canResubmit(hunt, viewer)) refuse('Only a product sent back to you can be resubmitted.');
+  if (!rules.canResubmit(hunt, viewer)) refuse('Only your own product that was sent back or rejected can be resubmitted.');
   if (typeof note === 'string') await huntingRepository.setNote(hunt.id, note.trim().slice(0, 1000));
+  if (autoRejected(hunt)) {
+    const read = await readProduct(auth.ownerId, hunt.connection_id, { competitorUrl: hunt.competitor_url, sourceUrl: hunt.source_url }, { excludeId: hunt.id });
+    await huntingRepository.setCheck(hunt.id, checkColumns(read));
+    await recordReading(hunt.id, read);
+    if (read.result?.mismatch) {
+      await rejectMismatch(auth.ownerId, hunt.id, read.result.mismatch, { actorId: auth.userId });
+      return detail(auth, huntId);
+    }
+  }
   await huntingRepository.resubmit(hunt.id);
-  await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.resubmitted', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: {} });
+  await activityRepository.record({ actorUserId: auth.userId, connectionId: hunt.connection_id, kind: 'hunt.resubmitted', subjectType: 'hunt', subjectId: hunt.id, title: hunt.title, detail: { from: stageOf(hunt) } });
   return detail(auth, huntId);
 }
 
@@ -625,6 +656,7 @@ async function draftStart(auth, huntId) {
       headline: hunt.check_result?.summary?.headline || null,
       priceChanges: readSource ? huntProfit.priceChanges(rows, readSource, hunt.currency).slice(0, 8) : [],
       selection: huntProfit.draftSelection(rows, preview.source?.axes || []),
+      selectionBasis: huntProfit.draftBasis(rows),
     },
   };
 }

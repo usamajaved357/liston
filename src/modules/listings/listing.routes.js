@@ -1,6 +1,6 @@
 const express = require('express');
 const { requireAuth } = require('../../middleware/auth.middleware');
-const { requireFeature } = require('../../middleware/feature.middleware');
+const { requireFeature, canPublishListings } = require('../../middleware/feature.middleware');
 const listingRepository = require('./listing.repository');
 const listingController = require('./listing.controller');
 const activityRepository = require('../team/activity.repository');
@@ -69,10 +69,24 @@ router.post('/:listingId/images/accept', ...editGuard, recordDraftWork, listingC
 // 2MB JSON limit, so this route parses its own body.
 router.post('/:listingId/images/upload', ...editGuard, recordDraftWork, express.json({ limit: '20mb' }), listingController.uploadImage);
 router.get('/:listingId/images/download', ...editGuard, listingController.downloadImage);
+// A draft or an ended listing goes live only for someone with "Publish
+// listings"; changes to a live listing need Listings alone.
+async function requirePublish(req, res, next) {
+  try {
+    const listing = req.listingRow;
+    const liveEdit = Boolean(listing?.edit_of_item_id) && !listing?.source_data?.ended;
+    if (!listing || liveEdit || (await canPublishListings(req, listing.connection_id))) return next();
+    return res.status(403).json({ error: "You can draft and edit on this account, but publishing to eBay needs the Publish listings access. Ask the owner to publish it, or to give you that access." });
+  } catch (err) {
+    return next(err);
+  }
+}
+
 router.post(
   '/:listingId/publish',
   requireAuth,
   requireFeature('listings', { resolveConnectionId: resolveConnectionIdFromListing }),
+  requirePublish,
   listingController.publish
 );
 

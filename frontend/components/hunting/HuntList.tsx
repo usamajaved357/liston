@@ -94,25 +94,15 @@ function Signals({ hunt }: { hunt: HuntSummary }) {
 }
 
 // A reviewer's Review / Approve on a waiting product and a hunter's Edit on a sent-back one; nothing else on the row (drafting is done from the product's page).
-function QuickAction({ hunt, onOpen, onEdit, onApprove, wide = false }: { hunt: HuntSummary; onOpen: () => void; onEdit: () => void; onApprove: () => void; wide?: boolean }) {
+// Reviewing happens on the product's page (open the row); only the hunter's
+// Edit, on one sent back, sits on the row.
+function QuickAction({ hunt, onEdit, wide = false }: { hunt: HuntSummary; onEdit: () => void; wide?: boolean }) {
   const p = hunt.permissions;
-  const size = wide ? "flex-1" : "btn-sm !h-7 !px-3 !text-[12px]";
   const act = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation();
     fn();
   };
-  if (p.canDecide && hunt.stage === "pending")
-    return (
-      <div className={`flex items-center gap-1.5 ${wide ? "w-full" : ""}`}>
-        <button type="button" onClick={act(onOpen)} className={`btn btn-secondary ${size}`}>
-          Review
-        </button>
-        <button type="button" onClick={act(onApprove)} className={`btn btn-primary ${size}`}>
-          Approve
-        </button>
-      </div>
-    );
-  if (p.canResubmit)
+  if (p.canResubmit && hunt.stage === "sent_back")
     return (
       <button type="button" onClick={act(onEdit)} className={`${EDIT_BUTTON} ${wide ? "w-full" : "!h-7 !px-3 !text-[12px]"}`}>
         <EditIcon />
@@ -126,7 +116,7 @@ function QuickAction({ hunt, onOpen, onEdit, onApprove, wide = false }: { hunt: 
   );
 }
 
-function Row({ hunt, you, onOpen, onEdit, onApprove }: { hunt: HuntSummary; you: string; onOpen: () => void; onEdit: () => void; onApprove: () => void }) {
+function Row({ hunt, you, onOpen, onEdit }: { hunt: HuntSummary; you: string; onOpen: () => void; onEdit: () => void }) {
   const v = VERDICT[hunt.verdict];
   // No competitor: the profit is the target by design, so it reads plain, "at your price".
   const unpriced = hunt.verdict === "unpriced";
@@ -165,9 +155,9 @@ function Row({ hunt, you, onOpen, onEdit, onApprove }: { hunt: HuntSummary; you:
         {(hunt.stage === "sent_back" && hunt.decisionNote) || (hunt.stage === "rejected" && hunt.rejectReasonLabel) ? (
           <p className="mt-2 line-clamp-2 rounded-lg bg-[var(--color-paper)] px-2.5 py-1.5 text-[12px] text-[var(--color-ink)]">{hunt.stage === "rejected" ? hunt.rejectReasonLabel : hunt.decisionNote}</p>
         ) : null}
-        {(hunt.permissions.canDecide && hunt.stage === "pending") || hunt.permissions.canResubmit ? (
+        {hunt.permissions.canResubmit && hunt.stage === "sent_back" ? (
           <div className="mt-3 flex">
-            <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} wide />
+            <QuickAction hunt={hunt} onEdit={onEdit} wide />
           </div>
         ) : null}
       </div>
@@ -178,7 +168,7 @@ function Row({ hunt, you, onOpen, onEdit, onApprove }: { hunt: HuntSummary; you:
         tabIndex={0}
         onClick={onOpen}
         onKeyDown={(e) => e.key === "Enter" && onOpen()}
-        className="hidden cursor-pointer grid-cols-[minmax(0,1fr)_112px_104px_176px_150px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[var(--color-paper)]/70 md:grid"
+        className="hidden cursor-pointer grid-cols-[minmax(0,1fr)_112px_104px_176px_96px] items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[var(--color-paper)]/70 md:grid"
       >
         <div className="flex min-w-0 items-center gap-2.5">
           <Thumb src={hunt.imageUrl} size={42} />
@@ -207,7 +197,7 @@ function Row({ hunt, you, onOpen, onEdit, onApprove }: { hunt: HuntSummary; you:
         </div>
         <Status hunt={hunt} />
         <div className="flex justify-end">
-          <QuickAction hunt={hunt} onOpen={onOpen} onEdit={onEdit} onApprove={onApprove} />
+          <QuickAction hunt={hunt} onEdit={onEdit} />
         </div>
       </div>
     </li>
@@ -226,7 +216,7 @@ export function PipelineTabs({ views, counts, value, onChange }: { views: HuntVi
   );
 }
 
-export function HuntRows({ data, view, you, loading, query = "", filtered = false, onOpen, onEdit, onApprove, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; query?: string; filtered?: boolean; onOpen: (id: string) => void; onEdit: (id: string) => void; onApprove: (hunt: HuntSummary) => void; onMore?: () => void }) {
+export function HuntRows({ data, view, you, loading, query = "", filtered = false, onOpen, onEdit, onMore }: { data: HuntListData | null; view: HuntView; you: string; loading: boolean; query?: string; filtered?: boolean; onOpen: (id: string) => void; onEdit: (id: string) => void; onMore?: () => void }) {
   if (!data) {
     return (
       <ul className="divide-y divide-[var(--color-line)]">
@@ -264,7 +254,7 @@ export function HuntRows({ data, view, you, loading, query = "", filtered = fals
   }
   return (
     <div className={`overflow-hidden rounded-b-[var(--radius-card)] ${loading ? "opacity-60 transition-opacity" : "transition-opacity"}`}>
-      <div className="hidden grid-cols-[minmax(0,1fr)_112px_104px_176px_150px] gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)] md:grid">
+      <div className="hidden grid-cols-[minmax(0,1fr)_112px_104px_176px_96px] gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)] md:grid">
         <span>Product</span>
         <span className="text-center">Profit per sale</span>
         <span className="text-center">Demand</span>
@@ -273,7 +263,7 @@ export function HuntRows({ data, view, you, loading, query = "", filtered = fals
       </div>
       <ul className="divide-y divide-[var(--color-line)]">
         {data.items.map((hunt) => (
-          <Row key={hunt.id} hunt={hunt} you={you} onOpen={() => onOpen(hunt.id)} onEdit={() => onEdit(hunt.id)} onApprove={() => onApprove(hunt)} />
+          <Row key={hunt.id} hunt={hunt} you={you} onOpen={() => onOpen(hunt.id)} onEdit={() => onEdit(hunt.id)} />
         ))}
       </ul>
       {data.more && onMore && (

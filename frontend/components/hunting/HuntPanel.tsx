@@ -55,7 +55,12 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
           <b className="font-semibold">Rejected automatically by Liston</b> {ago(hunt.decidedAt)} · {hunt.rejectReasonLabel}.
           {hunt.decisionNote && <Quote text={hunt.decisionNote} />}
           <p className="mt-1.5 text-[12.5px] text-rose-900/80">
-            The supplier must sell every variation the eBay listing sells (it can have more). Change the supplier link and check it again, or remove it.
+            The supplier must sell every variation of the eBay listing that has sold (it can have more, and variations nobody buys don&apos;t count).
+            {hunt.permissions.canResubmit
+              ? " Edit and fix it with another supplier link, or resubmit it once the supplier has them: Liston checks it again first."
+              : hunt.permissions.canEdit
+                ? " Edit it with another supplier link and it goes back in for review."
+                : ""}
             {hunt.permissions.canDecide && " A reviewer can still approve it."}
           </p>
         </Banner>
@@ -64,6 +69,11 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
           <b className="font-semibold">Rejected</b> by {who(hunt.reviewer)} {ago(hunt.decidedAt)}
           {hunt.rejectReasonLabel ? ` · ${hunt.rejectReasonLabel}` : ""}.
           {hunt.decisionNote && <Quote text={hunt.decisionNote} />}
+          {hunt.permissions.canResubmit ? (
+            <p className="mt-1.5 text-[12.5px] text-rose-900/80">Fix it with Edit and fix, or resubmit it as it is for another look.</p>
+          ) : (
+            hunt.permissions.canEdit && <p className="mt-1.5 text-[12.5px] text-rose-900/80">Fix it (other links, or a note on what changed) and it goes back in for review.</p>
+          )}
         </Banner>
       );
     case "approved":
@@ -142,7 +152,7 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
             <div className="min-w-0 text-[12.5px]">
               <p className="text-[var(--color-ink)]">
                 <b className="font-semibold">{EVENT_WORDS[e.kind]}</b>
-                {e.by ? ` by ${e.by.id === you ? "you" : e.by.name}` : ""}
+                {e.by ? ` by ${e.by.id === you ? "you" : e.by.name}` : e.system ? " by Liston" : ""}
                 {e.auto ? " (the owner's own find, approved as added)" : ""}
                 {e.reason ? ` · ${e.reason}` : ""}
                 <span className="text-[var(--color-muted)]"> · {new Date(e.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
@@ -156,7 +166,7 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
   );
 }
 
-// Edit (the hunter's, while it waits or was sent back): the links and the note, read again on save.
+// Edit (the hunter's, while it waits or was sent back; the hunter's or a reviewer's once rejected): the links and the note, read again on save.
 // startOpen: opened from the list's Edit, so the form is there straight away.
 function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntDetail; onSaved: (h: HuntDetail) => void; startOpen?: boolean; onClosed?: () => void }) {
   const [open, setOpen] = useState(startOpen);
@@ -190,11 +200,12 @@ function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntD
     }
   }
 
+  const rejected = hunt.stage === "rejected";
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className={EDIT_BUTTON}>
         <EditIcon />
-        Edit
+        {rejected ? "Edit and fix" : "Edit"}
       </button>
     );
   }
@@ -202,8 +213,9 @@ function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntD
     <form ref={formRef} onSubmit={save} className="card w-full space-y-3 border-amber-200 p-4 ring-4 ring-amber-50">
       <p className="flex items-center gap-1.5 text-[13px] font-semibold text-amber-800">
         <EditIcon />
-        Edit this product
+        {rejected ? "Fix this product" : "Edit this product"}
       </p>
+      {rejected && <p className="-mt-1 text-[12px] text-[var(--color-muted)]">Saving checks it again and sends it back for review{hunt.autoRejected ? ", as long as the supplier now sells the variations that sell" : ""}.</p>}
       <label className="block">
         <span className="label">
           Competitor on eBay <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>
@@ -224,7 +236,7 @@ function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntD
           Cancel
         </button>
         <button type="submit" disabled={busy} className="btn btn-primary btn-sm">
-          {busy ? "Checking…" : "Save and check again"}
+          {busy ? "Checking…" : rejected ? "Save and send for review" : "Save and check again"}
         </button>
       </div>
     </form>
@@ -308,7 +320,9 @@ export function HuntPanel({ huntId, you, onClose, onChanged, startEditing = fals
     setMoved(null);
     try {
       const next = await call();
-      if (kind === "recheck" && next.previous && next.previous.profit !== next.headline.profit) {
+      if (kind === "resubmit" && next.stage === "rejected") {
+        setMoved("Still rejected: the supplier doesn't have the eBay listing's variations that sell. Use Edit and fix to change the supplier link.");
+      } else if (kind === "recheck" && next.previous && next.previous.profit !== next.headline.profit) {
         setMoved(`Profit ${signedMoney(next.previous.profit, next.currency)} → ${signedMoney(next.headline.profit, next.currency)} since the last check.`);
       } else if (kind === "recheck") {
         setMoved("Checked again: the figures haven't changed.");

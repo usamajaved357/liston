@@ -173,31 +173,53 @@ const MATCH_MIN = 0.5; // an option this close to a variation is that variation 
 const TITLE_WORDS_MIN = 2; // words the two titles must share to be the same product
 
 /**
+ * How much of a competitor variation a supplier option covers, 0–1: each of
+ * the variation's values against the option's best. An option with more
+ * axes than the listing ("Black / UK plug / 2 pcs" for "Black") still covers
+ * it, which optionScore, counting every axis of both, would not.
+ */
+function coverScore(option, variant) {
+  const mine = productValues(option.attributes);
+  const theirs = productValues(variant.attributes);
+  if (!mine.length || !theirs.length) return 0;
+  return theirs.reduce((sum, value) => sum + Math.max(0, ...mine.map((other) => valueScore(value, other))), 0) / theirs.length;
+}
+const COVER_MIN = 0.75;
+const sellsIt = (options, variant) => options.some((o) => optionScore(o, variant) >= MATCH_MIN || coverScore(o, variant) >= COVER_MIN);
+
+/**
  * Whether the supplier sells what the eBay listing sells, or null when it
- * does (or there's no competitor to compare with). Every one of the eBay
- * listing's variations must be among the supplier's options: the supplier
- * can have more (five colours against the listing's one is fine, as long as
- * the listing's colour is one of them), never fewer. A listing without
- * variations is compared on its title: the two must share a few words that
- * say what the product is.
- * { kind: 'variations', missing: [label], total, reason } | { kind: 'product', reason }.
+ * does (or there's no competitor to compare with). Every variation of the
+ * eBay listing that has sold must be among the supplier's options: the
+ * supplier can have more (five colours against the listing's one is fine,
+ * as long as the listing's colour is one of them), and variations nobody
+ * buys don't count (a listing of ten colours that only sells Black needs
+ * Black). Only when no sold counts are known must every variation be there.
+ * A listing without variations is compared on its title: the two must
+ * share a few words that say what the product is.
+ * { kind: 'variations', missing: [label], total, selling, reason } | { kind: 'product', reason }.
  */
 function matchCheck(competitor, source, currency) {
   if (!competitor) return null;
-  const variations = competitorVariations(competitor, currency).filter((v) => v.label);
-  if (variations.length) {
+  const all = competitorVariations(competitor, currency).filter((v) => v.label);
+  if (all.length) {
+    const sold = all.filter((v) => (v.sold || 0) > 0);
+    const variations = sold.length ? sold : all;
+    const selling = Boolean(sold.length);
     const options = supplierOptions(source, currency);
-    const missing = variations.filter((v) => !options.some((o) => optionScore(o, v) >= MATCH_MIN)).map((v) => v.label);
+    const missing = variations.filter((v) => !sellsIt(options, v)).map((v) => v.label);
     if (!missing.length) return null;
     const shown = missing.slice(0, 6).join(', ');
+    const what = selling ? `variation${variations.length === 1 ? '' : 's'} with sales` : `variation${variations.length === 1 ? '' : 's'}`;
     return {
       kind: 'variations',
       missing,
       total: variations.length,
+      selling,
       reason:
         missing.length === variations.length
-          ? `None of the eBay listing's ${variations.length} variation${variations.length === 1 ? '' : 's'} (${shown}${missing.length > 6 ? '…' : ''}) is among the supplier's options.`
-          : `The eBay listing sells ${missing.length} of its ${variations.length} variations that the supplier doesn't have: ${shown}${missing.length > 6 ? ` and ${missing.length - 6} more` : ''}.`,
+          ? `None of the eBay listing's ${variations.length} ${what} (${shown}${missing.length > 6 ? '…' : ''}) is among the supplier's options.`
+          : `${missing.length} of the eBay listing's ${variations.length} ${what} ${missing.length === 1 ? "isn't" : "aren't"} among the supplier's options: ${shown}${missing.length > 6 ? ` and ${missing.length - 6} more` : ''}.`,
     };
   }
   const theirs = new Set(wordsOf(competitor.title).map((w) => w.replace(/(?<=\w{3})s$/, '')));
@@ -660,19 +682,35 @@ function priceChanges(rows, freshSource, currency) {
   return changes.sort((a, b) => Math.abs(b.after - b.before) - Math.abs(a.after - a.before));
 }
 
+// An option matched to a competitor variation that has sold (not merely priced at its lowest).
+const provenRow = (r) => r.match && r.match.label && ['exact', 'close', 'single'].includes(r.match.quality) && (r.match.sold || 0) > 0;
+
 /**
- * The options to start a draft with: on each axis of the draft screen,
- * the values some profitable, in-stock option has. An axis where every
- * value earns (or none does) is left as it is. { axisName: [values] } or
- * null when there's nothing to leave out.
+ * Which options a draft starts with: the ones matched to a variation of the
+ * competitor's listing that has sold and that earn, in stock ('selling'); when
+ * none of those, every option that earns ('earning'); else null. A listing
+ * of ten colours that only ever sold Black drafts Black.
  */
-function draftSelection(rows, axes) {
+function draftBasis(rows) {
   const earning = (rows || []).filter((r) => r.profit !== null && r.profit > 0 && r.stock !== 0);
   if (!earning.length) return null;
+  return earning.some(provenRow) ? 'selling' : 'earning';
+}
+
+/**
+ * The options to start a draft with (draftBasis), as values on each axis of
+ * the draft screen. An axis where every value is kept is left as it is.
+ * { axisName: [values] } or null when there's nothing to leave out.
+ */
+function draftSelection(rows, axes) {
+  const basis = draftBasis(rows);
+  if (!basis) return null;
+  const earning = rows.filter((r) => r.profit !== null && r.profit > 0 && r.stock !== 0);
+  const kept = basis === 'selling' ? earning.filter(provenRow) : earning;
   const selection = {};
   for (const axis of axes || []) {
     const values = (axis.values || []).map((v) => (typeof v === 'string' ? v : v.value));
-    const keep = values.filter((value) => earning.some((r) => r.attributes?.[axis.name] === value));
+    const keep = values.filter((value) => kept.some((r) => r.attributes?.[axis.name] === value));
     if (keep.length && keep.length < values.length) selection[axis.name] = keep;
   }
   return Object.keys(selection).length ? selection : null;
@@ -683,4 +721,4 @@ function optionLabel(row) {
   return row?.label || 'The product';
 }
 
-module.exports = { analyse, matchCheck, feeRates, priceChanges, draftSelection, salesByVariation, salesReading, shippingAnchor, bestSellerOption, supplierOptions, competitorVariations, optionScore, valueScore, quantityOf, norm, optionLabel, VERSION, MAX_OPTIONS, ENOUGH_ORDERS };
+module.exports = { analyse, matchCheck, coverScore, feeRates, priceChanges, draftSelection, draftBasis, salesByVariation, salesReading, shippingAnchor, bestSellerOption, supplierOptions, competitorVariations, optionScore, valueScore, quantityOf, norm, optionLabel, VERSION, MAX_OPTIONS, ENOUGH_ORDERS };

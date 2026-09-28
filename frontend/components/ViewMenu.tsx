@@ -9,7 +9,9 @@ import { useIsPhone } from "@/lib/useIsPhone";
 // opening a small menu with a section per choice (period, sort…). Keeps a
 // page's toolbar to one control instead of a dropdown per setting. Picking
 // an option closes the menu, as do a click outside and Escape. On a phone it rises from the bottom of the screen
-// instead, where a dropdown beside the button would run off the edge.
+// instead, where a dropdown beside the button would run off the edge. On a
+// laptop the menu opens rightwards from the button when there's room (a
+// button at the start of a toolbar), else leftwards from its right edge.
 
 export interface ViewMenuSection {
   label: string;
@@ -24,6 +26,7 @@ export interface ViewMenuSection {
 
 export function ViewMenu({ sections, title = "View", label }: { sections: ViewMenuSection[]; title?: string; label?: string }) {
   const [open, setOpen] = useState(false);
+  const [alignLeft, setAlignLeft] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const phone = useIsPhone();
   const close = useCallback(() => setOpen(false), []);
@@ -56,7 +59,12 @@ export function ViewMenu({ sections, title = "View", label }: { sections: ViewMe
     <div ref={wrap} className="relative flex-shrink-0">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          const box = wrap.current?.getBoundingClientRect();
+          // The menu is 240px wide (w-60): rightwards when that fits in the window.
+          if (box) setAlignLeft(box.left + 240 <= window.innerWidth - 12);
+          setOpen((v) => !v);
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
         title={title}
@@ -75,7 +83,7 @@ export function ViewMenu({ sections, title = "View", label }: { sections: ViewMe
         </svg>
       </button>
       {open && !phone && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1.5 max-h-[min(70vh,560px)] w-60 overflow-y-auto rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 shadow-lg">
+        <div role="menu" className={`absolute ${alignLeft ? "left-0" : "right-0"} top-full z-30 mt-1.5 max-h-[min(70vh,560px)] w-60 overflow-y-auto rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1 shadow-lg`}>
           <Sections sections={sections} onPicked={close} />
         </div>
       )}

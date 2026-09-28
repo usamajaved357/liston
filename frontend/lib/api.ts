@@ -1895,6 +1895,8 @@ export interface HuntTimelineEvent {
   reason?: string | null;
   note?: string | null;
   auto?: boolean;
+  // Rejected by Liston itself (the supplier doesn't match), not a member.
+  system?: boolean;
   itemId?: string | null;
 }
 
@@ -1995,6 +1997,7 @@ export interface DiscoverProduct {
   momentum: "rising" | "new" | "steady" | "quiet";
   lift: number | null;
   newestDays: number | null;
+  oldestDays?: number | null; // its oldest listing with a sold count: what `sold` was sold in
   recent: { sold: number; days: number } | null;
   score: number;
   band: DiscoverOpportunity["band"];
@@ -2314,6 +2317,8 @@ export interface HuntDraftStart {
     headline: HuntCheckResult["summary"]["headline"] | null;
     priceChanges: { label: string | null; before: number; after: number }[];
     selection: Record<string, string[]> | null;
+    // What the ticked options are: the ones that sold on the competitor's listing and earn, or every one that earns.
+    selectionBasis: "selling" | "earning" | null;
   };
 }
 
@@ -2729,7 +2734,7 @@ export const api = {
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
 
   getDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null; policyWords?: string[] }>(`/api/listings/${listingId}`),
+    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null; policyWords?: string[]; canPublish?: boolean }>(`/api/listings/${listingId}`),
 
   // Ways out when eBay refuses the draft's variation attribute in its category.
   getVariationFixes: (listingId: string) => request<VariationFixes>(`/api/listings/${listingId}/variation-fixes`),

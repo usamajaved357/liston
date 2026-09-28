@@ -52,6 +52,16 @@ function Reasons({ reasons }: { reasons: DiscoverProduct["reasons"] }) {
   );
 }
 
+// What the sold count was sold in ("in 26 days", "in 5 months"), so it isn't read as a second monthly figure:
+// under a month the two are the same number, since a listing counts as a month old at least.
+function soldIn(days: number | null | undefined): string {
+  if (days === null || days === undefined) return "";
+  if (days < 1) return " today";
+  if (days < 60) return ` in ${Math.round(days)} day${Math.round(days) === 1 ? "" : "s"}`;
+  if (days < 730) return ` in ${Math.round(days / 30)} months`;
+  return ` in ${Math.round(days / 365)} years`;
+}
+
 export function DiscoverProducts({
   products,
   currency,
@@ -187,7 +197,9 @@ export function DiscoverProducts({
                 </td>
                 <td className="px-3 py-3 text-center tabular-nums">
                   <span className="font-semibold text-[var(--color-ink)]">{count(Math.round(p.perMonth))}</span>
-                  <span className="block text-[11px] text-[var(--color-muted)]">{count(p.sold)} sold</span>
+                  <span className="block text-[11px] text-[var(--color-muted)]" title="Sold in all since its oldest listing started">
+                    {count(p.sold)} sold{soldIn(p.oldestDays)}
+                  </span>
                   {p.recent && p.recent.days >= 2 && (
                     <span className="block text-[11px] font-medium text-emerald-700">
                       {count(p.recent.sold)} in {p.recent.days}d

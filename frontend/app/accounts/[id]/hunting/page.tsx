@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, Connection, HuntFilters, HuntList, HuntSort, HuntSummary, HuntView } from "@/lib/api";
+import { api, ApiError, Connection, HuntFilters, HuntList, HuntSort, HuntView } from "@/lib/api";
 import { ViewMenu } from "@/components/ViewMenu";
 import { currencySymbol } from "@/lib/format";
 import { useConnection } from "@/lib/useConnection";
@@ -12,8 +12,6 @@ import { AccountPageSkeleton } from "@/components/Skeleton";
 import { HuntAddBar, HuntCheck, HuntForm } from "@/components/hunting/HuntForm";
 import { HuntRows, PipelineTabs, SORT_LABELS } from "@/components/hunting/HuntList";
 import { HuntPanel } from "@/components/hunting/HuntPanel";
-import { DecisionDialog, Decision } from "@/components/hunting/DecisionDialog";
-import { announceHuntingChange } from "@/components/hunting/HuntBits";
 import { PushPrompt } from "@/components/NotificationBell";
 import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 
@@ -68,7 +66,6 @@ function HuntingBody() {
   const openId = search.get("open");
   // Opened with Edit: the panel starts with its edit form open.
   const [editing, setEditing] = useState(false);
-  const [quick, setQuick] = useState<HuntSummary | null>(null);
   const [reload, setReload] = useState(0);
   // A product checked but not added yet: its Add bar is the page's footer.
   const [checked, setChecked] = useState<HuntCheck | null>(null);
@@ -197,18 +194,6 @@ function HuntingBody() {
     setAdded(null);
     setShowForm(true);
     changeTab("products");
-  }
-
-  async function quickApprove(input: { decision: Decision; reason?: string; note?: string }) {
-    if (!quick) return;
-    try {
-      await api.huntDecide(quick.id, input);
-      setQuick(null);
-      announceHuntingChange();
-      refresh();
-    } catch (err) {
-      throw new Error(err instanceof ApiError ? err.message : "That didn't save. Try again.");
-    }
   }
 
   const viewer = data?.viewer;
@@ -434,7 +419,6 @@ function HuntingBody() {
                   open(id);
                   setEditing(true);
                 }}
-                onApprove={setQuick}
                 onMore={loadMore}
               />
             )}
@@ -444,7 +428,6 @@ function HuntingBody() {
       )}
 
       {openId && <HuntPanel key={`${openId}-${editing}`} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} startEditing={editing} />}
-      <DecisionDialog decision={quick ? "approve" : null} reasons={data?.reasons || []} title={quick?.title || ""} onClose={() => setQuick(null)} onSubmit={quickApprove} />
     </AccountShell>
   );
 }

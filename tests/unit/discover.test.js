@@ -247,12 +247,17 @@ test('products: the same thing under several sellers is one product, judged on d
   // The filters: rising (12 in 3 days against a lifetime pace) and a new listing already selling.
   const filters = found[1];
   assert.strictEqual(filters.momentum, 'rising');
+  // What its sold count was sold in: its oldest listing's age (60 days; the other is 20).
+  assert.deepStrictEqual([filters.sold, filters.oldestDays], [50, 60]);
   assert.ok(filters.reasons.some((r) => /Rising/.test(r.text)));
   // A cheap product with one seller: little room, not proven.
   const bowl = found[2];
   assert.ok(bowl.reasons.some((r) => r.good === false && /One seller/.test(r.text)));
   assert.ok(bowl.reasons.some((r) => r.good === false && /little left/.test(r.text)));
   assert.strictEqual(bowl.band, 'weak');
+  // Listings under a month old: sales a month is the sold count itself (a month at least), and the age says why.
+  const young = products.productsOf([l('Solar Garden Lights Pack 10 LED', 98, 'h', { days: 26 }), l('Solar Garden Lights 10 Pack LED Outdoor', 72, 'i', { days: 12 })], { subject: 'solar lights', currency: 'GBP', now: NOW })[0];
+  assert.deepStrictEqual([young.perMonth, young.sold, young.oldestDays], [170, 170, 26]);
 });
 
 test('the site keywords: one row per term where it sells most, a searched keyword with its own market, nothing blocked', () => {

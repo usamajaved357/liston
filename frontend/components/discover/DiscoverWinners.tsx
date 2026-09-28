@@ -29,17 +29,18 @@ export function DiscoverWinnersView({
   onMore: () => void;
 }) {
   return (
-    <section className="card min-w-0 overflow-hidden">
+    <section className="card min-w-0">
       <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <DiscoverProductFilters filters={filters} onChange={onFilters} currency={data?.market.currency || "GBP"} />
+        {/* The whole width on a phone (the count goes under it), sharing the line with the count on wider screens. */}
+        <div className="min-w-0 grow basis-full sm:basis-0">
+          <DiscoverProductFilters filters={filters} onChange={onFilters} currency={data?.market.currency || "GBP"} delivery={data?.account || null} />
         </div>
         <p className="text-[11.5px] text-[var(--color-muted)]">
           {data ? `${count(data.matched)} product${data.matched === 1 ? "" : "s"}${data.mineHidden ? ` · ${count(data.mineHidden)} of yours hidden` : ""} · read ${ago(data.at)}` : ""}
           {loading && data ? " · Updating…" : ""}
         </p>
       </div>
-      <div className={loading ? "opacity-60" : ""}>
+      <div className={`overflow-hidden ${data && data.matched > data.products.length && data.products.length < 300 ? "" : "rounded-b-[var(--radius-card)]"} ${loading ? "opacity-60" : ""}`}>
         {data ? (
           <DiscoverProducts
             products={data.products}

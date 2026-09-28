@@ -9,6 +9,7 @@ import { PillTabs } from "@/components/PillTabs";
 import { count } from "@/components/research/format";
 import { DiscoverSearch } from "./DiscoverSearch";
 import { DiscoverCategoriesTab, DiscoverHero, DiscoverRecent } from "./DiscoverStartView";
+import { SearchBox } from "./discover-ui";
 import { DiscoverSiteKeywords, SiteKeywordsQuery } from "./DiscoverSiteKeywords";
 import { DiscoverSubjectView } from "./DiscoverSubjectView";
 import { DiscoverWatchlist } from "./DiscoverWatchlist";
@@ -333,10 +334,13 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
         <>
           {start?.error ? <Alert>{start.error}</Alert> : start?.data ? <DiscoverHero data={start.data} /> : null}
 
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* The search for the open tab (products, eBay's keywords) sits on the left of the tabs, so the filter bar below keeps to one line. */}
+          <div className="flex flex-wrap items-center gap-2">
+            {homeTab === "products" && <SearchBox value={winnersFilters.q || ""} onChange={(q) => setWinnersFilters({ ...winnersFilters, q })} placeholder="Words in the product" />}
+            {homeTab === "keywords" && !(keywordSource === "yours" && canSeeTraffic) && <SearchBox value={kwQuery.q} onChange={(q) => setKwQuery({ ...kwQuery, q })} placeholder="Words in the keyword" />}
             <PillTabs label="Discover" tabs={homeTabs} value={homeTab} onChange={changeHomeTab} />
             {homeTab === "keywords" && canSeeTraffic && (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="ml-auto flex flex-wrap items-center gap-2">
                 <SegmentedControl
                   label="Keywords from"
                   value={keywordSource}

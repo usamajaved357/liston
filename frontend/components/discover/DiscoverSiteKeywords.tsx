@@ -10,6 +10,7 @@ import { Chevron, Quiet, ScoreBadge } from "./discover-ui";
 // most, and how much better those titles sell than the rest), and the
 // keywords already searched with their own market (live listings, the
 // opportunity). Open one to see its products, keywords and categories.
+// Its words come from the search beside the tabs.
 // eBay doesn't share buyers' search volume with apps, so demand is the
 // sales themselves; "Your searches" (the account's own impressions) sits
 // beside this for whoever sees its analytics.
@@ -44,22 +45,8 @@ export function DiscoverSiteKeywords({
 }) {
   const set = (patch: Partial<SiteKeywordsQuery>) => onQuery({ ...query, ...patch });
   return (
-    <section className="card min-w-0 overflow-hidden">
+    <section className="card min-w-0">
       <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-3">
-        <label className="relative min-w-[170px] flex-1 sm:max-w-[260px]">
-          <span className="sr-only">Words in the keyword</span>
-          <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
-            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
-            <path d="M16 16l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          <input
-            type="search"
-            value={query.q}
-            onChange={(e) => set({ q: e.target.value })}
-            placeholder="Words in the keyword"
-            className="h-7 w-full rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-8 pr-3 text-[12px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-primary)] focus:outline-none"
-          />
-        </label>
         <ViewMenu
           title="Sort and show"
           sections={[
@@ -96,7 +83,7 @@ export function DiscoverSiteKeywords({
           </Quiet>
         </div>
       ) : (
-        <div className={`overflow-x-auto ${loading ? "opacity-60" : ""}`}>
+        <div className={`overflow-x-auto rounded-b-[var(--radius-card)] ${loading ? "opacity-60" : ""}`}>
           <table className="w-full min-w-[820px] table-fixed text-[12.5px]">
             <thead className="whitespace-nowrap bg-[var(--color-paper)] text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               <tr>
