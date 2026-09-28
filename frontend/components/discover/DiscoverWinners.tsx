@@ -35,7 +35,7 @@ export function DiscoverWinnersView({
           <DiscoverProductFilters filters={filters} onChange={onFilters} currency={data?.market.currency || "GBP"} />
         </div>
         <p className="text-[11.5px] text-[var(--color-muted)]">
-          {data ? `${count(data.matched)} product${data.matched === 1 ? "" : "s"} · read ${ago(data.at)}` : ""}
+          {data ? `${count(data.matched)} product${data.matched === 1 ? "" : "s"}${data.mineHidden ? ` · ${count(data.mineHidden)} of yours hidden` : ""} · read ${ago(data.at)}` : ""}
           {loading && data ? " · Updating…" : ""}
         </p>
       </div>

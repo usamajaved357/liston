@@ -31,6 +31,7 @@ const winnersSchema = z.object({
   minSales: z.coerce.number().int().min(0).max(100000).optional().default(0),
   newOnly: flag,
   sort: z.enum(['score', 'sales', 'rising', 'new', 'price']).optional().default('score'),
+  mine: z.enum(['show', 'hide']).optional().default('show'),
   limit: z.coerce.number().int().min(1).max(300).optional().default(60),
 });
 const siteKeywordsSchema = z.object({

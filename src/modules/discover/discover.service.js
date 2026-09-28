@@ -18,6 +18,8 @@ const keywords = require('./discover-keywords');
 const trends = require('./discover-trends');
 const compliance = require('./discover-compliance');
 const products = require('./discover-products');
+const personal = require('./discover-personal');
+const mirror = require('../ebay/ebay-mirror.repository');
 const advisor = require('../ai-generation/research-advisor.service');
 const researchAnalysis = require('../research/research-analysis');
 
@@ -423,7 +425,7 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
     recent: summary.recent,
     rising: summary.rising.map((l) => shown(l, country)),
     // Its products (the same product under several sellers grouped), best to hunt first, with why.
-    products: products.productsOf(summary.listings, { subject: subject.q || info.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: PRODUCTS_SHOWN }).filter((p) => p.read > 0),
+    products: await subjectProducts(ownerId, connectionId, ctx, products.productsOf(summary.listings, { subject: subject.q || info.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: PRODUCTS_SHOWN }).filter((p) => p.read > 0)),
     listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => ({ ...shown(l, country), flag: flagged(l.title) })),
     // The subject's own words (its category name, or the keyword) aren't news. More the deeper in.
     keywords: keywords.fromListings(listings, { query: subject.q || info.name, limit: keywordLimit(info) }).map((k) => ({ ...k, flag: flagged(k.term) })),
@@ -444,6 +446,20 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
     account: ctx.account ? { min: ctx.account.min, max: ctx.account.max, policyName: ctx.account.policyName, serviceName: ctx.account.serviceName } : null,
     budget: await budget.left(),
   };
+}
+
+// A subject's products scored for this account (its taste, how crowded each is) and marked with what
+// the owner already has, best first.
+async function subjectProducts(ownerId, connectionId, ctx, list) {
+  const [taste, crowd, owned] = await Promise.all([
+    tasteFor(connectionId),
+    repo.othersHunting(ownerId, list.flatMap((p) => p.itemIds), new Date(Date.now() - personal.CROWD_DAYS * 86400000)),
+    ownedFor(ownerId),
+  ]);
+  return list
+    .map((p) => personal.personalise(p, { taste, crowd: personal.crowdOf(p, crowd), currency: ctx.site.currency }))
+    .map((p) => ({ ...p, mine: personal.ownedOf(p, owned) }))
+    .sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
 }
 
 // One AI reading a day per site and subject, shared by every account on the site.
@@ -520,6 +536,32 @@ async function sitePool(site, day) {
   return value;
 }
 
+// The account's taste (its categories and the prices it sells at) and the owner's things (what they
+// already have), each read once a minute at most.
+const TASTE_CACHE_MS = 60 * 1000;
+const tasteCache = new Map();
+const ownedCache = new Map();
+async function tasteFor(connectionId) {
+  const hit = tasteCache.get(connectionId);
+  if (hit && Date.now() - hit.at < TASTE_CACHE_MS) return hit.value;
+  const [categories, prices] = await Promise.all([repo.ownCategories(connectionId, 50).catch(() => []), repo.livePrices(connectionId).catch(() => [])]);
+  const value = personal.tasteOf({ categoryIds: categories.map((c) => c.id), prices });
+  tasteCache.set(connectionId, { at: Date.now(), value });
+  return value;
+}
+async function ownedFor(ownerId) {
+  const hit = ownedCache.get(ownerId);
+  if (hit && Date.now() - hit.at < TASTE_CACHE_MS) return hit.value;
+  const [live, hunts, listings] = await Promise.all([mirror.ownerLiveListings(ownerId).catch(() => []), repo.ownerHunts(ownerId), repo.ownerListonCompetitors(ownerId)]);
+  const value = personal.ownedIndex({ live, hunts, listings });
+  ownedCache.set(ownerId, { at: Date.now(), value });
+  return value;
+}
+/** Forgets what's kept about an owner (after they hunt or list something, so Discover says so at once). */
+function forgetOwner(ownerId) {
+  ownedCache.delete(ownerId);
+}
+
 /**
  * The product pool for an account: the site's pool grouped into products
  * and scored for this account (its delivery), best first. Kept five minutes.
@@ -559,10 +601,13 @@ async function winnersPool(ownerId, connectionId) {
       pool.push({ ...p, from });
     }
   }
-  pool.sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
+  // Scored for this account: its categories and usual prices, and how many other Liston sellers hunt each one lately.
+  const [taste, crowd] = await Promise.all([tasteFor(connectionId), repo.othersHunting(ownerId, pool.flatMap((p) => p.itemIds), new Date(Date.now() - personal.CROWD_DAYS * 86400000))]);
+  const scored = pool.map((p) => personal.personalise(p, { taste, crowd: personal.crowdOf(p, crowd), currency: ctx.site.currency }));
+  scored.sort((a, b) => b.score - a.score || b.perMonth - a.perMonth);
   const blocked = (term) => compliance.termsIn(term).restricted.length > 0 || Boolean(compliance.veroBrandIn(term));
   const siteKeywords = keywords.poolKeywords(found, searched, { isBlocked: blocked }).sort((a, b) => b.perMonth - a.perMonth);
-  const value = { products: pool, keywords: siteKeywords, pool: { ...site.pool, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
+  const value = { products: scored, keywords: siteKeywords, pool: { ...site.pool, read }, market: marketplaces.summary(ctx.site.id), account: ctx.account ? { min: ctx.account.min, max: ctx.account.max } : null, at: new Date().toISOString() };
   winnersCache.set(cacheKey, { at: Date.now(), value });
   return value;
 }
@@ -574,11 +619,16 @@ const SELLER_SIZES = { small: [0, 1000], medium: [1000, 10000], large: [10000, I
  * this account, filtered the way a hunter filters — delivery it can match,
  * a price band, a minimum of sales a month, new lately — and sorted.
  */
-async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score', limit = WINNERS_SHOWN } = {}) {
+async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score', mine = 'show', limit = WINNERS_SHOWN } = {}) {
   const all = await winnersPool(ownerId, connectionId);
   const words = wordsOfQuery(q);
   const sizeBand = SELLER_SIZES[size] || null;
-  let list = all.products.filter((p) => {
+  // What the owner already has of each (a similar title is only marked: it may be another product).
+  const owned = await ownedFor(ownerId);
+  const marked = all.products.map((p) => ({ ...p, mine: personal.ownedOf(p, owned) }));
+  const isMine = (p) => Boolean(p.mine && p.mine.kind !== 'similar');
+  let mineHidden = 0;
+  let list = marked.filter((p) => {
     if (words.length && !words.every((w) => p.name.toLowerCase().includes(w))) return false;
     if (fit && p.delivery.known && p.delivery.share < 40) return false;
     if (priceMin !== null && (!p.price || p.price.median < priceMin)) return false;
@@ -594,6 +644,11 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
     if (sizeBand && !(p.smallestSellerScore !== null && p.smallestSellerScore >= sizeBand[0] && p.smallestSellerScore < sizeBand[1])) return false;
     if (minSales && p.perMonth < minSales) return false;
     if (newOnly && p.momentum !== 'new' && p.momentum !== 'rising') return false;
+    // Last, so "hidden as yours" counts only what the other filters would have shown.
+    if (mine === 'hide' && isMine(p)) {
+      mineHidden += 1;
+      return false;
+    }
     return true;
   });
   const by = {
@@ -604,7 +659,7 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
     price: (a, b) => (b.price?.median ?? 0) - (a.price?.median ?? 0),
   };
   list = [...list].sort(by[sort] || by.score);
-  return { products: list.slice(0, Math.min(WINNERS_MAX, Math.max(1, limit))), matched: list.length, pool: all.pool, market: all.market, account: all.account, at: all.at };
+  return { products: list.slice(0, Math.min(WINNERS_MAX, Math.max(1, limit))), matched: list.length, mineHidden, pool: all.pool, market: all.market, account: all.account, at: all.at };
 }
 
 /**
@@ -920,6 +975,7 @@ async function yourKeywords(ownerId, connectionId, { range = '30d' } = {}) {
 
 module.exports = {
   explore,
+  forgetOwner,
   winners,
   siteKeywords,
   rankChildren,

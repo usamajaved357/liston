@@ -196,4 +196,4 @@ function productsOf(listings, { subject = '', currency = 'GBP', accountKnown = t
     .slice(0, limit);
 }
 
-module.exports = { groupProducts, describe, productsOf, coreWords, NEW_DAYS };
+module.exports = { groupProducts, describe, productsOf, coreWords, NEW_DAYS, money };

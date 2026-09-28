@@ -342,6 +342,8 @@ async function add(auth, connectionId, { checkId, note }) {
     detail: { profit: columns.headlineProfit, roi: columns.headlineRoi, autoApproved: approved, autoRejected: Boolean(mismatch) },
   });
   if (approved && config.hunting.autoDraft) startDraft(auth.ownerId, id, auth.userId);
+  // Discover marks it as the owner's at once. Required here: Discover's module reads this one's tables.
+  require('../discover/discover.service').forgetOwner(auth.ownerId);
   return detail(auth, id);
 }
 

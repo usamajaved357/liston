@@ -19,6 +19,26 @@ const MOMENTUM: Record<DiscoverProduct["momentum"], { label: string; cls: string
   quiet: null,
 };
 
+// What the owner already has of it, and how many other Liston sellers hunt it (never who).
+function Marks({ product }: { product: DiscoverProduct }) {
+  if (!product.mine && !product.crowd) return null;
+  return (
+    <span className="mt-1 flex flex-wrap items-center gap-1.5">
+      {product.mine && (
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${product.mine.kind === "similar" ? "bg-slate-50 text-slate-700 ring-slate-200" : "bg-indigo-50 text-indigo-700 ring-indigo-200"}`} title="Already on your accounts">
+          <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden />
+          Yours · {product.mine.text}
+        </span>
+      )}
+      {product.crowd ? (
+        <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200" title="Other Liston sellers hunted it in the last two weeks; who isn't shown">
+          {product.crowd} other Liston sellers hunting it
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 function Reasons({ reasons }: { reasons: DiscoverProduct["reasons"] }) {
   return (
     <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
@@ -74,6 +94,7 @@ export function DiscoverProducts({
                   {MOMENTUM[p.momentum] && <span className={`rounded px-1.5 font-semibold ${MOMENTUM[p.momentum]!.cls}`}>{MOMENTUM[p.momentum]!.label}</span>}
                   <FlagTag flag={p.flag} />
                 </p>
+                <Marks product={p} />
               </div>
               <ScoreBadge score={p.score} band={p.band} size="sm" />
             </div>
@@ -156,6 +177,7 @@ export function DiscoverProducts({
                           </button>
                         )}
                       </p>
+                      <Marks product={p} />
                       <Reasons reasons={p.reasons} />
                     </div>
                   </div>

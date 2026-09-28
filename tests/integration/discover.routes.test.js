@@ -124,7 +124,7 @@ async function team() {
     const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
     return login.data.token;
   };
-  return { ownerToken: data.token, connectionId: connection.id, hunter: await member('hunter', ['hunting']), lister: await member('lister', ['listings']) };
+  return { ownerId: data.user.id, ownerToken: data.token, connectionId: connection.id, hunter: await member('hunter', ['hunting']), lister: await member('lister', ['listings']) };
 }
 
 test('Discover explores a category: its leading listings, their sold counts read once a day, the figures, keywords and subcategories; hunters only', async () => {
@@ -310,4 +310,78 @@ test("your keywords come from the account's own traffic, for whoever sees its an
   mock.method(taxonomy, 'searchCategories', async () => [{ id: '123', name: 'Night Lights', leaf: true, path: ['Home', 'Lighting', 'Night Lights'] }]);
   const suggested = await request('GET', `${base}/suggest?q=night`, undefined, t.hunter);
   assert.deepStrictEqual(suggested.data.categories, [{ id: '123', name: 'Night Lights', path: ['Home', 'Lighting'], leaf: true }]);
+});
+
+// A hunted product for `ownerId` on `connectionId`, from the competitor listing `itemId`.
+async function huntedFixture(ownerId, connectionId, itemId, status = 'pending') {
+  const huntingRepository = require('../../src/modules/hunting/hunting.repository');
+  return huntingRepository.insert({
+    ownerId,
+    connectionId,
+    hunterId: ownerId,
+    status,
+    competitorUrl: `https://www.ebay.co.uk/itm/${itemId}`,
+    competitorItemId: String(itemId),
+    sourceUrl: 'https://www.aliexpress.com/item/1005001234567890.html',
+    sourceProductId: '1005001234567890',
+    title: 'Discover fixture',
+    imageUrl: null,
+    currency: 'GBP',
+    checkResult: { summary: { verdict: 'strong', headline: {} }, options: [] },
+    headlineProfit: 3,
+    headlineRoi: 60,
+    soldPerMonth: 10,
+  });
+}
+
+async function otherOwner() {
+  const email = `discover-other-${crypto.randomUUID()}@example.com`;
+  const { data } = await request('POST', '/api/auth/signup', { email, password: 'testpassword123' });
+  const connection = await connectionService.createConnection(data.user.id, { platformKey: 'ebay', label: 'Other Store', credentials: { accessToken: 'x' } });
+  return { ownerId: data.user.id, connectionId: connection.id };
+}
+
+test("Discover says what the owner already has, how many other Liston sellers hunt a product (never who), and keeps each eBay site's market to itself", async () => {
+  const t = await team();
+  const base = `/api/connections/${t.connectionId}/discover`;
+  const first = await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter);
+  assert.strictEqual(first.status, 200, JSON.stringify(first.data));
+  // The fixture's listings group into one product: it's both the owner's (hunted) and crowded.
+  const mineProduct = first.data.products[0];
+  const crowdedProduct = mineProduct;
+  assert.ok(mineProduct, 'a product to mark');
+  assert.ok(first.data.products.every((p) => p.mine === null && p.crowd === 0), 'nothing yours or crowded yet');
+
+  // The owner hunted it; two other teams did too (a third team long ago doesn't count).
+  await huntedFixture(t.ownerId, t.connectionId, mineProduct.itemIds[0], 'rejected');
+  const others = [await otherOwner(), await otherOwner(), await otherOwner()];
+  for (const o of others) await huntedFixture(o.ownerId, o.connectionId, crowdedProduct.itemIds[0]);
+  await pool.query(`UPDATE hunted_products SET created_at = now() - interval '40 days' WHERE owner_user_id = $1`, [others[2].ownerId]);
+  discoverService.forgetOwner(t.ownerId);
+
+  const again = (await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter)).data;
+  const byKey = new Map(again.products.map((p) => [p.key, p]));
+  assert.deepStrictEqual(byKey.get(mineProduct.key).mine, { kind: 'rejected', text: 'Rejected before on Discover Store' });
+  const crowded = byKey.get(crowdedProduct.key);
+  assert.strictEqual(crowded.crowd, 2);
+  assert.ok(crowded.reasons.some((r) => r.good === false && /Hunted by 2 other Liston sellers/.test(r.text)));
+  assert.strictEqual(crowded.score, crowdedProduct.score - 4, 'a few points off, never who');
+  assert.ok(!JSON.stringify(crowded).includes(others[0].ownerId));
+
+  // Winners: marked by default, hidden when asked.
+  const shownAll = await request('GET', `${base}/winners?mine=show&limit=300`, undefined, t.hunter);
+  assert.strictEqual(shownAll.data.products.find((p) => p.key === mineProduct.key)?.mine?.kind, 'rejected');
+  const hidden = await request('GET', `${base}/winners?mine=hide&limit=300`, undefined, t.hunter);
+  assert.ok(!hidden.data.products.some((p) => p.key === mineProduct.key));
+  assert.ok(hidden.data.mineHidden >= 1);
+
+  // The same owner's eBay US account sees eBay US's market only: nothing explored on eBay UK.
+  const us = await connectionService.createConnection(t.ownerId, { platformKey: 'ebay', label: 'US Store', credentials: { accessToken: 'x' }, settings: { ebay: { marketplaceId: 'EBAY_US' } } }, { planChecked: true });
+  const usWinners = await request('GET', `/api/connections/${us.id}/discover/winners?limit=300`, undefined, t.ownerToken);
+  assert.strictEqual(usWinners.status, 200, JSON.stringify(usWinners.data));
+  assert.strictEqual(usWinners.data.market.id, 'EBAY_US');
+  assert.ok(!usWinners.data.products.some((p) => p.from.name === 'Test Lighting'));
+  const usKeywords = await request('GET', `/api/connections/${us.id}/discover/keywords?limit=400`, undefined, t.ownerToken);
+  assert.ok(!usKeywords.data.keywords.some((k) => k.from?.name === 'Test Lighting'));
+  assert.strictEqual(usKeywords.data.market.id, 'EBAY_US');
 });

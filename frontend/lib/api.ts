@@ -2006,6 +2006,11 @@ export interface DiscoverProduct {
   seller: { username: string | null; score: number | null; percentage: number | null }; // the leading listing's seller
   smallestSellerScore: number | null; // the smallest seller selling it every month
   from?: { kind: "category" | "keyword"; value: string; name: string; path: string[] };
+  // What the owner already has of it: their live listing is among its listings, a listing Liston made
+  // came from it, it was hunted (and where that got to), or a live listing has a very similar title.
+  mine?: { kind: "selling" | "listed" | "drafted" | "hunted" | "rejected" | "similar"; text: string } | null;
+  // Other Liston sellers who hunted it in the last two weeks (counted from two; never who).
+  crowd?: number;
 }
 // The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
 export interface DiscoverWinnersFilters {
@@ -2020,10 +2025,13 @@ export interface DiscoverWinnersFilters {
   minSales?: number;
   newOnly?: boolean;
   sort?: "score" | "sales" | "rising" | "new" | "price";
+  // Products the owner already has: shown and marked, or left out (a similar title is only ever marked).
+  mine?: "show" | "hide";
 }
 export interface DiscoverWinners {
   products: DiscoverProduct[];
   matched: number;
+  mineHidden?: number;
   pool: { subjects: number; listings: number; read: number };
   market: { id: string; name: string; currency: string };
   account: { min: number; max: number } | null;
@@ -2576,6 +2584,7 @@ export const api = {
     if (f.minSales) q.set("minSales", String(f.minSales));
     if (f.newOnly) q.set("newOnly", "1");
     if (f.sort) q.set("sort", f.sort);
+    if (f.mine) q.set("mine", f.mine);
     if (limit) q.set("limit", String(limit));
     return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
   },

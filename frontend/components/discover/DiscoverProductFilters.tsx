@@ -11,16 +11,17 @@ import { ViewMenu } from "@/components/ViewMenu";
 // `filterProducts` applies it to the products loaded) and in Winners
 // (where the server applies it to the pool). A hunter starts with the
 // filters a dropshipper wants — unbranded, a delivery the account can match,
-// listed in the last three months — and can clear them.
+// listed in the last three months, nothing they already have — and can
+// clear them.
 
 type Sort = NonNullable<DiscoverWinnersFilters["sort"]>;
 type Brand = NonNullable<DiscoverWinnersFilters["brand"]>;
 type Rating = NonNullable<DiscoverWinnersFilters["rating"]>;
 type Size = NonNullable<DiscoverWinnersFilters["size"]>;
 
-// Nothing set; and where a hunter starts: unbranded, a delivery the account can match, listed in the last three months.
-export const EMPTY_FILTERS: DiscoverWinnersFilters = { sort: "score", brand: "any", rating: "any", size: "any", minSales: 0, listedWithin: null, fit: false, newOnly: false };
-export const DEFAULT_FILTERS: DiscoverWinnersFilters = { ...EMPTY_FILTERS, brand: "unbranded", fit: true, listedWithin: 90 };
+// Nothing set; and where a hunter starts: unbranded, a delivery the account can match, listed in the last three months, not already theirs.
+export const EMPTY_FILTERS: DiscoverWinnersFilters = { sort: "score", brand: "any", rating: "any", size: "any", minSales: 0, listedWithin: null, fit: false, newOnly: false, mine: "show" };
+export const DEFAULT_FILTERS: DiscoverWinnersFilters = { ...EMPTY_FILTERS, brand: "unbranded", fit: true, listedWithin: 90, mine: "hide" };
 const LISTED: { key: string; label: string; short: string; days: number | null }[] = [
   { key: "0", label: "Any time", short: "Any time", days: null },
   { key: "30", label: "This month: a listing launched in the last 30 days", short: "Listed this month", days: 30 },
@@ -63,6 +64,8 @@ export function filterProducts(products: DiscoverProduct[], f: DiscoverWinnersFi
     if (size && !(p.smallestSellerScore !== null && p.smallestSellerScore >= size[0] && p.smallestSellerScore < size[1])) return false;
     if (f.minSales && p.perMonth < f.minSales) return false;
     if (f.newOnly && p.momentum !== "new" && p.momentum !== "rising") return false;
+    // Already theirs (a similar title is only marked: it may be another product).
+    if (f.mine === "hide" && p.mine && p.mine.kind !== "similar") return false;
     return true;
   });
   const by: Record<Sort, (a: DiscoverProduct, b: DiscoverProduct) => number> = {
@@ -86,6 +89,7 @@ export function countActive(f: DiscoverWinnersFilters): number {
   if (f.listedWithin) n += 1;
   if (f.minSales) n += 1;
   if (f.newOnly) n += 1;
+  if (f.mine === "hide") n += 1;
   return n;
 }
 
@@ -229,6 +233,23 @@ export function DiscoverProductFilters({ filters, onChange, currency }: { filter
               { key: "small", label: "Under 1,000 reviews: a newcomer can too", short: "A small seller sells it" },
               { key: "medium", label: "1,000 to 10,000 reviews", short: "A mid-size seller sells it" },
               { key: "large", label: "10,000 reviews or more", short: "Only big sellers sell it" },
+            ],
+          },
+        ]}
+      />
+
+      <ViewMenu
+        title="Yours"
+        label="Yours"
+        sections={[
+          {
+            label: "Products you already have",
+            value: filters.mine || "show",
+            hideInSummary: filters.mine !== "hide",
+            onChange: (mine) => set({ mine: mine as "show" | "hide" }),
+            options: [
+              { key: "show", label: "Show them, marked Yours" },
+              { key: "hide", label: "Hide ones you sell, listed, drafted or hunted", short: "Not yours yet" },
             ],
           },
         ]}

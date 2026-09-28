@@ -278,3 +278,36 @@ test('the site keywords: one row per term where it sells most, a searched keywor
   assert.strictEqual(byTerm['motion sensor'].perMonth, 300, "a searched keyword's own market");
   assert.deepStrictEqual([byTerm['solar lights'].subjects, byTerm['solar lights'].from, byTerm['solar lights'].perMonth], [0, null, 120]);
 });
+
+test('personal: what the owner already has, most certain first; a similar live title only when enough words match', () => {
+  const personal = require('../../src/modules/discover/discover-personal');
+  const index = personal.ownedIndex({
+    live: [{ itemId: '111', title: 'Solar Garden Lights Outdoor Waterproof LED Stake 10 Pack', account: 'Walexo' }],
+    hunts: [{ itemId: '222', stage: 'rejected', account: 'Selvora' }, { itemId: '111', stage: 'pending', account: 'Selvora' }],
+    listings: [{ itemId: '333', status: 'pending_review', account: 'Walexo' }],
+  });
+  const product = (itemIds, name = 'Something else entirely') => ({ itemIds, name });
+  assert.deepStrictEqual(personal.ownedOf(product(['111']), index), { kind: 'selling', text: 'You sell it on Walexo' });
+  assert.deepStrictEqual(personal.ownedOf(product(['222']), index), { kind: 'rejected', text: 'Rejected before on Selvora' });
+  assert.deepStrictEqual(personal.ownedOf(product(['333']), index), { kind: 'drafted', text: 'Drafted on Walexo' });
+  assert.deepStrictEqual(personal.ownedOf(product(['999'], 'Outdoor Solar Garden Lights Waterproof LED Stake Pack of 10'), index), { kind: 'similar', text: 'Like your listing on Walexo' });
+  assert.strictEqual(personal.ownedOf(product(['999'], 'Garden hose reel'), index), null);
+});
+
+test("personal: points for the account's categories and usual prices, a few off when other sellers crowd in", () => {
+  const personal = require('../../src/modules/discover/discover-personal');
+  const base = { itemIds: ['1', '2'], name: 'x', categoryId: '42', price: { median: 12 }, score: 60, band: 'fair', parts: { demand: 20 }, reasons: [] };
+  const taste = personal.tasteOf({ categoryIds: ['42'], prices: [8, 9, 10, 12, 14, 15, 30] });
+  const liked = personal.personalise(base, { taste });
+  assert.deepStrictEqual([liked.score, liked.band, liked.parts.forYou], [68, 'strong', 8]);
+  assert.strictEqual(liked.reasons.length, 2);
+  // Too few prices to know the account's range: the category alone.
+  assert.strictEqual(personal.personalise(base, { taste: personal.tasteOf({ categoryIds: ['42'], prices: [10] }) }).score, 65);
+  const huntsByItem = new Map([['1', new Set(['a', 'b'])], ['2', new Set(['b', 'c'])]]);
+  const crowd = personal.crowdOf(base, huntsByItem);
+  assert.strictEqual(crowd, 3);
+  const crowded = personal.personalise(base, { crowd });
+  assert.deepStrictEqual([crowded.score, crowded.crowd, crowded.parts.crowd], [54, 3, -6]);
+  // One other seller isn't a crowd.
+  assert.deepStrictEqual([personal.personalise(base, { crowd: 1 }).score, personal.personalise(base, { crowd: 1 }).crowd], [60, 0]);
+});
