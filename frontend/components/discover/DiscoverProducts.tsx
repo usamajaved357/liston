@@ -118,7 +118,7 @@ export function DiscoverProducts({
               <th className="px-3 py-2 text-center" title="How much of its sales come from sellers delivering like you or slower">
                 You can match
               </th>
-              <th className="w-[92px] px-4 py-2 text-center">
+              <th className="w-[88px] px-3 py-2 text-center">
                 <span className="sr-only">Hunt</span>
               </th>
             </tr>
@@ -200,9 +200,9 @@ export function DiscoverProducts({
                     <span className="text-[11.5px] text-[var(--color-muted)]">Not known</span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-center">
+                <td className="px-3 py-3 text-center">
                   {p.url && (
-                    <button type="button" onClick={() => onHunt(p.url!)} className="btn btn-primary btn-sm !h-8 gap-1.5 !text-[12px]" title="Hunt this product: check it against an AliExpress supplier">
+                    <button type="button" onClick={() => onHunt(p.url!)} className="btn btn-primary btn-sm !h-7 gap-1 !px-2.5 !text-[11.5px]" title="Hunt this product: check it against an AliExpress supplier">
                       <HuntIcon />
                       Hunt
                     </button>

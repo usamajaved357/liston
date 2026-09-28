@@ -1,22 +1,34 @@
 "use client";
 
 import { DiscoverProduct, DiscoverWinnersFilters } from "@/lib/api";
-import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { ViewMenu } from "@/components/ViewMenu";
 
-// The filters a hunter reaches for, in one bar: words, sort, a price
-// range, branded or not, delivery it can match, sales a month, momentum,
-// the top seller's rating and the smallest seller selling it. The same bar
-// on a subject's page (where `filterProducts` applies it to the products
-// loaded) and in Winners (where the server applies it to the pool).
+// The filters a hunter reaches for, as the app's menus (a small menu on a
+// laptop, a sheet from the bottom on a phone; picking closes it), grouped
+// so no menu is long: sort; price and brand; demand (sales a month,
+// momentum, delivery it can match); sellers (the top seller's rating, the
+// smallest seller selling it). The same bar on a subject's page (where
+// `filterProducts` applies it to the products loaded) and in Winners
+// (where the server applies it to the pool).
 
 type Sort = NonNullable<DiscoverWinnersFilters["sort"]>;
 type Brand = NonNullable<DiscoverWinnersFilters["brand"]>;
 type Rating = NonNullable<DiscoverWinnersFilters["rating"]>;
 type Size = NonNullable<DiscoverWinnersFilters["size"]>;
-type Sales = "0" | "10" | "50" | "150";
 
 export const DEFAULT_FILTERS: DiscoverWinnersFilters = { sort: "score", brand: "any", rating: "any", size: "any", minSales: 0 };
 const SIZES: Record<Exclude<Size, "any">, [number, number]> = { small: [0, 1000], medium: [1000, 10000], large: [10000, Infinity] };
+
+// Price bands, as the menu offers them; the filter itself is a range.
+const PRICE_BANDS: { key: string; label: string; short: string; min: number | null; max: number | null }[] = [
+  { key: "any", label: "Any price", short: "Any price", min: null, max: null },
+  { key: "u5", label: "Under 5", short: "Under 5", min: null, max: 5 },
+  { key: "5-10", label: "5 to 10", short: "5–10", min: 5, max: 10 },
+  { key: "10-25", label: "10 to 25", short: "10–25", min: 10, max: 25 },
+  { key: "25-50", label: "25 to 50", short: "25–50", min: 25, max: 50 },
+  { key: "50", label: "50 and over", short: "50+", min: 50, max: null },
+];
+const bandKey = (f: DiscoverWinnersFilters) => PRICE_BANDS.find((b) => (b.min ?? null) === (f.priceMin ?? null) && (b.max ?? null) === (f.priceMax ?? null))?.key || (f.priceMin || f.priceMax ? "custom" : "any");
 
 /** The same rules the server applies in Winners, for products already on the page. */
 export function filterProducts(products: DiscoverProduct[], f: DiscoverWinnersFilters): DiscoverProduct[] {
@@ -54,8 +66,7 @@ export function countActive(f: DiscoverWinnersFilters): number {
   let n = 0;
   if (f.q) n += 1;
   if (f.fit) n += 1;
-  if (f.priceMin !== null && f.priceMin !== undefined) n += 1;
-  if (f.priceMax !== null && f.priceMax !== undefined) n += 1;
+  if ((f.priceMin !== null && f.priceMin !== undefined) || (f.priceMax !== null && f.priceMax !== undefined)) n += 1;
   if (f.brand && f.brand !== "any") n += 1;
   if (f.rating && f.rating !== "any") n += 1;
   if (f.size && f.size !== "any") n += 1;
@@ -64,161 +75,149 @@ export function countActive(f: DiscoverWinnersFilters): number {
   return n;
 }
 
-function Group({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">{label}</span>
-      {children}
-    </div>
-  );
-}
-
-function Amount({ value, onChange, placeholder, label }: { value: number | null | undefined; onChange: (v: number | null) => void; placeholder: string; label: string }) {
-  return (
-    <input
-      type="number"
-      inputMode="decimal"
-      min={0}
-      step="0.5"
-      aria-label={label}
-      value={value === null || value === undefined ? "" : value}
-      onChange={(e) => onChange(e.target.value === "" ? null : Math.max(0, Number(e.target.value)))}
-      placeholder={placeholder}
-      className="h-7 w-[72px] rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-2.5 text-[12px] tabular-nums text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-primary)] focus:outline-none"
-    />
-  );
-}
-
-export function DiscoverProductFilters({ filters, onChange, currency, compact = false }: { filters: DiscoverWinnersFilters; onChange: (next: DiscoverWinnersFilters) => void; currency: string; compact?: boolean }) {
+export function DiscoverProductFilters({ filters, onChange, currency }: { filters: DiscoverWinnersFilters; onChange: (next: DiscoverWinnersFilters) => void; currency: string }) {
   const set = (patch: DiscoverWinnersFilters) => onChange({ ...filters, ...patch });
   const active = countActive(filters);
   const symbol = currency === "GBP" ? "£" : currency === "EUR" ? "€" : "$";
+  const priceKey = bandKey(filters);
   return (
-    <div className="flex flex-col gap-2.5">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <label className="relative min-w-[180px] flex-1 sm:max-w-[260px]">
-          <span className="sr-only">Words in the product</span>
-          <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
-            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
-            <path d="M16 16l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          <input
-            type="search"
-            value={filters.q || ""}
-            onChange={(e) => set({ q: e.target.value })}
-            placeholder="Words in the product"
-            className="h-7 w-full rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-8 pr-3 text-[12px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-primary)] focus:outline-none"
-          />
-        </label>
-        <Group label="Sort">
-          <SegmentedControl<Sort>
-            label="Sort"
-            size="sm"
-            value={filters.sort || "score"}
-            onChange={(sort) => set({ sort })}
-            options={[
+    <div className="flex flex-wrap items-center gap-2">
+      <label className="relative min-w-[170px] flex-1 sm:max-w-[240px]">
+        <span className="sr-only">Words in the product</span>
+        <svg viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--color-muted)]" aria-hidden>
+          <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
+          <path d="M16 16l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+        <input
+          type="search"
+          value={filters.q || ""}
+          onChange={(e) => set({ q: e.target.value })}
+          placeholder="Words in the product"
+          className="h-7 w-full rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] pl-8 pr-3 text-[12px] text-[var(--color-ink)] placeholder:text-[var(--color-muted)] focus:border-[var(--color-primary)] focus:outline-none"
+        />
+      </label>
+
+      <ViewMenu
+        title="Sort"
+        sections={[
+          {
+            label: "Sort by",
+            value: filters.sort || "score",
+            onChange: (sort) => set({ sort: sort as Sort }),
+            options: [
               { key: "score", label: "Best to hunt" },
-              { key: "sales", label: "Most sales" },
-              { key: "rising", label: "Rising" },
-              { key: "new", label: "Newest" },
+              { key: "sales", label: "Most sales a month" },
+              { key: "rising", label: "Rising fastest" },
+              { key: "new", label: "Newest listing" },
               { key: "price", label: "Priciest" },
-            ]}
-          />
-        </Group>
-        {active > 0 && (
-          <button type="button" onClick={() => onChange({ ...DEFAULT_FILTERS, sort: filters.sort })} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
-            Clear {active} filter{active === 1 ? "" : "s"}
-          </button>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <Group label="Price">
-          <Amount value={filters.priceMin} onChange={(priceMin) => set({ priceMin })} placeholder={`${symbol} min`} label="Lowest price" />
-          <span className="text-[11px] text-[var(--color-muted)]">to</span>
-          <Amount value={filters.priceMax} onChange={(priceMax) => set({ priceMax })} placeholder={`${symbol} max`} label="Highest price" />
-        </Group>
-        <Group label="Brand">
-          <SegmentedControl<Brand>
-            label="Brand"
-            size="sm"
-            value={filters.brand || "any"}
-            onChange={(brand) => set({ brand })}
-            options={[
-              { key: "any", label: "Any" },
-              { key: "unbranded", label: "Unbranded", title: "No brand on its listing: what a supplier can provide" },
+            ],
+          },
+        ]}
+      />
+
+      <ViewMenu
+        title="Price and brand"
+        label="Price and brand"
+        sections={[
+          {
+            label: `Price (${symbol}, with postage)`,
+            value: priceKey,
+            hideInSummary: priceKey === "any",
+            onChange: (key) => {
+              const band = PRICE_BANDS.find((b) => b.key === key);
+              set({ priceMin: band?.min ?? null, priceMax: band?.max ?? null });
+            },
+            options: [...PRICE_BANDS.map((b) => ({ key: b.key, label: b.label, short: `${symbol}${b.short.replace("Any price", "").trim()}`.replace(/^£$|^€$|^\$$/, "Any price") })), ...(priceKey === "custom" ? [{ key: "custom", label: "Custom range", short: "Custom" }] : [])],
+          },
+          {
+            label: "Brand",
+            value: filters.brand || "any",
+            hideInSummary: !filters.brand || filters.brand === "any",
+            onChange: (brand) => set({ brand: brand as Brand }),
+            options: [
+              { key: "any", label: "Any brand" },
+              { key: "unbranded", label: "Unbranded: what a supplier can provide" , short: "Unbranded" },
               { key: "branded", label: "Branded" },
-            ]}
-          />
-        </Group>
-        <Group label="Delivery">
-          <SegmentedControl<"any" | "fit">
-            label="Delivery"
-            size="sm"
-            value={filters.fit ? "fit" : "any"}
-            onChange={(v) => set({ fit: v === "fit" })}
-            options={[
-              { key: "any", label: "Any" },
-              { key: "fit", label: "I can match", title: "At least 40% of its sales come from sellers delivering like you or slower" },
-            ]}
-          />
-        </Group>
-        <Group label="Sales">
-          <SegmentedControl<Sales>
-            label="Sales a month"
-            size="sm"
-            value={String(filters.minSales || 0) as Sales}
-            onChange={(v) => set({ minSales: Number(v) })}
-            options={[
-              { key: "0", label: "Any" },
-              { key: "10", label: "10+" },
-              { key: "50", label: "50+" },
-              { key: "150", label: "150+" },
-            ]}
-          />
-        </Group>
-        {!compact && (
-          <Group label="Momentum">
-            <SegmentedControl<"all" | "new">
-              label="Momentum"
-              size="sm"
-              value={filters.newOnly ? "new" : "all"}
-              onChange={(v) => set({ newOnly: v === "new" })}
-              options={[
-                { key: "all", label: "All" },
-                { key: "new", label: "New or rising", title: "A listing launched in the last 90 days already selling, or selling faster lately than over its life" },
-              ]}
-            />
-          </Group>
-        )}
-        <Group label="Top seller's rating">
-          <SegmentedControl<Rating>
-            label="Seller rating"
-            size="sm"
-            value={filters.rating || "any"}
-            onChange={(rating) => set({ rating })}
-            options={[
-              { key: "any", label: "Any" },
-              { key: "top", label: "99%+" },
-              { key: "good", label: "98%+" },
-              { key: "weak", label: "Under 98%", title: "The top seller's feedback is weak: room to beat them on service" },
-            ]}
-          />
-        </Group>
-        <Group label="Smallest seller selling it">
-          <SegmentedControl<Size>
-            label="Seller size"
-            size="sm"
-            value={filters.size || "any"}
-            onChange={(size) => set({ size })}
-            options={[
-              { key: "any", label: "Any" },
-              { key: "small", label: "Under 1k reviews", title: "A small seller sells it every month: a newcomer can too" },
-              { key: "medium", label: "1k–10k" },
-              { key: "large", label: "10k+" },
-            ]}
-          />
-        </Group>
-      </div>
+            ],
+          },
+        ]}
+      />
+
+      <ViewMenu
+        title="Demand and delivery"
+        label="Demand and delivery"
+        sections={[
+          {
+            label: "Sales a month",
+            value: String(filters.minSales || 0),
+            hideInSummary: !filters.minSales,
+            onChange: (v) => set({ minSales: Number(v) }),
+            options: [
+              { key: "0", label: "Any sales" },
+              { key: "10", label: "10 or more a month", short: "10+/mo" },
+              { key: "50", label: "50 or more a month", short: "50+/mo" },
+              { key: "150", label: "150 or more a month", short: "150+/mo" },
+            ],
+          },
+          {
+            label: "Momentum",
+            value: filters.newOnly ? "new" : "all",
+            hideInSummary: !filters.newOnly,
+            onChange: (v) => set({ newOnly: v === "new" }),
+            options: [
+              { key: "all", label: "All products" },
+              { key: "new", label: "New or rising: launched lately and selling, or selling faster lately", short: "New or rising" },
+            ],
+          },
+          {
+            label: "Delivery",
+            value: filters.fit ? "fit" : "any",
+            hideInSummary: !filters.fit,
+            onChange: (v) => set({ fit: v === "fit" }),
+            options: [
+              { key: "any", label: "Any delivery" },
+              { key: "fit", label: "I can match: 40%+ of its sales from sellers delivering like me or slower", short: "I can match" },
+            ],
+          },
+        ]}
+      />
+
+      <ViewMenu
+        title="Sellers"
+        label="Sellers"
+        sections={[
+          {
+            label: "Top seller's feedback",
+            value: filters.rating || "any",
+            hideInSummary: !filters.rating || filters.rating === "any",
+            onChange: (rating) => set({ rating: rating as Rating }),
+            options: [
+              { key: "any", label: "Any rating" },
+              { key: "top", label: "99% or better", short: "Top seller 99%+" },
+              { key: "good", label: "98% or better", short: "Top seller 98%+" },
+              { key: "weak", label: "Under 98%: room to beat them on service", short: "Top seller under 98%" },
+            ],
+          },
+          {
+            label: "Smallest seller selling it monthly",
+            value: filters.size || "any",
+            hideInSummary: !filters.size || filters.size === "any",
+            onChange: (size) => set({ size: size as Size }),
+            options: [
+              { key: "any", label: "Any size" },
+              { key: "small", label: "Under 1,000 reviews: a newcomer can too", short: "A small seller sells it" },
+              { key: "medium", label: "1,000 to 10,000 reviews", short: "A mid-size seller sells it" },
+              { key: "large", label: "10,000 reviews or more", short: "Only big sellers sell it" },
+            ],
+          },
+        ]}
+      />
+
+      {active > 0 && (
+        <button type="button" onClick={() => onChange({ ...DEFAULT_FILTERS, sort: filters.sort })} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
+          Clear {active} filter{active === 1 ? "" : "s"}
+        </button>
+      )}
     </div>
   );
 }

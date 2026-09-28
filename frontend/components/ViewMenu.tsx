@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BottomSheet } from "@/components/BottomSheet";
 import { useIsPhone } from "@/lib/useIsPhone";
 
-// One compact button for how a list is shown ("Last 7 days · Newest"),
+// One compact button for how a list is shown ("Last 7 days · Newest"; its
+// `label` when every section is left off the summary),
 // opening a small menu with a section per choice (period, sort…). Keeps a
 // page's toolbar to one control instead of a dropdown per setting. Picking
 // an option closes the menu, as do a click outside and Escape. On a phone it rises from the bottom of the screen
@@ -21,7 +22,7 @@ export interface ViewMenuSection {
   hideInSummary?: boolean;
 }
 
-export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSection[]; title?: string }) {
+export function ViewMenu({ sections, title = "View", label }: { sections: ViewMenuSection[]; title?: string; label?: string }) {
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const phone = useIsPhone();
@@ -68,7 +69,7 @@ export function ViewMenu({ sections, title = "View" }: { sections: ViewMenuSecti
           <circle cx="16" cy="7" r="2" stroke="currentColor" strokeWidth="1.8" />
           <circle cx="10" cy="17" r="2" stroke="currentColor" strokeWidth="1.8" />
         </svg>
-        {summary}
+        {summary || label || title}
         <svg viewBox="0 0 24 24" fill="none" className={`h-3.5 w-3.5 text-[var(--color-muted)] transition-transform ${open ? "rotate-180" : ""}`} aria-hidden>
           <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>

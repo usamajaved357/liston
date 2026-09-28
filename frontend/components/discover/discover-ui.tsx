@@ -96,28 +96,6 @@ export function StatTile({
   );
 }
 
-/** A section folded away until asked for: a card header with a chevron, then its body. */
-export function Collapsible({ title, note, open, onToggle, children }: { title: string; note?: string; open: boolean; onToggle: () => void; children: React.ReactNode }) {
-  return (
-    <section className={open ? "space-y-4" : ""}>
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="card flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:border-[var(--color-line-strong)]"
-      >
-        <span className="min-w-0 flex-1">
-          <span className="block text-[13px] font-semibold text-[var(--color-ink)]">{title}</span>
-          {note && <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{note}</span>}
-        </span>
-        <span className="text-[12px] font-medium text-[var(--color-primary)]">{open ? "Hide" : "Show"}</span>
-        <Chevron className={`h-4 w-4 flex-shrink-0 text-[var(--color-line-strong)] transition-transform ${open ? "-rotate-90" : "rotate-90"}`} />
-      </button>
-      {open && children}
-    </section>
-  );
-}
-
 export function CardHeader({ title, aside, note }: { title: string; aside?: React.ReactNode; note?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
