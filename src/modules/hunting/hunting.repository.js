@@ -14,6 +14,8 @@ const STAGE_SQL = `CASE WHEN cardinality(h.item_ids) > 0 THEN 'listed' WHEN h.li
 // filtered by hunter).
 const VIEW_SQL = {
   all: 'TRUE',
+  // Hunted from Discover, its supplier not added yet.
+  sourcing: `${STAGE_SQL} = 'sourcing'`,
   review: `${STAGE_SQL} = 'pending'`,
   approved: `${STAGE_SQL} = 'approved'`,
   drafted: `${STAGE_SQL} = 'drafted'`,
@@ -49,8 +51,8 @@ const SELECT = `
 async function insert(fields) {
   const { rows } = await query(
     `INSERT INTO hunted_products (owner_user_id, connection_id, hunter_user_id, status, competitor_url, competitor_item_id, source_url, source_product_id,
-       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at, sales_score, found_by_liston)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at, sales_score, found_by_liston, added_from)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
      RETURNING id`,
     [
       fields.ownerId,
@@ -73,6 +75,7 @@ async function insert(fields) {
       fields.decidedAt || null,
       fields.salesScore ?? null,
       Boolean(fields.foundByListon),
+      fields.addedFrom || null,
     ]
   );
   return rows[0].id;
@@ -153,17 +156,37 @@ async function counts(connectionId, { viewerId = null, ...filters } = {}) {
  * approved (drafted or listed since included) and rejected in those dates,
  * and how many wait for review now.
  */
+// The Overview's hunting figures for [start, end), with what's behind each:
+// products hunted (of them, added as the eBay listing alone from Discover or from Product research, `added_from`), approved (of them, the owner's own, approved as added), rejected
+// (of them, by Liston: the supplier doesn't sell what sells) and sent back;
+// and right now, what needs a supplier, waits for review, is sent back, is approved and still
+// to be drafted, or whose draft failed (hunt-rules.draftStateOf, a draft
+// stuck over 15 minutes counting as failed).
+const EMPTY_OVERVIEW = { hunted: 0, huntedFromDiscover: 0, huntedFromResearch: 0, approved: 0, approvedAsAdded: 0, rejected: 0, rejectedByListon: 0, sentBack: 0, reviewing: 0, sourcingNow: 0, sentBackNow: 0, toDraft: 0, draftFailed: 0 };
 async function countForOverview(connectionId, start, end) {
+  const inDates = (column) => `${column} >= $2 AND ${column} < $3`;
+  const toDraft = `status = 'approved' AND listing_id IS NULL AND cardinality(item_ids) = 0`;
+  // (Never NULL: a product not tried yet has no draft status, and NOT NULL would leave it out.)
+  const failed = `COALESCE(draft_status = 'failed' OR (draft_status = 'drafting' AND draft_attempted_at < now() - interval '15 minutes'), false)`;
   const { rows } = await query(
     `SELECT
-       count(*) FILTER (WHERE created_at >= $2 AND created_at < $3)::int AS hunted,
-       count(*) FILTER (WHERE status = 'approved' AND decided_at >= $2 AND decided_at < $3)::int AS approved,
-       count(*) FILTER (WHERE status = 'rejected' AND decided_at >= $2 AND decided_at < $3)::int AS rejected,
-       count(*) FILTER (WHERE status = 'pending')::int AS reviewing
+       count(*) FILTER (WHERE ${inDates('created_at')})::int AS hunted,
+       count(*) FILTER (WHERE added_from = 'discover' AND ${inDates('created_at')})::int AS "huntedFromDiscover",
+       count(*) FILTER (WHERE added_from = 'research' AND ${inDates('created_at')})::int AS "huntedFromResearch",
+       count(*) FILTER (WHERE status = 'approved' AND ${inDates('decided_at')})::int AS approved,
+       count(*) FILTER (WHERE status = 'approved' AND ${inDates('decided_at')} AND reviewer_user_id = hunter_user_id AND NOT found_by_liston)::int AS "approvedAsAdded",
+       count(*) FILTER (WHERE status = 'rejected' AND ${inDates('decided_at')})::int AS rejected,
+       count(*) FILTER (WHERE status = 'rejected' AND ${inDates('decided_at')} AND reject_reason = 'mismatch' AND reviewer_user_id IS NULL)::int AS "rejectedByListon",
+       count(*) FILTER (WHERE status = 'sent_back' AND ${inDates('decided_at')})::int AS "sentBack",
+       count(*) FILTER (WHERE status = 'pending')::int AS reviewing,
+       count(*) FILTER (WHERE status = 'sourcing')::int AS "sourcingNow",
+       count(*) FILTER (WHERE status = 'sent_back')::int AS "sentBackNow",
+       count(*) FILTER (WHERE ${toDraft} AND NOT ${failed})::int AS "toDraft",
+       count(*) FILTER (WHERE ${toDraft} AND ${failed})::int AS "draftFailed"
      FROM hunted_products WHERE connection_id = $1`,
     [connectionId, start, end]
   );
-  return rows[0] || { hunted: 0, approved: 0, rejected: 0, reviewing: 0 };
+  return rows[0] || { ...EMPTY_OVERVIEW };
 }
 
 /** The badge: products waiting that this person may review, their own sent back, and approved ones ready to draft. */
@@ -172,7 +195,8 @@ async function badgeCounts(connectionId, viewerId) {
     `SELECT
        count(*) FILTER (WHERE ${STAGE_SQL} = 'pending' AND h.hunter_user_id IS DISTINCT FROM $2)::int AS review,
        count(*) FILTER (WHERE ${STAGE_SQL} = 'sent_back' AND h.hunter_user_id = $2)::int AS sent_back,
-       count(*) FILTER (WHERE ${STAGE_SQL} = 'approved')::int AS approved
+       count(*) FILTER (WHERE ${STAGE_SQL} = 'approved')::int AS approved,
+       count(*) FILTER (WHERE ${STAGE_SQL} = 'sourcing' AND h.hunter_user_id = $2)::int AS sourcing
      FROM hunted_products h WHERE h.connection_id = $1`,
     [connectionId, viewerId]
   );
@@ -258,6 +282,56 @@ async function addItemForListing(listingId, itemId) {
      WHERE listing_id = $1`,
     [listingId, String(itemId)]
   );
+}
+
+// ---- a product's other supplier links (its main one is on hunted_products) ------------
+
+async function sourcesOf(huntId) {
+  const { rows } = await query(
+    `SELECT s.*, u.name AS added_by_name, u.email AS added_by_email FROM hunt_sources s LEFT JOIN users u ON u.id = s.added_by WHERE s.hunt_id = $1 ORDER BY s.created_at`,
+    [huntId]
+  );
+  return rows;
+}
+
+async function findSource(huntId, sourceId) {
+  const { rows } = await query(`SELECT * FROM hunt_sources WHERE id = $1 AND hunt_id = $2`, [sourceId, huntId]);
+  return rows[0] || null;
+}
+
+/** Adds a supplier link (or checks it again when it's already there): its id. */
+async function saveSource(huntId, { sourceUrl, sourceProductId, title, imageUrl, checkResult, headlineProfit, headlineRoi }, addedBy) {
+  const { rows } = await query(
+    `INSERT INTO hunt_sources (hunt_id, source_url, source_product_id, title, image_url, check_result, headline_profit, headline_roi, added_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     ON CONFLICT (hunt_id, source_product_id) DO UPDATE SET source_url = EXCLUDED.source_url, title = EXCLUDED.title, image_url = EXCLUDED.image_url,
+       check_result = EXCLUDED.check_result, headline_profit = EXCLUDED.headline_profit, headline_roi = EXCLUDED.headline_roi, checked_at = now()
+     RETURNING id`,
+    [huntId, sourceUrl, sourceProductId, title, imageUrl, JSON.stringify(checkResult), headlineProfit, headlineRoi, addedBy || null]
+  );
+  return rows[0].id;
+}
+
+async function deleteSource(huntId, sourceId) {
+  await query(`DELETE FROM hunt_sources WHERE id = $1 AND hunt_id = $2`, [sourceId, huntId]);
+}
+
+/** A product with a supplier now: in for review (or approved, when a reviewer's own call), from 'sourcing'. */
+async function setStatus(id, status, { reviewerId = null } = {}) {
+  await query(
+    `UPDATE hunted_products SET status = $2, submitted_at = CASE WHEN $2 = 'pending' THEN now() ELSE submitted_at END,
+       reviewer_user_id = CASE WHEN $2 = 'approved' THEN $3 ELSE reviewer_user_id END, decided_at = CASE WHEN $2 = 'approved' THEN now() ELSE decided_at END,
+       updated_at = now()
+     WHERE id = $1`,
+    [id, status, reviewerId]
+  );
+}
+
+/** The newest product hunted on this account from this competitor listing, or null (Discover's Hunt adds a listing once). */
+async function huntOnAccount(connectionId, itemId) {
+  if (!itemId) return null;
+  const { rows } = await query(`${SELECT} WHERE h.connection_id = $1 AND h.competitor_item_id = $2 ORDER BY h.created_at DESC LIMIT 1`, [connectionId, String(itemId)]);
+  return rows[0] || null;
 }
 
 // ---- the same product elsewhere (warnings, never a block) ------------------------------
@@ -421,6 +495,7 @@ module.exports = {
   eventsSince,
   outcomesBetween,
   countForOverview,
+  EMPTY_OVERVIEW,
   personName,
   addReading,
   readings,
@@ -442,6 +517,12 @@ module.exports = {
   linkDraft,
   addItemForListing,
   huntsMatching,
+  huntOnAccount,
+  sourcesOf,
+  findSource,
+  saveSource,
+  deleteSource,
+  setStatus,
   listingsMatching,
   huntedBetween,
   decidedBetween,

@@ -7,12 +7,15 @@
 // products and, while one waits or has been sent back, can change and
 // improve their own, but never remove one: only a reviewer (the owner
 // included) removes a hunted product, at any stage (a hunter removes their
-// own that Liston rejected). A product Liston's supplier search found is
-// never approved as it's added, the owner's included: a person opens it and
-// approves or rejects it, the reviewer who added it too (Liston found it, not
-// they). A rejected product can be edited (by its hunter
-// or a reviewer) and goes back in for review. An approved product drafts itself; drafting it
-// by hand, when that failed, needs Listings access or reviewing.
+// own that Liston rejected). A product hunted from Discover (its eBay
+// listing added alone, `found_by_liston`) waits in 'sourcing' until someone
+// adds a supplier link, then for review: it's never approved as it's added,
+// the owner's included, and the reviewer who added it may decide on it. Its
+// hunter changes their own while it waits; a reviewer changes any product
+// before it's drafted (its eBay link, its supplier links, which is the main
+// one), a rejected one going back in for review. An approved product drafts
+// itself; drafting it by hand, when that failed, needs Listings access or
+// reviewing.
 
 const REJECT_REASONS = [
   { key: 'low_profit', label: 'Low profit' },
@@ -39,7 +42,7 @@ function draftStateOf(hunt, now = Date.now()) {
 // Where a product stands: its review decision until it's drafted, then
 // drafted, then listed (drafted and listed follow the draft and the eBay
 // item, so deleting a draft puts it back to approved).
-const STAGES = ['pending', 'sent_back', 'approved', 'drafted', 'listed', 'rejected'];
+const STAGES = ['sourcing', 'pending', 'sent_back', 'approved', 'drafted', 'listed', 'rejected'];
 function stageOf(hunt) {
   if (Array.isArray(hunt.item_ids) && hunt.item_ids.length) return 'listed';
   if (hunt.listing_id) return 'drafted';
@@ -50,10 +53,13 @@ const isHunter = (hunt, viewer) => Boolean(hunt.hunter_user_id) && hunt.hunter_u
 const beforeDraft = (hunt) => !['drafted', 'listed'].includes(stageOf(hunt));
 
 const rules = {
-  canDecide: (hunt, viewer) => viewer.canReview && beforeDraft(hunt) && (viewer.isOwner || !isHunter(hunt, viewer) || Boolean(hunt.found_by_liston)),
-  // Fixing and resubmitting are the hunter's own while it waits; a reviewer sends it back instead.
-  // A rejected product can be fixed by its hunter or a reviewer, and goes in for review again.
-  canEdit: (hunt, viewer) => (['pending', 'sent_back'].includes(stageOf(hunt)) && isHunter(hunt, viewer)) || (stageOf(hunt) === 'rejected' && (isHunter(hunt, viewer) || Boolean(viewer.canReview))),
+  // Nothing to decide until it has a supplier.
+  canDecide: (hunt, viewer) => viewer.canReview && beforeDraft(hunt) && stageOf(hunt) !== 'sourcing' && (viewer.isOwner || !isHunter(hunt, viewer) || Boolean(hunt.found_by_liston)),
+  // Its eBay link, its supplier links and which is the main one: the hunter's own while it needs a
+  // supplier, waits or has been sent back (or was rejected); a reviewer's at any stage before it's drafted.
+  // A rejected product changed goes back in for review.
+  canEdit: (hunt, viewer) =>
+    (['sourcing', 'pending', 'sent_back', 'rejected'].includes(stageOf(hunt)) && isHunter(hunt, viewer)) || (Boolean(viewer.canReview) && beforeDraft(hunt)),
   // The hunter sends their own back in for review: one sent back, or one rejected (as it is, or after fixing it).
   canResubmit: (hunt, viewer) => ['sent_back', 'rejected'].includes(stageOf(hunt)) && isHunter(hunt, viewer),
   // A reviewer removes any; the hunter removes their own that Liston rejected.

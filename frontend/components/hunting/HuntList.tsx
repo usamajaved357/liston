@@ -14,6 +14,7 @@ import { PillTabs } from "@/components/PillTabs";
 
 export const VIEW_LABELS: Record<HuntView, string> = {
   all: "All",
+  sourcing: "Needs a supplier",
   review: "Waiting for review",
   approved: "Approved",
   drafted: "Drafted",
@@ -32,6 +33,7 @@ export const SORT_LABELS: Record<HuntSort, string> = {
 };
 
 const EMPTY: Record<HuntView, { title: string; text: string }> = {
+  sourcing: { title: "Nothing waiting for a supplier", text: "Products hunted from Discover or Product research wait here until someone opens them and adds the AliExpress product that supplies them." },
   review: { title: "Nothing waiting for review", text: "New finds from the team land here for a decision." },
   approved: { title: "Nothing approved waiting", text: "Approved products draft themselves and move to Drafted. One whose draft failed stays here with the reason; open it to try again." },
   drafted: { title: "Nothing drafted yet", text: "Approved products show here once their draft is made, until they go live." },
@@ -41,11 +43,15 @@ const EMPTY: Record<HuntView, { title: string; text: string }> = {
   mine: { title: "You haven't added a product yet", text: "Products you add show here, whatever happens to them: waiting, sent back, approved, drafted, listed or rejected." },
 };
 
+// Where a product hunted as its listing alone came from.
+const FROM = { discover: "From Discover", research: "From Product research" } as const;
+
 function Status({ hunt }: { hunt: HuntSummary }) {
   let line: string | null = null;
   if (hunt.stage === "rejected") line = hunt.autoRejected ? `by Liston · ${hunt.rejectReasonLabel}` : hunt.rejectReasonLabel;
   else if (hunt.stage === "sent_back") line = hunt.decisionNote;
-  else if (hunt.stage === "pending") line = `${hunt.foundByListon ? "Found by Liston · " : ""}waiting ${ago(hunt.submittedAt).replace(" ago", "")}`;
+  else if (hunt.stage === "pending") line = `${hunt.addedFrom ? `${FROM[hunt.addedFrom]} · ` : ""}waiting ${ago(hunt.submittedAt).replace(" ago", "")}`;
+  else if (hunt.stage === "sourcing") line = `${FROM[hunt.addedFrom ?? "discover"]} · add a supplier`;
   else if (hunt.stage === "listed") line = hunt.sales ? `${money(hunt.sales.sales, hunt.sales.currency || hunt.currency)} · ${count(hunt.sales.units)} sold` : "No sales yet";
   else if (hunt.stage === "drafted") line = [hunt.draftedBy ? `by ${hunt.draftedBy.name}` : null, hunt.draftedAt ? ago(hunt.draftedAt) : null].filter(Boolean).join(" · ") || null;
   else if (hunt.stage === "approved") line = hunt.draftState === "failed" ? "Draft failed · open to try again" : hunt.autoApproved ? "Owner's find" : hunt.reviewer ? `by ${hunt.reviewer.name}` : null;
@@ -102,6 +108,14 @@ function QuickAction({ hunt, onEdit, wide = false }: { hunt: HuntSummary; onEdit
     e.stopPropagation();
     fn();
   };
+  // Hunted as its listing alone (Discover, Product research): its supplier is added on its page.
+  if (p.canEdit && hunt.stage === "sourcing")
+    return (
+      <span className={`${EDIT_BUTTON} ${wide ? "w-full" : "!h-7 !px-3 !text-[12px]"}`}>
+        <EditIcon />
+        Add supplier
+      </span>
+    );
   if (p.canResubmit && hunt.stage === "sent_back")
     return (
       <button type="button" onClick={act(onEdit)} className={`${EDIT_BUTTON} ${wide ? "w-full" : "!h-7 !px-3 !text-[12px]"}`}>

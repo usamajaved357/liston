@@ -1,8 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
-import { api, ApiError, ResearchBudget, ResearchDeliveryFilter, ResearchItem, ResearchResult } from "@/lib/api";
+import { useParams, useRouter } from "next/navigation";
+import { api, ApiError, ResearchBudget, ResearchDeliveryFilter, ResearchItem, ResearchParams, ResearchResult } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
@@ -11,8 +11,10 @@ import { count } from "@/components/research/format";
 import { ResearchFolds, ResearchOverview } from "@/components/research/ResearchPanels";
 import { RESEARCH_SORTS, ResearchListings, ResearchSort, sortResearch } from "@/components/research/ResearchListings";
 import { DeliveryBar } from "@/components/research/DeliveryBar";
+import { RESEARCH_FILTERS, ResearchFilterState, ResearchFilters, filterResearch } from "@/components/research/ResearchFilters";
 import { SoldListings } from "@/components/research/SoldListings";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { HuntListingDialog } from "@/components/hunting/HuntListingDialog";
 
 // Product research on the account's eBay site: whether to list a product,
 // at what price, under what title, and what could get it taken down — from
@@ -24,11 +26,21 @@ import { SegmentedControl } from "@/components/charts/SegmentedControl";
 
 // delivery: which listings to compare with (left out: the server's default,
 // those that deliver like this account).
-type Params = { q: string; condition: string; minPrice: string; maxPrice: string; delivery?: ResearchDeliveryFilter };
+type Params = ResearchParams;
+// The filters eBay applies (the search runs again): a price range on the item price (a little under the
+// minimum, so postage can lift a listing over it; the page checks the price with postage), and Unbranded.
+const serverParams = (f: ResearchFilterState) => ({
+  minPrice: f.priceMin !== null ? String(Math.floor(f.priceMin * 0.85 * 100) / 100) : "",
+  maxPrice: f.priceMax !== null ? String(f.priceMax) : "",
+  brand: f.brand,
+});
 const PAGE = 50;
 
 export default function ResearchPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
+  // Hunt: the eBay listing being added to the hunting list (HuntListingDialog), its supplier added on its page.
+  const [hunting, setHunting] = useState<string | null>(null);
   const { connection, user, loading, error } = useConnection(params.id);
   const [q, setQ] = useState("");
   const [condition, setCondition] = useState("new");
@@ -44,6 +56,14 @@ export default function ResearchPage() {
   // The search on screen, as asked (the form may have changed since).
   const asked = useRef<Params | null>(null);
   const [shown, setShown] = useState(PAGE);
+  // The listings' filters (ResearchFilters): price and brand asked of eBay, the rest on what's read.
+  const [filters, setFilters] = useState<ResearchFilterState>(RESEARCH_FILTERS);
+  function changeFilters(next: ResearchFilterState) {
+    const again = next.priceMin !== filters.priceMin || next.priceMax !== filters.priceMax || next.brand !== filters.brand;
+    setFilters(next);
+    setShown(PAGE);
+    if (again && asked.current) runWith({ ...asked.current, ...serverParams(next) }, { keepView: true });
+  }
 
   useEffect(() => {
     if (!connection) return;
@@ -57,7 +77,8 @@ export default function ResearchPage() {
     try {
       const data = await api.researchAdvice(connection.id, params);
       if (asked.current !== params) return;
-      setResult((r) => (r ? { ...r, advice: data.advice, analysis: data.analysis } : r));
+      // The listings' marks redone with the brands the AI names.
+      setResult((r) => (r ? { ...r, advice: data.advice, analysis: data.analysis, items: data.marks ? r.items.map((i) => ({ ...i, marks: data.marks![i.itemId] ?? i.marks })) : r.items } : r));
     } catch {
       /* the figures stand without it */
     } finally {
@@ -67,7 +88,7 @@ export default function ResearchPage() {
 
   async function run(query: string) {
     if (!connection || query.trim().length < 2) return;
-    return runWith({ q: query.trim(), condition, minPrice: "", maxPrice: "" });
+    return runWith({ q: query.trim(), condition, ...serverParams(filters) });
   }
 
   // The same search, compared with listings that deliver faster, slower,
@@ -145,7 +166,8 @@ export default function ResearchPage() {
 
   const market = connection.marketplace;
   const currency = result?.market.currency ?? market?.currency ?? "GBP";
-  const ordered = result ? sortResearch(result.items, sort) : [];
+  const sorted = result ? sortResearch(result.items, sort) : [];
+  const ordered = filterResearch(sorted, filters, market?.country ?? null);
   const s = result?.summary;
   const maxSold = result ? Math.max(0, ...result.items.map((i) => i.sold ?? 0)) : 0;
 
@@ -262,7 +284,8 @@ export default function ResearchPage() {
           </ResearchOverview>
           <ResearchFolds result={result} checking={checking} />
 
-          <section className="card overflow-hidden">
+          {/* Not clipped: the filter menus open below their buttons, past the card when it's short. */}
+          <section className="card">
             <div className="flex flex-wrap items-center justify-between gap-x-4 border-b border-[var(--color-line)] px-4">
               <div role="tablist" aria-label="Listings" className="flex gap-x-1">
                 {[
@@ -290,6 +313,11 @@ export default function ResearchPage() {
               </div>
               {view === "active" && (
                 <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 py-2">
+                  {ordered.length !== sorted.length && (
+                    <span className="text-[12px] tabular-nums text-[var(--color-muted)]">
+                      {count(ordered.length)} of {count(sorted.length)} match
+                    </span>
+                  )}
                   <SegmentedControl size="sm" label="Sort" value={sort} onChange={setSort} options={RESEARCH_SORTS} />
                   {unread.length > 0 && (
                     <button
@@ -308,16 +336,49 @@ export default function ResearchPage() {
                 </div>
               )}
             </div>
+            {view === "active" && (
+              <div className="border-b border-[var(--color-line)] px-4 py-2.5">
+                <ResearchFilters filters={filters} onChange={changeFilters} currency={currency} countryName={market?.countryName ?? null} disabled={searching} />
+                {filters.brand === "unbranded" && result.brandFilter && (
+                  <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">
+                    {result.brandFilter.byEbay ? "Listings whose Brand says unbranded, in the search's main category" : "eBay couldn't filter this search by Brand"}
+                    {result.brandFilter.dropped ? `; ${count(result.brandFilter.dropped)} naming a brand in the title left out` : ""}.
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="overflow-hidden rounded-b-[var(--radius-card)]">
             {view === "sold" ? (
               <SoldListings sales={result.sales ?? { available: false }} currency={currency} />
             ) : (
               <ResearchListings
                 items={ordered.slice(0, shown)}
                 currency={currency}
-                connectionId={connection.id}
                 maxSold={maxSold}
-                canHunt={!connection.permissions || Boolean(connection.permissions.hunting || connection.permissions.hunting_review)}
+                onHunt={!connection.permissions || connection.permissions.hunting || connection.permissions.hunting_review ? setHunting : undefined}
               />
+            )}
+            {view === "active" && sorted.length === 0 && (
+              <div className="px-4 py-10 text-center text-[13px] text-[var(--color-muted)]">
+                {filters.priceMin !== null || filters.priceMax !== null || filters.brand !== "any" ? (
+                  <>
+                    eBay has no live listings for this search at this price or brand.{" "}
+                    <button type="button" onClick={() => changeFilters(RESEARCH_FILTERS)} className="font-medium text-[var(--color-primary)] hover:underline">
+                      Reset the filters
+                    </button>
+                  </>
+                ) : (
+                  "eBay has no live listings for this search right now."
+                )}
+              </div>
+            )}
+            {view === "active" && ordered.length === 0 && sorted.length > 0 && (
+              <div className="px-4 py-8 text-center text-[13px] text-[var(--color-muted)]">
+                No listing matches these filters.{" "}
+                <button type="button" onClick={() => changeFilters(RESEARCH_FILTERS)} className="font-medium text-[var(--color-primary)] hover:underline">
+                  Reset them
+                </button>
+              </div>
             )}
             {view === "active" && shown < ordered.length && (
               <div className="border-t border-[var(--color-line)] px-4 py-3 text-center">
@@ -326,6 +387,7 @@ export default function ResearchPage() {
                 </button>
               </div>
             )}
+            </div>
           </section>
           <p className="text-[12px] text-[var(--color-muted)]">
             {view === "active"
@@ -335,6 +397,16 @@ export default function ResearchPage() {
                 : ""}
           </p>
         </div>
+      )}
+      {hunting && (
+        <HuntListingDialog
+          key={hunting}
+          connectionId={connection.id}
+          competitorUrl={hunting}
+          from="research"
+          onClose={() => setHunting(null)}
+          onOpenHunt={(id) => router.push(`/accounts/${connection.id}/hunting?open=${encodeURIComponent(id)}`)}
+        />
       )}
     </AccountShell>
   );

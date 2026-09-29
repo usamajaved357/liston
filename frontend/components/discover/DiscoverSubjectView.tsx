@@ -220,7 +220,8 @@ export function DiscoverSubjectView({
   onBack: () => void;
   backLabel: string;
   onHunt: (url: string) => void;
-  onReadMore: () => void;
+  // Load more: the listings read next are the ones that can pass these filters.
+  onReadMore: (filters: DiscoverWinnersFilters) => void;
   readingMore: boolean;
   onRank: () => void;
   onToggleWatch: () => void;
@@ -242,14 +243,14 @@ export function DiscoverSubjectView({
   const [loadedFrom, setLoadedFrom] = useState<{ asked: number; products: number; shown: number } | null>(null);
   const loadMore = () => {
     setLoadedFrom({ asked: data.reads.asked, products: data.products.length, shown: shownProducts.length });
-    onReadMore();
+    onReadMore(filters);
   };
   const loadNote =
     loadedFrom && data.reads.asked > loadedFrom.asked
       ? (() => {
           const found = Math.max(0, data.products.length - loadedFrom.products);
           const passing = Math.max(0, shownProducts.length - loadedFrom.shown);
-          if (!found) return { text: "The next listings added no new products: they're more of the same ones.", hidden: false };
+          if (!found) return { text: "The next listings for these filters added no new products: they're more of the same ones.", hidden: false };
           return {
             text: `${found} new product${found === 1 ? "" : "s"} found${passing ? `, ${passing} matching your filters` : ", none matching your filters"}.`,
             hidden: passing === 0,
@@ -285,7 +286,7 @@ export function DiscoverSubjectView({
   const specific = subject.kind === "keyword" || subject.path.length > 1;
   const hidden = data.compliance.hidden;
   const hiddenText = hidden.count
-    ? `${hidden.count} of the leading listings ${hidden.count === 1 ? "is" : "are"} hidden: ${[hidden.restricted ? `${hidden.restricted} restricted on eBay` : null, hidden.brand ? `${hidden.brand} ${hidden.brands.length ? `branded (${hidden.brands.slice(0, 3).join(", ")})` : "a VeRO brand"}` : null].filter(Boolean).join(", ")}. Nothing here counts them.`
+    ? `${hidden.count} of the leading listings ${hidden.count === 1 ? "is" : "are"} hidden: restricted on eBay. Nothing here counts them.`
     : null;
 
   // Sales by price: each band's share of the sales (solid) against its share of the listings (dashed).
@@ -608,7 +609,9 @@ export function DiscoverSubjectView({
                 ? "Sold counts need this account's eBay sign-in, which didn't work: reconnect the account, or ask the owner to."
                 : data.reads.stopped
                   ? "Today's sold-count reads ran out before every listing was read."
-                  : `From the ${read} leading listings read of ${data.listings.length}${data.reads.more ? "; loading more reads the next ones' sold counts" : ""}.`}
+                  : `From the ${read} leading listings read of ${data.reads.of ?? data.listings.length}${
+                      data.reads.focused ? `, and ${data.reads.focused} more read for your filters` : ""
+                    }${data.reads.more ? "; loading more reads only listings that can pass your filters" : ""}.`}
             </p>
             {data.reads.more && !data.reads.stopped && !data.reads.reading && (
               <button
@@ -617,7 +620,7 @@ export function DiscoverSubjectView({
                 disabled={readingMore}
                 className="btn btn-secondary btn-sm !h-8 !text-[12.5px]"
               >
-                {readingMore ? "Reading the next listings…" : `Load more products (the next ${data.reads.step} listings)`}
+                {readingMore ? "Reading listings for your filters…" : `Load more products for these filters`}
               </button>
             )}
           </div>

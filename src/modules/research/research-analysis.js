@@ -215,19 +215,39 @@ function riskChecks({ query, items, breakdown, refusals = [], advice = null, sal
   const branded = brands.filter((b) => !b.unbranded);
   const brandedShare = counted ? Math.round((branded.reduce((sum, b) => sum + b.count, 0) / counted) * 100) : null;
   const ai = advice?.brandRisk;
-  const brandLevel = ai ? (ai.level === 'high' ? 'bad' : ai.level === 'low' ? 'warn' : 'ok') : brandedShare === null ? 'unknown' : brandedShare >= 60 ? 'warn' : 'ok';
+  // Liston's own VeRO list decides "Don't list"; a brand only the AI calls protected is its guess
+  // (eBay hasn't said so), so it holds the verdict at "List with care" and is said to be a guess.
+  // Required here: discover-compliance requires this module.
+  const { VERO_BRANDS } = require('../discover/discover-compliance');
+  const aiBrands = ai && ai.level !== 'none' ? (ai.brands || []).filter(Boolean) : [];
+  const listed = aiBrands.filter((b) => VERO_BRANDS.includes(String(b).toLowerCase()));
+  const source = !aiBrands.length ? null : listed.length ? 'list' : 'ai';
+  const brandLevel = ai
+    ? ai.level === 'high'
+      ? source === 'ai' ? 'warn' : 'bad'
+      : ai.level === 'low'
+        ? 'warn'
+        : 'ok'
+    : brandedShare === null
+      ? 'unknown'
+      : brandedShare >= 60
+        ? 'warn'
+        : 'ok';
   const topBranded = branded.slice(0, 3).map((b) => b.name);
   checks.push({
     key: 'brand',
     label: 'Brand & VeRO',
     level: brandLevel,
+    source,
     detail: [
+      source === 'list' ? `${listed.join(', ')} ${listed.length === 1 ? 'is' : 'are'} on Liston's list of brands whose owners report listings to eBay (VeRO).` : null,
+      source === 'ai' && ai.level === 'high' ? `A guess by Liston's AI, not eBay's word: ${aiBrands.join(', ')} ${aiBrands.length === 1 ? "isn't" : "aren't"} on Liston's VeRO list, so check before you list.` : null,
       ai?.reason,
       brandedShare !== null ? `${brandedShare}% of listings name a brand${topBranded.length ? ` (${topBranded.join(', ')})` : ''}.` : null,
     ]
       .filter(Boolean)
       .join(' ') || 'Brand not checked yet.',
-    brands: ai?.brands?.length ? ai.brands : topBranded,
+    brands: listed.length ? listed : aiBrands.length ? aiBrands : topBranded,
   });
 
   const safety = advice?.safetyRisk;

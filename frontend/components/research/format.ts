@@ -24,3 +24,6 @@ export function age(days: number | null | undefined) {
   if (days < 365) return `${Math.round(days / 30)} mo`;
   return `${(days / 365).toFixed(1)} yr`;
 }
+
+/** What a buyer pays for a listing: its price with postage. */
+export const landed = (i: { price?: { value: number } | null; shipping?: { cost: number } | null }) => (i.price?.value ?? 0) + (i.shipping?.cost ?? 0);

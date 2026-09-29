@@ -4,6 +4,8 @@ const connectionService = require('../connections/connection.service');
 const marketplaces = require('../ebay/marketplaces');
 const researchStats = require('./research-stats');
 const analysis = require('./research-analysis');
+const marks = require('./research-marks');
+const discoverRepository = require('../discover/discover.repository');
 const advisor = require('../ai-generation/research-advisor.service');
 const listingRepository = require('../listings/listing.repository');
 const ebayService = require('../ebay/ebay.service');
@@ -169,7 +171,9 @@ async function salesOf(ownerId, connectionId, site, { query, condition, minPrice
 // listings that deliver like the account ('similar', the default when the
 // account's postage policy is known), faster, slower, or 'all'; the
 // figures, price and verdict are worked out from what's kept.
-async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, maxPrice, delivery: wanted }) {
+// `brand`: 'unbranded' keeps listings whose Brand says unbranded (asked of eBay in the search's
+// main category, then any title naming a brand dropped), 'any' (the default) keeps every one.
+async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, maxPrice, delivery: wanted, brand = 'any' }) {
   const query = String(q || '').trim();
   if (query.length < 2) throw new ResearchError('Type what you want to research.', 400);
   const { site, pricing, fulfillmentPolicyId } = await accountOf(ownerId, connectionId);
@@ -177,11 +181,32 @@ async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, m
   if (left.remaining <= 0) {
     throw new ResearchError(`Research has used today's ${left.limit} eBay reads. It resets at ${resetText()}.`, 429);
   }
-  const [found, account] = await Promise.all([
-    browseUsage.as('research', () => browseResearch.search({ q: query, marketplaceId: site.id, condition, minPrice: clean(minPrice), maxPrice: clean(maxPrice), country: site.country })),
-    accountDelivery(ownerId, connectionId, site, fulfillmentPolicyId),
-  ]);
-  await spend(found.calls);
+  const asked = { q: query, marketplaceId: site.id, condition, minPrice: clean(minPrice), maxPrice: clean(maxPrice), country: site.country };
+  const [plain, account] = await Promise.all([browseUsage.as('research', () => browseResearch.search(asked)), accountDelivery(ownerId, connectionId, site, fulfillmentPolicyId)]);
+  await spend(plain.calls);
+  let found = plain;
+  let brandFilter = null;
+  if (brand === 'unbranded') {
+    // eBay's Brand filter needs a category: the search's main one. Its breakdown (brands, categories) stays the whole search's.
+    const categoryId = plain.breakdown?.categoryId || null;
+    if (categoryId) {
+      const narrowed = await browseUsage
+        .as('research', () => browseResearch.search({ ...asked, categoryId, aspectFilter: `categoryId:${categoryId},Brand:{${UNBRANDED.join('|')}}` }))
+        .catch((err) => {
+          logger.warn('Research: unbranded search not made', { error: err.message });
+          return null;
+        });
+      if (narrowed) {
+        await spend(narrowed.calls);
+        found = { ...narrowed, breakdown: plain.breakdown };
+      }
+    }
+    // Any title still naming a brand (eBay's Brand field is the seller's word): left out too.
+    const names = marks.brandNamesOf({ breakdown: plain.breakdown, total: plain.total });
+    const before = found.items.length;
+    found = { ...found, items: found.items.filter((item) => !marks.brandIn(item.title, names)) };
+    brandFilter = { byEbay: found !== plain && Boolean(categoryId), categoryId, dropped: before - found.items.length };
+  }
 
   const now = Date.now();
   const placed = found.items.map((item) => {
@@ -190,7 +215,11 @@ async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, m
   });
   const counts = { similar: 0, faster: 0, slower: 0, unknown: 0, all: placed.length };
   for (const item of placed) counts[item.delivery.compared] += 1;
-  const filter = DELIVERY_FILTERS.includes(wanted) ? wanted : account ? 'similar' : 'all';
+  // Left to the default and no listing delivers like the account (a small search, or sellers
+  // eBay gives no delivery dates for): every listing, said so, rather than an empty page.
+  const chosenByHand = DELIVERY_FILTERS.includes(wanted);
+  const fellBack = !chosenByHand && Boolean(account) && counts.similar === 0 && placed.length > 0;
+  const filter = chosenByHand ? wanted : account && !fellBack ? 'similar' : 'all';
   const chosen = filter === 'all' || !account ? placed : placed.filter((item) => item.delivery.compared === filter);
 
   // What sold (and what eBay removed) is read alongside the sold counts.
@@ -208,10 +237,29 @@ async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, m
   const summary = researchStats.summarise(items, { country: site.country, total: found.total });
   const deliveryInfo = {
     filter: account ? filter : 'all',
+    fellBack,
     counts,
     account: account ? { min: account.min, max: account.max, handling: account.handling, service: account.service, serviceName: account.serviceName, policyName: account.policyName } : null,
   };
-  return { query, site, pricing, found, items, summary, sales, soldLimited: top.stopped, delivery: deliveryInfo };
+  return { query, site, pricing, found, items, summary, sales, soldLimited: top.stopped, delivery: deliveryInfo, brandFilter };
+}
+
+// Words sellers put in eBay's Brand field for a product with none.
+const UNBRANDED = ['Unbranded', 'Unbranded/Generic', 'Generic', 'Does not apply'];
+
+/**
+ * Each listing marked with what to know before listing like it (research-marks):
+ * a violation (a restricted item, a VeRO brand), a brand its title names, the
+ * owner's own history, and a listing like it eBay removed in the last 90 days.
+ */
+async function marked(ownerId, { items, found, sales }, advice) {
+  const [refusals, rejected] = await Promise.all([
+    listingRepository.findPolicyRefusals(ownerId).catch(() => []),
+    discoverRepository.ownerBrandRejections(ownerId).catch(() => []),
+  ]);
+  const removed = sales?.available ? sales.items.filter((i) => i.state === 'removed') : [];
+  const names = marks.brandNamesOf({ advice, breakdown: found.breakdown, total: found.total });
+  return marks.markItems(items, { names, refusals, rejected, removed });
 }
 
 // The AI's judgement is about the product (its brand, whether it's
@@ -255,7 +303,8 @@ async function search(ownerId, connectionId, input) {
     summary: found.summary,
     analysis: await analyse(ownerId, found, kept),
     advice: kept,
-    items: found.items,
+    items: await marked(ownerId, found, kept),
+    brandFilter: found.brandFilter,
     // What sold in the last 90 days and what eBay removed (eBay's sales
     // history), or { available: false } until eBay grants the API.
     sales: found.sales,
@@ -282,7 +331,14 @@ async function advice(ownerId, connectionId, input) {
     breakdown: found.found.breakdown,
     keywords: base.keywords.words,
   });
-  return { advice: ai, analysis: ai ? await analyse(ownerId, found, ai) : base, budget: await budget() };
+  // The AI names the brands that take listings down: every listing's marks redone with them.
+  const withMarks = await marked(ownerId, found, ai);
+  return {
+    advice: ai,
+    analysis: ai ? await analyse(ownerId, found, ai) : base,
+    marks: Object.fromEntries(withMarks.map((i) => [i.itemId, i.marks])),
+    budget: await budget(),
+  };
 }
 
 /** Sold counts for more listings from a search (by their ids). */

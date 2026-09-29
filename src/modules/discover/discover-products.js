@@ -18,8 +18,9 @@ const compliance = require('./discover-compliance');
 //   - momentum: rising (selling faster lately than over its life) or new
 //     (a listing launched lately already selling)
 //   - spread: whether one listing takes nearly all of it
-// Anything that would break eBay's rules never gets here (discover-compliance
-// hides it first); a filtered word is noted, since it's only wording.
+// A restricted item never gets here (discover-compliance hides it first); a
+// VeRO brand a title names is carried as `vero` for the page to mark, and a
+// filtered word is noted, since it's only wording.
 
 const NEW_DAYS = 90;
 const UNBRANDED = /^(unbranded|un-branded|does not apply|n\/a|na|none|no brand|no|generic|unbrand|nobrand|not specified|-)$/i;
@@ -177,6 +178,8 @@ function describe(group, { currency = 'GBP', accountKnown = true, now = Date.now
     parts: { demand, proven, fit, room, momentum, spread },
     reasons,
     flag: compliance.flagOf(group.leader.title),
+    // A VeRO brand its titles name (Liston's list first, then the AI's guess): marked, never hidden.
+    vero: group.leader.vero || items.map((x) => x.l.vero).find((v) => v?.source === 'list') || items.map((x) => x.l.vero).find(Boolean) || null,
     brand,
     // null until a reading carries the brand specific (older readings don't).
     branded: brandRead ? Boolean(brand) : null,

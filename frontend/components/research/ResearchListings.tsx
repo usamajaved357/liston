@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import { ResearchItem } from "@/lib/api";
 import { formatShortDate } from "@/lib/format";
-import { age, bigMoney, count, flag, money } from "./format";
+import { age, bigMoney, count, flag, landed, money } from "./format";
+import { MarkBadges } from "./ResearchFilters";
 
 // The listings of a search, one row each: what it sells for, how many it has
 // sold and what that came to, when it went live, and the two things to do
@@ -20,7 +20,6 @@ export const RESEARCH_SORTS: { key: ResearchSort; label: string }[] = [
 ];
 
 export function sortResearch(items: ResearchItem[], sort: ResearchSort) {
-  const landed = (i: ResearchItem) => (i.price?.value ?? 0) + (i.shipping?.cost ?? 0);
   return [...items].sort((a, b) => {
     if (sort === "sold") return (b.sold ?? -1) - (a.sold ?? -1);
     if (sort === "revenue") return (b.revenue ?? -1) - (a.revenue ?? -1);
@@ -30,15 +29,7 @@ export function sortResearch(items: ResearchItem[], sort: ResearchSort) {
   });
 }
 
-function DraftIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
-      <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-// "Hunt": check this listing's profit against a supplier and add it for review.
+// "Hunt": the listing added to the hunting list, its supplier added on its page.
 function HuntGlyph() {
   return (
     <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
@@ -48,8 +39,8 @@ function HuntGlyph() {
   );
 }
 
-export function ResearchListings({ items, currency, connectionId, maxSold, canHunt = false }: { items: ResearchItem[]; currency: string; connectionId: string; maxSold: number; canHunt?: boolean }) {
-  const huntHref = (url: string) => `/accounts/${connectionId}/hunting?competitor=${encodeURIComponent(url)}`;
+// `onHunt`: the listing added to the hunting list on its own, its supplier added on its page (HuntListingDialog).
+export function ResearchListings({ items, currency, maxSold, onHunt }: { items: ResearchItem[]; currency: string; maxSold: number; onHunt?: (url: string) => void }) {
   return (
     <>
     {/* A phone: one card per listing, the same figures under its title. */}
@@ -75,6 +66,11 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
                 )}
                 {item.topRated && <span className="rounded bg-emerald-50 px-1.5 text-[11px] text-emerald-700">Top rated</span>}
               </p>
+              {item.marks && (
+                <p className="mt-1 flex flex-wrap items-center gap-1">
+                  <MarkBadges marks={item.marks} />
+                </p>
+              )}
             </div>
           </div>
           <div className="mt-2 flex items-end gap-3 pl-[4.25rem]">
@@ -90,25 +86,18 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
                 {item.daysLive !== null && item.daysLive !== undefined && ` · ${age(item.daysLive)} live`}
               </p>
             </div>
-            {item.url && canHunt && (
-              <Link
-                href={huntHref(item.url)}
-                onClick={(e) => e.stopPropagation()}
+            {item.url && onHunt && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onHunt(item.url!);
+                }}
                 className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg border border-[var(--color-line)] px-3 text-[13px] font-semibold text-[var(--color-ink)]"
               >
                 <HuntGlyph />
                 Hunt
-              </Link>
-            )}
-            {item.url && (
-              <Link
-                href={`/accounts/${connectionId}/listings/new?competitor=${encodeURIComponent(item.url)}`}
-                onClick={(e) => e.stopPropagation()}
-                className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg bg-[var(--color-primary-soft)] px-3 text-[13px] font-semibold text-[var(--color-primary)]"
-              >
-                <DraftIcon />
-                Draft
-              </Link>
+              </button>
             )}
           </div>
         </li>
@@ -165,6 +154,11 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
                       {item.hasVariations && <span className="rounded bg-[var(--color-paper)] px-1.5 text-[11px] ring-1 ring-inset ring-[var(--color-line)]">Options</span>}
                       {item.topRated && <span className="rounded bg-emerald-50 px-1.5 text-[11px] text-emerald-700">Top rated</span>}
                     </p>
+                    {item.marks && (
+                      <p className="mt-1 flex flex-wrap items-center gap-1">
+                        <MarkBadges marks={item.marks} />
+                      </p>
+                    )}
                   </div>
                 </div>
               </td>
@@ -210,27 +204,19 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
               </td>
               <td className="px-4 py-2.5">
                 <div className="flex items-center justify-end gap-1.5">
-                  {item.url && canHunt && (
-                    <Link
-                      href={huntHref(item.url)}
-                      onClick={(e) => e.stopPropagation()}
-                      title="Check this listing's profit against a supplier and add it for review"
+                  {item.url && onHunt && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onHunt(item.url!);
+                      }}
+                      title="Add this listing to your hunting list, then add its supplier on its page"
                       className="inline-flex h-8 items-center gap-1 rounded-lg border border-[var(--color-line)] px-2.5 text-[12.5px] font-semibold text-[var(--color-ink)] hover:border-[var(--color-line-strong)]"
                     >
                       <HuntGlyph />
                       Hunt
-                    </Link>
-                  )}
-                  {item.url && (
-                    <Link
-                      href={`/accounts/${connectionId}/listings/new?competitor=${encodeURIComponent(item.url)}`}
-                      onClick={(e) => e.stopPropagation()}
-                      title="Start a Liston draft from this listing"
-                      className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--color-primary-soft)] px-2.5 text-[12.5px] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white"
-                    >
-                      <DraftIcon />
-                      Draft
-                    </Link>
+                    </button>
                   )}
                 </div>
               </td>

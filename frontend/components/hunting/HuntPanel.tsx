@@ -7,6 +7,7 @@ import { api, ApiError, HuntDetail, HuntTimelineEvent } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { money, count } from "@/components/research/format";
 import { HuntResult } from "./HuntResult";
+import { HuntSources } from "./HuntSources";
 import { DecisionDialog, Decision } from "./DecisionDialog";
 import { Person, StageChip, Thumb, ago, announceHuntingChange, profitInk, roiText, signedMoney , EDIT_BUTTON, EditIcon } from "./HuntBits";
 
@@ -33,6 +34,16 @@ function Quote({ text }: { text: string }) {
 function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
   const who = (p: HuntDetail["reviewer"]) => (p ? (p.id === you ? "you" : p.name) : "a reviewer");
   switch (hunt.stage) {
+    case "sourcing":
+      return (
+        <Banner tone="indigo">
+          <b className="font-semibold">Needs a supplier</b> · hunted from {hunt.addedFrom === "research" ? "Product research" : "Discover"} {ago(hunt.createdAt)}
+          {hunt.hunter ? ` by ${hunt.hunter.id === you ? "you" : hunt.hunter.name}` : ""}.
+          {hunt.permissions.canEdit
+            ? " Add the AliExpress product that supplies it under Suppliers: Liston works out the profit on every option and it goes in for review."
+            : " Its hunter adds the supplier, then it goes in for review."}
+        </Banner>
+      );
     case "pending":
       return (
         <Banner tone="indigo">
@@ -40,8 +51,8 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
           {hunt.resubmits ? ` · resubmitted ${hunt.resubmits === 1 ? "once" : `${hunt.resubmits} times`}` : ""}.
           {hunt.foundByListon
             ? hunt.permissions.canDecide
-              ? " Liston found its supplier; it's approved only when you approve it here."
-              : " Liston found its supplier; the owner or a reviewer approves or rejects it."
+              ? ` Hunted from ${hunt.addedFrom === "research" ? "Product research" : "Discover"}: it's approved only when you approve it here.`
+              : ` Hunted from ${hunt.addedFrom === "research" ? "Product research" : "Discover"}: the owner or a reviewer approves or rejects it.`
             : hunt.hunter?.id === you && " The owner or a reviewer decides on it."}
         </Banner>
       );
@@ -155,9 +166,19 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
             <span className={`relative z-10 mt-1.5 h-[11px] w-[11px] flex-shrink-0 rounded-full ring-2 ring-[var(--color-panel)] ${EVENT_DOT[e.kind]}`} aria-hidden />
             <div className="min-w-0 text-[12.5px]">
               <p className="text-[var(--color-ink)]">
-                <b className="font-semibold">{EVENT_WORDS[e.kind]}</b>
+                <b className="font-semibold">
+                  {e.kind === "updated" && e.supplier
+                    ? e.supplier === "added"
+                      ? e.main
+                        ? "Supplier added"
+                        : "Another supplier added"
+                      : e.supplier === "main"
+                        ? "Main supplier changed"
+                        : "Supplier link taken off"
+                    : EVENT_WORDS[e.kind]}
+                </b>
                 {e.by ? ` by ${e.by.id === you ? "you" : e.by.name}` : e.system ? " by Liston" : ""}
-                {e.byListon ? " (supplier found by Liston)" : ""}
+                {e.from === "research" ? " from Product research" : e.from === "discover" ? " from Discover" : e.byListon ? " (supplier found by Liston)" : ""}
                 {e.auto ? " (the owner's own find, approved as added)" : ""}
                 {e.reason ? ` · ${e.reason}` : ""}
                 <span className="text-[var(--color-muted)]"> · {new Date(e.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
@@ -184,7 +205,9 @@ function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntD
     onClosed?.();
   };
   const [competitorUrl, setCompetitorUrl] = useState(hunt.competitorUrl || "");
-  const [sourceUrl, setSourceUrl] = useState(hunt.sourceUrl);
+  const [sourceUrl, setSourceUrl] = useState(hunt.sourceUrl || "");
+  // No supplier yet: it's added under Suppliers, not here.
+  const hasSupplier = Boolean(hunt.sourceUrl);
   const [note, setNote] = useState(hunt.hunterNote || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -195,7 +218,7 @@ function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntD
     setError(null);
     try {
       // A cleared competitor is taken away: the product is priced at the target return.
-      const saved = await api.huntUpdate(hunt.id, { competitorUrl: competitorUrl.trim() || null, sourceUrl: sourceUrl.trim(), note });
+      const saved = await api.huntUpdate(hunt.id, { competitorUrl: competitorUrl.trim() || null, sourceUrl: hasSupplier ? sourceUrl.trim() : undefined, note });
       close();
       onSaved(saved);
     } catch (err) {
@@ -223,14 +246,18 @@ function EditLinks({ hunt, onSaved, startOpen = false, onClosed }: { hunt: HuntD
       {rejected && <p className="-mt-1 text-[12px] text-[var(--color-muted)]">Saving checks it again and sends it back for review{hunt.autoRejected ? ", as long as the supplier now sells the variations that sell" : ""}.</p>}
       <label className="block">
         <span className="label">
-          Competitor on eBay <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>
+          Competitor on eBay {hasSupplier && <span className="font-normal normal-case text-[var(--color-muted)]">(optional)</span>}
         </span>
-        <input className="input mt-1.5" type="url" value={competitorUrl} onChange={(e) => setCompetitorUrl(e.target.value)} placeholder="https://www.ebay.co.uk/itm/…" disabled={busy} />
+        <input className="input mt-1.5" type="url" value={competitorUrl} onChange={(e) => setCompetitorUrl(e.target.value)} placeholder="https://www.ebay.co.uk/itm/…" disabled={busy} required={!hasSupplier} />
+        <span className="mt-1 block text-[11.5px] text-[var(--color-muted)]">Changing it checks every supplier again against the new listing.</span>
       </label>
-      <label className="block">
-        <span className="label">Supplier on AliExpress</span>
-        <input className="input mt-1.5" type="url" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} disabled={busy} required />
-      </label>
+      {hasSupplier && (
+        <label className="block">
+          <span className="label">Main supplier on AliExpress</span>
+          <input className="input mt-1.5" type="url" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} disabled={busy} required />
+          <span className="mt-1 block text-[11.5px] text-[var(--color-muted)]">More supplier links are added under Suppliers, where you can make one the main supplier.</span>
+        </label>
+      )}
       <label className="block">
         <span className="label">Your note</span>
         <textarea className="input mt-1.5 min-h-[72px] py-2" value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} disabled={busy} />
@@ -425,6 +452,7 @@ export function HuntPanel({ huntId, you, onClose, onChanged, startEditing = fals
                 {p?.canEdit && <EditLinks key={hunt.checkedAt} hunt={hunt} onSaved={update} startOpen={editFirst} onClosed={() => setEditFirst(false)} />}
                 {moved && <span className="text-[12px] font-medium text-[var(--color-ink)]">{moved}</span>}
               </div>
+              <HuntSources hunt={hunt} onChanged={update} />
               <HuntResult result={hunt.result} />
               <Timeline events={hunt.timeline} you={you} />
             </>

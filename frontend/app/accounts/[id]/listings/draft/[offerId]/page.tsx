@@ -1806,6 +1806,8 @@ export default function DraftEditorPage() {
   const [uploading, setUploading] = useState(false);
 
   const [saving, setSaving] = useState(false);
+  // Leaving with unsaved changes: asked first.
+  const [confirmLeave, setConfirmLeave] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [regeneratingSku, setRegeneratingSku] = useState(false);
   const [fixingWords, setFixingWords] = useState(false);
@@ -1837,6 +1839,7 @@ export default function DraftEditorPage() {
   // An ended listing opened from Inactive: publishing puts it back on eBay
   // (a relist, new item number), and it can go back up unchanged.
   const isRelist = isLiveEdit && Boolean(listing?.source_data?.ended);
+  const backHref = `/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`;
 
   // The category schema in force, for resetFrom to merge unfilled rows in.
   // A ref, kept in step wherever categoryInfo is set, so a save (which also
@@ -2177,6 +2180,8 @@ export default function DraftEditorPage() {
     setSplitting(index);
     setError(null);
     try {
+      // The new listing is made from the saved draft: unsaved changes go up first.
+      if (dirty && !(await handleSave())) return;
       const { listing: created } = await api.splitDraftVariant(listing.id, index);
       const c = created.generated_data as DraftContent;
       setSplitDone((list) => [...list, { id: created.id, title: isVariationDraft(c) ? c.commonTitle : c.title }]);
@@ -2187,15 +2192,16 @@ export default function DraftEditorPage() {
     }
   }
 
-  // Edits save themselves. Text is saved a moment after typing stops; row
-  // and option changes go with it. On success only the RELATIVE edits
-  // (removals, renames, per-row overrides — all indexed against the draft
-  // as it was) are cleared, since the server has applied them; anything
-  // typed while the request was in flight stays and goes in the next save.
+  // Edits are saved when the seller clicks Save (Publish, a category change
+  // and the other server steps save pending edits first themselves). On
+  // success only the RELATIVE edits (removals, renames, per-row overrides —
+  // all indexed against the draft as it was) are cleared, since the server
+  // has applied them; anything typed while the request was in flight stays
+  // unsaved until the next Save.
   async function handleSave() {
     if (!listing) return false;
     const patch = buildPatch();
-    const signature = JSON.stringify(patch);
+    if (!Object.keys(patch).length) return true;
     setSaving(true);
     setError(null);
     try {
@@ -2212,10 +2218,8 @@ export default function DraftEditorPage() {
       setQuantityOverrides({});
       setImageOverrides({});
       previewOutdated(data.listing.id);
-      failedSaveRef.current = null;
       return true;
     } catch (err) {
-      failedSaveRef.current = signature;
       setError(err instanceof ApiError ? err.message : "Couldn't save your changes. Try again.");
       return false;
     } finally {
@@ -2223,34 +2227,33 @@ export default function DraftEditorPage() {
     }
   }
 
-  // What would be saved right now — the trigger for the autosave below.
-  const patchSignature = editable && !isLiveEdit && dirty ? JSON.stringify(buildPatch()) : "";
-  const failedSaveRef = useRef<string | null>(null);
-  const handleSaveRef = useRef(handleSave);
-  handleSaveRef.current = handleSave;
-  // Other server round-trips (a category refit, a split, a publish) save the
-  // pending edits themselves and then reset from the result; an autosave
-  // landing in the middle of one would race it.
-  const otherRequestBusy = publishing || deleting || refitting || applyingFix || splitting !== null || regeneratingSku || fixingWords;
+  // Unsaved edits on a draft (a live listing's edits go up with Publish): Save is offered, leaving warns.
+  const unsaved = editable && !isLiveEdit && dirty;
+  const saveBlocked = title.length > TITLE_MAX;
+  // Save with the keyboard (Ctrl/Cmd+S), as in any editor.
+  const saveRef = useRef(handleSave);
+  saveRef.current = handleSave;
   useEffect(() => {
-    if (!patchSignature || saving || otherRequestBusy) return;
-    // A save eBay's rules rejected (a clashing option name, say) is not
-    // retried until the seller changes something.
-    if (failedSaveRef.current === patchSignature) return;
-    if (title.length > TITLE_MAX) return;
-    const timer = window.setTimeout(() => void handleSaveRef.current(), 900);
-    return () => window.clearTimeout(timer);
-  }, [patchSignature, saving, otherRequestBusy, title.length]);
+    if (!editable || isLiveEdit) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (unsaved && !saving && !saveBlocked) void saveRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editable, isLiveEdit, unsaved, saving, saveBlocked]);
 
-  // Leaving with a save still pending would lose it.
+  // Leaving with unsaved edits (or a save still going) would lose them.
   useEffect(() => {
-    if (!patchSignature && !saving) return;
+    if (!unsaved && !saving) return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [patchSignature, saving]);
+  }, [unsaved, saving]);
 
   // Rewords the filter's words on the server (AI, then fixed replacements)
   // and reloads the draft; anything typed but not yet saved goes up first so
@@ -2724,7 +2727,13 @@ export default function DraftEditorPage() {
   return (
     <main className="flex h-[100dvh] flex-col bg-[var(--color-paper)]">
       <EditorHeader
-        backHref={`/accounts/${params.id}/listings${isRelist ? "?filter=inactive" : isLiveEdit ? "" : "?filter=draft"}`}
+        backHref={backHref}
+        onBack={(e) => {
+          // Unsaved changes: asked first, not lost on the way out.
+          if (!unsaved) return;
+          e.preventDefault();
+          setConfirmLeave(true);
+        }}
         backLabel={isLiveEdit ? "Back to listings" : "Back to drafts"}
         title={isRelist ? "Relist listing" : isLiveEdit ? "Edit live listing" : editable ? "Edit listing" : "Listing"}
         chips={
@@ -2752,8 +2761,20 @@ export default function DraftEditorPage() {
               {isRelist ? "Ended" : "Live"} · #{listing.edit_of_item_id}
             </span>
           ) : editable ? (
-            <span className="chip text-xs font-medium text-[var(--color-muted)]" aria-live="polite">
-              {saving ? "Saving…" : title.length > TITLE_MAX ? "Shorten the title to save" : dirty ? "Saving soon…" : "All changes saved"}
+            <span className="flex items-center gap-2.5">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-muted)] max-sm:hidden" aria-live="polite">
+                {unsaved && !saving && <span className="h-2 w-2 rounded-full bg-amber-500" aria-hidden />}
+                {saving ? "Saving…" : unsaved && saveBlocked ? "Shorten the title to save" : unsaved ? "Unsaved changes" : "All changes saved"}
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleSave()}
+                disabled={!unsaved || busy || saveBlocked}
+                title={saveBlocked ? "Shorten the title to save" : "Save your changes (Ctrl+S)"}
+                className="btn btn-primary btn-sm min-w-[72px]"
+              >
+                {saving ? "Saving…" : unsaved ? "Save" : "Saved"}
+              </button>
             </span>
           ) : null
         }
@@ -3379,7 +3400,7 @@ export default function DraftEditorPage() {
             <div className="flex items-center gap-3">
               {(!isLiveEdit || isRelist) && !mayPublish && (
                 <span className="max-w-[340px] text-right text-xs leading-snug text-[var(--color-muted)] max-sm:hidden">
-                  Saved as you go. Someone with Publish listings access puts it on eBay.
+                  Save your changes with Save at the top. Someone with Publish listings access puts it on eBay.
                 </span>
               )}
               {isRelist ? (
@@ -3464,6 +3485,18 @@ export default function DraftEditorPage() {
           }}
         />
       )}
+      <ConfirmDialog
+        open={confirmLeave}
+        title="Leave without saving?"
+        description="Your changes to this draft haven't been saved. Save them first, or leave and lose them."
+        confirmLabel="Leave without saving"
+        danger
+        onCancel={() => setConfirmLeave(false)}
+        onConfirm={() => {
+          setConfirmLeave(false);
+          router.push(backHref);
+        }}
+      />
       <ConfirmDialog
         open={confirmPublish}
         title={isRelist ? "Relist this on eBay?" : isLiveEdit ? "Publish these changes?" : "Publish this listing?"}

@@ -30,3 +30,18 @@ test('in winter London is on UTC, and just after midnight it is already the new 
     mock.timers.reset();
   }
 });
+
+// The cards count what the chart under them draws: 7 days is today and the six whole days before
+// it, from midnight there, not the last 168 hours (which counted listings the chart left out).
+test('7, 30 and 90 days are whole days in the seller’s time zone, today included', () => {
+  mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-29T18:00:00Z') });
+  try {
+    const [start, end] = resolveRangeWindow('7d', undefined, undefined, 'Europe/London');
+    assert.deepStrictEqual([start.toISOString(), end.toISOString()], ['2026-09-22T23:00:00.000Z', '2026-09-29T18:00:00.000Z'], '23 Sept 00:00 BST to now');
+    assert.strictEqual(resolveRangeWindow('30d', undefined, undefined, 'Europe/London')[0].toISOString(), '2026-08-30T23:00:00.000Z');
+    assert.strictEqual(resolveRangeWindow('90d', undefined, undefined, 'Europe/London')[0].toISOString(), '2026-07-01T23:00:00.000Z');
+    assert.strictEqual(resolveRangeWindow('7d')[0].toISOString(), '2026-09-22T18:00:00.000Z', 'no time zone: the last 168 hours as before');
+  } finally {
+    mock.timers.reset();
+  }
+});

@@ -16,12 +16,15 @@ const sourceUrl = z
   .url("That isn't a link. Paste the supplier's AliExpress product link.")
   .refine((u) => /aliexpress\./i.test(u) && /\/item\/(?:[^/?#]*?)\d{6,}/.test(u), "That doesn't look like an AliExpress product link (it should have /item/ and the product number).");
 const note = z.string().max(1000, 'Keep the note under 1,000 characters.');
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // The competitor is optional, as in drafting.
 const checkSchema = z.object({ competitorUrl: z.preprocess(blankToUndefined, competitorUrl.optional()), sourceUrl: z.preprocess(blankToUndefined, sourceUrl) });
-// Discover's Hunt: Liston finds the supplier itself.
-// `add: false`: found and returned as a check, for the hunter to add from the form.
-const autoSourceSchema = z.object({ competitorUrl, add: z.boolean().optional().default(true) });
+// Discover's Hunt: the eBay listing added on its own, its supplier added on its page.
+// `from`: the tool it was hunted from, Discover (new products by category) or Product research (one product's market).
+const huntListingSchema = z.object({ competitorUrl, from: z.enum(['discover', 'research']).default('discover') });
+// A supplier link added to a product.
+const sourceSchema = z.object({ sourceUrl });
 const addSchema = z.object({ checkId: z.string().uuid('Check the product first.'), note: note.optional() });
 // A blank or null competitor takes it away; leaving it out keeps it.
 const blankToNull = (v) => (v === null || (typeof v === 'string' && v.trim() === '') ? null : typeof v === 'string' ? v.trim() : v);
@@ -55,11 +58,23 @@ const handle = (fn) => async (req, res, next) => {
 };
 
 module.exports = {
-  autoSource: handle(async (req, res) => {
-    const input = parse(autoSourceSchema, req.body, res);
+  huntListing: handle(async (req, res) => {
+    const input = parse(huntListingSchema, req.body, res);
     if (!input) return;
-    const out = await huntingService.autoSource(auth(req), req.params.id, input);
-    res.status(out.found && out.hunt ? 201 : 200).json(out);
+    const out = await huntingService.huntListing(auth(req), req.params.id, input);
+    res.status(out.added ? 201 : 200).json(out);
+  }),
+  addSource: handle(async (req, res) => {
+    const input = parse(sourceSchema, req.body, res);
+    if (input) res.status(201).json(await huntingService.addSource(auth(req), req.params.huntId, input));
+  }),
+  makeMainSource: handle(async (req, res) => {
+    if (!UUID.test(req.params.sourceId)) return res.status(404).json({ error: 'That supplier link is no longer on this product.' });
+    res.json(await huntingService.makeMainSource(auth(req), req.params.huntId, req.params.sourceId));
+  }),
+  removeSource: handle(async (req, res) => {
+    if (!UUID.test(req.params.sourceId)) return res.status(404).json({ error: 'That supplier link is no longer on this product.' });
+    res.json(await huntingService.removeSource(auth(req), req.params.huntId, req.params.sourceId));
   }),
   check: handle(async (req, res) => {
     const input = parse(checkSchema, req.body, res);

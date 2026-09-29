@@ -97,11 +97,28 @@ export interface ListingWork {
   waiting: number;
   drafted: number;
   published: number;
-  // Product hunting in the same dates, and how many wait for review now.
+  // Of the drafted and published in the dates, the ones made from a hunted product.
+  draftedFromHunts?: number;
+  publishedFromHunts?: number;
+  // Product hunting in the same dates, with what's behind each: found by
+  // Discover (its eBay listing added first, its supplier added after), the owner's own approved as
+  // added, rejected by Liston (the supplier doesn't sell what sells), sent
+  // back to the hunter.
   hunted?: number;
+  // Of them, added as the eBay listing alone from Discover, or from Product research.
+  huntedFromDiscover?: number;
+  huntedFromResearch?: number;
   approved?: number;
+  approvedAsAdded?: number;
   rejected?: number;
+  rejectedByListon?: number;
+  sentBack?: number;
+  // Right now: needing a supplier (hunted from Discover), waiting for review, sent back, approved and still to be drafted, draft failed.
   reviewing?: number;
+  sourcingNow?: number;
+  sentBackNow?: number;
+  toDraft?: number;
+  draftFailed?: number;
 }
 
 export interface OverviewAccount {
@@ -123,9 +140,12 @@ export interface OverviewAccount {
 // The Listings tab's chart: the listing pipeline per day, with the stretch before.
 export type ListingTrendKey = "hunted" | "approved" | "rejected" | "drafted" | "published";
 export interface ListingTrendPoint {
+  // A day, or for Today an hour ("2026-09-29T14").
   day: string;
   previousDay: string | null;
   partial: boolean;
+  // An hour of today not reached yet.
+  future?: boolean;
   values: Record<ListingTrendKey, number>;
   previous: Record<ListingTrendKey, number> | null;
 }
@@ -143,6 +163,8 @@ export interface RecentListing {
   url: string | null;
   account: string;
   marketplaceId: string;
+  // The account's eBay site's time zone, for its time.
+  timeZone?: string | null;
 }
 
 // One account's Overview: its money and listing work for a range, in its
@@ -186,7 +208,22 @@ export interface ResearchItem {
   // eBay's delivery window for a buyer on the site, in working days from
   // now, next to the account's own delivery ('unknown': eBay gave no dates).
   delivery: { min: number | null; max: number | null; compared: ResearchDeliveryGroup };
+  // What to know before listing like it, or null when clear.
+  marks: ResearchMarks | null;
 }
+
+// A listing's marks (research-marks): a violation (a restricted item, or a VeRO brand named as the
+// product), a brand its title names, a word eBay's hazardous filter blocks, the owner's own history
+// (eBay refused a draft like it, the team rejected one), and a listing like it eBay removed lately.
+export interface ResearchMarks {
+  // source (a brand): "list", on Liston's own list of brands known to report listings to eBay; "ai", only the AI's reading names it.
+  violation: { kind: "restricted" | "brand"; label: string; prohibited?: boolean; source?: "list" | "ai" } | null;
+  brand: string | null;
+  hazmat: string | null;
+  risk: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string } | null;
+  removedLike: { title: string } | null;
+}
+export type ResearchBrandFilter = "any" | "unbranded";
 
 export type ResearchDeliveryGroup = "similar" | "faster" | "slower" | "unknown";
 export type ResearchDeliveryFilter = "similar" | "faster" | "slower" | "all";
@@ -194,6 +231,8 @@ export type ResearchDeliveryFilter = "similar" | "faster" | "slower" | "all";
 export interface ResearchDelivery {
   // Which listings the figures are worked out from.
   filter: ResearchDeliveryFilter;
+  // The default ("Like you") left nothing, so every listing is used instead.
+  fellBack?: boolean;
   counts: Record<ResearchDeliveryGroup | "all", number>;
   // The account's delivery from its postage policy, in working days; null
   // when the policy couldn't be read (then every listing is compared).
@@ -226,6 +265,8 @@ export interface ResearchRisk {
   // history: the refused drafts; brand: the brands at issue.
   items?: { title: string; account: string; at: string; reason: string; kind: "ip" | "words" | "policy" }[];
   brands?: string[];
+  // brand: "list", a brand on Liston's VeRO list; "ai", only the AI's guess (never "Don't list" on its own).
+  source?: "list" | "ai" | null;
 }
 
 export interface ResearchPrice {
@@ -330,6 +371,8 @@ export interface ResearchResult {
   delivery: ResearchDelivery;
   soldLimited: boolean;
   budget: ResearchBudget;
+  // Unbranded asked: whether eBay's own Brand filter narrowed it (in the main category), and how many titles naming a brand were left out.
+  brandFilter?: { byEbay: boolean; categoryId: string | null; dropped: number } | null;
 }
 
 // Sales by day under the business Overview's cards: what buyers paid each
@@ -340,11 +383,14 @@ export interface ResearchResult {
 // account's own charges on the day billed), orders and units as counts.
 export type SalesTrendKey = "sales" | "orders" | "units" | "fees" | "earnings" | "profit";
 export interface OverviewTrendPoint {
+  // A day, or for Today an hour ("2026-09-29T14").
   day: string;
   values: Record<SalesTrendKey, number>;
   previous: Record<SalesTrendKey, number> | null;
   previousDay: string | null;
   partial: boolean;
+  // An hour of today not reached yet.
+  future?: boolean;
 }
 
 // A listing that sold most in the dates: units, orders and item sales
@@ -1642,9 +1688,10 @@ export type EarningsRange = "today" | "7d" | "30d" | "90d" | "this_month" | "las
 
 // ---- Product hunting (backend modules/hunting) ----------------------------------
 
-export type HuntStage = "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
+// "sourcing": hunted from Discover, waiting for a supplier link.
+export type HuntStage = "sourcing" | "pending" | "sent_back" | "approved" | "drafted" | "listed" | "rejected";
 // The list's tabs; mine is "My hunts" (the person's own finds, whatever their stage).
-export type HuntView = "all" | "review" | "approved" | "drafted" | "listed" | "rejected" | "mine";
+export type HuntView = "all" | "sourcing" | "review" | "approved" | "drafted" | "listed" | "rejected" | "mine";
 export type HuntSort = "newest" | "waiting" | "profit" | "roi" | "demand" | "sales";
 // The hunted products' filters: profit a sale at least (1, 2, 3, 5, 10), sold a month at least (5, 10, 30, 100),
 // added in the last 7, 30 or 90 days, and only products not already hunted, drafted or live elsewhere.
@@ -1655,7 +1702,8 @@ export interface HuntFilters {
   unique?: boolean;
 }
 // unpriced: checked without a competitor, so priced at the target return with no market to judge by.
-export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown";
+// "no_supplier": hunted from Discover, its supplier not added yet.
+export type HuntVerdict = "strong" | "thin" | "loss" | "unpriced" | "unknown" | "no_supplier";
 // target: no competitor, so the price a draft would list it at.
 export type HuntMatchQuality = "exact" | "close" | "lowest" | "single" | "target";
 export type HuntLevel = "ok" | "warn" | "bad" | "unknown";
@@ -1744,7 +1792,8 @@ export interface HuntCheckResult {
       deliveryDays: number | null;
     } | null;
     days: { min: number | null; max: number } | null;
-  };
+    // Null while a product hunted from Discover waits for a supplier link.
+  } | null;
   // counted: postage per sale in the figures (0 with a free-shipping offer); cost: what AliExpress quoted.
   shipping:
     | { basis: "aliexpress"; counted: number; cost: number; freeOver: number | null; company: string | null; minDays: number | null; maxDays: number | null; tracking: boolean; forOption?: string | null }
@@ -1846,8 +1895,10 @@ export interface HuntSummary {
   hunter: HuntPerson | null;
   reviewer: HuntPerson | null;
   autoApproved: boolean;
-  // Found by Liston's supplier search: never approved as it's added, a person approves or rejects it.
+  // Added as its eBay listing alone (or found by Liston's old supplier search): never approved as it's added, a person approves or rejects it.
   foundByListon: boolean;
+  // Which tool it was hunted from as its listing alone; null when a hunter added it with its supplier.
+  addedFrom: "discover" | "research" | null;
   createdAt: string;
   submittedAt: string;
   decidedAt: string | null;
@@ -1867,7 +1918,8 @@ export interface HuntSummary {
   // Live listings with a very similar title (the same product from another supplier, say).
   similar?: number;
   competitorUrl: string | null;
-  sourceUrl: string;
+  // Null while it waits for a supplier link (hunted from Discover).
+  sourceUrl: string | null;
   listingId: string | null;
   itemIds: string[];
   draftedBy: HuntPerson | null;
@@ -1897,42 +1949,56 @@ export interface HuntTimelineEvent {
   reason?: string | null;
   note?: string | null;
   auto?: boolean;
-  // Added from Liston's own supplier search (Discover's Hunt, Find with Liston).
+  // Added from Liston's old supplier search (products added that way).
   byListon?: boolean;
+  // Hunted as the eBay listing alone, its supplier after: from Discover or Product research.
+  from?: "discover" | "research" | null;
+  // A change to its supplier links (an "updated" event): added (main: its first), made main, taken off.
+  supplier?: "added" | "main" | "removed" | null;
+  main?: boolean;
   // Rejected by Liston itself (the supplier doesn't match), not a member.
   system?: boolean;
   itemId?: string | null;
 }
 
-// Discover's Hunt: the AliExpress products Liston looked at for a listing, and what it made of each.
-export interface HuntSourceTry {
+// Discover's Hunt: the eBay listing added on its own (waiting for a supplier link), or the one already on the list.
+export interface HuntAlreadyHunted {
+  id: string;
+  stage: HuntStage;
   title: string;
+  hunter: { id: string; name: string } | null;
+  createdAt: string;
+}
+export type HuntFromListing = { added: true; hunt: HuntDetail } | { added: false; alreadyHunted: HuntAlreadyHunted };
+
+// A supplier link on a product: the main one (its figures are the product's, and the draft's) or another kept beside it.
+export interface HuntSource {
+  id: string | null;
+  main: boolean;
   url: string;
+  productId: string | null;
+  title: string | null;
   imageUrl: string | null;
-  via: "image" | "text";
   rating: number | null;
+  orders: string | null;
+  onSale: boolean;
   profit: number | null;
   roi: number | null;
-  ok: boolean;
-  // Matches and earns, but under the account's target return.
-  belowTarget?: boolean;
-  why: string | null;
+  basis: string | null;
+  verdict: string;
+  options: number | null;
+  inStock: number | null;
+  postage: { basis: string; cost: number | null; freeOver: number | null; maxDays: number | null } | null;
+  // It doesn't sell what the eBay listing sells.
+  mismatch: string | null;
+  checkedAt: string;
+  addedBy: { id: string; name: string } | null;
 }
-// A supplier that matches but earns under the target return: kept as a check, never added by itself.
-export type HuntBelowTarget = { found: true; belowTarget: true; targetRoi: number; checkId: string; result: HuntCheckResult; autoApproves: boolean; sourceUrl: string; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null; addNote: string };
-// `note`: said when part of the search couldn't run (photo search unavailable just now, say).
-export type HuntAutoSource =
-  | { found: true; belowTarget?: false; hunt: HuntDetail; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null }
-  | HuntBelowTarget
-  | { found: false; reason: string; tried: HuntSourceTry[]; note?: string | null };
-// The add form's "Find with Liston": the supplier found, kept as a check for the hunter to add.
-export type HuntFoundSupplier =
-  | { found: true; belowTarget?: false; checkId: string; result: HuntCheckResult; autoApproves: boolean; sourceUrl: string; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null }
-  | HuntBelowTarget
-  | { found: false; reason: string; tried: HuntSourceTry[]; note?: string | null };
 
 export interface HuntDetail extends HuntSummary {
   connectionLabel: string;
+  // Every supplier link, the main one first (none while it waits for one).
+  sources: HuntSource[];
   result: HuntCheckResult;
   timeline: HuntTimelineEvent[];
   viewer: HuntViewer;
@@ -2045,8 +2111,9 @@ export interface DiscoverProduct {
   mine?: { kind: "selling" | "listed" | "drafted" | "hunted" | "rejected" | "similar"; text: string } | null;
   // Other Liston sellers who hunted it in the last two weeks (counted from two; never who).
   crowd?: number;
-  // Its takedown risk for this owner: a VeRO brand specific, eBay's refusals of their drafts, their team's brand-risk rejections.
-  risk?: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string } | null;
+  // Its takedown risk for this owner: a VeRO brand (source "list": Liston's list; "ai": only the AI's guess, never eBay's word),
+  // eBay's refusals of their drafts, their team's brand-risk rejections.
+  risk?: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string; source?: "list" | "ai"; brand?: string } | null;
 }
 // The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
 export interface DiscoverWinnersFilters {
@@ -2218,8 +2285,10 @@ export interface DiscoverCompliance {
   };
   brands: { branded: number | null; top: { name: string; count: number; share: number | null }[] };
   ai: { brand: DiscoverRisk | null; safety: DiscoverRisk | null; summary: string | null } | null;
-  // The leading listings hidden because they'd break eBay's rules: a restricted item, or a VeRO brand as the product.
-  hidden: { count: number; restricted: number; brand: number; brands: string[] };
+  // The leading listings hidden: a restricted item eBay doesn't allow.
+  hidden: { count: number; restricted: number };
+  // The leading listings naming a VeRO brand (Liston's list, or the AI's guess): kept and marked, not hidden.
+  vero?: { count: number; brands: string[] };
 }
 export interface DiscoverPrice {
   recommended: number;
@@ -2250,7 +2319,8 @@ export interface DiscoverExplore {
   categories: { id: string; name: string; count: number }[];
   children: DiscoverChild[];
   // `reading`: sold counts still being read in the background (the page asks again); `progress`: how far.
-  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number; reading?: boolean; progress?: { done: number; of: number } };
+  // `of`: the leading listings read from eBay; `focused`: listings read beyond them for the filters (Load more).
+  reads: { asked: number; read: number; of?: number; focused?: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number; reading?: boolean; progress?: { done: number; of: number } };
   watch: { id: string } | null;
   ranking: { total: number; done: number } | null;
   market: { id: string; name: string; currency: string; country?: string; flag?: string };
@@ -2264,6 +2334,8 @@ export interface DiscoverCategoryCard {
   leaf?: boolean;
   listings?: number;
   scanned: { score: number; band: DiscoverOpportunity["band"]; total: number } | null;
+  // An own category: its live listings once searched, before its sold counts are read.
+  live?: number | null;
 }
 // A category explored on the site (any depth), with what its leading listings sell: the Categories tab's best sellers.
 export interface DiscoverBestCategory {
@@ -2287,6 +2359,8 @@ export interface DiscoverStart {
   bestCategories?: DiscoverBestCategory[];
   account: DiscoverAccount | null;
   yourCategories: DiscoverCategoryCard[];
+  // The account's own categories being scored in the background: the page asks again until done.
+  yourScoring?: { total: number; done: number } | null;
   topCategories: DiscoverCategoryCard[];
   watches: number;
   // The best products across everything explored on the site, for the start screen.
@@ -2357,6 +2431,8 @@ export interface HuntBadge {
   review: number;
   sentBack: number;
   approved: number;
+  // Their own hunted from Discover, waiting for a supplier link.
+  sourcing?: number;
   access: boolean;
 }
 
@@ -2375,6 +2451,37 @@ export interface HuntDraftStart {
     // What the ticked options are: the ones that sold on the competitor's listing and earn, or every one that earns.
     selectionBasis: "selling" | "earning" | null;
   };
+}
+
+// A research search as asked: the product, its condition, a price range (at eBay, the item price),
+// which delivery to compare with, and Unbranded (eBay's Brand filter in the search's main category).
+export type ResearchParams = { q: string; condition?: string; minPrice?: string; maxPrice?: string; delivery?: ResearchDeliveryFilter; brand?: ResearchBrandFilter };
+function researchQuery(params: ResearchParams): URLSearchParams {
+  const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
+  if (params.minPrice) query.set("minPrice", params.minPrice);
+  if (params.maxPrice) query.set("maxPrice", params.maxPrice);
+  if (params.delivery) query.set("delivery", params.delivery);
+  if (params.brand && params.brand !== "any") query.set("brand", params.brand);
+  return query;
+}
+
+// The Products tab's filters as query values (the Winners list, and Find more with the same).
+function winnersQuery(f: DiscoverWinnersFilters): URLSearchParams {
+  const q = new URLSearchParams();
+  if (f.q) q.set("q", f.q);
+  if (f.fit) q.set("fit", "1");
+  if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
+  if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
+  if (f.brand && f.brand !== "any") q.set("brand", f.brand);
+  if (f.rating && f.rating !== "any") q.set("rating", f.rating);
+  if (f.size && f.size !== "any") q.set("size", f.size);
+  if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
+  if (f.minSales) q.set("minSales", String(f.minSales));
+  if (f.newOnly) q.set("newOnly", "1");
+  if (f.sort) q.set("sort", f.sort);
+  if (f.mine) q.set("mine", f.mine);
+  if (f.safety) q.set("safety", f.safety);
+  return q;
 }
 
 export const api = {
@@ -2575,22 +2682,14 @@ export const api = {
   checkListingHealth: (id: string, itemId: string, competitor: boolean) =>
     request<HealthCheck>(`/api/connections/${id}/analytics/listings/${encodeURIComponent(itemId)}/check`, { method: "POST", body: JSON.stringify({ competitor }) }),
 
-  researchSearch: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string; delivery?: ResearchDeliveryFilter }) => {
-    const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
-    if (params.minPrice) query.set("minPrice", params.minPrice);
-    if (params.maxPrice) query.set("maxPrice", params.maxPrice);
-    if (params.delivery) query.set("delivery", params.delivery);
-    return request<ResearchResult>(`/api/connections/${id}/research?${query.toString()}`);
-  },
+  researchSearch: (id: string, params: ResearchParams) => request<ResearchResult>(`/api/connections/${id}/research?${researchQuery(params).toString()}`),
   // The AI's reading of a search (title, keywords, brand and safety risk) and
   // the analysis redone with it; reuses the search's kept eBay reads.
-  researchAdvice: (id: string, params: { q: string; condition?: string; minPrice?: string; maxPrice?: string; delivery?: ResearchDeliveryFilter }) => {
-    const query = new URLSearchParams({ q: params.q, condition: params.condition || "any" });
-    if (params.minPrice) query.set("minPrice", params.minPrice);
-    if (params.maxPrice) query.set("maxPrice", params.maxPrice);
-    if (params.delivery) query.set("delivery", params.delivery);
-    return request<{ advice: ResearchAdvice | null; analysis: ResearchAnalysis; budget: ResearchBudget }>(`/api/connections/${id}/research/advice?${query.toString()}`);
-  },
+  // `marks`: every listing's marks redone with the brands the AI names, by item id.
+  researchAdvice: (id: string, params: ResearchParams) =>
+    request<{ advice: ResearchAdvice | null; analysis: ResearchAnalysis; marks?: Record<string, ResearchMarks | null>; budget: ResearchBudget }>(
+      `/api/connections/${id}/research/advice?${researchQuery(params).toString()}`
+    ),
   // Sold counts for more listings of a search (up to 20 at a time).
   researchSold: (id: string, items: Pick<ResearchItem, "itemId" | "legacyItemId" | "hasVariations" | "createdAt">[]) =>
     request<{ items: { itemId: string; sold: number | null; soldPerMonth: number | null }[]; soldLimited: boolean; budget: ResearchBudget }>(
@@ -2603,10 +2702,14 @@ export const api = {
   huntCheck: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
   // Discover's Hunt: Liston finds an AliExpress supplier for the listing and adds it, or says why not.
-  huntAutoSource: (connectionId: string, competitorUrl: string) =>
-    request<HuntAutoSource>(`/api/connections/${connectionId}/hunting/auto-source`, { method: "POST", body: JSON.stringify({ competitorUrl }) }),
-  huntFindSupplier: (connectionId: string, competitorUrl: string) =>
-    request<HuntFoundSupplier>(`/api/connections/${connectionId}/hunting/auto-source`, { method: "POST", body: JSON.stringify({ competitorUrl, add: false }) }),
+  // Discover's Hunt: the eBay listing added on its own, its supplier added on its page.
+  // `from`: the tool it's hunted from, Discover or Product research (recorded on the product).
+  huntFromListing: (connectionId: string, competitorUrl: string, from: "discover" | "research") =>
+    request<HuntFromListing>(`/api/connections/${connectionId}/hunting/from-listing`, { method: "POST", body: JSON.stringify({ competitorUrl, from }) }),
+  // A product's supplier links: add one (the first becomes its main supplier), make one main, take one off.
+  huntAddSource: (huntId: string, sourceUrl: string) => request<HuntDetail>(`/api/hunting/${huntId}/sources`, { method: "POST", body: JSON.stringify({ sourceUrl }) }),
+  huntMakeMainSource: (huntId: string, sourceId: string) => request<HuntDetail>(`/api/hunting/${huntId}/sources/${sourceId}/main`, { method: "POST" }),
+  huntRemoveSource: (huntId: string, sourceId: string) => request<HuntDetail>(`/api/hunting/${huntId}/sources/${sourceId}`, { method: "DELETE" }),
   huntAdd: (connectionId: string, input: { checkId: string; note?: string }) =>
     request<HuntDetail>(`/api/connections/${connectionId}/hunting`, { method: "POST", body: JSON.stringify(input) }),
   huntList: (connectionId: string, params: { view?: HuntView; hunter?: string; q?: string; sort?: HuntSort; page?: number } & HuntFilters = {}) => {
@@ -2623,34 +2726,38 @@ export const api = {
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },
   discoverStart: (connectionId: string) => request<DiscoverStart>(`/api/connections/${connectionId}/discover`),
-  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number) => {
+  // `focus`: the page's filters when loading more: only listings that can pass them are read.
+  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number, focus?: DiscoverWinnersFilters | null) => {
     const q = new URLSearchParams();
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
     if (reads) q.set("reads", String(reads));
+    if (focus) {
+      if (focus.q) q.set("fq", focus.q);
+      if (focus.fit) q.set("fit", "1");
+      if (focus.priceMin !== null && focus.priceMin !== undefined) q.set("priceMin", String(focus.priceMin));
+      if (focus.priceMax !== null && focus.priceMax !== undefined) q.set("priceMax", String(focus.priceMax));
+      if (focus.brand && focus.brand !== "any") q.set("brand", focus.brand);
+      if (focus.rating && focus.rating !== "any") q.set("rating", focus.rating);
+      if (focus.size && focus.size !== "any") q.set("size", focus.size);
+      if (focus.listedWithin) q.set("listedWithin", String(focus.listedWithin));
+    }
     return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
   },
   discoverReview: (connectionId: string, subject: DiscoverSubjectRef) => {
     const q = new URLSearchParams();
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
-    return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
+    return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number; marked?: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
   },
+  // "Find more products for these filters": more listings that can pass them read in the explored subjects most likely to have them.
+  discoverWinnersMore: (connectionId: string, f: DiscoverWinnersFilters = {}) =>
+    request<{ read: number; subjects: string[]; more: boolean; signInFailed?: boolean; stopped?: boolean }>(`/api/connections/${connectionId}/discover/winners/more`, {
+      method: "POST",
+      body: JSON.stringify(Object.fromEntries(winnersQuery(f).entries())),
+    }),
   discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}, limit?: number) => {
-    const q = new URLSearchParams();
-    if (f.q) q.set("q", f.q);
-    if (f.fit) q.set("fit", "1");
-    if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
-    if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
-    if (f.brand && f.brand !== "any") q.set("brand", f.brand);
-    if (f.rating && f.rating !== "any") q.set("rating", f.rating);
-    if (f.size && f.size !== "any") q.set("size", f.size);
-    if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
-    if (f.minSales) q.set("minSales", String(f.minSales));
-    if (f.newOnly) q.set("newOnly", "1");
-    if (f.sort) q.set("sort", f.sort);
-    if (f.mine) q.set("mine", f.mine);
-    if (f.safety) q.set("safety", f.safety);
+    const q = winnersQuery(f);
     if (limit) q.set("limit", String(limit));
     return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
   },

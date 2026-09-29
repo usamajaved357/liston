@@ -251,9 +251,15 @@ test('risk checks: your own refused drafts for the product, eBay\'s word filter,
   const ai = Object.fromEntries(withAi.map((r) => [r.key, r]));
   assert.strictEqual(ai.history.level, 'ok');
   assert.strictEqual(ai.words.level, 'warn');
-  assert.strictEqual(ai.brand.level, 'bad');
+  // Anker isn't on Liston's VeRO list: the AI's guess holds it at care, said to be a guess, never "Don't list".
+  assert.deepStrictEqual([ai.brand.level, ai.brand.source], ['warn', 'ai']);
   assert.deepStrictEqual(ai.brand.brands, ['Anker']);
+  assert.match(ai.brand.detail, /A guess by Liston's AI, not eBay's word/);
   assert.strictEqual(ai.safety.level, 'warn');
+  const listed = Object.fromEntries(
+    analysis.riskChecks({ query: 'running socks', items: [], breakdown: null, refusals: [], advice: { brandRisk: { level: 'high', brands: ['Nike'], reason: 'Nike enforces VeRO.' }, safetyRisk: { level: 'none', reason: '' } } }).map((r) => [r.key, r])
+  );
+  assert.deepStrictEqual([listed.brand.level, listed.brand.source, listed.brand.brands], ['bad', 'list', ['Nike']], "a brand on Liston's list is Don't list");
 });
 
 const market = (extra = {}) => ({
@@ -434,6 +440,35 @@ test("research compares with listings that deliver like the account by default, 
   const faster = await researchService.search('owner', 'conn', { q: 'lamp', delivery: 'faster' });
   assert.deepStrictEqual(faster.items.map((i) => i.title), ['Fast']);
   assert.strictEqual(searchCall.mock.calls.length, 1, 'switching group re-reads nothing from eBay');
+  assert.strictEqual(like.delivery.fellBack, false);
+});
+
+test("when no listing delivers like the account, research's default uses every listing and says so; chosen by hand it stays empty", async () => {
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' }, settings: { ebay: { fulfillmentPolicyId: 'p1' } } }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => []);
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, owner, action) => action({ accessToken: 't' }));
+  mock.method(ebayService, 'postagePolicyDetails', async () => ({ policy: { handlingTime: { value: 1 }, shippingOptions: [{ optionType: 'DOMESTIC', shippingServices: [{ shippingServiceCode: 'UK_OtherCourier5To7Days' }] }] }, services: [] }));
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString();
+  mock.method(ebayBrowse, 'searchItemSummaries', async () => ({
+    total: 2,
+    itemSummaries: [
+      { itemId: 'v1|7|0', title: 'Walking Dead season three box set', price: { value: '9.99', currency: 'GBP' }, shippingOptions: [{ shippingCost: { value: '0' }, minEstimatedDeliveryDate: day(1), maxEstimatedDeliveryDate: day(2) }] },
+      { itemId: 'v1|8|0', title: 'Season three sealed box set', price: { value: '12.99', currency: 'GBP' } },
+    ],
+  }));
+  mock.method(ebayBrowse, 'getItem', async () => ({ estimatedAvailabilities: [{ estimatedSoldQuantity: 2 }] }));
+
+  const found = await researchService.search('owner', 'conn', { q: 'walking dead season 3' });
+  assert.strictEqual(found.delivery.fellBack, true);
+  assert.strictEqual(found.delivery.filter, 'all');
+  assert.strictEqual(found.items.length, 2, 'nothing hidden behind an empty default');
+  assert.strictEqual(found.delivery.counts.similar, 0);
+
+  const asked = await researchService.search('owner', 'conn', { q: 'walking dead season 3', delivery: 'similar' });
+  assert.strictEqual(asked.delivery.fellBack, false);
+  assert.strictEqual(asked.items.length, 0);
 });
 
 test("eBay's sales history shows what sold in 90 days; a sold listing that isn't live is read once, and eBay deleting it marks it removed", async () => {
@@ -512,4 +547,59 @@ test('the price range leaves out listings priced far from the rest: a £117 bund
   assert.strictEqual(s.price.median, 9.99, 'the middle still counts every listing');
   assert.ok(s.bands.every((b) => b.from < 20), 'no band stretched out to £117');
   assert.deepStrictEqual(researchStats.typicalPrices([1, 50, 100]), [1, 50, 100], 'too few to judge: all kept');
+});
+
+test("Unbranded asks eBay for listings whose Brand says so, in the search's main category, and drops titles naming a brand; every listing is marked: a VeRO brand or restricted item, eBay refusing one like it, eBay removing one like it", async () => {
+  const discoverRepository = require('../../src/modules/discover/discover.repository');
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' } }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, owner, action) => action({ accessToken: 't' }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => [{ title: 'Cotton ankle socks black', message: 'This listing may be in violation of the VeRO intellectual property policy', account: 'Shop', at: '2026-09-01' }]);
+  mock.method(discoverRepository, 'ownerBrandRejections', async () => []);
+  const breakdown = { brands: [{ name: 'Nike', count: 60, unbranded: false }, { name: 'Unbranded', count: 40, unbranded: true }], categories: [{ id: '11511', name: 'Socks', count: 90 }], categoryId: '11511' };
+  const item = (id, title) => browseResearch.mapSummary({ itemId: `v1|${id}|0`, legacyItemId: id, title, price: { value: '6.99', currency: 'GBP' } });
+  const calls = mock.method(browseResearch, 'search', async (input) =>
+    input.aspectFilter
+      ? { total: 4, items: [item('1', 'Nike crew socks 3 pairs'), item('2', 'Cotton ankle socks black 5 pairs'), item('3', 'Plain merino wool hiking socks for men 3 pairs'), item('4', 'Chanel logo socks')], breakdown: null, calls: 1 }
+      : { total: 200, items: [item('9', 'Nike crew socks'), item('4', 'Chanel logo socks')], breakdown, calls: 1 }
+  );
+  mock.method(browseResearch, 'soldCount', async () => ({ sold: 2, calls: 1 }));
+  mock.method(salesHistory, 'soldListings', async () => ({
+    available: true,
+    total: 1,
+    items: [{ itemId: 'v1|77|0', legacyItemId: '77', title: 'Plain merino wool hiking socks for men 3 pairs', image: null, url: null, price: 5, shipping: 0, currency: 'GBP', sold: 9, lastSoldAt: '2026-09-20T10:00:00Z', seller: 'x', country: 'GB' }],
+  }));
+  mock.method(ebayService, 'listingStates', async () => ({ states: { 77: 'removed' } }));
+
+  const result = await researchService.search('owner', 'conn', { q: 'socks', brand: 'unbranded', delivery: 'all' });
+  const narrowed = calls.mock.calls.find((c) => c.arguments[0].aspectFilter).arguments[0];
+  assert.deepStrictEqual([narrowed.categoryId, narrowed.aspectFilter], ['11511', 'categoryId:11511,Brand:{Unbranded|Unbranded/Generic|Generic|Does not apply}']);
+  // Titles naming a brand ("Nike", on 60% of the search; Chanel, a VeRO brand) are left out, the rest kept.
+  assert.deepStrictEqual(result.items.map((i) => i.legacyItemId), ['2', '3']);
+  assert.deepStrictEqual([result.brandFilter.byEbay, result.brandFilter.dropped], [true, 2]);
+  const marksOf = Object.fromEntries(result.items.map((i) => [i.legacyItemId, i.marks]));
+  assert.strictEqual(marksOf['2'].risk.kind, 'refused', "eBay refused the owner's draft for one like it (intellectual property)");
+  assert.strictEqual(marksOf['2'].risk.level, 'bad');
+  assert.deepStrictEqual(marksOf['3'].removedLike, { title: 'Plain merino wool hiking socks for men 3 pairs' }, 'eBay removed one like it in the last 90 days');
+
+  // Any brand: the plain search, every listing kept and marked: a VeRO brand as the product.
+  const any = await researchService.search('owner', 'conn', { q: 'socks', delivery: 'all' });
+  assert.deepStrictEqual([any.items.map((i) => i.legacyItemId), any.brandFilter], [['9', '4'], null]);
+  const anyMarks = Object.fromEntries(any.items.map((i) => [i.legacyItemId, i.marks]));
+  assert.deepStrictEqual(anyMarks['4'].violation, { kind: 'brand', label: 'chanel', source: 'list' });
+  assert.deepStrictEqual([anyMarks['9'].violation, anyMarks['9'].brand], [{ kind: 'brand', label: 'nike', source: 'list' }, 'Nike'], "Nike is on Liston's VeRO list too");
+});
+
+test("a brand only the AI calls protected is marked as its guess, and when it rates the risk low it's a brand to check, never a VeRO violation", () => {
+  const marks = require('../../src/modules/research/research-marks');
+  const title = 'Women Blake Print LooseSports Hoodie Hooded Sweatshirt Pullover';
+  const high = marks.brandNamesOf({ advice: { brandRisk: { level: 'high', brands: ['LooseSports'] } } });
+  assert.deepStrictEqual(marks.marksOf({ title }, { names: high }).violation, { kind: 'brand', label: 'LooseSports', source: 'ai' });
+  const low = marks.brandNamesOf({ advice: { brandRisk: { level: 'low', brands: ['LooseSports'] } } });
+  const lowMarks = marks.marksOf({ title }, { names: low });
+  assert.strictEqual(lowMarks.violation, null);
+  assert.strictEqual(lowMarks.brand, 'LooseSports');
+  const listed = marks.marksOf({ title: 'Nike hoodie pullover for women' }, { names: low });
+  assert.deepStrictEqual(listed.violation, { kind: 'brand', label: 'nike', source: 'list' }, "Liston's own VeRO list counts whatever the AI says");
 });

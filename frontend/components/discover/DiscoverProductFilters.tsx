@@ -30,7 +30,7 @@ export const DEFAULT_FILTERS: DiscoverWinnersFilters = {
   listedWithin: null,
   newOnly: false,
   mine: "hide",
-  safety: "safe",
+  safety: "all",
   rating: "any",
   size: "any",
 };
@@ -74,8 +74,8 @@ export function filterProducts(products: DiscoverProduct[], f: DiscoverWinnersFi
     if (size && !(p.smallestSellerScore !== null && p.smallestSellerScore >= size[0] && p.smallestSellerScore < size[1])) return false;
     if (f.minSales && p.perMonth < f.minSales) return false;
     if (f.newOnly && p.momentum !== "new" && p.momentum !== "rising") return false;
-    // At risk of a takedown: a VeRO brand specific, or eBay refused (or the team rejected) one like it.
-    if ((f.safety ?? "safe") === "safe" && p.risk) return false;
+    // At risk of a takedown (a VeRO brand, or eBay refused or the team rejected one like it): shown marked unless hidden.
+    if (f.safety === "safe" && p.risk) return false;
     // Already theirs (a similar title is only marked: it may be another product).
     if (f.mine === "hide" && p.mine && p.mine.kind !== "similar") return false;
     return true;
@@ -103,7 +103,7 @@ export function changedFromDefault(f: DiscoverWinnersFilters): boolean {
     !same(f.listedWithin || null, d.listedWithin) ||
     Boolean(f.newOnly) !== Boolean(d.newOnly) ||
     (f.mine || "show") !== d.mine ||
-    (f.safety || "safe") !== d.safety ||
+    (f.safety || "all") !== d.safety ||
     (f.rating || "any") !== "any" ||
     (f.size || "any") !== "any"
   );
@@ -204,13 +204,13 @@ export function DiscoverProductFilters({
           },
           {
             label: "VeRO and your eBay history",
-            value: filters.safety || "safe",
-            // Safe is where everyone starts: the button only says so once risky ones are shown.
-            hideInSummary: (filters.safety || "safe") === "safe",
+            value: filters.safety || "all",
+            // Shown, marked, is where everyone starts (a VeRO brand is Liston's guess): the button only says so once they're hidden.
+            hideInSummary: (filters.safety || "all") === "all",
             onChange: (safety) => set({ safety: safety as "safe" | "all" }),
             options: [
-              { key: "safe", label: "Safe only: no VeRO brand, nothing eBay refused you for", short: "VeRO safe" },
-              { key: "all", label: "Show risky ones too, marked", short: "Risky shown" },
+              { key: "all", label: "Show them, marked: VeRO brand, Possible VeRO, eBay refused one like it", short: "VeRO shown" },
+              { key: "safe", label: "Hide them", short: "VeRO hidden" },
             ],
           },
         ]}

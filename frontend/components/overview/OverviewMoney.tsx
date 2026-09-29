@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode } from "react";
+import Link from "next/link";
 import { ListingWork, MoneySummary } from "@/lib/api";
 import { currencySymbol } from "@/lib/format";
 
@@ -293,44 +294,140 @@ export function SalesCards({
 
 // The listing pipeline, stage by stage: products hunted, approved or rejected
 // (product hunting), then drafted and published in Liston, all in the chosen
-// dates. What's live, waiting to publish and waiting for review right now
-// sits underneath.
-const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink?: string }[] = [
-  { label: "Hunted", note: "Products found to list", of: (w) => w.hunted ?? 0 },
-  { label: "Approved", note: "Picked to draft", of: (w) => w.approved ?? 0, ink: "text-emerald-600" },
-  { label: "Rejected", note: "Passed over", of: (w) => w.rejected ?? 0, ink: "text-rose-600" },
-  { label: "Drafted", note: "Drafts created in Liston", of: (w) => w.drafted },
-  { label: "Published", note: "Went live from Liston", of: (w) => w.published },
+// dates, each with what's behind it (from Discover or added with a supplier, rejected
+// by a reviewer or by Liston for a supplier that doesn't match, drafted from a
+// hunted product or not). What's live, waiting and stuck right now sits
+// underneath.
+interface StageDetail {
+  label: string;
+  of: (w: ListingWork) => number;
+  hint: string;
+  // Worth a look when there are any: amber.
+  warn?: boolean;
+}
+const num = (v: number | undefined) => v ?? 0;
+const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink?: string; details: StageDetail[] }[] = [
+  {
+    label: "Hunted",
+    note: "Products found to list",
+    of: (w) => num(w.hunted),
+    details: [
+      { label: "Added with a supplier", of: (w) => num(w.hunted) - num(w.huntedFromDiscover) - num(w.huntedFromResearch), hint: "Checked and added by a hunter with its AliExpress supplier" },
+      { label: "From Discover", of: (w) => num(w.huntedFromDiscover), hint: "Hunted from Discover: the eBay listing added first, its supplier added on its page" },
+      { label: "From Product research", of: (w) => num(w.huntedFromResearch), hint: "Hunted from Product research: the eBay listing added first, its supplier added on its page" },
+    ],
+  },
+  {
+    label: "Approved",
+    note: "Picked to draft",
+    of: (w) => num(w.approved),
+    ink: "text-emerald-600",
+    details: [
+      { label: "By a reviewer", of: (w) => num(w.approved) - num(w.approvedAsAdded), hint: "Opened on the Hunting page and approved" },
+      { label: "Owner's own", of: (w) => num(w.approvedAsAdded), hint: "Hunted by the owner with their own supplier: approved as added" },
+    ],
+  },
+  {
+    label: "Rejected",
+    note: "Passed over",
+    of: (w) => num(w.rejected),
+    ink: "text-rose-600",
+    details: [
+      { label: "By a reviewer", of: (w) => num(w.rejected) - num(w.rejectedByListon), hint: "Rejected on the Hunting page" },
+      { label: "Supplier didn't match", of: (w) => num(w.rejectedByListon), hint: "Rejected by Liston: the supplier doesn't sell the eBay listing's best-selling variations", warn: true },
+      { label: "Sent back to fix", of: (w) => num(w.sentBack), hint: "Sent back to the hunter to change (not counted as rejected)" },
+    ],
+  },
+  {
+    label: "Drafted",
+    note: "Drafts created in Liston",
+    of: (w) => w.drafted,
+    details: [
+      { label: "From hunted products", of: (w) => num(w.draftedFromHunts), hint: "Drafted from an approved hunted product" },
+      { label: "Other drafts", of: (w) => w.drafted - num(w.draftedFromHunts), hint: "Drafted from a competitor and supplier link on the Listings page" },
+    ],
+  },
+  {
+    label: "Published",
+    note: "Went live from Liston",
+    of: (w) => w.published,
+    details: [
+      { label: "From hunted products", of: (w) => num(w.publishedFromHunts), hint: "Its draft was made from a hunted product" },
+      { label: "Other listings", of: (w) => w.published - num(w.publishedFromHunts), hint: "Drafted from a link on the Listings page" },
+    ],
+  },
 ];
 
-export function ListingCards({ work, loading }: { work: ListingWork | null; loading?: boolean }) {
+/**
+ * The Listings tab's cards and what stands right now. `huntingHref`: on one
+ * account's Overview, the Hunting page's tab for a figure (a link each).
+ */
+export function ListingCards({ work, loading, huntingHref }: { work: ListingWork | null; loading?: boolean; huntingHref?: (view: "sourcing" | "review" | "approved" | "all") => string }) {
+  // Right now, the hunting figures only when there are any; the ones that need someone first.
+  const now: { value: number; text: string; view?: "sourcing" | "review" | "approved" | "all"; warn?: boolean }[] = work
+    ? [
+        { value: work.live, text: "live on eBay" },
+        { value: work.waiting, text: `draft${work.waiting === 1 ? "" : "s"} waiting to publish` },
+        ...[
+          { value: num(work.sourcingNow), text: `hunted as a listing, needing a supplier`, view: "sourcing" as const },
+          { value: num(work.reviewing), text: `hunted product${num(work.reviewing) === 1 ? "" : "s"} waiting for review`, view: "review" as const },
+          { value: num(work.toDraft), text: `approved, still to be drafted`, view: "approved" as const },
+          { value: num(work.draftFailed), text: `draft${num(work.draftFailed) === 1 ? "" : "s"} failed, to draft again`, view: "approved" as const, warn: true },
+          { value: num(work.sentBackNow), text: `sent back to ${num(work.sentBackNow) === 1 ? "its hunter" : "their hunters"}`, view: "all" as const },
+        ].filter((x) => x.value > 0),
+      ]
+    : [];
   return (
     <>
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-5">
-        {STAGES.map((stage) => {
+        {STAGES.map((stage, index) => {
           const value = work ? stage.of(work) : 0;
           return (
-            <div key={stage.label} className="card flex min-h-[120px] min-w-0 flex-col p-3.5 sm:min-h-[136px] sm:p-5">
+            <div key={stage.label} className={`card flex min-w-0 flex-col px-3.5 py-3 sm:px-5 sm:py-4 ${index === STAGES.length - 1 ? "max-lg:col-span-2" : ""}`}>
               <span className="text-[13px] font-medium text-[var(--color-muted)]">{stage.label}</span>
               {loading || !work ? (
-                <span className="mt-3 h-8 w-20 animate-pulse rounded-md bg-[var(--color-line)]" />
+                <span className="mt-3 h-7 w-16 animate-pulse rounded-md bg-[var(--color-line)]" />
               ) : (
-                <span className={`mt-2.5 text-[24px] font-semibold leading-none sm:text-[28px] tracking-tight tabular-nums ${value > 0 && stage.ink ? stage.ink : "text-[var(--color-ink)]"}`}>{count(value)}</span>
+                <span className={`mt-2.5 text-[20px] font-semibold leading-none tracking-tight tabular-nums sm:text-[24px] ${value > 0 && stage.ink ? stage.ink : "text-[var(--color-ink)]"}`}>{count(value)}</span>
               )}
-              <span className="mt-auto pt-3 text-[12px] text-[var(--color-muted)]">{stage.note}</span>
+              <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">{stage.note}</span>
+              <dl className="mt-3 space-y-1 border-t border-[var(--color-line)] pt-2.5 text-[12px] sm:mt-3.5 sm:pt-3 sm:text-[12.5px]">
+                {stage.details.map((d) => {
+                  const figure = work ? Math.max(0, d.of(work)) : 0;
+                  return (
+                    <div key={d.label} className="flex items-baseline justify-between gap-2" title={d.hint}>
+                      <dt className="truncate text-[var(--color-muted)]">{d.label}</dt>
+                      <dd className={`shrink-0 font-medium tabular-nums ${d.warn && figure > 0 ? "text-amber-600" : "text-[var(--color-ink)]"}`}>
+                        {loading || !work ? <span className="inline-block h-3 w-6 animate-pulse rounded bg-[var(--color-line)] align-middle" /> : count(figure)}
+                      </dd>
+                    </div>
+                  );
+                })}
+              </dl>
             </div>
           );
         })}
       </div>
       {work && (
-        <p className="mt-4 text-[13px] text-[var(--color-muted)]">
-          Right now: <span className="font-medium text-[var(--color-ink)]">{count(work.live)}</span> live on eBay ·{" "}
-          <span className="font-medium text-[var(--color-ink)]">{count(work.waiting)}</span> drafts waiting to publish
-          {(work.reviewing ?? 0) > 0 && (
-            <>
-              {" "}· <span className="font-medium text-[var(--color-ink)]">{count(work.reviewing ?? 0)}</span> hunted product{work.reviewing === 1 ? "" : "s"} waiting for review
-            </>
-          )}
+        <p className="mt-4 text-[13px] leading-relaxed text-[var(--color-muted)]">
+          Right now:{" "}
+          {now.map((x, i) => {
+            const figure = <span className={`font-medium tabular-nums ${x.warn ? "text-amber-600" : "text-[var(--color-ink)]"}`}>{count(x.value)}</span>;
+            return (
+              <span key={x.text}>
+                {i > 0 && " · "}
+                {huntingHref && x.view ? (
+                  <Link href={huntingHref(x.view)} className="hover:text-[var(--color-primary)] hover:underline">
+                    {figure} {x.text}
+                  </Link>
+                ) : (
+                  <>
+                    {figure} {x.text}
+                  </>
+                )}
+              </span>
+            );
+          })}
         </p>
       )}
     </>

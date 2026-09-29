@@ -30,7 +30,7 @@ const run = crypto.randomInt(100000, 999999);
 const PARENT = `9${run}`;
 const CHILDREN = [`8${run}1`, `8${run}2`];
 const KEYWORD = `fountain ${run}`;
-const calls = { search: 0, sold: 0 };
+const calls = { search: 0, sold: 0, focused: [] };
 
 // A subject's listings: 30 of them, the first ones selling fastest, all from
 // different sellers; the keyword ones have "cat water fountain" in their titles.
@@ -55,6 +55,12 @@ function listingsFor({ categoryId, q }) {
 test.before(async () => {
   mock.method(browseResearch, 'searchListings', async (input) => {
     calls.search += 1;
+    // A search narrowed to the hunter's filters (Load more): other listings, all within the price.
+    if (String(input.filter || '').includes('price:')) {
+      calls.focused.push(input);
+      const items = Array.from({ length: 30 }, (_, i) => ({ ...listingsFor({ categoryId: `5${run}` })[i], price: { value: 75 + i, currency: 'GBP' } }));
+      return { total: 30, items, breakdown: null, calls: 1 };
+    }
     const items = listingsFor(input);
     return {
       total: input.categoryId === CHILDREN[1] ? 90000 : 1200,
@@ -79,6 +85,8 @@ test.before(async () => {
   });
   mock.method(taxonomy, 'getCategoryPath', async (site, id) => {
     if (String(id) === PARENT) return [{ id: PARENT, name: 'Test Lighting' }];
+    if (String(id) === `6${run}`) return [{ id: `6${run}`, name: 'Test Lamps' }];
+    if (String(id) === `4${run}`) return [{ id: `4${run}`, name: 'Test Shades' }];
     const at = CHILDREN.indexOf(String(id));
     return at >= 0 ? [{ id: PARENT, name: 'Test Lighting' }, { id: CHILDREN[at], name: `Child ${at}` }] : [];
   });
@@ -98,7 +106,9 @@ test.after(async () => {
   mock.restoreAll();
   await new Promise((resolve) => server.close(resolve));
   await pool.query(`DELETE FROM discover_scans WHERE subject = ANY($1)`, [[`c:${PARENT}`, ...CHILDREN.map((c) => `c:${c}`), `q:${KEYWORD}`, `q:parrot cage ${run}`, 'q:night light motion sensor']]);
-  await pool.query(`DELETE FROM discover_listing_reads WHERE item_id LIKE $1 OR item_id LIKE $2 OR item_id LIKE $3`, [`9${run}%`, `8${run}%`, `7${run}%`]);
+  await pool.query(`DELETE FROM discover_listing_reads WHERE item_id LIKE $1 OR item_id LIKE $2 OR item_id LIKE $3 OR item_id LIKE $4 OR item_id LIKE $5`, [`9${run}%`, `8${run}%`, `7${run}%`, `6${run}%`, `5${run}%`]);
+  await pool.query(`DELETE FROM discover_scans WHERE subject = ANY($1)`, [[`c:6${run}`, `c:4${run}`]]);
+  await pool.query(`DELETE FROM discover_listing_reads WHERE item_id LIKE $1`, [`4${run}%`]);
   await pool.end();
 });
 
@@ -149,7 +159,7 @@ test('Discover explores a category: its leading listings, their sold counts read
   const d = first.data;
   assert.strictEqual(d.subject.name, 'Test Lighting');
   assert.strictEqual(d.figures.total, 1200);
-  assert.deepStrictEqual(d.reads, { asked: 50, read: 50, more: true, stopped: false, signInFailed: false, step: 50, reading: false, progress: { done: 50, of: 50 } });
+  assert.deepStrictEqual(d.reads, { asked: 50, read: 50, of: 79, focused: 0, more: true, stopped: false, signInFailed: false, step: 50, reading: false, progress: { done: 50, of: 50 } });
   assert.strictEqual(calls.sold, 50, 'the first 50 listings read');
   // Fastest first, with its best-selling option first.
   assert.strictEqual(d.listings[0].itemId, `${PARENT}00`);
@@ -172,7 +182,8 @@ test('Discover explores a category: its leading listings, their sold counts read
   assert.ok(winners.data.products.every((p) => p.perMonth >= 10 && p.from && p.from.name));
   assert.ok(winners.data.products.some((p) => p.from.name === 'Test Lighting'));
   const priced = await request('GET', `${base}/winners?priceMin=25&brand=unbranded`, undefined, t.hunter);
-  assert.ok(priced.data.products.every((p) => p.price.median >= 25 && p.branded === false), JSON.stringify(priced.data.products.map((p) => [p.price.median, p.branded])));
+  // Unbranded: no named brand on its listings (a brand not read yet counts as none, as the filter says).
+  assert.ok(priced.data.products.every((p) => p.price.median >= 25 && p.branded !== true), JSON.stringify(priced.data.products.map((p) => [p.price.median, p.branded])));
   // The pool is the whole site's (other subjects too), so: nothing 60 days old passes "this month", and the test listings pass "3 months".
   const lately = await request('GET', `${base}/winners?listedWithin=30`, undefined, t.hunter);
   assert.ok(lately.data.products.every((p) => p.newestDays !== null && p.newestDays <= 30 && p.from.name !== 'Test Lighting'));
@@ -418,12 +429,12 @@ test("Discover keeps products at risk of a takedown out by default: one like a d
   const risky = again.products.find((p) => p.key === product.key);
   assert.deepStrictEqual([risky.risk.kind, risky.risk.level], ['refused', 'bad']);
   assert.match(risky.risk.text, /brand or intellectual-property/);
-  // Winners hides it unless asked, and says how many it hid.
-  const safe = (await request('GET', `${base}/winners?limit=300`, undefined, t.hunter)).data;
+  // Winners shows it marked by default; hidden only when asked, saying how many it hid.
+  const all = (await request('GET', `${base}/winners?limit=300`, undefined, t.hunter)).data;
+  assert.strictEqual(all.products.find((p) => p.key === product.key)?.risk?.kind, 'refused');
+  const safe = (await request('GET', `${base}/winners?safety=safe&limit=300`, undefined, t.hunter)).data;
   assert.ok(!safe.products.some((p) => p.key === product.key));
   assert.ok(safe.riskHidden >= 1);
-  const all = (await request('GET', `${base}/winners?safety=all&limit=300`, undefined, t.hunter)).data;
-  assert.strictEqual(all.products.find((p) => p.key === product.key)?.risk?.kind, 'refused');
   assert.strictEqual((await request('GET', `${base}/winners?safety=maybe`, undefined, t.hunter)).status, 400);
 });
 
@@ -456,4 +467,102 @@ test('a subject answers at once with what is read, reads the rest in the backgro
     trading.getItemSales = real;
     discoverService._quickMs();
   }
+});
+
+test("Load more reads only listings that can pass the page's filters, then searches eBay within them for more; never the rest", async () => {
+  const t = await team();
+  const base = `/api/connections/${t.connectionId}/discover`;
+  const CATEGORY = `6${run}`;
+  // Opened: its first 50 leading listings read in eBay's order (the figures stand on them).
+  const opened = await request('GET', `${base}/explore?categoryId=${CATEGORY}`, undefined, t.hunter);
+  assert.strictEqual(opened.status, 200, JSON.stringify(opened.data));
+  assert.deepStrictEqual([opened.data.reads.read, opened.data.reads.of, opened.data.reads.focused], [50, 79, 0], 'of the 79 leading listings kept (one hidden)');
+  const soldBefore = calls.sold;
+  // Load more with Price £70+ (unbranded): the leading listings from £70 (the 58th on), then eBay searched
+  // within the price for more, all read; the ones under £70 never read.
+  const more = await request('GET', `${base}/explore?categoryId=${CATEGORY}&reads=100&priceMin=70&brand=unbranded`, undefined, t.hunter);
+  assert.strictEqual(more.status, 200, JSON.stringify(more.data));
+  assert.strictEqual(calls.sold - soldBefore, 50, '22 leading listings from £70 and 28 found for the filters');
+  const read = async (ids) => (await pool.query('SELECT item_id FROM discover_listing_reads WHERE item_id = ANY($1)', [ids])).rows.length;
+  const under = Array.from({ length: 7 }, (_, i) => `${CATEGORY}${51 + i}`); // £63–£69
+  assert.strictEqual(await read(under), 0, 'nothing under the price is read');
+  const focused = calls.focused.at(-1);
+  assert.deepStrictEqual([focused.categoryId, focused.offset, /price:\[59\.5\.\.\],priceCurrency:GBP/.test(focused.filter), /Brand:\{Unbranded/.test(focused.aspectFilter)], [CATEGORY, 0, true, true]);
+  assert.strictEqual(more.data.reads.focused, 50);
+  assert.ok(more.data.products.some((p) => p.itemIds.some((id) => id.startsWith(`5${run}`))), 'products from the listings found for the filters');
+  // The subject's own figures stay on its leading listings.
+  assert.strictEqual(more.data.reads.of, 79);
+  // Loading more again searches the next page only when those run out; nothing is read twice.
+  const soldAfter = calls.sold;
+  const searches = calls.focused.length;
+  const again = await request('GET', `${base}/explore?categoryId=${CATEGORY}&reads=100&priceMin=70&brand=unbranded`, undefined, t.hunter);
+  assert.deepStrictEqual([calls.sold, calls.focused.length, again.data.reads.focused], [soldAfter, searches, 50]);
+});
+
+test("Find more for the Products tab's filters reads only listings that can pass them, where matching products come from; the tab, the list and the counts follow", async () => {
+  const t = await team();
+  const base = `/api/connections/${t.connectionId}/discover`;
+  const discoverRepo = require('../../src/modules/discover/discover.repository');
+  // The pool from this run's subjects only (the dev database may hold real ones).
+  const realScans = discoverRepo.scansForSite;
+  mock.method(discoverRepo, 'scansForSite', async (...args) => (await realScans(...args)).filter((row) => row.subject.includes(String(run))));
+  try {
+    // A child category of this run, its first reads made (ranking read 8 of it; opening reads its first 100).
+    await request('GET', `${base}/explore?categoryId=${CHILDREN[0]}`, undefined, t.hunter);
+    const read = async (ids) => (await pool.query('SELECT item_id FROM discover_listing_reads WHERE item_id = ANY($1)', [ids])).rows.map((r) => r.item_id);
+    const before = (await request('GET', `${base}/winners?priceMin=70`, undefined, t.hunter)).data;
+    assert.ok(before.products.every((p) => p.price.median >= 70));
+    const soldBefore = calls.sold;
+    const ours = async () =>
+      (await pool.query('SELECT item_id FROM discover_listing_reads WHERE item_id LIKE ANY($1)', [[`9${run}%`, `8${run}%`, `7${run}%`, `6${run}%`, `5${run}%`]])).rows.map((r) => r.item_id);
+    const readBefore = new Set(await ours());
+    const more = await request('POST', `${base}/winners/more`, { priceMin: '70' }, t.hunter);
+    assert.strictEqual(more.status, 200, JSON.stringify(more.data));
+    assert.ok(more.data.read > 0 && more.data.subjects.length > 0, JSON.stringify(more.data));
+    assert.strictEqual(calls.sold - soldBefore, more.data.read, 'each listing read once');
+    // Every listing it read passes the price (a fixture listing is priced £12 + its number, one found by the
+    // filtered search £75 + its number): none under £70 was bought.
+    const priceOf = (id) => (id.startsWith(`5${run}`) ? 75 : 12) + Number(id.slice(-2));
+    const newlyRead = (await ours()).filter((id) => !readBefore.has(id));
+    assert.ok(newlyRead.length > 0 && newlyRead.every((id) => priceOf(id) >= 70), JSON.stringify(newlyRead));
+    void read;
+    const after = (await request('GET', `${base}/winners?priceMin=70`, undefined, t.hunter)).data;
+    assert.ok(after.matched >= before.matched);
+    // Asked again with nothing left to read for the filters: says so, reads nothing.
+    let last = more.data;
+    for (let i = 0; i < 10 && last.more; i += 1) last = (await request('POST', `${base}/winners/more`, { priceMin: '70' }, t.hunter)).data;
+    const soldEnd = calls.sold;
+    const done = (await request('POST', `${base}/winners/more`, { priceMin: '70' }, t.hunter)).data;
+    assert.deepStrictEqual([done.read, done.more, calls.sold], [0, false, soldEnd]);
+  } finally {
+    discoverRepo.scansForSite = realScans;
+  }
+});
+
+test("Your categories not explored yet are scored in the background: searched, their top sold counts read, the tab filling in; not again for hours", async () => {
+  const t = await team();
+  const base = `/api/connections/${t.connectionId}/discover`;
+  const CATEGORY = `4${run}`;
+  // Two listings Liston made for the account in a category nobody has explored.
+  for (let i = 0; i < 2; i += 1) {
+    await pool.query(`INSERT INTO listings (connection_id, status, generated_data) VALUES ($1, 'published', $2)`, [t.connectionId, JSON.stringify({ categoryId: CATEGORY, title: `Shade ${i}` })]);
+  }
+  const soldBefore = calls.sold;
+  const first = await request('GET', base, undefined, t.hunter);
+  assert.strictEqual(first.status, 200, JSON.stringify(first.data));
+  const mine = () => first.data.yourCategories.find((c) => c.id === CATEGORY);
+  assert.deepStrictEqual([mine().listings, mine().scanned, first.data.yourScoring.total], [2, null, 1]);
+  let now = first.data;
+  for (let i = 0; i < 50 && now.yourScoring; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    now = (await request('GET', base, undefined, t.hunter)).data;
+  }
+  const row = now.yourCategories.find((c) => c.id === CATEGORY);
+  assert.strictEqual(now.yourScoring, null);
+  assert.ok(row.scanned && row.scanned.score > 0 && row.scanned.total === 1200, JSON.stringify(row));
+  assert.strictEqual(row.live, 1200);
+  assert.strictEqual(calls.sold - soldBefore, 8, 'its leading listings, 8 read');
+  // Asked again: nothing left to score, nothing read.
+  const again = await request('GET', base, undefined, t.hunter);
+  assert.deepStrictEqual([again.data.yourScoring, calls.sold - soldBefore], [null, 8]);
 });

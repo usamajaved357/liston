@@ -52,7 +52,9 @@ function mapSummary(s) {
  * paging through a result or coming back to it spends no call. `calls` is
  * how many eBay calls this spent (0 from the kept copy).
  */
-async function search({ q, marketplaceId, condition, minPrice, maxPrice, country }) {
+// `categoryId` and `aspectFilter`: the search narrowed at eBay (Research's Unbranded: its main
+// category, "categoryId:X,Brand:{Unbranded|…}").
+async function search({ q, marketplaceId, condition, minPrice, maxPrice, country, categoryId = null, aspectFilter = null }) {
   const filters = ['buyingOptions:{FIXED_PRICE}'];
   if (condition === 'new') filters.push('conditions:{NEW}');
   if (condition === 'used') filters.push('conditions:{USED}');
@@ -60,10 +62,10 @@ async function search({ q, marketplaceId, condition, minPrice, maxPrice, country
     const currency = { EBAY_GB: 'GBP', EBAY_US: 'USD', EBAY_AU: 'AUD', EBAY_CA: 'CAD' }[marketplaceId] || 'EUR';
     filters.push(`price:[${minPrice || ''}..${maxPrice || ''}]`, `priceCurrency:${currency}`);
   }
-  const key = JSON.stringify([marketplaceId, q.toLowerCase(), filters]);
+  const key = JSON.stringify([marketplaceId, q.toLowerCase(), filters, categoryId, aspectFilter]);
   const kept = searches.get(key);
   if (kept && Date.now() - kept.at < SEARCH_TTL_MS) return { ...kept.value, calls: 0 };
-  const params = { q, limit: SEARCH_LIMIT, filter: filters.join(','), deliveryCountry: country || undefined };
+  const params = { q, limit: SEARCH_LIMIT, filter: filters.join(','), deliveryCountry: country || undefined, categoryIds: categoryId || undefined, aspectFilter: aspectFilter || undefined };
   let res;
   let calls = 1;
   try {
@@ -87,13 +89,17 @@ async function search({ q, marketplaceId, condition, minPrice, maxPrice, country
  * nothing is kept here). One call, two if eBay won't break the search
  * down. { total, items, breakdown, calls }.
  */
-async function searchListings({ q, categoryId, marketplaceId, country, limit = 100 }) {
+// `offset`, `filter` and `aspectFilter`: a later page, or a search narrowed at eBay (Discover's Load
+// more with the hunter's filters: a price range, an unbranded Brand).
+async function searchListings({ q, categoryId, marketplaceId, country, limit = 100, offset = 0, filter = 'buyingOptions:{FIXED_PRICE}', aspectFilter }) {
   const params = {
     q: q || undefined,
     categoryIds: categoryId ? String(categoryId) : undefined,
     limit: Math.min(SEARCH_LIMIT, limit),
-    filter: 'buyingOptions:{FIXED_PRICE}',
+    offset: offset || undefined,
+    filter,
     deliveryCountry: country || undefined,
+    aspectFilter: aspectFilter || undefined,
   };
   let res;
   let calls = 1;

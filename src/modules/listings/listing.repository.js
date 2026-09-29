@@ -195,15 +195,19 @@ async function latestChanges(connectionId, since) {
 // published from Liston between two times, and drafts waiting now. Edits of
 // live listings (edit_of_item_id) aren't new listings and don't count.
 async function countListingWork(connectionId, start, end) {
+  // Of each, the ones made from a hunted product (its draft, drafted from the hunt).
+  const fromHunt = 'EXISTS (SELECT 1 FROM hunted_products h WHERE h.listing_id = l.id)';
   const { rows } = await query(
     `SELECT
-       count(*) FILTER (WHERE created_at >= $2 AND created_at < $3)::int AS drafted,
-       count(*) FILTER (WHERE status = 'published' AND updated_at >= $2 AND updated_at < $3)::int AS published,
-       count(*) FILTER (WHERE status = 'pending_review')::int AS waiting
-     FROM listings WHERE connection_id = $1 AND edit_of_item_id IS NULL`,
+       count(*) FILTER (WHERE l.created_at >= $2 AND l.created_at < $3)::int AS drafted,
+       count(*) FILTER (WHERE l.created_at >= $2 AND l.created_at < $3 AND ${fromHunt})::int AS "draftedFromHunts",
+       count(*) FILTER (WHERE l.status = 'published' AND l.updated_at >= $2 AND l.updated_at < $3)::int AS published,
+       count(*) FILTER (WHERE l.status = 'published' AND l.updated_at >= $2 AND l.updated_at < $3 AND ${fromHunt})::int AS "publishedFromHunts",
+       count(*) FILTER (WHERE l.status = 'pending_review')::int AS waiting
+     FROM listings l WHERE l.connection_id = $1 AND l.edit_of_item_id IS NULL`,
     [connectionId, start, end]
   );
-  return rows[0] || { drafted: 0, published: 0, waiting: 0 };
+  return rows[0] || { drafted: 0, draftedFromHunts: 0, published: 0, publishedFromHunts: 0, waiting: 0 };
 }
 
 /** An account's listing work since a moment, for the Overview's chart: when each draft was made, and published. */

@@ -60,6 +60,12 @@ export function DeliveryBar({
       >
         {accountName}: {days(account.min, account.max)}
       </span>
+      {delivery.fellBack && (
+        <p className="w-full text-[12px] text-amber-800">
+          None of these listings delivers like {accountName}
+          {counts.unknown > 0 ? ` (${count(counts.unknown)} of them gave eBay no delivery dates)` : ""}, so the figures use all {count(counts.all)}.
+        </p>
+      )}
     </div>
   );
 }

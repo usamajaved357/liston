@@ -19,7 +19,7 @@ async function resolveConnectionIdFromListing(req) {
 
 // Working on a draft (edits, AI rewrites, photos, variation fixes, SKU) is
 // the person's work: recorded once it succeeds, at most once per draft and
-// person in any 3 hours — autosave is many small saves, one sitting. A live
+// person in any 3 hours — a sitting is often several saves. A live
 // listing's working copy isn't a draft: its publish is recorded instead.
 const DRAFT_SITTING_HOURS = 3;
 function recordDraftWork(req, res, next) {

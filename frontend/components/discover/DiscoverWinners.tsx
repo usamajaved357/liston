@@ -19,6 +19,9 @@ export function DiscoverWinnersView({
   onHunt,
   onOpen,
   onMore,
+  finding,
+  found,
+  onFindMore,
 }: {
   data: Winners | null;
   filters: DiscoverWinnersFilters;
@@ -27,7 +30,13 @@ export function DiscoverWinnersView({
   onHunt: (url: string) => void;
   onOpen: (subject: DiscoverSubjectRef) => void;
   onMore: () => void;
+  // "Find more products for these filters": reading now, and what the last one found (`now`: the products matching since).
+  finding: boolean;
+  found: { before: number; now: number; read: number; subjects: string[]; more: boolean; signInFailed?: boolean; stopped?: boolean; error?: string } | null;
+  onFindMore: () => void;
 }) {
+  const allShown = Boolean(data && !(data.matched > data.products.length && data.products.length < 300));
+  const gained = found ? Math.max(0, found.now - found.before) : 0;
   return (
     <section className="card min-w-0">
       <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-3">
@@ -43,7 +52,7 @@ export function DiscoverWinnersView({
           {loading && data ? " · Updating…" : ""}
         </p>
       </div>
-      <div className={`overflow-hidden ${data && data.matched > data.products.length && data.products.length < 300 ? "" : "rounded-b-[var(--radius-card)]"} ${loading ? "opacity-60" : ""}`}>
+      <div className={`overflow-hidden ${data && (!allShown || data.pool.subjects > 0) ? "" : "rounded-b-[var(--radius-card)]"} ${loading ? "opacity-60" : ""}`}>
         {data ? (
           <DiscoverProducts
             products={data.products}
@@ -60,11 +69,45 @@ export function DiscoverWinnersView({
           </div>
         )}
       </div>
-      {data && data.matched > data.products.length && data.products.length < 300 && (
+      {data && !allShown && (
         <div className="flex items-center justify-center border-t border-[var(--color-line)] px-4 py-2.5">
           <button type="button" onClick={onMore} disabled={loading} className="btn btn-secondary btn-sm !h-8 !text-[12.5px] disabled:opacity-60">
             {loading ? "Loading…" : `Load more products (${count(data.matched - data.products.length)} more)`}
           </button>
+        </div>
+      )}
+      {/* Every match shown: read more listings for these filters in what's been explored, so more can match. */}
+      {data && allShown && data.pool.subjects > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-b-[var(--radius-card)] border-t border-[var(--color-line)] px-4 py-2.5" aria-live="polite">
+          <p className="min-w-0 text-[11.5px] text-[var(--color-muted)]">
+            {finding ? (
+              "Reading more listings that can pass these filters in the categories and keywords explored…"
+            ) : found?.error ? (
+              <span className="text-rose-600">{found.error}</span>
+            ) : found?.signInFailed && !found.read ? (
+              <span className="text-amber-700">Sold counts need this account&apos;s eBay sign-in, which didn&apos;t work: reconnect the account, or ask the owner to.</span>
+            ) : found?.stopped && !found.read ? (
+              <span className="text-amber-700">Today&apos;s sold-count reads have run out. Find more reads again after they reset.</span>
+            ) : found && loading ? (
+              "Read. Updating the list…"
+            ) : found ? (
+              <>
+                <span className="font-medium text-[var(--color-ink)]">
+                  {found.read
+                    ? `${count(found.read)} more listing${found.read === 1 ? "" : "s"} read in ${found.subjects.slice(0, 3).join(", ")}: ${gained ? `${count(gained)} new product${gained === 1 ? "" : "s"} match` : "nothing new matches"}.`
+                    : "Nothing more to read for these filters in what's been explored."}
+                </span>{" "}
+                {found.more ? "Find more reads the next ones." : "Explore more categories or keywords to find more."}
+              </>
+            ) : (
+              "That's every product matching these filters so far. Find more reads more listings for them in the categories and keywords explored."
+            )}
+          </p>
+          {(!found || found.more || found.error) && (
+            <button type="button" onClick={onFindMore} disabled={finding || loading} className="btn btn-secondary btn-sm !h-8 shrink-0 !text-[12.5px] disabled:opacity-60">
+              {finding ? "Reading…" : "Find more products for these filters"}
+            </button>
+          )}
         </div>
       )}
     </section>

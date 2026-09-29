@@ -60,10 +60,12 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
   const [start, setStart] = useState<{ data?: DiscoverStart; error?: string } | null>(null);
   const [startTick, setStartTick] = useState(0);
   // The open subject's answer; kept on screen while it's asked again (a ranking's progress, more reads).
-  const [reads, setReads] = useState<{ key: string; n: number }>({ key: "", n: READS_STEP });
+  // How many sold counts are wanted, and the filters they're for (Load more reads what can pass them).
+  const [reads, setReads] = useState<{ key: string; n: number; focus?: DiscoverWinnersFilters | null }>({ key: "", n: READS_STEP });
   const readsWanted = reads.key === key ? reads.n : READS_STEP;
+  const readsFocus = reads.key === key ? reads.focus ?? null : null;
   const [poll, setPoll] = useState(0);
-  const requestKey = `${key}|${readsWanted}|${poll}`;
+  const requestKey = `${key}|${readsWanted}|${readsFocus ? JSON.stringify(readsFocus) : ""}|${poll}`;
   const [result, setResult] = useState<{ requestKey: string; key: string; data?: DiscoverExplore; error?: string } | null>(null);
   const [watchBusy, setWatchBusy] = useState(false);
   const [watchlist, setWatchlist] = useState<{ data?: DiscoverWatchList; error?: string } | null>(null);
@@ -80,7 +82,22 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     setWinnersLimit(PAGE);
   };
   const [winners, setWinners] = useState<{ key: string; data?: DiscoverWinners; error?: string } | null>(null);
-  const winnersKey = JSON.stringify([winnersFilters, winnersLimit]);
+  // A product hunted (from here or anywhere on the page): asked again, so it shows as the owner's
+  // at once and its Hunt isn't offered twice. Nothing is read from eBay again for it.
+  const [hunted, setHunted] = useState(0);
+  useEffect(() => {
+    const again = () => {
+      setHunted((n) => n + 1);
+      setPoll((n) => n + 1);
+    };
+    window.addEventListener("liston:hunting", again);
+    return () => window.removeEventListener("liston:hunting", again);
+  }, []);
+  // "Find more products for these filters": reading, then what it found (the list asked again after).
+  const [finding, setFinding] = useState<{ filters: string; before: number } | null>(null);
+  const [found, setFound] = useState<{ filters: string; before: number; read: number; subjects: string[]; more: boolean; signInFailed?: boolean; stopped?: boolean; error?: string } | null>(null);
+  const [foundTick, setFoundTick] = useState(0);
+  const winnersKey = JSON.stringify([winnersFilters, winnersLimit, hunted, foundTick]);
   const [kwQuery, setKwQueryState] = useState<SiteKeywordsQuery>({ q: "", sort: "sales", searchedOnly: false });
   const [kwLimit, setKwLimit] = useState(PAGE);
   const setKwQuery = (next: SiteKeywordsQuery) => {
@@ -124,12 +141,20 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     };
   }, [connectionId, key, startTick]);
 
+  // Your categories being scored in the background: asked again until they're all in.
+  const scoringYours = Boolean(start?.data?.yourScoring);
+  useEffect(() => {
+    if (!scoringYours || key) return;
+    const timer = setTimeout(() => setStartTick((n) => n + 1), RANK_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [scoringYours, key, start]);
+
   // The open category or keyword.
   useEffect(() => {
     if (!subject) return;
     let cancelled = false;
     api
-      .discoverExplore(connectionId, subject, readsWanted)
+      .discoverExplore(connectionId, subject, readsWanted, readsFocus)
       .then((data) => !cancelled && setResult({ requestKey, key, data }))
       .catch((err) => !cancelled && setResult({ requestKey, key, error: err instanceof ApiError ? err.message : "Couldn't read that from eBay. Try again." }));
     return () => {
@@ -152,10 +177,10 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
       .discoverReview(connectionId, subject)
       .then((d) => {
         setReview({ key: forKey, compliance: d.compliance, checked: d.checked, failed: !d.checked, hidden: d.hidden });
-        // The AI named brands that hide more listings: open the subject again (no eBay call) so
-        // the figures, keywords and Selling now leave them out too.
+        // The AI named brands that mark more products: open the subject again (no eBay call) so
+        // its products carry the marks too.
         setResult((r) => {
-          if (r && r.key === forKey && r.data && r.data.compliance.hidden.count !== d.hidden) setPoll((n) => n + 1);
+          if (r && r.key === forKey && r.data && (r.data.compliance.hidden.count !== d.hidden || (r.data.compliance.vero?.count ?? 0) !== (d.marked ?? 0))) setPoll((n) => n + 1);
           return r;
         });
       })
@@ -284,10 +309,29 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
     }
   }
 
+  // More listings read for the filters in view, in the explored subjects most likely to have them; the list asked again after.
+  async function findMore() {
+    const key = JSON.stringify(winnersFilters);
+    const before = winners?.data?.matched ?? 0;
+    setFinding({ filters: key, before });
+    setFound(null);
+    try {
+      const r = await api.discoverWinnersMore(connectionId, winnersFilters);
+      setFound({ filters: key, before, ...r });
+      setFoundTick((n) => n + 1);
+    } catch (err) {
+      setFound({ filters: key, before, read: 0, subjects: [], more: true, error: err instanceof ApiError ? err.message : "Couldn't read more just now. Try again." });
+    } finally {
+      setFinding(null);
+    }
+  }
+
   const watchCount = start?.data?.watches ?? watchlist?.data?.items.length ?? null;
   const w = start?.data?.winners;
+  // The products for the filters in view (the pool's size until they're counted): the tab, the hero and the list agree.
+  const matched = winners?.data ? winners.data.matched : null;
   const homeTabs = [
-    { key: "products" as HomeTab, label: "Products", count: w ? count(w.total) : undefined },
+    { key: "products" as HomeTab, label: "Products", count: matched !== null ? count(matched) : w ? count(w.total) : undefined },
     { key: "keywords" as HomeTab, label: "Keywords", count: w?.keywords !== undefined ? count(w.keywords) : undefined },
     { key: "categories" as HomeTab, label: "Categories", count: start?.data ? count(start.data.topCategories.length + start.data.yourCategories.length) : undefined },
     { key: "saved" as HomeTab, label: "Watchlist and recent", count: watchCount || undefined },
@@ -322,7 +366,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
               onBack={() => open(parent ? { categoryId: parent.id } : null)}
               backLabel={parent ? parent.name : "Discover"}
               onHunt={onHunt}
-              onReadMore={() => setReads({ key, n: Math.max(readsWanted, shown.data?.reads.asked || 0) + (shown.data?.reads.step || READS_STEP) })}
+              onReadMore={(focus) => setReads({ key, n: Math.max(readsWanted, shown.data?.reads.asked || 0) + (shown.data?.reads.step || READS_STEP), focus })}
               readingMore={(!answered && readsWanted > (shown.data.reads.asked || 0)) || Boolean(shown.data.reads.reading)}
               onRank={rank}
               onToggleWatch={toggleWatch}
@@ -334,7 +378,7 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
         )
       ) : (
         <>
-          {start?.error ? <Alert>{start.error}</Alert> : start?.data ? <DiscoverHero data={start.data} /> : null}
+          {start?.error ? <Alert>{start.error}</Alert> : start?.data ? <DiscoverHero data={start.data} matched={homeTab === "products" ? matched : null} /> : null}
 
           {/* The search for the open tab (products, eBay's keywords) sits on the left of the tabs, so the filter bar below keeps to one line. */}
           <div className="flex flex-wrap items-center gap-2">
@@ -380,6 +424,9 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
                 onHunt={onHunt}
                 onOpen={open}
                 onMore={() => setWinnersLimit((n) => n + PAGE)}
+                finding={finding?.filters === JSON.stringify(winnersFilters)}
+                found={found && found.filters === JSON.stringify(winnersFilters) ? { ...found, now: winners?.data?.matched ?? found.before } : null}
+                onFindMore={findMore}
               />
             ))}
 
