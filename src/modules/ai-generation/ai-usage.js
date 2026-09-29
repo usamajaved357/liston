@@ -31,6 +31,7 @@ const PURPOSES = {
   'editor.revise': 'Editor AI edits & recommended changes',
   'editor.policy': 'Fix policy words',
   'editor.photo': 'Editor photo edits',
+  'hunting.match': 'Hunting: supplier photo checks',
   research: 'Product research advice',
 };
 

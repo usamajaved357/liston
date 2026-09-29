@@ -2,10 +2,14 @@
 // Pure: the words to search AliExpress with, which of the products found to
 // check, and whether a checked one will do.
 //
-// Only products that look like the same thing are checked: most of the
+// Only products that look like the same thing are checked: first most of the
 // listing's title words in theirs, and the same size where both give one
 // (a listing without variations is otherwise matched on two shared words,
-// far too loose to pick a supplier by itself).
+// far too loose to pick a supplier by itself). The photos then decide, but
+// only for a product that passes every other check (hunting.service
+// photoJudge): the listing's own photos among the supplier's (hunt-photos,
+// free), else the AI's comparison (ai-generation/product-match), since
+// titles alone can't tell a round spotlight projector from a tree-shaped one.
 //
 // A supplier will do when its product is rated 4.0 stars or more on
 // AliExpress, it sells what the eBay listing sells (hunt-profit.matchCheck:
@@ -187,27 +191,28 @@ function judge(result) {
 }
 
 /**
- * The best of the suppliers that will do: the highest return, then profit,
+ * The suppliers that will do, best first: the highest return, then profit,
  * then rating; alike on all three, a photo match (it looks the same), then
  * the one found first (`order`), so the pick never depends on which check
  * answered first. `belowTarget`: matches under the target return count too.
  */
-function best(checked, { belowTarget = false } = {}) {
+function ranked(checked, { belowTarget = false } = {}) {
   // The figures it was judged on (judge), else the check's headline.
   const roi = (c) => c.verdict.roi ?? c.result.summary.headline.roi;
   const profit = (c) => c.verdict.profit ?? c.result.summary.headline.profit;
-  return (
-    checked
-      .filter((c) => c.verdict.ok || (belowTarget && c.verdict.belowTarget))
-      .sort(
-        (a, b) =>
-          roi(b) - roi(a) ||
-          profit(b) - profit(a) ||
-          b.result.source.supplier.rating - a.result.source.supplier.rating ||
-          Number(b.candidate?.via === 'image') - Number(a.candidate?.via === 'image') ||
-          (a.order ?? 0) - (b.order ?? 0)
-      )[0] || null
-  );
+  return checked
+    .filter((c) => c.verdict.ok || (belowTarget && c.verdict.belowTarget))
+    .sort(
+      (a, b) =>
+        roi(b) - roi(a) ||
+        profit(b) - profit(a) ||
+        b.result.source.supplier.rating - a.result.source.supplier.rating ||
+        Number(b.candidate?.via === 'image') - Number(a.candidate?.via === 'image') ||
+        (a.order ?? 0) - (b.order ?? 0)
+    );
 }
 
-module.exports = { searchWords, searchImage, sameProduct, sizesIn, candidatesToCheck, judgedOn, judge, best, MIN_RATING, MAX_ROI, CHECK_MAX };
+/** The best of the suppliers that will do (ranked), or null. */
+const best = (checked, options) => ranked(checked, options)[0] || null;
+
+module.exports = { searchWords, searchImage, sameProduct, sizesIn, candidatesToCheck, judgedOn, judge, ranked, best, MIN_RATING, MAX_ROI, CHECK_MAX };

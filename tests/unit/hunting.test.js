@@ -636,4 +636,7 @@ test('a checked supplier will do at 4.0 stars or more, selling what sells, in st
   const u50 = under(50);
   assert.strictEqual(sourcing.best([under(40), u50, { verdict: { ok: false }, result: result() }], { belowTarget: true }), u50);
   assert.strictEqual(sourcing.best([under(50), a], { belowTarget: true }), a);
+  // All that will do, best first: the photos are compared in this order until one is the same product.
+  assert.deepStrictEqual(sourcing.ranked([a, under(90), b, { verdict: { ok: false }, result: result() }]), [b, a]);
+  assert.deepStrictEqual(sourcing.ranked([under(40), u50, a], { belowTarget: true }).map((c) => c.verdict.roi ?? 'a'), ['a', 50, 40]);
 });

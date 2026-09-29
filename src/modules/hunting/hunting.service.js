@@ -9,6 +9,7 @@ const { REJECT_REASONS, reasonLabel, stageOf, permissionsFor, decisionFields, Hu
 const stats = require('./hunting-stats');
 const { noticeFor } = require('./hunt-notice');
 const sourcing = require('./hunt-sourcing');
+const huntPhotos = require('./hunt-photos');
 const analyticsDays = require('../analytics/analytics-days');
 const notificationsService = require('../notifications/notifications.service');
 const connectionService = require('../connections/connection.service');
@@ -17,6 +18,7 @@ const activityRepository = require('../team/activity.repository');
 const listingRepository = require('../listings/listing.repository');
 const ebaySource = require('../sourcing/ebay-listing.source');
 const aliexpressSource = require('../sourcing/aliexpress');
+const productMatch = require('../ai-generation/product-match.service');
 const browseUsage = require('../ebay/browse-usage');
 const mirror = require('../ebay/ebay-mirror.repository');
 const ebayService = require('../ebay/ebay.service');
@@ -141,7 +143,7 @@ async function readProduct(ownerId, connectionId, { competitorUrl, sourceUrl }, 
   result.salesScore = huntSales.salesScore({ demand: result.demand, variations: result.sales.variations });
   result.market = { id: site.id, name: site.name, country: site.country };
   result.duplicates = await duplicatesFor(ownerId, { productId, itemId, title: competitor?.title || source.title, titles: [competitor?.title, source.title], connectionId, excludeId });
-  return { competitorUrl: competitorUrl || null, sourceUrl, itemId, productId, result, reading: huntProfit.salesReading(competitor, site.currency) };
+  return { competitorUrl: competitorUrl || null, sourceUrl, itemId, productId, result, reading: huntProfit.salesReading(competitor, site.currency), sourcePhotos: source.imageUrls || [] };
 }
 
 // The listing in eBay's sales history for its title, or { available: false }
@@ -317,14 +319,47 @@ async function check(auth, connectionId, { competitorUrl, sourceUrl }) {
 }
 
 /**
+ * Whether a checked supplier is the same product as the eBay listing, from
+ * the photos, asked only of a supplier that passes every other check:
+ * async (pick) => { same, why, by }. Free first: two or more of the listing's
+ * photos among the supplier's own (hunt-photos, by: 'photos'); otherwise the
+ * AI compares the listing's photos with the supplier's main one (by: 'ai').
+ * The listing's photos are read once, when first needed. Throws when the
+ * listing's photo can't be read or the AI can't answer: nothing is picked unseen.
+ */
+const LISTING_PHOTOS = 6;
+const SUPPLIER_PHOTOS = 8;
+function photoJudge(competitor, searchedPhoto) {
+  let listing = null;
+  const listingPhotos = () =>
+    (listing ||= (async () => {
+      const urls = [...new Set(competitor.referenceImages?.length ? competitor.referenceImages : [competitor.imageUrl].filter(Boolean))].slice(0, LISTING_PHOTOS);
+      const photos = await Promise.all(urls.map((u, i) => (i === 0 && searchedPhoto ? searchedPhoto : aliexpressSource.readPhoto(sourcing.searchImage(u)).catch(() => null))));
+      if (!urls.length && searchedPhoto) photos.push(searchedPhoto);
+      return { photos: photos.filter(Boolean), prints: await Promise.all(photos.map(huntPhotos.fingerprint)) };
+    })());
+  return async (pick) => {
+    const { photos, prints } = await listingPhotos();
+    const main = pick.candidate.imageUrl || (pick.read?.sourcePhotos || [])[0] || null;
+    const urls = [...new Set([main, ...(pick.read?.sourcePhotos || [])].filter(Boolean))].slice(0, SUPPLIER_PHOTOS);
+    const theirs = await Promise.all(urls.map((u) => aliexpressSource.fetchPhoto(u)));
+    const same = huntPhotos.compare(prints, await Promise.all(theirs.map(huntPhotos.fingerprint)));
+    if (same.samePhotos) return { same: true, why: `${same.shared} of the listing's photos are the supplier's own`, by: 'photos' };
+    const [look] = await productMatch.sameAsListing({ listing: { title: competitor.title, photos }, candidates: [{ title: pick.candidate.title, photo: theirs[0] || null }] });
+    return { ...look, by: 'ai' };
+  };
+}
+
+/**
  * Discover's Hunt: finds an AliExpress supplier for an eBay listing by
  * itself and adds the product. The listing is read once; AliExpress is
- * searched by its photo and by its title's words; up to six of the products
- * found are checked in full, as a hunter's check would (prices, postage,
- * the account's fees and target return); one rated 4.0 stars or more that
- * sells what the listing sells and earns the target is added the usual way
- * (waiting for review; the owner's approved and drafted). Otherwise nothing
- * is added: { found: false, reason, tried }.
+ * searched by its photo and by its title's words; up to eight products whose
+ * titles look alike are checked in full, as a hunter's check would (prices,
+ * postage, the account's fees and target return); of those rated 4.0 stars
+ * or more that sell what the listing sells and earn the target, best first,
+ * the first that's the same product in the photos (photoJudge: only these are
+ * compared, so the AI is asked about as few as possible) is added, waiting
+ * for review. Otherwise nothing is added: { found: false, reason, tried }.
  */
 const SOURCE_CONCURRENCY = 4;
 // `add: false` (the add form's "Find with Liston"): the supplier found is kept as a check and returned,
@@ -353,8 +388,11 @@ async function autoSource(auth, connectionId, { competitorUrl, add: addIt = true
   }
   const { check: candidates, skipped } = sourcing.candidatesToCheck(found, competitor.title);
   // Said with the answer when a search couldn't run (eBay's photo not reachable just now, say).
-  const note = found.errors.some((e) => e.startsWith('Image search'))
-    ? "Photo search wasn't available just now (eBay's photo couldn't be fetched), so it searched by the title only."
+  const photoError = found.errors.find((e) => e.startsWith('Image search'));
+  const note = photoError
+    ? /eBay photo couldn't be read/.test(photoError)
+      ? "Photo search wasn't available just now (eBay's photo couldn't be fetched), so it searched by the title only."
+      : `Photo search wasn't available just now (${photoError.replace(/^Image search: /, '')}), so it searched by the title only.`
     : found.errors.length
       ? `Part of the search failed: ${found.errors.join('; ')}.`
       : null;
@@ -389,14 +427,42 @@ async function autoSource(auth, connectionId, { competitorUrl, add: addIt = true
     }
   }
   await Promise.all(Array.from({ length: Math.min(SOURCE_CONCURRENCY, candidates.length) }, worker));
-  const tried = candidates.map((c) => {
-    const x = checked.find((k) => k.candidate === c);
-    // The figures it was judged on (hunt-sourcing.judgedOn).
-    return { title: c.title, url: c.url, imageUrl: c.imageUrl, via: c.via, rating: x?.result?.source?.supplier?.rating ?? c.rating ?? null, profit: x?.verdict.profit ?? null, roi: x?.verdict.roi ?? null, ok: Boolean(x?.verdict.ok), belowTarget: Boolean(x?.verdict.belowTarget), why: x?.verdict.why || null };
-  });
-  const winner = sourcing.best(checked);
-  // None at the target return: the best that matches and earns less, shown to add by hand.
-  const near = winner ? null : sourcing.best(checked, { belowTarget: true });
+
+  // The photos decide, asked only of the ones that would be picked, best first, until one is the
+  // same product: titles share words across quite different products (a round spotlight projector
+  // and a tree-shaped one are both "Christmas projector light").
+  const looksSame = photoJudge(competitor, found.photo);
+  const looked = { photos: 0, ai: 0 };
+  async function firstSame(list) {
+    for (const pick of list) {
+      const look = await looksSame(pick);
+      looked[look.by] += 1;
+      if (look.same) return pick;
+      pick.verdict = { ...pick.verdict, ok: false, belowTarget: false, why: `Not the same product in the photos${look.why ? `: ${look.why}` : ''}` };
+    }
+    return null;
+  }
+  const triedRows = () =>
+    candidates.map((c) => {
+      const x = checked.find((k) => k.candidate === c);
+      // The figures it was judged on (hunt-sourcing.judgedOn).
+      return { title: c.title, url: c.url, imageUrl: c.imageUrl, via: c.via, rating: x?.result?.source?.supplier?.rating ?? c.rating ?? null, profit: x?.verdict.profit ?? null, roi: x?.verdict.roi ?? null, ok: Boolean(x?.verdict.ok), belowTarget: Boolean(x?.verdict.belowTarget), why: x?.verdict.why || null };
+    });
+  let winner;
+  let near = null;
+  try {
+    winner = await firstSame(sourcing.ranked(checked));
+    // None at the target return: the best that matches and earns less, shown to add by hand.
+    if (!winner) near = await firstSame(sourcing.ranked(checked, { belowTarget: true }));
+  } catch (err) {
+    return {
+      found: false,
+      reason: `Liston couldn't compare the supplier's photos with the eBay listing's just now (${err.message}), so it didn't pick one. Try again in a moment.`,
+      tried: [...triedRows(), ...skippedRows].slice(0, 10),
+      note,
+    };
+  }
+  const tried = triedRows();
   // What it made of each, for when a seller asks why nothing was found.
   logger.info('Hunting: supplier search', {
     connectionId,
@@ -408,6 +474,7 @@ async function autoSource(auth, connectionId, { competitorUrl, add: addIt = true
     errors: found.errors,
     tried: tried.map((t) => `${t.via}:${t.ok ? 'ok' : t.belowTarget ? `below target (${t.why})` : t.why}`),
     skipped: skipped.length,
+    photoChecks: looked,
   });
   const via = (pick) => (pick.candidate.via === 'image' ? 'image' : 'text');
   if (near) {
@@ -431,7 +498,7 @@ async function autoSource(auth, connectionId, { competitorUrl, add: addIt = true
     };
   }
   if (!winner) {
-    return { found: false, reason: `None of the ${candidates.length} AliExpress products that look like it is rated 4.0 stars or more, with free postage, sells what the listing sells and makes money at its price.`, tried: [...tried, ...skippedRows].slice(0, 10), note };
+    return { found: false, reason: `None of the ${candidates.length} AliExpress products that look like it is the same product in the photos, rated 4.0 stars or more, with free postage, sells what the listing sells and makes money at its price.`, tried: [...tried, ...skippedRows].slice(0, 10), note };
   }
 
   // Added the way a hunter's check is: kept, then added, always waiting for review (Liston found it).

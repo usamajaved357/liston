@@ -355,3 +355,38 @@ test('downloadViaOtherDns fetches the photo from the address another resolver ga
 test('downloadViaOtherDns fails plainly when the other resolvers give no address', async () => {
   await assert.rejects(aliexpressSource.downloadViaOtherDns('https://i.ebayimg.com/images/g/x/s-l500.jpg', async () => []), /no other address/);
 });
+
+test("findSuppliers searches by a photo no bigger than 800px (AliExpress refuses large ones) and hands back the listing's photo to compare with", async () => {
+  const sharp = require('sharp');
+  const config = require('../../src/config');
+  const big = await sharp({ create: { width: 1600, height: 1200, channels: 3, background: '#c00' } }).png().toBuffer();
+  const saved = { source: config.aliexpress.source, byImage: dsApi.searchByImage, byText: dsApi.searchByText };
+  let searched = null;
+  config.aliexpress.source = 'ds-api';
+  dsApi.searchByImage = async (bytes) => {
+    searched = bytes;
+    return [{ productId: '1', via: 'image' }];
+  };
+  dsApi.searchByText = async () => [];
+  try {
+    const found = await aliexpressSource.findSuppliers({
+      imageUrl: 'https://photo.invalid/s-l1600.png',
+      words: 'mug',
+      fetchImpl: async () => ({ ok: true, arrayBuffer: async () => big }),
+      resolveImpl: async () => [],
+    });
+    const { width, height, format } = await sharp(searched).metadata();
+    assert.deepStrictEqual([width, height, format], [800, 600, 'jpeg']);
+    assert.ok(found.photo.equals(big));
+    assert.deepStrictEqual([found.image.length, found.errors], [1, []]);
+  } finally {
+    config.aliexpress.source = saved.source;
+    dsApi.searchByImage = saved.byImage;
+    dsApi.searchByText = saved.byText;
+  }
+});
+
+test('fetchPhoto gives null for a photo that can\'t be read', async () => {
+  assert.strictEqual(await aliexpressSource.fetchPhoto(null), null);
+  assert.strictEqual(await aliexpressSource.fetchPhoto('https://x.invalid/a.jpg', { fetchImpl: async () => ({ ok: false, status: 404 }) }), null);
+});

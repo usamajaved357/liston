@@ -1,3 +1,4 @@
+const sharp = require('sharp');
 const config = require('../../../config');
 const scraper = require('../../scraping/aliexpress-listing.scraper');
 const dsApi = require('./ds-api');
@@ -92,28 +93,19 @@ async function fetchShipping(url, skuId, { shipTo, currency } = {}) {
  * AliExpress products that may be the same thing as an eBay listing: by its
  * photo (image search) and by the words of its title (text search), each
  * tried whatever the other does, best matches first:
- * { image: [candidate], text: [candidate], errors: [message] }. Needs the
- * AliExpress API (ALIEXPRESS_SOURCE=ds-api); the browser scraper can't search.
+ * { image: [candidate], text: [candidate], errors: [message], photo } (photo:
+ * the listing's photo as read, to compare the products found with; null when
+ * it couldn't be). Needs the AliExpress API (ALIEXPRESS_SOURCE=ds-api); the
+ * browser scraper can't search.
  */
 async function findSuppliers({ imageUrl, words, shipTo, currency, fetchImpl = fetch, resolveImpl = resolveElsewhere }) {
   if (config.aliexpress.source !== 'ds-api') {
     throw new ScrapingError('Finding a supplier by itself needs the AliExpress API (ALIEXPRESS_SOURCE=ds-api).', { source: 'aliexpress' });
   }
   const errors = [];
-  // The photo, several ways at once (eBay's image host sits on a CDN, and the edge a network's DNS
-  // hands out doesn't always answer): as asked, as eBay's smaller copy, over IPv4, and from the
-  // addresses independent DNS resolvers give; the first to arrive, within PHOTO_WAIT_MS.
-  const small = String(imageUrl).replace(/\/s-l\d+\./, '/s-l225.');
-  const photo = () =>
-    Promise.any([
-      download(fetchImpl, imageUrl),
-      download(fetchImpl, small),
-      httpsDownload(imageUrl, { family: 4 }),
-      downloadViaOtherDns(imageUrl, resolveImpl),
-    ]).catch((err) => {
-      throw new Error(`the eBay photo couldn't be read (${err.errors?.[0]?.message || err.message})`);
-    });
-  const byImage = (async () => (imageUrl ? dsApi.searchByImage(await photo(), { shipTo, currency, count: 20 }) : []))().catch((err) => {
+  const listingPhoto = imageUrl ? readPhoto(imageUrl, { fetchImpl, resolveImpl }) : Promise.resolve(null);
+  listingPhoto.catch(() => {}); // awaited below; never an unhandled rejection
+  const byImage = (async () => (imageUrl ? dsApi.searchByImage(await searchable(await listingPhoto), { shipTo, currency, count: 20 }) : []))().catch((err) => {
     errors.push(`Image search: ${err.message}`);
     return [];
   });
@@ -123,7 +115,40 @@ async function findSuppliers({ imageUrl, words, shipTo, currency, fetchImpl = fe
   });
   const [image, text] = await Promise.all([byImage, byText]);
   if (errors.length) logger.warn('AliExpress supplier search partly failed', { errors });
-  return { image, text, errors };
+  return { image, text, errors, photo: await listingPhoto.catch(() => null) };
+}
+
+/**
+ * An eBay photo, several ways at once (eBay's image host sits on a CDN, and
+ * the edge a network's DNS hands out doesn't always answer): as asked, as
+ * eBay's smaller copy, over IPv4, and from the addresses independent DNS
+ * resolvers give; the first to arrive, within PHOTO_WAIT_MS.
+ */
+function readPhoto(url, { fetchImpl = fetch, resolveImpl = resolveElsewhere } = {}) {
+  const small = String(url).replace(/\/s-l\d+\./, '/s-l225.');
+  return Promise.any([download(fetchImpl, url), download(fetchImpl, small), httpsDownload(url, { family: 4 }), downloadViaOtherDns(url, resolveImpl)]).catch((err) => {
+    throw new Error(`the eBay photo couldn't be read (${err.errors?.[0]?.message || err.message})`);
+  });
+}
+
+// AliExpress's image search refuses a large photo ("image size too large"): a JPEG no wider or
+// taller than 800px searches the same. Left as it is when sharp can't read it.
+async function searchable(bytes) {
+  try {
+    return await sharp(bytes).rotate().resize(800, 800, { fit: 'inside', withoutEnlargement: true }).flatten({ background: '#ffffff' }).jpeg({ quality: 85 }).toBuffer();
+  } catch {
+    return bytes;
+  }
+}
+
+/** An AliExpress product's photo, or null when it can't be read. */
+async function fetchPhoto(url, { fetchImpl = fetch } = {}) {
+  if (!url) return null;
+  try {
+    return await download(fetchImpl, url);
+  } catch {
+    return null;
+  }
 }
 
 const PHOTO_WAIT_MS = 6000;
@@ -178,4 +203,4 @@ async function downloadViaOtherDns(url, resolveImpl) {
   );
 }
 
-module.exports = { fetchProduct, fetchPackage, fetchShipping, productIdFromUrl, findSuppliers, downloadViaOtherDns };
+module.exports = { fetchProduct, fetchPackage, fetchShipping, productIdFromUrl, findSuppliers, readPhoto, fetchPhoto, downloadViaOtherDns };

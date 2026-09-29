@@ -728,6 +728,19 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
   const real = aliexpressSource.findSuppliers;
   const realShipping = aliexpressSource.fetchShipping;
   const alike = (id, via, over = {}) => ({ productId: id, title: 'TWS Wireless Earbuds Bluetooth 5.3 Headphones', imageUrl: null, price: 3, rating: 4.7, orders: '1000+', url: `https://www.aliexpress.com/item/100500${id}.html`, via, ...over });
+  // The photos are compared by the AI (tested in unit/product-match): here it says whatever `looks` says.
+  const productMatch = require('../../src/modules/ai-generation/product-match.service');
+  const realLooks = productMatch.sameAsListing;
+  const realFetchPhoto = aliexpressSource.fetchPhoto;
+  const realReadPhoto = aliexpressSource.readPhoto;
+  let looks = () => ({ same: true, why: 'Same earbuds and case' });
+  const compared = [];
+  const compare = async ({ candidates }) => {
+    compared.push(candidates.map((c) => c.title));
+    return candidates.map((c) => looks(c));
+  };
+  productMatch.sameAsListing = compare;
+  aliexpressSource.fetchPhoto = async () => Buffer.from('photo');
   try {
     // Nothing that looks like it: nothing checked, nothing added.
     // (And the photo couldn't be fetched: it says it searched by the title only.)
@@ -753,6 +766,60 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
 
     // Free over £8 (AliExpress's Choice): found. From the add form, kept as a check for the hunter to add.
     aliexpressSource.fetchShipping = async () => ({ cost: 0.99, freeOver: 8, minDays: 5, maxDays: 8, company: 'AliExpress Standard', tracking: true, currency: 'GBP' });
+
+    // The photos are only compared for ones that pass everything else, best first: both here, and
+    // neither is the same product, so nothing is offered.
+    looks = () => ({ same: false, why: 'Over-ear headphones, not earbuds' });
+    compared.length = 0;
+    const unlike = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
+    assert.strictEqual(unlike.status, 200, JSON.stringify(unlike.data));
+    assert.deepStrictEqual([unlike.data.found, compared.length], [false, 2]);
+    assert.match(unlike.data.reason, /is the same product in the photos/);
+    assert.deepStrictEqual(unlike.data.tried.map((r) => r.why), ['Not the same product in the photos: Over-ear headphones, not earbuds', 'Not the same product in the photos: Over-ear headphones, not earbuds']);
+    // One failing the other checks is never compared: rated under 4, it isn't asked about.
+    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, supplier: { ...SOURCE.supplier, rating: 3.6 }, sourceUrl: u });
+    compared.length = 0;
+    await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
+    assert.strictEqual(compared.length, 0, 'no AI call for a supplier that fails anyway');
+    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
+    // The AI can't answer just now: nothing is picked unseen.
+    productMatch.sameAsListing = async () => {
+      throw new Error("the photos couldn't be compared (overloaded)");
+    };
+    const down = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
+    assert.strictEqual(down.data.found, false);
+    assert.match(down.data.reason, /couldn't compare the supplier's photos with the eBay listing's just now/);
+    // Two of the listing's photos are the supplier's own: the same product, no AI asked.
+    const sharp = require('sharp');
+    const picture = (shapes) =>
+      sharp(
+        Buffer.from(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fafafa"/><stop offset="1" stop-color="#9a9a9a"/></linearGradient>` +
+            `<radialGradient id="r"><stop offset="0" stop-color="#eee"/><stop offset="1" stop-color="#222"/></radialGradient></defs><rect width="400" height="400" fill="url(#g)"/>${shapes}</svg>`
+        )
+      )
+        .png()
+        .toBuffer();
+    const pictures = {
+      'https://i.ebayimg.com/1/s-l500.jpg': await picture('<circle cx="140" cy="200" r="90" fill="url(#r)"/><rect x="250" y="80" width="90" height="240" fill="url(#r)"/>'),
+      'https://i.ebayimg.com/2/s-l500.jpg': await picture('<rect x="60" y="60" width="120" height="120" fill="url(#r)"/><circle cx="280" cy="290" r="70" fill="url(#r)"/>'),
+    };
+    COMPETITOR.referenceImages = Object.keys(pictures);
+    aliexpressSource.readPhoto = async (u) => pictures[u];
+    // The supplier's copies: smaller, as JPEGs.
+    const copies = await Promise.all(Object.values(pictures).map((b) => sharp(b).resize(300).jpeg({ quality: 70 }).toBuffer()));
+    const theirs = { 'https://ae01.alicdn.com/1.jpg': copies[0], 'https://ae01.alicdn.com/2.jpg': copies[1] };
+    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, imageUrls: Object.keys(theirs), sourceUrl: u });
+    aliexpressSource.fetchPhoto = async (u) => theirs[u] || null;
+    productMatch.sameAsListing = compare;
+    compared.length = 0;
+    const own = await request('POST', url, { competitorUrl: COMPETITOR_URL, add: false }, t.hunter.token);
+    assert.deepStrictEqual([own.data.found, compared.length], [true, 0]);
+    COMPETITOR.referenceImages = [];
+    aliexpressSource.readPhoto = realReadPhoto;
+    aliexpressSource.fetchPhoto = async () => Buffer.from('photo');
+    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
+    looks = () => ({ same: true, why: 'Same earbuds and case' });
     const kept = await request('POST', url, { competitorUrl: COMPETITOR_URL, add: false }, t.hunter.token);
     assert.strictEqual(kept.status, 200, JSON.stringify(kept.data));
     assert.deepStrictEqual([kept.data.found, typeof kept.data.checkId, kept.data.autoApproves], [true, 'string', false]);
@@ -811,6 +878,10 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
     assert.strictEqual((await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.nobody.token)).status, 403);
     assert.strictEqual((await request('POST', url, { competitorUrl: 'https://example.com/x' }, t.hunter.token)).status, 400);
   } finally {
+    COMPETITOR.referenceImages = [];
+    productMatch.sameAsListing = realLooks;
+    aliexpressSource.fetchPhoto = realFetchPhoto;
+    aliexpressSource.readPhoto = realReadPhoto;
     aliexpressSource.findSuppliers = real;
     aliexpressSource.fetchShipping = realShipping;
     aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
