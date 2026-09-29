@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, HuntAutoSource, HuntDetail, HuntSourceTry } from "@/lib/api";
 import { money } from "@/components/research/format";
-import { Thumb, announceHuntingChange } from "./HuntBits";
+import { STAGE, Thumb, ago, announceHuntingChange } from "./HuntBits";
 
 // Discover's Hunt: Liston looks for the AliExpress supplier itself — the
 // listing's photo and title searched, the best matches checked the way a
@@ -185,6 +185,24 @@ export function AutoSourceDialog({
                 Keep discovering
               </button>
               <button type="button" onClick={() => onOpenHunt(added?.id ?? (result.belowTarget ? "" : result.hunt.id))} className="btn btn-primary btn-sm">
+                Open it
+              </button>
+            </div>
+          </>
+        ) : result && result.alreadyHunted ? (
+          <>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-primary)]">Already hunted</p>
+            <h2 className="mt-0.5 text-[15px] font-semibold text-[var(--color-ink)]">This listing is already on your hunting list</h2>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--color-muted)]">
+              {result.alreadyHunted.title} was added {ago(result.alreadyHunted.createdAt)}
+              {result.alreadyHunted.hunter ? ` by ${result.alreadyHunted.hunter.name}` : ""}
+              {result.alreadyHunted.foundByListon ? " (supplier found by Liston)" : ""} and is {STAGE[result.alreadyHunted.stage].label.toLowerCase()}. Nothing was added again.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
+                Keep discovering
+              </button>
+              <button type="button" onClick={() => onOpenHunt(result.alreadyHunted!.id)} className="btn btn-primary btn-sm">
                 Open it
               </button>
             </div>

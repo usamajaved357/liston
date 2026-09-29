@@ -75,7 +75,8 @@ function getItemsByItemGroup(itemGroupId, marketplaceId) {
 // how the results split by category and by item specific (Brand included).
 // deliveryCountry: where the buyer is, so eBay can estimate each
 // listing's delivery dates (X-EBAY-C-ENDUSERCTX contextualLocation).
-function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort, fieldgroups, deliveryCountry }, marketplaceId) {
+// aspectFilter: "categoryId:123,Brand:{Unbranded|Generic}" (needs the category among categoryIds).
+function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort, fieldgroups, deliveryCountry, aspectFilter }, marketplaceId) {
   return request(
     'search',
     '/buy/browse/v1/item_summary/search',
@@ -88,6 +89,7 @@ function searchItemSummaries({ q, limit = 25, offset, filter, categoryIds, sort,
       ...(categoryIds ? { category_ids: categoryIds } : {}),
       ...(sort ? { sort } : {}),
       ...(fieldgroups ? { fieldgroups } : {}),
+      ...(aspectFilter ? { aspect_filter: aspectFilter } : {}),
     },
     marketplaceId,
     deliveryCountry ? { 'X-EBAY-C-ENDUSERCTX': `contextualLocation=${encodeURIComponent(`country=${deliveryCountry}`)}` } : {}

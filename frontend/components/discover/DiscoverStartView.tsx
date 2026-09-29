@@ -20,9 +20,9 @@ function compact(n: number) {
   return String(n);
 }
 
-function Stat({ value, label }: { value: string; label: string }) {
+function Stat({ value, label, title }: { value: string; label: string; title?: string }) {
   return (
-    <div className="min-w-0 rounded-xl border border-white/60 bg-white/70 px-3 py-2 backdrop-blur">
+    <div className="min-w-0 rounded-xl border border-white/60 bg-white/70 px-3 py-2 backdrop-blur" title={title}>
       <p className="text-[17px] font-semibold leading-tight tracking-tight tabular-nums text-[var(--color-ink)]">{value}</p>
       <p className="truncate text-[11px] text-[var(--color-muted)]">{label}</p>
     </div>
@@ -30,8 +30,10 @@ function Stat({ value, label }: { value: string; label: string }) {
 }
 
 /** What Discover does, in two lines, and the size of what's been explored on the site. */
-export function DiscoverHero({ data }: { data: DiscoverStart }) {
+// `matched`: the products the Products tab's filters leave, shown against everything found.
+export function DiscoverHero({ data, matched = null }: { data: DiscoverStart; matched?: number | null }) {
   const w = data.winners;
+  const filtered = w && matched !== null && matched !== w.total;
   return (
     <section className="card overflow-hidden">
       <div className="flex flex-col gap-3 bg-[linear-gradient(135deg,#eef2ff_0%,#f8fafc_55%,#ecfdf5_100%)] px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
@@ -43,7 +45,11 @@ export function DiscoverHero({ data }: { data: DiscoverStart }) {
           </p>
         </div>
         <div className="grid flex-shrink-0 grid-cols-3 gap-2 lg:w-[400px]">
-          <Stat value={w ? count(w.total) : "—"} label="products found" />
+          <Stat
+            value={filtered ? count(matched) : w ? count(w.total) : "—"}
+            label={filtered ? `of ${count(w.total)} match` : "products found"}
+            title={filtered ? `${count(matched)} of the ${count(w.total)} products found match your filters` : undefined}
+          />
           <Stat value={w?.keywords !== undefined ? count(w.keywords) : "—"} label="keywords that sell" />
           <Stat value={w ? count(w.pool.subjects) : "—"} label="explored" />
         </div>
@@ -209,7 +215,7 @@ function RankedCategories({ rows, rank, currency, onOpen }: { rows: DiscoverBest
 }
 
 // The account's own categories: where the listings Liston made for it sit.
-function YourCategories({ rows, onOpen }: { rows: DiscoverCategoryCard[]; onOpen: (subject: DiscoverSubjectRef) => void }) {
+function YourCategories({ rows, onOpen, scoring }: { rows: DiscoverCategoryCard[]; onOpen: (subject: DiscoverSubjectRef) => void; scoring: { total: number; done: number } | null }) {
   if (!rows.length) {
     return (
       <div className="px-4 pb-4">
@@ -239,12 +245,17 @@ function YourCategories({ rows, onOpen }: { rows: DiscoverCategoryCard[]; onOpen
                 {c.path && c.path.length > 0 && <span className="mt-0.5 block truncate text-[11px] text-[var(--color-muted)]">{c.path.join(" › ")}</span>}
               </td>
               <td className="px-3 py-2.5 text-center font-semibold tabular-nums text-[var(--color-ink)]">{count(c.listings ?? 0)}</td>
-              <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-muted)]">{c.scanned ? compact(c.scanned.total) : "—"}</td>
+              <td className="px-3 py-2.5 text-center tabular-nums text-[var(--color-muted)]">{c.scanned ? compact(c.scanned.total) : c.live !== null && c.live !== undefined ? compact(c.live) : "—"}</td>
               <td className="px-3 py-2.5 text-center text-[var(--color-muted)]">
                 {c.scanned ? (
                   <span className="inline-flex items-center gap-1.5 tabular-nums">
                     <Dot band={c.scanned.band} />
                     {c.scanned.score}
+                  </span>
+                ) : scoring ? (
+                  <span className="inline-flex items-center gap-1.5 text-[11.5px]">
+                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-primary)]/25 border-t-[var(--color-primary)]" aria-hidden />
+                    Scoring
                   </span>
                 ) : (
                   <span className="text-[11.5px]">Open to score</span>
@@ -275,7 +286,13 @@ export function DiscoverCategoriesTab({ data, onOpen }: { data: DiscoverStart; o
     { key: "trending", label: RANKED.trending.label, count: best.length ? count(best.filter((c) => c.rising > 0).length) : undefined },
     ...(data.yourCategories.length ? [{ key: "yours" as CatTab, label: "Yours", count: count(data.yourCategories.length) }] : []),
   ];
-  const note = tab === "all" || tab === "yours" ? TAB_NOTES[tab] : RANKED[tab].note;
+  const scoring = data.yourScoring;
+  const note =
+    tab === "yours" && scoring
+      ? `Scoring your categories not explored yet: ${scoring.done} of ${scoring.total}. Each fills in as its sold counts are read.`
+      : tab === "all" || tab === "yours"
+        ? TAB_NOTES[tab]
+        : RANKED[tab].note;
   return (
     <div className="space-y-4">
       <section className="card min-w-0">
@@ -287,7 +304,7 @@ export function DiscoverCategoriesTab({ data, onOpen }: { data: DiscoverStart; o
           {tab === "all" ? (
             <AllCategories rows={data.topCategories} onOpen={onOpen} />
           ) : tab === "yours" ? (
-            <YourCategories rows={data.yourCategories} onOpen={onOpen} />
+            <YourCategories rows={data.yourCategories} onOpen={onOpen} scoring={data.yourScoring ?? null} />
           ) : (
             <RankedCategories key={tab} rows={best} rank={tab} currency={data.market.currency} onOpen={onOpen} />
           )}

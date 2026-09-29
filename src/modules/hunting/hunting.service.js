@@ -362,15 +362,42 @@ function photoJudge(competitor, searchedPhoto) {
  * for review. Otherwise nothing is added: { found: false, reason, tried }.
  */
 const SOURCE_CONCURRENCY = 4;
+// Searches running now, by account and eBay listing (and, for the add form, by person: its check is
+// theirs): a second Hunt for the same listing while one runs (a second click, a retried request, a
+// teammate) waits for it and gets the same answer, so a listing is never added twice.
+const searching = new Map();
 // `add: false` (the add form's "Find with Liston"): the supplier found is kept as a check and returned,
 // { found, checkId, result, autoApproves, sourceUrl, supplier, tried }, for the hunter to add with their note.
-async function autoSource(auth, connectionId, { competitorUrl, add: addIt = true }) {
+async function autoSource(auth, connectionId, input) {
+  const addIt = input.add !== false;
+  const key = `${connectionId}:${ebaySource.legacyItemIdFromUrl(input.competitorUrl) || input.competitorUrl}:${addIt ? 'add' : `find:${auth.userId}`}`;
+  if (searching.has(key)) return searching.get(key);
+  const run = findAndAdd(auth, connectionId, { competitorUrl: input.competitorUrl, add: addIt }).finally(() => searching.delete(key));
+  searching.set(key, run);
+  return run;
+}
+
+async function findAndAdd(auth, connectionId, { competitorUrl, add: addIt }) {
   const viewer = await viewerFor(auth, connectionId);
   if (!viewer.canHunt) refuse("You don't have access to hunting on this account.");
   const connection = await connectionService.getConnectionSummary(connectionId, auth.ownerId);
   if (connection.platform_key !== 'ebay') throw new HuntError('Product hunting needs an eBay account.');
   const site = marketplaces.byId(connection.marketplace?.id) || marketplaces.byId(connection.settings?.ebay?.marketplaceId) || marketplaces.byId(marketplaces.DEFAULT_ID);
   const itemId = ebaySource.legacyItemIdFromUrl(competitorUrl);
+  // Discover's Hunt adds a listing to an account once: already there (whatever became of it), it says so
+  // and links to it rather than searching again. (The add form's own check only warns: a person chose it.)
+  if (addIt) {
+    const existing = await huntingRepository.huntOnAccount(connectionId, itemId);
+    if (existing) {
+      const hunt = summaryOf(existing, viewer);
+      return {
+        found: false,
+        alreadyHunted: { id: hunt.id, stage: hunt.stage, title: hunt.title, hunter: hunt.hunter, createdAt: hunt.createdAt, foundByListon: hunt.foundByListon },
+        reason: `This eBay listing is already on the account's hunting list, added by ${hunt.hunter?.name || 'someone'}.`,
+        tried: [],
+      };
+    }
+  }
   await ensureAllowance();
   const competitor = await browseUsage.as('hunting', () => ebaySource.fetchListing(competitorUrl, site.id));
   const known = { competitor, ebaySales: await ebaySoldHistory(competitor, itemId, site.id) };

@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const discoverService = require('./discover.service');
+const focusing = require('./discover-focus');
 const teamRepository = require('../team/team.repository');
 
 // Discover's requests (mounted under /api/connections/:id/discover):
@@ -11,7 +12,6 @@ const subjectSchema = z
     q: z.string().trim().min(2, 'Type at least two letters.').max(80, 'Keep the keyword under 80 characters.').optional(),
   })
   .refine((v) => v.categoryId || v.q, { message: 'Pick a category or type a keyword.' });
-const exploreSchema = subjectSchema.and(z.object({ reads: z.coerce.number().int().min(1).max(discoverService.READS_MAX).optional() }));
 const rankSchema = z.object({ categoryId: z.string().regex(/^\d{1,12}$/, 'That category isn’t one eBay knows.') });
 const keywordsSchema = z.object({ range: z.enum(['7d', '30d', '90d']).default('30d') });
 const flag = z.enum(['1', 'true', '0', 'false', '']).optional().transform((v) => v === '1' || v === 'true');
@@ -19,6 +19,20 @@ const amount = z
   .union([z.literal(''), z.coerce.number().min(0).max(100000)])
   .optional()
   .transform((v) => (v === '' || v === undefined ? null : v));
+// Loading more with the page's filters: what's worth reading (discover-focus). `fq`: words in the product.
+const exploreSchema = subjectSchema.and(
+  z.object({
+    reads: z.coerce.number().int().min(1).max(discoverService.READS_MAX).optional(),
+    fq: z.string().trim().max(80).optional().default(''),
+    fit: flag,
+    priceMin: amount,
+    priceMax: amount,
+    brand: z.enum(['any', 'unbranded', 'branded']).optional().default('any'),
+    rating: z.enum(['any', 'top', 'good', 'weak']).optional().default('any'),
+    size: z.enum(['any', 'small', 'medium', 'large']).optional().default('any'),
+    listedWithin: z.coerce.number().int().min(0).max(730).optional().default(0),
+  })
+);
 const winnersSchema = z.object({
   q: z.string().trim().max(80).optional().default(''),
   fit: flag,
@@ -69,7 +83,7 @@ const explore = handle(async (req, res) => {
   if (!input) return;
   // Your own traffic on a keyword is the account's analytics: owners, and members with Analytics.
   const canSeeTraffic = req.role === 'owner' || (await teamRepository.resolvePermission(req.userId, req.params.id, 'analytics'));
-  res.status(200).json(await discoverService.explore(req.ownerId, req.params.id, input, { reads: input.reads, canSeeTraffic }));
+  res.status(200).json(await discoverService.explore(req.ownerId, req.params.id, input, { reads: input.reads, canSeeTraffic, focus: focusing.focusOf(input) }));
 });
 
 const review = handle(async (req, res) => {
@@ -111,6 +125,13 @@ const winners = handle(async (req, res) => {
   res.status(200).json(await discoverService.winners(req.ownerId, req.params.id, input));
 });
 
+// "Find more products for these filters": the Products tab's filters in the body.
+const findMore = handle(async (req, res) => {
+  const input = parse(winnersSchema, req.body || {}, res);
+  if (!input) return;
+  res.status(200).json(await discoverService.findMore(req.ownerId, req.params.id, input));
+});
+
 const yourKeywords = handle(async (req, res) => {
   const input = parse(keywordsSchema, req.query, res);
   if (!input) return;
@@ -123,4 +144,4 @@ const siteKeywords = handle(async (req, res) => {
   res.status(200).json(await discoverService.siteKeywords(req.ownerId, req.params.id, input));
 });
 
-module.exports = { start, explore, review, suggest, rank, watches, addWatch, removeWatch, winners, siteKeywords, yourKeywords };
+module.exports = { start, explore, review, suggest, rank, watches, addWatch, removeWatch, winners, findMore, siteKeywords, yourKeywords };

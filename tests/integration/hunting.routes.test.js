@@ -760,6 +760,8 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
   const url = `/api/connections/${t.connectionId}/hunting/auto-source`;
   const real = aliexpressSource.findSuppliers;
   const realShipping = aliexpressSource.fetchShipping;
+  // Discover's Hunt adds a listing to an account once: each case hunts a listing of its own.
+  const listing = (n) => `https://www.ebay.co.uk/itm/5550000000${String(n).padStart(2, '0')}`;
   const alike = (id, via, over = {}) => ({ productId: id, title: 'TWS Wireless Earbuds Bluetooth 5.3 Headphones', imageUrl: null, price: 3, rating: 4.7, orders: '1000+', url: `https://www.aliexpress.com/item/100500${id}.html`, via, ...over });
   // The photos are compared by the AI (tested in unit/product-match): here it says whatever `looks` says.
   const productMatch = require('../../src/modules/ai-generation/product-match.service');
@@ -862,7 +864,7 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
     assert.deepStrictEqual([fromForm.status, fromForm.data.stage, fromForm.data.sourceUrl], [201, 'pending', kept.data.sourceUrl]);
 
     // From Discover: added for review at once, the hunter's, with a note saying Liston found it.
-    const found = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
+    const found = await request('POST', url, { competitorUrl: listing(1) }, t.hunter.token);
     assert.strictEqual(found.status, 201, JSON.stringify(found.data));
     assert.strictEqual(found.data.found, true);
     assert.deepStrictEqual([found.data.hunt.stage, found.data.hunt.hunter.id], ['pending', t.hunter.id]);
@@ -870,16 +872,26 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
     assert.strictEqual(found.data.tried.length, 2);
     assert.ok(found.data.supplier.roi >= 60);
     assert.strictEqual(found.data.hunt.foundByListon, true);
+    // Hunting the same listing again (a second click, a retried request, a teammate): nothing added, a link to it.
+    const count = async () => (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.hunter.token)).data.items.length;
+    const listed = await count();
+    const again = await request('POST', url, { competitorUrl: listing(1) }, t.reviewer.token);
+    assert.strictEqual(again.status, 200, JSON.stringify(again.data));
+    assert.deepStrictEqual([again.data.found, again.data.alreadyHunted.id, again.data.alreadyHunted.stage, again.data.alreadyHunted.hunter.id], [false, found.data.hunt.id, 'pending', t.hunter.id]);
+    assert.strictEqual(await count(), listed);
+    // Two at the same moment: one search, one product, both told of it.
+    const [one, two] = await Promise.all([listing(6), listing(6)].map((u) => request('POST', url, { competitorUrl: u }, t.hunter.token)));
+    assert.deepStrictEqual([one.data.hunt?.id, await count()], [two.data.hunt?.id, listed + 1]);
 
     // Never approved as added, the owner's included: it waits until someone opens it and approves it.
-    const byOwner = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.ownerToken);
+    const byOwner = await request('POST', url, { competitorUrl: listing(2) }, t.ownerToken);
     assert.strictEqual(byOwner.status, 201, JSON.stringify(byOwner.data));
     assert.deepStrictEqual([byOwner.data.hunt.stage, byOwner.data.hunt.autoApproved, byOwner.data.hunt.foundByListon, byOwner.data.hunt.permissions.canDecide], ['pending', false, true, true]);
     assert.strictEqual((await request('POST', url, { competitorUrl: COMPETITOR_URL, add: false }, t.ownerToken)).data.autoApproves, false, 'the add form adds it for review too');
     const ownerApproves = await request('POST', `/api/hunting/${byOwner.data.hunt.id}/decision`, { decision: 'approve' }, t.ownerToken);
     assert.deepStrictEqual([ownerApproves.status, ownerApproves.data.stage], [200, 'approved']);
     // A reviewer's Liston find waits too, and they may decide on it (Liston found it, not they).
-    const byReviewer = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.reviewer.token);
+    const byReviewer = await request('POST', url, { competitorUrl: listing(3) }, t.reviewer.token);
     assert.deepStrictEqual([byReviewer.data.hunt.stage, byReviewer.data.hunt.permissions.canDecide], ['pending', true]);
     const reviewerRejects = await request('POST', `/api/hunting/${byReviewer.data.hunt.id}/decision`, { decision: 'reject', reason: 'low_demand' }, t.reviewer.token);
     assert.deepStrictEqual([reviewerRejects.status, reviewerRejects.data.stage], [200, 'rejected']);
@@ -892,7 +904,7 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
       [t.connectionId, target]
     );
     const before = (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.hunter.token)).data.items.length;
-    const under = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
+    const under = await request('POST', url, { competitorUrl: listing(4) }, t.hunter.token);
     assert.strictEqual(under.status, 200, JSON.stringify(under.data));
     assert.deepStrictEqual([under.data.found, under.data.belowTarget, under.data.targetRoi, typeof under.data.checkId, under.data.hunt], [true, true, target, 'string', undefined]);
     assert.ok(under.data.supplier.profit > 0 && under.data.supplier.roi < target);
@@ -903,7 +915,7 @@ test("Discover's Hunt finds the supplier itself: the best AliExpress product rat
     assert.deepStrictEqual([addedUnder.status, addedUnder.data.stage], [201, 'pending']);
     // Dearer than the eBay price: a loss, not a match.
     aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, variants: SOURCE.variants.map((v) => ({ ...v, priceText: 'GBP 99.00' })), sourceUrl: u });
-    const loss = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
+    const loss = await request('POST', url, { competitorUrl: listing(5) }, t.hunter.token);
     assert.deepStrictEqual([loss.data.found, loss.data.tried[0].belowTarget, loss.data.tried[0].why], [false, false, "Loses money at the competitor's price"]);
     aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
 

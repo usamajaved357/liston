@@ -279,6 +279,13 @@ async function addItemForListing(listingId, itemId) {
   );
 }
 
+/** The newest product hunted on this account from this competitor listing, or null (Discover's Hunt adds a listing once). */
+async function huntOnAccount(connectionId, itemId) {
+  if (!itemId) return null;
+  const { rows } = await query(`${SELECT} WHERE h.connection_id = $1 AND h.competitor_item_id = $2 ORDER BY h.created_at DESC LIMIT 1`, [connectionId, String(itemId)]);
+  return rows[0] || null;
+}
+
 // ---- the same product elsewhere (warnings, never a block) ------------------------------
 
 /** The owner's hunted products (any account) of this supplier product or competitor listing. */
@@ -462,6 +469,7 @@ module.exports = {
   linkDraft,
   addItemForListing,
   huntsMatching,
+  huntOnAccount,
   listingsMatching,
   huntedBetween,
   decidedBetween,

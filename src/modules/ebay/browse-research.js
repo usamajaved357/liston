@@ -87,13 +87,17 @@ async function search({ q, marketplaceId, condition, minPrice, maxPrice, country
  * nothing is kept here). One call, two if eBay won't break the search
  * down. { total, items, breakdown, calls }.
  */
-async function searchListings({ q, categoryId, marketplaceId, country, limit = 100 }) {
+// `offset`, `filter` and `aspectFilter`: a later page, or a search narrowed at eBay (Discover's Load
+// more with the hunter's filters: a price range, an unbranded Brand).
+async function searchListings({ q, categoryId, marketplaceId, country, limit = 100, offset = 0, filter = 'buyingOptions:{FIXED_PRICE}', aspectFilter }) {
   const params = {
     q: q || undefined,
     categoryIds: categoryId ? String(categoryId) : undefined,
     limit: Math.min(SEARCH_LIMIT, limit),
-    filter: 'buyingOptions:{FIXED_PRICE}',
+    offset: offset || undefined,
+    filter,
     deliveryCountry: country || undefined,
+    aspectFilter: aspectFilter || undefined,
   };
   let res;
   let calls = 1;

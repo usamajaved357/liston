@@ -1942,11 +1942,20 @@ export interface HuntSourceTry {
 }
 // A supplier that matches but earns under the target return: kept as a check, never added by itself.
 export type HuntBelowTarget = { found: true; belowTarget: true; targetRoi: number; checkId: string; result: HuntCheckResult; autoApproves: boolean; sourceUrl: string; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null; addNote: string };
+// Discover's Hunt on a listing already on the account's hunting list: nothing searched or added, a link to it.
+export interface HuntAlreadyHunted {
+  id: string;
+  stage: HuntStage;
+  title: string;
+  hunter: { id: string; name: string } | null;
+  createdAt: string;
+  foundByListon: boolean;
+}
 // `note`: said when part of the search couldn't run (photo search unavailable just now, say).
 export type HuntAutoSource =
   | { found: true; belowTarget?: false; hunt: HuntDetail; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null }
   | HuntBelowTarget
-  | { found: false; reason: string; tried: HuntSourceTry[]; note?: string | null };
+  | { found: false; reason: string; tried: HuntSourceTry[]; note?: string | null; alreadyHunted?: HuntAlreadyHunted };
 // The add form's "Find with Liston": the supplier found, kept as a check for the hunter to add.
 export type HuntFoundSupplier =
   | { found: true; belowTarget?: false; checkId: string; result: HuntCheckResult; autoApproves: boolean; sourceUrl: string; supplier: HuntSourceTry; tried: HuntSourceTry[]; note?: string | null }
@@ -2272,7 +2281,8 @@ export interface DiscoverExplore {
   categories: { id: string; name: string; count: number }[];
   children: DiscoverChild[];
   // `reading`: sold counts still being read in the background (the page asks again); `progress`: how far.
-  reads: { asked: number; read: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number; reading?: boolean; progress?: { done: number; of: number } };
+  // `of`: the leading listings read from eBay; `focused`: listings read beyond them for the filters (Load more).
+  reads: { asked: number; read: number; of?: number; focused?: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number; reading?: boolean; progress?: { done: number; of: number } };
   watch: { id: string } | null;
   ranking: { total: number; done: number } | null;
   market: { id: string; name: string; currency: string; country?: string; flag?: string };
@@ -2286,6 +2296,8 @@ export interface DiscoverCategoryCard {
   leaf?: boolean;
   listings?: number;
   scanned: { score: number; band: DiscoverOpportunity["band"]; total: number } | null;
+  // An own category: its live listings once searched, before its sold counts are read.
+  live?: number | null;
 }
 // A category explored on the site (any depth), with what its leading listings sell: the Categories tab's best sellers.
 export interface DiscoverBestCategory {
@@ -2309,6 +2321,8 @@ export interface DiscoverStart {
   bestCategories?: DiscoverBestCategory[];
   account: DiscoverAccount | null;
   yourCategories: DiscoverCategoryCard[];
+  // The account's own categories being scored in the background: the page asks again until done.
+  yourScoring?: { total: number; done: number } | null;
   topCategories: DiscoverCategoryCard[];
   watches: number;
   // The best products across everything explored on the site, for the start screen.
@@ -2397,6 +2411,25 @@ export interface HuntDraftStart {
     // What the ticked options are: the ones that sold on the competitor's listing and earn, or every one that earns.
     selectionBasis: "selling" | "earning" | null;
   };
+}
+
+// The Products tab's filters as query values (the Winners list, and Find more with the same).
+function winnersQuery(f: DiscoverWinnersFilters): URLSearchParams {
+  const q = new URLSearchParams();
+  if (f.q) q.set("q", f.q);
+  if (f.fit) q.set("fit", "1");
+  if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
+  if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
+  if (f.brand && f.brand !== "any") q.set("brand", f.brand);
+  if (f.rating && f.rating !== "any") q.set("rating", f.rating);
+  if (f.size && f.size !== "any") q.set("size", f.size);
+  if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
+  if (f.minSales) q.set("minSales", String(f.minSales));
+  if (f.newOnly) q.set("newOnly", "1");
+  if (f.sort) q.set("sort", f.sort);
+  if (f.mine) q.set("mine", f.mine);
+  if (f.safety) q.set("safety", f.safety);
+  return q;
 }
 
 export const api = {
@@ -2645,11 +2678,22 @@ export const api = {
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },
   discoverStart: (connectionId: string) => request<DiscoverStart>(`/api/connections/${connectionId}/discover`),
-  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number) => {
+  // `focus`: the page's filters when loading more: only listings that can pass them are read.
+  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number, focus?: DiscoverWinnersFilters | null) => {
     const q = new URLSearchParams();
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
     if (reads) q.set("reads", String(reads));
+    if (focus) {
+      if (focus.q) q.set("fq", focus.q);
+      if (focus.fit) q.set("fit", "1");
+      if (focus.priceMin !== null && focus.priceMin !== undefined) q.set("priceMin", String(focus.priceMin));
+      if (focus.priceMax !== null && focus.priceMax !== undefined) q.set("priceMax", String(focus.priceMax));
+      if (focus.brand && focus.brand !== "any") q.set("brand", focus.brand);
+      if (focus.rating && focus.rating !== "any") q.set("rating", focus.rating);
+      if (focus.size && focus.size !== "any") q.set("size", focus.size);
+      if (focus.listedWithin) q.set("listedWithin", String(focus.listedWithin));
+    }
     return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
   },
   discoverReview: (connectionId: string, subject: DiscoverSubjectRef) => {
@@ -2658,21 +2702,14 @@ export const api = {
     if (subject.q) q.set("q", subject.q);
     return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
   },
+  // "Find more products for these filters": more listings that can pass them read in the explored subjects most likely to have them.
+  discoverWinnersMore: (connectionId: string, f: DiscoverWinnersFilters = {}) =>
+    request<{ read: number; subjects: string[]; more: boolean; signInFailed?: boolean; stopped?: boolean }>(`/api/connections/${connectionId}/discover/winners/more`, {
+      method: "POST",
+      body: JSON.stringify(Object.fromEntries(winnersQuery(f).entries())),
+    }),
   discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}, limit?: number) => {
-    const q = new URLSearchParams();
-    if (f.q) q.set("q", f.q);
-    if (f.fit) q.set("fit", "1");
-    if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
-    if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
-    if (f.brand && f.brand !== "any") q.set("brand", f.brand);
-    if (f.rating && f.rating !== "any") q.set("rating", f.rating);
-    if (f.size && f.size !== "any") q.set("size", f.size);
-    if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
-    if (f.minSales) q.set("minSales", String(f.minSales));
-    if (f.newOnly) q.set("newOnly", "1");
-    if (f.sort) q.set("sort", f.sort);
-    if (f.mine) q.set("mine", f.mine);
-    if (f.safety) q.set("safety", f.safety);
+    const q = winnersQuery(f);
     if (limit) q.set("limit", String(limit));
     return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
   },

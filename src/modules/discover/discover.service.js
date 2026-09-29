@@ -1,9 +1,11 @@
+const crypto = require('crypto');
 const logger = require('../../utils/logger');
 const connectionService = require('../connections/connection.service');
 const ebayService = require('../ebay/ebay.service');
 const trading = require('../ebay/api/ebay.trading');
 const taxonomy = require('../ebay/api/ebay.taxonomy');
 const browseResearch = require('../ebay/browse-research');
+const focusing = require('./discover-focus');
 const browseUsage = require('../ebay/browse-usage');
 const governor = require('../ebay/request-governor');
 const marketplaces = require('../ebay/marketplaces');
@@ -40,7 +42,7 @@ const SCAN_SIZE = 200; // eBay's page: one Browse call either way
 const READS_FIRST = 50; // sold counts read when a top-level category opens
 const READS_DEEP = 100; // a subcategory or a keyword: more, for more products
 const READS_STEP = 50; // "Load more products"
-const READS_MAX = 200;
+const READS_MAX = 300; // 200 of the leading listings at most; the rest only for the hunter's filters (discover-focus)
 // A reading this recent stands (sold counts barely move in a day; the nightly refresh reads opened ones again).
 const READ_FRESH_DAYS = 1;
 const CHILD_READS = 8; // per subcategory when ranking them (enough for its keywords)
@@ -51,7 +53,7 @@ const PRODUCTS_SHOWN = 150; // products on a subject's page (the page filters th
 const WINNERS_SCANS = 200; // scans in the Winners pool (newest first)
 const WINNERS_DAYS = 30; // a scan older than this is out of the pool
 const BEST_CATEGORIES_MAX = 100; // explored categories the Categories tab ranks
-const WINNERS_PER_SCAN = 8;
+const WINNERS_PER_SCAN = 40; // products a subject adds to the pool: enough that a hunter's filters find the ones past its top few
 const WINNERS_SHOWN = 60; // a page of Winners; "Load more" asks for more, up to WINNERS_MAX
 const WINNERS_MAX = 300;
 const POOL_KEYWORDS_SHOWN = 60; // a page of the site's keywords
@@ -375,10 +377,54 @@ async function childRows(ctx, info, parentScan, brandNames = []) {
  * children (subcategories, ranked once scanned), watch, account, budget }.
  * `reads`: how many leading listings' sold counts to read (25 a step).
  */
-function explore(ownerId, connectionId, input, { reads: wantedReads = READS_FIRST, canSeeTraffic = false } = {}) {
+// `focus`: the hunter's filters when they loaded more (discover-focus): what's read beyond the first reads.
+function explore(ownerId, connectionId, input, { reads: wantedReads = READS_FIRST, canSeeTraffic = false, focus = null } = {}) {
   const subject = subjectOf(input);
   const max = Math.min(READS_MAX, Math.max(READS_FIRST, Number(wantedReads) || READS_FIRST));
-  return once(`explore:${connectionId}:${subject.key}:${max}:${canSeeTraffic}`, () => exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic }));
+  return once(`explore:${connectionId}:${subject.key}:${max}:${canSeeTraffic}:${focusing.signature(focus)}`, () => exploreNow(ownerId, connectionId, subject, max, { canSeeTraffic, focus }));
+}
+
+// ---- more listings for the hunter's filters ------------------------------------------
+
+// eBay searches narrowed to the filters, page by page, kept as scans of their own ("f:<subject>|<filters>",
+// as long as a scan): the Winners pool takes their products (never the subject's figures), and a
+// restart doesn't search again. A search costs one of Discover's day's searches.
+const focusKey = (subject, focus) => `f:${subject.key}|${crypto.createHash('sha1').update(focusing.signature(focus)).digest('hex').slice(0, 12)}`;
+
+/**
+ * The listings eBay has for the subject within the filters, beyond its
+ * leading ones: the pages searched so far, one more when `want` more are
+ * needed and eBay has them (within Discover's searches). { listings,
+ * takenAt, more }: more when eBay has further pages.
+ */
+async function focusListings(ctx, subject, focus, { exclude, want }) {
+  const key = focusKey(subject, focus);
+  const row = await repo.getScan(ctx.site.id, key);
+  const fresh = row && Date.now() - new Date(row.taken_at).getTime() < SCAN_TTL_MS;
+  const kept = fresh ? { listings: row.listings || [], pages: row.breakdown?.pages || 1, done: Boolean(row.breakdown?.done), takenAt: row.taken_at } : { listings: [], pages: 0, done: false, takenAt: new Date().toISOString() };
+  const unseen = () => {
+    const seen = new Set(exclude);
+    return kept.listings.filter((l) => !seen.has(idOf(l)) && seen.add(idOf(l)));
+  };
+  if (want > 0 && !kept.done && unseen().length < want && (await budget.left()).browse > 0) {
+    const search = focusing.searchOf(subject, focus, { currency: ctx.site.currency });
+    const offset = kept.pages * SCAN_SIZE;
+    const run = (aspectFilter) =>
+      browseUsage.as('discover', () =>
+        browseResearch.searchListings({ q: search.q, categoryId: subject.categoryId, marketplaceId: ctx.site.id, country: ctx.site.country, limit: SCAN_SIZE, offset, filter: search.filter, aspectFilter })
+      );
+    // eBay refusing the brand filter (a category without a Brand aspect): the same search without it.
+    const found = await run(search.aspectFilter).catch((err) => (search.aspectFilter ? run(undefined) : Promise.reject(err)));
+    await budget.spend('browse', found.calls);
+    const had = new Set(kept.listings.map(idOf));
+    kept.listings = [...kept.listings, ...found.items.map(slim).filter((l) => !had.has(idOf(l)))];
+    kept.pages += 1;
+    kept.done = found.items.length < SCAN_SIZE || offset + SCAN_SIZE >= found.total;
+    kept.takenAt = new Date().toISOString();
+    await repo.saveScan(ctx.site.id, key, { total: found.total, listings: kept.listings, breakdown: { pages: kept.pages, done: kept.done } });
+    forgetWinners();
+  }
+  return { listings: unseen(), takenAt: kept.takenAt, more: !kept.done };
 }
 
 // The account's own traffic and sales on a keyword (its Analytics figures,
@@ -398,38 +444,79 @@ async function ownTraffic(ownerId, connectionId, keyword) {
   }
 }
 
-// How many sold counts a subject reads on opening: the deeper (a keyword, a subcategory), the more products it's worth.
-const firstReads = (subject, info) => (subject.kind === 'keyword' || info.path.length > 1 ? READS_DEEP : READS_FIRST);
-
-async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic }) {
-  const ctx = await context(ownerId, connectionId);
-  const info = await subjectInfo(ctx.site, subject);
-  const max = Math.max(asked, firstReads(subject, info));
-  const traffic = canSeeTraffic && subject.kind === 'keyword' ? ownTraffic(ownerId, connectionId, subject.q) : Promise.resolve(null);
+/**
+ * What a subject reads, in order, up to `max`: its leading listings (the
+ * kept scan, searched again when it holds fewer than asked), the first
+ * reads in eBay's order (the subject's figures stand on them), then, with
+ * the hunter's filters (`focus`), only listings that can pass them: the
+ * leading ones first, then more from eBay searched within the filters.
+ * Without filters, the leading listings in order. Listings that would break
+ * eBay's rules are hidden, never read.
+ */
+async function readPlan(ctx, subject, info, focus, max) {
   let scanRow = await scan(ctx.site, subject);
   // Asked for more than a kept scan holds (one taken before scans were 200): searched again, when eBay has more.
   if (max > scanRow.listings.length && scanRow.listings.length < SCAN_SIZE && scanRow.total > scanRow.listings.length) {
     scanRow = await scan(ctx.site, subject, { force: true }).catch(() => scanRow);
   }
-  // Opened: it's in the nightly shared refresh for a few days, read with this account.
-  await repo.touchScan(ctx.site.id, subject.key, connectionId).catch(() => {});
   // The AI's brand/VeRO and restricted reading, when today's is kept (else the page asks for it).
   const advice = await advisor.keptAdvice(adviceKey(ctx.site, subject)).catch(() => null);
   // Listings that would break eBay's rules (a restricted item, a VeRO brand as the product) are
   // hidden, not read, and not counted: Discover never points anyone at them.
   const brandNames = veroBrands(advice);
   const { kept, hidden } = compliance.partition(scanRow.listings, brandNames);
+  const first = firstReads(subject, info);
+  const scanBrands = scanRow.breakdown?.brands || [];
+  const scanBrandTotal = scanBrands.reduce((sum, b) => sum + b.count, 0) || scanRow.total || 1;
+  const knownBrands = [...brandNames, ...scanBrands.filter((b) => !b.unbranded && b.count / scanBrandTotal >= 0.05).map((b) => b.name)];
+  const fits = (takenAt) => (l) => focusing.passes(l, focus, { account: ctx.account, brands: knownBrands, takenAt: new Date(takenAt).getTime() });
+  const rest = focus ? kept.slice(first).filter(fits(scanRow.taken_at)) : kept.slice(first);
+  let readOrder = [...kept.slice(0, first), ...rest];
+  let found = { listings: [], takenAt: null, more: false };
+  if (focus) {
+    found = await focusListings(ctx, subject, focus, { exclude: kept.map(idOf), want: max - readOrder.length }).catch((err) => {
+      logger.warn('Discover: no more listings searched for the filters', { subject: subject.key, error: err.message });
+      return found;
+    });
+    const extra = compliance.partition(found.listings, brandNames).kept.filter(fits(found.takenAt || Date.now()));
+    found = { ...found, listings: extra };
+    readOrder = [...readOrder, ...extra];
+  }
+  return { scanRow, advice, brandNames, kept, hidden, rest, readOrder, found, passes: (l) => fits(scanRow.taken_at)(l) };
+}
+
+// How many sold counts a subject reads on opening: the deeper (a keyword, a subcategory), the more products it's worth.
+const firstReads = (subject, info) => (subject.kind === 'keyword' || info.path.length > 1 ? READS_DEEP : READS_FIRST);
+
+async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic, focus = null }) {
+  const ctx = await context(ownerId, connectionId);
+  const info = await subjectInfo(ctx.site, subject);
+  const max = Math.max(asked, firstReads(subject, info));
+  const traffic = canSeeTraffic && subject.kind === 'keyword' ? ownTraffic(ownerId, connectionId, subject.q) : Promise.resolve(null);
+  const { scanRow, advice, brandNames, kept, hidden, rest, readOrder, found } = await readPlan(ctx, subject, info, focus, max);
+  // Opened: it's in the nightly shared refresh for a few days, read with this account.
+  await repo.touchScan(ctx.site.id, subject.key, connectionId).catch(() => {});
   // Answered within a moment with what's read; the rest read on while the page asks again.
-  const sold = await soldSoFar(ownerId, connectionId, ctx, kept, max, subject.key);
+  const sold = await soldSoFar(ownerId, connectionId, ctx, readOrder, max, `${subject.key}${focus ? `|${focusing.signature(focus)}` : ''}`);
+  // Listings read before under other filters stay read: their products don't drop off the page.
+  const others = [...kept, ...found.listings].map(idOf).filter((id) => !sold.reads.has(id));
+  if (others.length) {
+    const earlier = await repo.latestReads(ctx.site.id, others, analyticsDays.addDays(ctx.day, -READ_FALLBACK_DAYS));
+    for (const [id, read] of earlier) sold.reads.set(id, read);
+  }
   const listings = scoring.withPace(placed({ ...scanRow, listings: kept }, ctx, sold.reads));
-  const wantedIds = kept.slice(0, max).map(idOf);
+  // The listings found for the filters: products only, never the subject's figures.
+  const extraListings = found.listings.length ? scoring.withPace(placed({ taken_at: found.takenAt, listings: found.listings }, ctx, sold.reads)) : [];
+  const wantedIds = readOrder.slice(0, max).map(idOf);
   const readOf = wantedIds.filter((id) => sold.reads.get(id)?.day === ctx.day || sold.reads.get(id)?.day === analyticsDays.addDays(ctx.day, -1)).length;
 
   const f = scoring.figures(listings, { total: scanRow.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
   // Two weeks of readings: recent sales per listing, and the subject's sales day by day.
-  const history = await repo.readsSince(ctx.site.id, listings.map(idOf), analyticsDays.addDays(ctx.day, -15));
+  const history = await repo.readsSince(ctx.site.id, [...listings, ...extraListings].map(idOf), analyticsDays.addDays(ctx.day, -15));
   const recent = trends.recentSales(history);
   const summary = trends.summarise(scoring.sellingNow(listings), recent);
+  // Products from the leading listings and those found for the filters together.
+  const productSource = extraListings.length ? trends.summarise(scoring.sellingNow([...listings, ...extraListings]), recent).listings : summary.listings;
   const [children, watch] = await Promise.all([childRows(ctx, info, scanRow, brandNames), repo.findWatch(connectionId, subject.kind, subject.value)]);
   const brands = scanRow.breakdown?.brands || [];
   // Brands worth flagging in a keyword: the VeRO ones, and brands on at least 5% of the listings
@@ -460,7 +547,7 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
     recent: summary.recent,
     rising: summary.rising.map((l) => shown(l, country)),
     // Its products (the same product under several sellers grouped), best to hunt first, with why.
-    products: await subjectProducts(ownerId, connectionId, ctx, products.productsOf(summary.listings, { subject: subject.q || info.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: PRODUCTS_SHOWN }).filter((p) => p.read > 0)),
+    products: await subjectProducts(ownerId, connectionId, ctx, products.productsOf(productSource, { subject: subject.q || info.name, currency: ctx.site.currency, accountKnown: Boolean(ctx.account), limit: PRODUCTS_SHOWN }).filter((p) => p.read > 0)),
     listings: summary.listings.slice(0, LISTINGS_SHOWN).map((l) => ({ ...shown(l, country), flag: flagged(l.title) })),
     // The subject's own words (its category name, or the keyword) aren't news. More the deeper in.
     keywords: keywords.fromListings(listings, { query: subject.q || info.name, limit: keywordLimit(info) }).map((k) => ({ ...k, flag: flagged(k.term) })),
@@ -476,7 +563,10 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
     reads: {
       asked: max,
       read: f.demand.read,
-      more: max < READS_MAX && (listings.length > max || (scanRow.listings.length < SCAN_SIZE && scanRow.total > scanRow.listings.length)),
+      // The leading listings (the figures' own), and those read beyond them for the filters.
+      of: kept.length,
+      focused: focus ? extraListings.filter((l) => l.sold !== null).length + rest.filter((l) => sold.reads.has(idOf(l))).length : 0,
+      more: max < READS_MAX && (readOrder.length > max || Boolean(focus && found.more) || (!focus && scanRow.listings.length < SCAN_SIZE && scanRow.total > scanRow.listings.length)),
       stopped: sold.stopped,
       signInFailed: Boolean(sold.signInFailed),
       step: READS_STEP,
@@ -567,17 +657,21 @@ async function sitePool(site, day) {
   const recent = trends.recentSales(history);
   const subjects = [];
   for (const s of scans) {
-    const isCategory = s.subject.startsWith('c:');
-    const value = s.subject.slice(2);
+    // A search within a hunter's filters ("f:<subject>|<filters>", discover-focus): its products join
+    // the pool under its subject, never the subject's figures or keywords.
+    const focused = s.subject.startsWith('f:');
+    const key = focused ? s.subject.slice(2, s.subject.lastIndexOf('|')) : s.subject;
+    const isCategory = key.startsWith('c:');
+    const value = key.slice(2);
     const path = isCategory ? await taxonomy.getCategoryPath(site.id, value).catch(() => []) : [];
     if (isCategory && !path.length) continue;
     const name = isCategory ? path[path.length - 1].name : value;
     // A restricted subject, or one under a restricted category (Electronic Smoking…): out.
     if (compliance.termsIn(isCategory ? path.map((p) => p.name).join(' ') : name).restricted.length) continue;
     const { kept } = compliance.partition(s.listings);
-    subjects.push({ scan: { ...s, listings: kept }, from: { kind: isCategory ? 'category' : 'keyword', value, name, path: isCategory ? path.slice(0, -1).map((p) => p.name) : [] } });
+    subjects.push({ scan: { ...s, listings: kept }, focused, from: { kind: isCategory ? 'category' : 'keyword', value, name, path: isCategory ? path.slice(0, -1).map((p) => p.name) : [] } });
   }
-  const value = { subjects, reads, recent, pool: { subjects: scans.length, listings: ids.length } };
+  const value = { subjects, reads, recent, pool: { subjects: scans.filter((s) => !s.subject.startsWith('f:')).length, listings: ids.length } };
   poolCache.set(site.id, { at: Date.now(), value });
   return value;
 }
@@ -639,17 +733,19 @@ async function winnersPool(ownerId, connectionId) {
   // Every category explored at any depth, with what its leading listings sell a month: the best-selling ones.
   const categoryRows = [];
   let read = 0;
-  for (const { scan: s, from } of site.subjects) {
+  for (const { scan: s, from, focused } of site.subjects) {
     const listings = trends.summarise(scoring.withPace(placed(s, ctx, site.reads)), site.recent).listings;
     read += listings.filter((l) => l.soldPerMonth !== null).length;
     const where = { kind: from.kind, value: from.value, name: from.name };
+    // A search within filters: its products only (below).
+    const own = !focused;
     // Across the whole site a lone word ("white", "plus") means nothing without its category, so the
     // site's list keeps phrases of two words or more whose titles sell at least as well as the rest.
-    const subjectKeywords = keywords.fromListings(listings, { query: from.name, limit: KEYWORDS_TOP });
+    const subjectKeywords = own ? keywords.fromListings(listings, { query: from.name, limit: KEYWORDS_TOP }) : [];
     for (const k of subjectKeywords) {
       if (k.words >= 2 && (k.lift ?? 0) >= 1) found.push({ term: k.term, perMonth: k.perMonth, sold: k.sold, salesShare: k.salesShare, lift: k.lift, listings: k.listings, from: where });
     }
-    if (from.kind === 'category') {
+    if (own && from.kind === 'category') {
       const f = scoring.figures(listings, { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
       if (f.demand.read) {
         const o = scoring.opportunity(f, { currency: ctx.site.currency });
@@ -669,7 +765,7 @@ async function winnersPool(ownerId, connectionId) {
         });
       }
     }
-    if (from.kind === 'keyword') {
+    if (own && from.kind === 'keyword') {
       const f = scoring.figures(listings, { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
       if (f.demand.read) {
         const o = scoring.opportunity(f, { currency: ctx.site.currency });
@@ -770,6 +866,86 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
  * opportunity or how many categories share it, a page at a time. eBay
  * doesn't share buyers' search volume, so demand is the sales themselves.
  */
+// ---- more for the Products tab's filters ------------------------------------------------
+
+const MORE_SUBJECTS = 3; // explored categories and keywords read further per "Find more"
+// A subject with nothing left to read for some filters (its leading listings read, eBay's filtered
+// search to its end): skipped for them until its scan is taken again.
+const exhausted = new Map(); // `${site}:${subject}:${signature}` -> when
+
+/**
+ * "Find more products for these filters" on the Products tab: more
+ * listings that can pass the hunter's filters, read in the explored
+ * categories and keywords most likely to have them — where the matching
+ * products come from, then the best-selling — the next READS_STEP of each
+ * in up to MORE_SUBJECTS of them, eBay searched within the filters when
+ * their leading listings run out (the same as a subject's Load more). Their
+ * products join the pool. { read, subjects: [name], more, signInFailed,
+ * stopped } (stopped: the day's sold-count reads used up).
+ */
+function findMore(ownerId, connectionId, filters = {}) {
+  const focus = focusing.focusOf({ ...filters, fq: filters.q });
+  return once(`more:${connectionId}:${focusing.signature(focus)}`, () => findMoreNow(ownerId, connectionId, filters, focus));
+}
+
+async function findMoreNow(ownerId, connectionId, filters, focus) {
+  const ctx = await context(ownerId, connectionId);
+  const [pool, matching] = await Promise.all([winnersPool(ownerId, connectionId), winners(ownerId, connectionId, { ...filters, limit: WINNERS_MAX })]);
+  // Where the products that match come from (most first), then the best-selling categories explored.
+  const bySubject = new Map();
+  for (const p of matching.products) {
+    const k = `${p.from.kind}:${p.from.value}`;
+    bySubject.set(k, { from: p.from, n: (bySubject.get(k)?.n || 0) + 1 });
+  }
+  const order = [...bySubject.values()].sort((a, b) => b.n - a.n).map((x) => x.from);
+  for (const c of pool.categories) if (!bySubject.has(`category:${c.id}`)) order.push({ kind: 'category', value: c.id, name: c.name });
+  const signature = focusing.signature(focus);
+  const fresh = (read) => Boolean(read) && (read.day === ctx.day || read.day === analyticsDays.addDays(ctx.day, -1));
+  const names = [];
+  let read = 0;
+  let more = false;
+  // Why it stopped short: the account's eBay sign-in failing, or the day's sold-count reads used up.
+  let signInFailed = false;
+  let stopped = false;
+  for (const from of order) {
+    if (names.length >= MORE_SUBJECTS) {
+      more = true;
+      break;
+    }
+    const subject = subjectOf(from.kind === 'category' ? { categoryId: from.value } : { q: from.value });
+    const doneKey = `${ctx.site.id}:${subject.key}:${signature}`;
+    if (Date.now() - (exhausted.get(doneKey) || 0) < SCAN_TTL_MS) continue;
+    try {
+      const info = await subjectInfo(ctx.site, subject);
+      const plan = await readPlan(ctx, subject, info, focus, READS_MAX);
+      const reads = await repo.latestReads(ctx.site.id, plan.readOrder.map(idOf), analyticsDays.addDays(ctx.day, -1));
+      // Only what can pass the filters, the subject's leading listings included (its figures aren't wanted here).
+      const unread = plan.readOrder.filter((l) => !fresh(reads.get(idOf(l))) && plan.passes(l));
+      if (!unread.length) {
+        if (!plan.found.more) exhausted.set(doneKey, Date.now());
+        continue;
+      }
+      const batch = unread.slice(0, READS_STEP);
+      const sold = await readSold(ownerId, connectionId, ctx, batch, { max: batch.length });
+      read += batch.filter((l) => fresh(sold.reads.get(idOf(l)))).length;
+      names.push(from.name);
+      if (unread.length > batch.length || plan.found.more) more = true;
+      // The day's reads used up, or the account's eBay sign-in failing: stop here.
+      if (sold.stopped) {
+        signInFailed = Boolean(sold.signInFailed);
+        stopped = !signInFailed;
+        more = true;
+        break;
+      }
+    } catch (err) {
+      logger.warn('Discover: no more read for the filters', { subject: subject.key, error: err.message });
+      if (err.statusCode === 429) break;
+    }
+  }
+  forgetWinners();
+  return { read, subjects: names, more, signInFailed, stopped };
+}
+
 async function siteKeywords(ownerId, connectionId, { q = '', sort = 'sales', searchedOnly = false, limit = POOL_KEYWORDS_SHOWN } = {}) {
   const all = await winnersPool(ownerId, connectionId);
   const words = wordsOfQuery(q);
@@ -879,6 +1055,58 @@ async function rankChildren(ownerId, connectionId, categoryId) {
   return { total: job.total, done: job.done };
 }
 
+// ---- the account's own categories, scored ----------------------------------------------
+
+const OWN_MAX = 20; // own categories scored per run, most listings first
+const OWN_AGAIN_MS = 6 * 60 * 60 * 1000; // a run at most this often per account
+const ownScoring = new Map(); // connectionId -> { total, done, finishedAt }
+
+/**
+ * The Categories tab's "Yours": each of the account's categories nobody has
+ * explored yet is searched and its leading listings' sold counts read
+ * (CHILD_READS each, as a ranked subcategory), a few at a time, in the
+ * background — at most every six hours, and only while more than a third of
+ * Discover's day is left (the rest is for people exploring). { total, done }
+ * while it runs, else null.
+ */
+async function scoreOwn(ownerId, connectionId, ctx, ids) {
+  const key = String(connectionId);
+  const job = ownScoring.get(key);
+  if (job && !job.finishedAt) return { total: job.total, done: job.done };
+  if (!ids.length || (job && Date.now() - job.finishedAt < OWN_AGAIN_MS)) return null;
+  const left = await budget.left();
+  if (left.tradingPaused || left.trading < left.limits.trading / 3 || left.browse < left.limits.browse / 3) return null;
+  const chosen = ids.slice(0, OWN_MAX);
+  const run = { total: chosen.length, done: 0, finishedAt: null };
+  ownScoring.set(key, run);
+  let next = 0;
+  let stop = false;
+  async function worker() {
+    while (next < chosen.length && !stop) {
+      const id = chosen[next++];
+      try {
+        const s = await scan(ctx.site, subjectOf({ categoryId: id }));
+        const { kept } = compliance.partition(s.listings);
+        const sold = await readSold(ownerId, connectionId, ctx, kept, { max: CHILD_READS });
+        // The account's eBay sign-in fails, or the day's reads are used up: no point asking again today.
+        if (sold.signInFailed || sold.stopped) stop = true;
+      } catch (err) {
+        if (err.statusCode === 429) stop = true;
+        else logger.warn('Discover: your category not scored', { categoryId: id, error: err.message });
+      } finally {
+        run.done += 1;
+      }
+    }
+  }
+  Promise.all(Array.from({ length: RANK_CONCURRENCY }, worker))
+    .catch((err) => logger.warn('Discover: scoring your categories stopped', { connectionId, error: err.message }))
+    .finally(() => {
+      run.finishedAt = Date.now();
+      forgetWinners();
+    });
+  return { total: run.total, done: run.done };
+}
+
 /** Categories matching what's typed in Discover's search box, with their paths. */
 async function suggest(ownerId, connectionId, q) {
   const text = String(q || '').trim();
@@ -915,6 +1143,12 @@ async function start(ownerId, connectionId) {
     const f = scoring.figures(placed(s, ctx, reads), { total: s.total, country: ctx.site.country, accountKnown: Boolean(ctx.account) });
     return f.demand.read ? { ...scoring.opportunity(f, { currency: ctx.site.currency }), parts: undefined, total: s.total } : null;
   };
+  // The account's own categories not scored yet: scored in the background (the page asks again until done).
+  const unscored = ownRows.filter((c) => !badge(c.id) && !restrictedName(c.name)).map((c) => c.id);
+  const yourScoring = await scoreOwn(ownerId, connectionId, ctx, unscored).catch((err) => {
+    logger.warn('Discover: your categories not scored', { connectionId, error: err.message });
+    return null;
+  });
   // The first few watches with their figures, for the start screen.
   const preview = watched ? (await watches(ownerId, connectionId)).items.slice(0, 4) : [];
   // What anyone on the site explored lately (shared, refreshed nightly), with its opportunity.
@@ -949,7 +1183,9 @@ async function start(ownerId, connectionId) {
     winners: pool ? { products: pool.products.slice(0, 5), total: pool.products.length, keywords: pool.keywords.length, pool: pool.pool } : null,
     // Every category explored on the site (any depth), best-selling first, for the Categories tab.
     bestCategories: pool ? pool.categories.slice(0, BEST_CATEGORIES_MAX) : [],
-    yourCategories: ownRows.map((c) => ({ ...c, scanned: badge(c.id) })),
+    // Live listings from its search even before its sold counts are read.
+    yourCategories: ownRows.map((c) => ({ ...c, scanned: badge(c.id), live: scans.get(`c:${c.id}`)?.total ?? null })),
+    yourScoring,
     topCategories: top.map((c) => ({ id: c.id, name: c.name, leaf: c.leaf, scanned: badge(c.id) })),
     watches: watched,
     watchPreview: preview,
@@ -1085,6 +1321,7 @@ async function _soldSettled() {
 }
 
 module.exports = {
+  findMore,
   _quickMs,
   _soldSettled,
   explore,
