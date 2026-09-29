@@ -280,7 +280,8 @@ export default function ResearchPage() {
           </ResearchOverview>
           <ResearchFolds result={result} checking={checking} />
 
-          <section className="card overflow-hidden">
+          {/* Not clipped: the filter menus open below their buttons, past the card when it's short. */}
+          <section className="card">
             <div className="flex flex-wrap items-center justify-between gap-x-4 border-b border-[var(--color-line)] px-4">
               <div role="tablist" aria-label="Listings" className="flex gap-x-1">
                 {[
@@ -342,6 +343,7 @@ export default function ResearchPage() {
                 )}
               </div>
             )}
+            <div className="overflow-hidden rounded-b-[var(--radius-card)]">
             {view === "sold" ? (
               <SoldListings sales={result.sales ?? { available: false }} currency={currency} />
             ) : (
@@ -352,6 +354,20 @@ export default function ResearchPage() {
                 maxSold={maxSold}
                 canHunt={!connection.permissions || Boolean(connection.permissions.hunting || connection.permissions.hunting_review)}
               />
+            )}
+            {view === "active" && sorted.length === 0 && (
+              <div className="px-4 py-10 text-center text-[13px] text-[var(--color-muted)]">
+                {filters.priceMin !== null || filters.priceMax !== null || filters.brand !== "any" ? (
+                  <>
+                    eBay has no live listings for this search at this price or brand.{" "}
+                    <button type="button" onClick={() => changeFilters(RESEARCH_FILTERS)} className="font-medium text-[var(--color-primary)] hover:underline">
+                      Reset the filters
+                    </button>
+                  </>
+                ) : (
+                  "eBay has no live listings for this search right now."
+                )}
+              </div>
             )}
             {view === "active" && ordered.length === 0 && sorted.length > 0 && (
               <div className="px-4 py-8 text-center text-[13px] text-[var(--color-muted)]">
@@ -368,6 +384,7 @@ export default function ResearchPage() {
                 </button>
               </div>
             )}
+            </div>
           </section>
           <p className="text-[12px] text-[var(--color-muted)]">
             {view === "active"

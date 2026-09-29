@@ -214,7 +214,8 @@ export interface ResearchItem {
 // product), a brand its title names, a word eBay's hazardous filter blocks, the owner's own history
 // (eBay refused a draft like it, the team rejected one), and a listing like it eBay removed lately.
 export interface ResearchMarks {
-  violation: { kind: "restricted" | "brand"; label: string; prohibited?: boolean } | null;
+  // source (a brand): "list", on Liston's own list of brands known to report listings to eBay; "ai", only the AI's reading names it.
+  violation: { kind: "restricted" | "brand"; label: string; prohibited?: boolean; source?: "list" | "ai" } | null;
   brand: string | null;
   hazmat: string | null;
   risk: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string } | null;
@@ -228,6 +229,8 @@ export type ResearchDeliveryFilter = "similar" | "faster" | "slower" | "all";
 export interface ResearchDelivery {
   // Which listings the figures are worked out from.
   filter: ResearchDeliveryFilter;
+  // The default ("Like you") left nothing, so every listing is used instead.
+  fellBack?: boolean;
   counts: Record<ResearchDeliveryGroup | "all", number>;
   // The account's delivery from its postage policy, in working days; null
   // when the policy couldn't be read (then every listing is compared).

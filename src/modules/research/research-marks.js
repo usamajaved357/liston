@@ -8,19 +8,24 @@ const { titleSimilarity, SIMILAR_AT } = require('../hunting/hunt-duplicates');
 // history (eBay refused a draft like it, the team rejected one for brand
 // risk), and whether eBay removed a listing like it in the last 90 days.
 // Pure: titles in, marks out. Research listings carry no Brand specific, so
-// brands are read from titles.
+// brands are read from titles. None of it is eBay's word on the listing
+// itself (a live listing hasn't been taken down): a brand on Liston's own
+// VeRO list is `source: 'list'`, one only the AI's reading names is
+// `source: 'ai'` (a guess, and not a violation at all when it rates the
+// risk low); only removedLike and a refusal are things eBay actually did.
 
 /**
  * The names a search's titles are judged against: `vero`, the brands the
  * AI's reading says take listings down (with Liston's own VeRO list,
- * always), and `brands`, every brand on 5% or more of the search's listings.
+ * always), `veroLevel` how sure it is ('high' | 'low'), and `brands`, every
+ * brand on 5% or more of the search's listings.
  */
 function brandNamesOf({ advice = null, breakdown = null, total = 0 } = {}) {
   const vero = advice?.brandRisk && advice.brandRisk.level !== 'none' ? (advice.brandRisk.brands || []).filter(Boolean) : [];
   const all = breakdown?.brands || [];
   const counted = all.reduce((sum, b) => sum + (b.count || 0), 0) || total || 1;
   const brands = all.filter((b) => !b.unbranded && (b.count || 0) / counted >= 0.05).map((b) => b.name);
-  return { vero, brands };
+  return { vero, veroLevel: vero.length ? advice.brandRisk.level : null, brands };
 }
 
 /** The brand a title names (a VeRO one first), or null. */
@@ -30,12 +35,18 @@ function brandIn(title, names) {
 
 /**
  * One listing's marks, or null when there's nothing to say: { violation:
- * { kind: 'restricted' | 'brand', label, prohibited? }, brand, hazmat,
+ * { kind: 'restricted' | 'brand', label, prohibited?, source? }, brand, hazmat,
  * risk: { kind, level, text }, removedLike: { title } }.
  */
 function marksOf(item, { names, refusals = [], rejected = [], removed = [] }) {
   const title = item.title || '';
-  const violation = compliance.violationOf(title, names.vero, item.category || '');
+  let violation = compliance.violationOf(title, names.vero, item.category || '');
+  if (violation?.kind === 'brand') {
+    const listed = compliance.VERO_BRANDS.includes(violation.label.toLowerCase());
+    // Only the AI names it, and it rates the risk low: a brand to check, not a violation.
+    if (!listed && names.veroLevel !== 'high') violation = null;
+    else violation = { ...violation, source: listed ? 'list' : 'ai' };
+  }
   const flag = compliance.flagOf(title, [...names.vero, ...names.brands]);
   const risk = compliance.productRisk({ brand: null, name: title, itemIds: [item.legacyItemId].filter(Boolean) }, { refusals, rejected });
   const like = removed.find((r) => r.title && titleSimilarity(r.title, title) >= SIMILAR_AT);

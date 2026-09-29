@@ -30,14 +30,6 @@ export function sortResearch(items: ResearchItem[], sort: ResearchSort) {
   });
 }
 
-function DraftIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
-      <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 // "Hunt": check this listing's profit against a supplier and add it for review.
 function HuntGlyph() {
   return (
@@ -103,16 +95,6 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
               >
                 <HuntGlyph />
                 Hunt
-              </Link>
-            )}
-            {item.url && (
-              <Link
-                href={`/accounts/${connectionId}/listings/new?competitor=${encodeURIComponent(item.url)}`}
-                onClick={(e) => e.stopPropagation()}
-                className="inline-flex h-9 shrink-0 items-center gap-1 rounded-lg bg-[var(--color-primary-soft)] px-3 text-[13px] font-semibold text-[var(--color-primary)]"
-              >
-                <DraftIcon />
-                Draft
               </Link>
             )}
           </div>
@@ -229,17 +211,6 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
                     >
                       <HuntGlyph />
                       Hunt
-                    </Link>
-                  )}
-                  {item.url && (
-                    <Link
-                      href={`/accounts/${connectionId}/listings/new?competitor=${encodeURIComponent(item.url)}`}
-                      onClick={(e) => e.stopPropagation()}
-                      title="Start a Liston draft from this listing"
-                      className="inline-flex h-8 items-center gap-1 rounded-lg bg-[var(--color-primary-soft)] px-2.5 text-[12.5px] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white"
-                    >
-                      <DraftIcon />
-                      Draft
                     </Link>
                   )}
                 </div>

@@ -152,7 +152,7 @@ export function ResearchFilters({
         title="VeRO and violations"
         sections={[
           {
-            label: "Listings that would break eBay's rules, or like ones eBay refused or removed",
+            label: "A VeRO brand or restricted item, or like one eBay refused or removed",
             value: filters.safety,
             onChange: (v) => set({ safety: v as ResearchFilterState["safety"] }),
             options: [
@@ -226,8 +226,21 @@ const BADGE = "inline-flex h-[18px] items-center rounded px-1.5 text-[10.5px] fo
 export function MarkBadges({ marks }: { marks: ResearchMarks | null }) {
   if (!marks) return null;
   const out: { key: string; text: string; tone: string; title: string }[] = [];
-  if (marks.violation?.kind === "brand")
-    out.push({ key: "vero", text: `VeRO · ${cap(marks.violation.label)}`, tone: "bg-rose-50 text-rose-700 ring-rose-200", title: `Names ${cap(marks.violation.label)}, a brand whose owner takes listings down through eBay's VeRO programme` });
+  // A brand mark is Liston's warning about listing a product like it, not eBay's word on this listing (it's live).
+  if (marks.violation?.kind === "brand" && marks.violation.source === "ai")
+    out.push({
+      key: "vero",
+      text: `Possible VeRO · ${cap(marks.violation.label)}`,
+      tone: "bg-amber-50 text-amber-800 ring-amber-200",
+      title: `Liston's AI reading thinks ${cap(marks.violation.label)} may be a protected brand. It isn't on Liston's VeRO list and eBay hasn't taken this listing down: check the brand before selling it.`,
+    });
+  else if (marks.violation?.kind === "brand")
+    out.push({
+      key: "vero",
+      text: `VeRO brand · ${cap(marks.violation.label)}`,
+      tone: "bg-rose-50 text-rose-700 ring-rose-200",
+      title: `${cap(marks.violation.label)} is on Liston's list of brands whose owners report listings to eBay (VeRO). This listing is still live, but a listing like it can be taken down.`,
+    });
   else if (marks.violation?.kind === "restricted")
     out.push({
       key: "restricted",

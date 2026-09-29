@@ -215,7 +215,11 @@ async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, m
   });
   const counts = { similar: 0, faster: 0, slower: 0, unknown: 0, all: placed.length };
   for (const item of placed) counts[item.delivery.compared] += 1;
-  const filter = DELIVERY_FILTERS.includes(wanted) ? wanted : account ? 'similar' : 'all';
+  // Left to the default and no listing delivers like the account (a small search, or sellers
+  // eBay gives no delivery dates for): every listing, said so, rather than an empty page.
+  const chosenByHand = DELIVERY_FILTERS.includes(wanted);
+  const fellBack = !chosenByHand && Boolean(account) && counts.similar === 0 && placed.length > 0;
+  const filter = chosenByHand ? wanted : account && !fellBack ? 'similar' : 'all';
   const chosen = filter === 'all' || !account ? placed : placed.filter((item) => item.delivery.compared === filter);
 
   // What sold (and what eBay removed) is read alongside the sold counts.
@@ -233,6 +237,7 @@ async function gather(ownerId, connectionId, { q, condition = 'any', minPrice, m
   const summary = researchStats.summarise(items, { country: site.country, total: found.total });
   const deliveryInfo = {
     filter: account ? filter : 'all',
+    fellBack,
     counts,
     account: account ? { min: account.min, max: account.max, handling: account.handling, service: account.service, serviceName: account.serviceName, policyName: account.policyName } : null,
   };
