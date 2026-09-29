@@ -128,5 +128,23 @@ test('an account\'s listing work counts drafts made and listings published in th
   await add('published', '2026-08-01T10:00:00Z', '2026-08-02T10:00:00Z'); // both before the range
   await add('pending_review', '2026-09-11T10:00:00Z', '2026-09-11T10:00:00Z', '406000000001'); // an edit of a live listing: not new
   const work = await listingRepository.countListingWork(connectionId, new Date('2026-09-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z'));
-  assert.deepStrictEqual(work, { drafted: 2, published: 1, waiting: 1 });
+  assert.deepStrictEqual(work, { drafted: 2, draftedFromHunts: 0, published: 1, publishedFromHunts: 0, waiting: 1 });
+  // One drafted from a hunted product and published: counted as from hunting too.
+  const { rows: [{ id: fromHunt }] } = await pool.query(
+    `INSERT INTO listings (connection_id, status, created_at, updated_at) VALUES ($1, 'published', '2026-09-15T10:00:00Z', '2026-09-16T10:00:00Z') RETURNING id`,
+    [connectionId]
+  );
+  const { rows: [{ user_id: ownerId }] } = await pool.query('SELECT user_id FROM connections WHERE id = $1', [connectionId]);
+  await pool.query(
+    `INSERT INTO hunted_products (owner_user_id, connection_id, hunter_user_id, competitor_url, competitor_item_id, source_url, source_product_id, title, currency, check_result, status, listing_id)
+     VALUES ($1, $2, $1, 'https://www.ebay.co.uk/itm/1', '1', 'https://www.aliexpress.com/item/1.html', '1', 'Earbuds', 'GBP', '{}', 'approved', $3)`,
+    [ownerId, connectionId, fromHunt]
+  );
+  assert.deepStrictEqual(await listingRepository.countListingWork(connectionId, new Date('2026-09-01T00:00:00Z'), new Date('2026-10-01T00:00:00Z')), {
+    drafted: 3,
+    draftedFromHunts: 1,
+    published: 2,
+    publishedFromHunts: 1,
+    waiting: 1,
+  });
 });

@@ -272,8 +272,41 @@ test('the tabs: All, Waiting for review, Approved, Drafted, Listed, Rejected, an
   const { hunt: third } = await hunt(t.connectionId, t.hunter.token);
   await request('POST', `/api/hunting/${third.id}/decision`, { decision: 'reject', reason: 'low_profit' }, t.reviewer.token);
   await hunt(t.connectionId, t.hunter.token);
-  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, hour, soon), { hunted: 5, approved: 2, rejected: 1, reviewing: 2 });
-  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, new Date(Date.now() - 7200 * 1000), hour), { hunted: 0, approved: 0, rejected: 0, reviewing: 2 });
+  const none = huntingRepository.EMPTY_OVERVIEW;
+  // Of the two approved, the owner's own was approved as it was added, and isn't drafted yet.
+  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, hour, soon), { ...none, hunted: 5, approved: 2, approvedAsAdded: 1, rejected: 1, reviewing: 2, toDraft: 1 });
+  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, new Date(Date.now() - 7200 * 1000), hour), { ...none, reviewing: 2, toDraft: 1 });
+  // What's behind each: found by Liston, rejected by Liston (its supplier doesn't sell what sells), sent
+  // back; and now, approved and still to be drafted, or its draft failed (stuck drafting counts).
+  const { hunt: byListon } = await hunt(t.connectionId, t.hunter.token);
+  await pool.query(`UPDATE hunted_products SET found_by_liston = true WHERE id = $1`, [byListon.id]);
+  await request('POST', `/api/hunting/${byListon.id}/decision`, { decision: 'send_back', note: 'Check the white one' }, t.reviewer.token);
+  const { hunt: mismatched } = await hunt(t.connectionId, t.hunter.token);
+  await huntingRepository.setDecision(mismatched.id, { status: 'rejected', reject_reason: 'mismatch', decision_note: 'No White' }, null);
+  const approve = async () => {
+    const { hunt: h } = await hunt(t.connectionId, t.hunter.token);
+    await request('POST', `/api/hunting/${h.id}/decision`, { decision: 'approve' }, t.reviewer.token);
+    return h.id;
+  };
+  await approve();
+  const failedId = await approve();
+  const stuckId = await approve();
+  await pool.query(`UPDATE hunted_products SET draft_status = 'failed', draft_error = 'eBay said no' WHERE id = $1`, [failedId]);
+  await pool.query(`UPDATE hunted_products SET draft_status = 'drafting', draft_attempted_at = now() - interval '20 minutes' WHERE id = $1`, [stuckId]);
+  assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, hour, soon), {
+    ...none,
+    hunted: 10,
+    huntedByListon: 1,
+    approved: 5,
+    approvedAsAdded: 1,
+    rejected: 2,
+    rejectedByListon: 1,
+    sentBack: 1,
+    reviewing: 2,
+    sentBackNow: 1,
+    toDraft: 2,
+    draftFailed: 2,
+  });
 });
 
 test('a bad link is refused before anything is read', async () => {

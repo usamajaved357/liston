@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ListingTrendKey, ListingTrendPoint, RecentListing } from "@/lib/api";
+import Link from "next/link";
+import { ListingTrendKey, ListingTrendPoint, ListingWork, OverviewAccount, RecentListing } from "@/lib/api";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { ViewMenu } from "@/components/ViewMenu";
 import { InlineLegend } from "./OverviewSales";
@@ -96,7 +97,18 @@ function when(iso: string) {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
-export function RecentListingsCard({ items, showMarket, flagOf }: { items: RecentListing[] | null; showMarket: boolean; flagOf: (marketplaceId: string) => string }) {
+export function RecentListingsCard({
+  items,
+  showMarket,
+  flagOf,
+  empty = "Nothing published from Liston in these dates yet.",
+}: {
+  items: RecentListing[] | null;
+  showMarket: boolean;
+  flagOf: (marketplaceId: string) => string;
+  // Said when there's nothing: "today" when the chart beside it shows the last 7 days.
+  empty?: string;
+}) {
   const shown = (items ?? []).slice(0, 5);
   return (
     <section className="card flex h-full min-w-0 flex-col">
@@ -105,7 +117,7 @@ export function RecentListingsCard({ items, showMarket, flagOf }: { items: Recen
         <span className="text-[11.5px] text-[var(--color-muted)]">From Liston, with sales since</span>
       </div>
       {shown.length === 0 ? (
-        <p className="flex flex-1 items-center justify-center px-4 py-8 text-center text-[13px] text-[var(--color-muted)]">Nothing published from Liston in these dates yet.</p>
+        <p className="flex flex-1 items-center justify-center px-4 py-8 text-center text-[13px] text-[var(--color-muted)]">{empty}</p>
       ) : (
         <ol className="mt-1.5 divide-y divide-[var(--color-line)]">
           {shown.map((item) => {
@@ -143,6 +155,179 @@ export function RecentListingsCard({ items, showMarket, flagOf }: { items: Recen
           })}
         </ol>
       )}
+    </section>
+  );
+}
+
+// The Overview's accounts side by side: what each has live and waiting right
+// now, and its listing work in the dates, busiest first, each opening its own
+// Overview. Live listings show each account's share of the total.
+const NOW_COLUMNS: { key: keyof ListingWork; label: string; hint: string }[] = [
+  { key: "live", label: "Live", hint: "Live on eBay now" },
+  { key: "waiting", label: "To publish", hint: "Drafts waiting to publish" },
+  { key: "reviewing", label: "For review", hint: "Hunted products waiting for review" },
+];
+const DATE_COLUMNS: { key: keyof ListingWork; label: string; hint: string }[] = [
+  { key: "hunted", label: "Hunted", hint: "Products hunted" },
+  { key: "approved", label: "Approved", hint: "Hunted products approved" },
+  { key: "rejected", label: "Rejected", hint: "Hunted products rejected" },
+  { key: "drafted", label: "Drafted", hint: "Drafts created in Liston" },
+  { key: "published", label: "Published", hint: "Went live from Liston" },
+];
+const figureOf = (w: ListingWork | null, key: keyof ListingWork) => (w ? Number(w[key] ?? 0) : 0);
+
+/** What needs someone on an account right now, for its row: failed drafts, then Liston's rejections in the dates. */
+function flagsOf(w: ListingWork | null): string[] {
+  if (!w) return [];
+  const out: string[] = [];
+  if (w.draftFailed) out.push(`${count(w.draftFailed)} draft${w.draftFailed === 1 ? "" : "s"} failed`);
+  if (w.rejectedByListon) out.push(`${count(w.rejectedByListon)} supplier${w.rejectedByListon === 1 ? "" : "s"} didn't match`);
+  return out;
+}
+
+export function AccountListingsCard({ accounts, datesLabel, showMarket }: { accounts: OverviewAccount[]; datesLabel: string; showMarket: boolean }) {
+  const rows = [...accounts].sort((a, b) => figureOf(b.listings, "live") - figureOf(a.listings, "live") || a.label.localeCompare(b.label));
+  const totalLive = rows.reduce((sum, a) => sum + figureOf(a.listings, "live"), 0);
+  const total = (key: keyof ListingWork) => rows.reduce((sum, a) => sum + figureOf(a.listings, key), 0);
+  const share = (a: OverviewAccount) => (totalLive > 0 ? figureOf(a.listings, "live") / totalLive : 0);
+  const name = (a: OverviewAccount) => (
+    <>
+      {showMarket && a.marketplace?.flag ? <span className="mr-1">{a.marketplace.flag}</span> : null}
+      {a.label}
+      {showMarket && a.marketplace?.label ? <span className="font-normal text-[var(--color-muted)]"> · {a.marketplace.label}</span> : null}
+    </>
+  );
+  const cell = (a: OverviewAccount, key: keyof ListingWork) => {
+    const v = figureOf(a.listings, key);
+    return <span className={v ? "text-[var(--color-ink)]" : "text-[var(--color-line-strong)]"}>{a.listings ? count(v) : "—"}</span>;
+  };
+  return (
+    <section className="card mt-4 min-w-0 overflow-hidden">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 px-4 pt-3.5">
+        <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">By account</h2>
+        <span className="text-[11.5px] text-[var(--color-muted)]">Open an account for its own Overview</span>
+      </div>
+
+      {/* Phones: one block per account. */}
+      <ul className="mt-2 divide-y divide-[var(--color-line)] sm:hidden">
+        {rows.map((a) => (
+          <li key={a.id}>
+            <Link href={`/accounts/${a.id}`} className="block px-4 py-2.5">
+              <span className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-[13px] font-medium text-[var(--color-ink)]">{name(a)}</span>
+                <span className="shrink-0 text-[12.5px] tabular-nums text-[var(--color-muted)]">
+                  <b className="font-semibold text-[var(--color-ink)]">{a.listings ? count(figureOf(a.listings, "live")) : "—"}</b> live
+                </span>
+              </span>
+              <span className="mt-1.5 block h-1.5 overflow-hidden rounded-full bg-[var(--color-line)]">
+                <span className="block h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.round(share(a) * 100)}%` }} />
+              </span>
+              <span className="mt-1.5 block text-[11.5px] tabular-nums text-[var(--color-muted)]">
+                {a.listings
+                  ? `${NOW_COLUMNS.slice(1)
+                      .map((c) => `${count(figureOf(a.listings, c.key))} ${c.label.toLowerCase()}`)
+                      .join(" · ")} · ${datesLabel}: ${DATE_COLUMNS.map((c) => `${count(figureOf(a.listings, c.key))} ${c.label.toLowerCase()}`).join(" · ")}`
+                  : "Couldn't be read from eBay just now"}
+              </span>
+              {flagsOf(a.listings).length > 0 && <span className="mt-1 block text-[11.5px] font-medium text-amber-600">{flagsOf(a.listings).join(" · ")}</span>}
+            </Link>
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-2 hidden overflow-x-auto sm:block">
+        <table className="w-full min-w-[760px] text-[12.5px]">
+          <thead className="text-[11px] font-medium text-[var(--color-muted)]">
+            <tr>
+              <th className="px-4 pb-1 text-left font-medium" />
+              <th colSpan={NOW_COLUMNS.length} className="border-b border-[var(--color-line)] px-2 pb-1 text-center font-medium uppercase tracking-wide">
+                Right now
+              </th>
+              <th className="w-3" />
+              <th colSpan={DATE_COLUMNS.length} className="border-b border-[var(--color-line)] px-2 pb-1 text-center font-medium uppercase tracking-wide">
+                {datesLabel}
+              </th>
+            </tr>
+            <tr className="shadow-[0_1px_0_var(--color-line)]">
+              <th className="px-4 py-2 text-left font-medium">Account</th>
+              {NOW_COLUMNS.map((c) => (
+                <th key={c.key} className={`px-2 py-2 text-right font-medium ${c.key === "live" ? "w-[150px]" : ""}`} title={c.hint}>
+                  {c.label}
+                </th>
+              ))}
+              <th />
+              {DATE_COLUMNS.map((c) => (
+                <th key={c.key} className="px-2 py-2 text-right font-medium" title={c.hint}>
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="tabular-nums">
+            {rows.map((a) => {
+              const flags = flagsOf(a.listings);
+              return (
+                <tr key={a.id} className="group border-b border-[var(--color-line)]/70 transition-colors last:border-0 hover:bg-[var(--color-primary-soft)]/40">
+                  <td className="max-w-[260px] px-4 py-2">
+                    <Link href={`/accounts/${a.id}`} className="block truncate font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]" title={`Open ${a.label}'s Overview`}>
+                      {name(a)}
+                    </Link>
+                    {!a.listings ? (
+                      <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">Couldn&apos;t be read from eBay just now</span>
+                    ) : (
+                      flags.length > 0 && <span className="mt-0.5 block truncate text-[11px] font-medium text-amber-600">{flags.join(" · ")}</span>
+                    )}
+                  </td>
+                  <td className="px-2 py-2 text-right">
+                    <span className="flex items-center justify-end gap-2">
+                      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--color-line)]" aria-hidden>
+                        <span className="block h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.round(share(a) * 100)}%` }} />
+                      </span>
+                      <span className="w-10 font-semibold text-[var(--color-ink)]">{a.listings ? count(figureOf(a.listings, "live")) : "—"}</span>
+                      <span className="w-9 text-[11px] text-[var(--color-muted)]">{a.listings && totalLive > 0 ? `${Math.round(share(a) * 100)}%` : ""}</span>
+                    </span>
+                  </td>
+                  {NOW_COLUMNS.slice(1).map((c) => (
+                    <td key={c.key} className="px-2 py-2 text-right">
+                      {cell(a, c.key)}
+                    </td>
+                  ))}
+                  <td />
+                  {DATE_COLUMNS.map((c) => (
+                    <td key={c.key} className="px-2 py-2 text-right">
+                      {cell(a, c.key)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+          {rows.length > 1 && (
+            <tfoot className="tabular-nums">
+              <tr className="border-t border-[var(--color-line)] bg-[var(--color-paper)]/60 font-semibold text-[var(--color-ink)]">
+                <td className="px-4 py-2">All {rows.length} accounts</td>
+                <td className="px-2 py-2 text-right">
+                  <span className="flex items-center justify-end gap-2">
+                    <span className="w-10">{count(totalLive)}</span>
+                    <span className="w-9" />
+                  </span>
+                </td>
+                {NOW_COLUMNS.slice(1).map((c) => (
+                  <td key={c.key} className="px-2 py-2 text-right">
+                    {count(total(c.key))}
+                  </td>
+                ))}
+                <td />
+                {DATE_COLUMNS.map((c) => (
+                  <td key={c.key} className="px-2 py-2 text-right">
+                    {count(total(c.key))}
+                  </td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
     </section>
   );
 }

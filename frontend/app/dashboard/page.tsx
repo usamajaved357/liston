@@ -3,13 +3,13 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, Overview, User } from "@/lib/api";
+import { api, ApiError, ListingWork, Overview, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { AccountMenu } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
 import { BestSellersCard, SalesTrendCard } from "@/components/overview/OverviewSales";
-import { addListingTrends, ListingTrendCard, RecentListingsCard } from "@/components/overview/OverviewListings";
+import { AccountListingsCard, addListingTrends, ListingTrendCard, RecentListingsCard } from "@/components/overview/OverviewListings";
 import { useAmounts } from "@/lib/useAmounts";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { currencySymbol } from "@/lib/format";
@@ -206,22 +206,16 @@ export default function DashboardPage() {
         .sort((a, b) => b.units - a.units || b.sales - a.sales)
         .slice(0, 6);
 
-  // The markets in view's listing work, added up (counts, not money).
-  const listingWork = inView.length
-    ? inView.reduce(
-        (sum, m) => ({
-          live: sum.live + m.listings.live,
-          waiting: sum.waiting + m.listings.waiting,
-          drafted: sum.drafted + m.listings.drafted,
-          published: sum.published + m.listings.published,
-          hunted: sum.hunted + (m.listings.hunted ?? 0),
-          approved: sum.approved + (m.listings.approved ?? 0),
-          rejected: sum.rejected + (m.listings.rejected ?? 0),
-          reviewing: sum.reviewing + (m.listings.reviewing ?? 0),
-        }),
-        { live: 0, waiting: 0, drafted: 0, published: 0, hunted: 0, approved: 0, rejected: 0, reviewing: 0 }
-      )
+  // The markets in view's listing work, added up (counts, not money): every figure each market has.
+  const listingWork: ListingWork | null = inView.length
+    ? inView.reduce((sum, m) => {
+        const next = { ...sum } as Record<string, number>;
+        for (const [key, value] of Object.entries(m.listings)) next[key] = (next[key] ?? 0) + (Number(value) || 0);
+        return next as unknown as ListingWork;
+      }, { live: 0, waiting: 0, drafted: 0, published: 0 } as ListingWork)
     : null;
+  // The dates in words, for the By account table's heading.
+  const datesLabel = range === "today" ? "Today" : range === "this_month" ? "This month" : range === "last_month" ? "Last month" : `Last ${rangeLabel}`;
   // One name per account, its markets after it ("Minsu LTD (UK, AU)") when
   // every market is in view: one reconnect covers all of them.
   const names = (list: typeof accounts) => {
@@ -366,9 +360,12 @@ export default function DashboardPage() {
                   .slice(0, 5)}
                 showMarket={current === "all" && markets.length > 1}
                 flagOf={(id) => markets.find((m) => m.id === id)?.flag ?? ""}
+                empty={range === "today" ? "Nothing published from Liston today yet." : undefined}
               />
             </div>
           )}
+          {/* How much is on which account. */}
+          {metric === "listings" && accounts.length > 1 && <AccountListingsCard accounts={accounts} datesLabel={datesLabel} showMarket={current === "all" && markets.length > 1} />}
 
           {/* How sales moved, and what sold most. */}
           {metric === "sales" && (

@@ -297,14 +297,14 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
             <Alert>{dataError}</Alert>
           ) : metric === "listings" ? (
             <>
-              <ListingCards work={data?.listings ?? null} loading={!data} />
+              <ListingCards work={data?.listings ?? null} loading={!data} huntingHref={(view) => `/accounts/${connectionId}/hunting?view=${view}`} />
               {/* How listing work moved, and what went live. */}
               {data && (
                 <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
                   <div className="min-w-0 lg:col-span-2">
                     <ListingTrendCard points={data.listingTrend ?? null} caption={range === "today" ? "Last 7 days" : range === "this_month" ? "This month" : range === "last_month" ? "Last month" : `Last ${RANGES.find((r) => r.key === range)?.label ?? ""}`} />
                   </div>
-                  <RecentListingsCard items={data.recentListings ?? []} showMarket={false} flagOf={() => ""} />
+                  <RecentListingsCard items={data.recentListings ?? []} showMarket={false} flagOf={() => ""} empty={range === "today" ? "Nothing published from Liston today yet." : undefined} />
                 </div>
               )}
             </>

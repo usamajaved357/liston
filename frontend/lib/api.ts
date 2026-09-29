@@ -97,11 +97,25 @@ export interface ListingWork {
   waiting: number;
   drafted: number;
   published: number;
-  // Product hunting in the same dates, and how many wait for review now.
+  // Of the drafted and published in the dates, the ones made from a hunted product.
+  draftedFromHunts?: number;
+  publishedFromHunts?: number;
+  // Product hunting in the same dates, with what's behind each: found by
+  // Liston (Discover's Hunt, Find with Liston), the owner's own approved as
+  // added, rejected by Liston (the supplier doesn't sell what sells), sent
+  // back to the hunter.
   hunted?: number;
+  huntedByListon?: number;
   approved?: number;
+  approvedAsAdded?: number;
   rejected?: number;
+  rejectedByListon?: number;
+  sentBack?: number;
+  // Right now: waiting for review, sent back, approved and still to be drafted, draft failed.
   reviewing?: number;
+  sentBackNow?: number;
+  toDraft?: number;
+  draftFailed?: number;
 }
 
 export interface OverviewAccount {

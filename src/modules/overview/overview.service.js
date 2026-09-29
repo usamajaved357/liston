@@ -28,6 +28,8 @@ const huntingRepository = require('../hunting/hunting.repository');
 const listingTrend = require('./listing-trend');
 
 const RANGES = new Set(['today', '7d', '30d', '90d', 'this_month', 'last_month']);
+// Every listing figure an account has, added up per market.
+const LISTING_KEYS = ['live', 'drafted', 'draftedFromHunts', 'published', 'publishedFromHunts', 'waiting', ...Object.keys(huntingRepository.EMPTY_OVERVIEW)];
 // How long the page waits for a finance read before answering with what's
 // stored; the read carries on and the page asks again.
 const FINANCES_WAIT_MS = 6000;
@@ -61,7 +63,7 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
   const [start, end] = ebayService.resolveRangeWindow(range, null, null, timeZone || marketplaces.timeZoneOf(connection.marketplace?.id || marketplaces.DEFAULT_ID));
   const [work, hunting] = await Promise.all([
     listingRepository.countListingWork(connection.id, start, end),
-    huntingRepository.countForOverview(connection.id, start, end).catch(() => ({ hunted: 0, approved: 0, rejected: 0, reviewing: 0 })),
+    huntingRepository.countForOverview(connection.id, start, end).catch(() => ({ ...huntingRepository.EMPTY_OVERVIEW })),
   ]);
   const orderIds = orders.map((o) => o.orderId);
   const [moneyByOrder, costs, archived, charges] = await Promise.all([
@@ -78,8 +80,9 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
   return {
     activeListings: listings,
     ...listingWork,
-    // The listing pipeline: hunting (products hunted, approved, rejected; waiting for review now), then drafts and what went live.
-    listings: { live: listings, drafted: work.drafted, published: work.published, waiting: work.waiting, hunted: hunting.hunted, approved: hunting.approved, rejected: hunting.rejected, reviewing: hunting.reviewing },
+    // The listing pipeline: hunting (products hunted, approved, rejected, each with what's behind it;
+    // what waits now), then drafts and what went live (of them, from hunted products).
+    listings: { live: listings, ...work, ...hunting },
     ...(extras ? await salesExtras(connection, { range, timeZone, orders, recent }) : {}),
     money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled, charges }),
     // The same dates' orders by state, for the account Overview's queue.
@@ -210,10 +213,7 @@ async function getOverview(ownerId, viewer, { range = 'today', timeZone = null }
         currency: summary.currency,
         accounts: accounts.length,
         activeListings: accounts.reduce((sum, a) => sum + a.activeListings, 0),
-        listings: ['live', 'drafted', 'published', 'waiting', 'hunted', 'approved', 'rejected', 'reviewing'].reduce(
-          (acc, key) => ({ ...acc, [key]: accounts.reduce((sum, a) => sum + (a.listings?.[key] || 0), 0) }),
-          {}
-        ),
+        listings: LISTING_KEYS.reduce((acc, key) => ({ ...acc, [key]: accounts.reduce((sum, a) => sum + (a.listings?.[key] || 0), 0) }), {}),
         money: moneySummary.addUp(accounts.map((a) => a.money).filter(Boolean), summary.currency),
         // Its accounts' sales by day added up, and its best sellers.
         trend: salesTrend.addTrends(accounts.map((a) => a.trend)),

@@ -153,17 +153,36 @@ async function counts(connectionId, { viewerId = null, ...filters } = {}) {
  * approved (drafted or listed since included) and rejected in those dates,
  * and how many wait for review now.
  */
+// The Overview's hunting figures for [start, end), with what's behind each:
+// products hunted (of them, found by Liston: Discover's Hunt, Find with
+// Liston), approved (of them, the owner's own, approved as added), rejected
+// (of them, by Liston: the supplier doesn't sell what sells) and sent back;
+// and right now, what waits for review, is sent back, is approved and still
+// to be drafted, or whose draft failed (hunt-rules.draftStateOf, a draft
+// stuck over 15 minutes counting as failed).
+const EMPTY_OVERVIEW = { hunted: 0, huntedByListon: 0, approved: 0, approvedAsAdded: 0, rejected: 0, rejectedByListon: 0, sentBack: 0, reviewing: 0, sentBackNow: 0, toDraft: 0, draftFailed: 0 };
 async function countForOverview(connectionId, start, end) {
+  const inDates = (column) => `${column} >= $2 AND ${column} < $3`;
+  const toDraft = `status = 'approved' AND listing_id IS NULL AND cardinality(item_ids) = 0`;
+  // (Never NULL: a product not tried yet has no draft status, and NOT NULL would leave it out.)
+  const failed = `COALESCE(draft_status = 'failed' OR (draft_status = 'drafting' AND draft_attempted_at < now() - interval '15 minutes'), false)`;
   const { rows } = await query(
     `SELECT
-       count(*) FILTER (WHERE created_at >= $2 AND created_at < $3)::int AS hunted,
-       count(*) FILTER (WHERE status = 'approved' AND decided_at >= $2 AND decided_at < $3)::int AS approved,
-       count(*) FILTER (WHERE status = 'rejected' AND decided_at >= $2 AND decided_at < $3)::int AS rejected,
-       count(*) FILTER (WHERE status = 'pending')::int AS reviewing
+       count(*) FILTER (WHERE ${inDates('created_at')})::int AS hunted,
+       count(*) FILTER (WHERE found_by_liston AND ${inDates('created_at')})::int AS "huntedByListon",
+       count(*) FILTER (WHERE status = 'approved' AND ${inDates('decided_at')})::int AS approved,
+       count(*) FILTER (WHERE status = 'approved' AND ${inDates('decided_at')} AND reviewer_user_id = hunter_user_id AND NOT found_by_liston)::int AS "approvedAsAdded",
+       count(*) FILTER (WHERE status = 'rejected' AND ${inDates('decided_at')})::int AS rejected,
+       count(*) FILTER (WHERE status = 'rejected' AND ${inDates('decided_at')} AND reject_reason = 'mismatch' AND reviewer_user_id IS NULL)::int AS "rejectedByListon",
+       count(*) FILTER (WHERE status = 'sent_back' AND ${inDates('decided_at')})::int AS "sentBack",
+       count(*) FILTER (WHERE status = 'pending')::int AS reviewing,
+       count(*) FILTER (WHERE status = 'sent_back')::int AS "sentBackNow",
+       count(*) FILTER (WHERE ${toDraft} AND NOT ${failed})::int AS "toDraft",
+       count(*) FILTER (WHERE ${toDraft} AND ${failed})::int AS "draftFailed"
      FROM hunted_products WHERE connection_id = $1`,
     [connectionId, start, end]
   );
-  return rows[0] || { hunted: 0, approved: 0, rejected: 0, reviewing: 0 };
+  return rows[0] || { ...EMPTY_OVERVIEW };
 }
 
 /** The badge: products waiting that this person may review, their own sent back, and approved ones ready to draft. */
@@ -421,6 +440,7 @@ module.exports = {
   eventsSince,
   outcomesBetween,
   countForOverview,
+  EMPTY_OVERVIEW,
   personName,
   addReading,
   readings,
