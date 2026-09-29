@@ -81,11 +81,17 @@ export function DiscoverCompliance({ data, checking, onCheck, aiUnavailable }: {
               {data.hidden.count} of the leading listings {data.hidden.count === 1 ? "is" : "are"} hidden
             </span>{" "}
             and left out of every figure here:{" "}
-            {[data.hidden.restricted ? `${data.hidden.restricted} ${data.hidden.restricted === 1 ? "names" : "name"} an item eBay restricts` : null, data.hidden.brand ? `${data.hidden.brand} ${data.hidden.brand === 1 ? "sells" : "sell"} a VeRO brand${data.hidden.brands.length ? ` (${data.hidden.brands.slice(0, 4).join(", ")})` : ""}` : null]
-              .filter(Boolean)
-              .join("; ")}
-            . Discover never points anyone at a product that would break eBay&apos;s rules.
+            {data.hidden.restricted} {data.hidden.restricted === 1 ? "names" : "name"} an item eBay restricts. Discover never points anyone at an item eBay doesn&apos;t allow.
           </span>
+        </p>
+      )}
+      {(data.vero?.count ?? 0) > 0 && (
+        <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[12px] leading-snug text-amber-900">
+          <span className="font-semibold">
+            {data.vero!.count} of the leading listings {data.vero!.count === 1 ? "names" : "name"} a brand that may be protected
+          </span>
+          {data.vero!.brands.length ? ` (${data.vero!.brands.slice(0, 4).join(", ")})` : ""}. They&apos;re shown and counted, marked VeRO brand or Possible VeRO:
+          that&apos;s Liston&apos;s judgement, not eBay&apos;s, so check the brand before you hunt one.
         </p>
       )}
       <div className="mt-4 grid grid-cols-1 gap-5 md:grid-cols-3">

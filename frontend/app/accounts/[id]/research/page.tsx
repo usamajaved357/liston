@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { api, ApiError, ResearchBudget, ResearchDeliveryFilter, ResearchItem, ResearchParams, ResearchResult } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
@@ -14,6 +14,7 @@ import { DeliveryBar } from "@/components/research/DeliveryBar";
 import { RESEARCH_FILTERS, ResearchFilterState, ResearchFilters, filterResearch } from "@/components/research/ResearchFilters";
 import { SoldListings } from "@/components/research/SoldListings";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
+import { HuntListingDialog } from "@/components/hunting/HuntListingDialog";
 
 // Product research on the account's eBay site: whether to list a product,
 // at what price, under what title, and what could get it taken down — from
@@ -37,6 +38,9 @@ const PAGE = 50;
 
 export default function ResearchPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
+  // Hunt: the eBay listing being added to the hunting list (HuntListingDialog), its supplier added on its page.
+  const [hunting, setHunting] = useState<string | null>(null);
   const { connection, user, loading, error } = useConnection(params.id);
   const [q, setQ] = useState("");
   const [condition, setCondition] = useState("new");
@@ -350,9 +354,8 @@ export default function ResearchPage() {
               <ResearchListings
                 items={ordered.slice(0, shown)}
                 currency={currency}
-                connectionId={connection.id}
                 maxSold={maxSold}
-                canHunt={!connection.permissions || Boolean(connection.permissions.hunting || connection.permissions.hunting_review)}
+                onHunt={!connection.permissions || connection.permissions.hunting || connection.permissions.hunting_review ? setHunting : undefined}
               />
             )}
             {view === "active" && sorted.length === 0 && (
@@ -394,6 +397,16 @@ export default function ResearchPage() {
                 : ""}
           </p>
         </div>
+      )}
+      {hunting && (
+        <HuntListingDialog
+          key={hunting}
+          connectionId={connection.id}
+          competitorUrl={hunting}
+          from="research"
+          onClose={() => setHunting(null)}
+          onOpenHunt={(id) => router.push(`/accounts/${connection.id}/hunting?open=${encodeURIComponent(id)}`)}
+        />
       )}
     </AccountShell>
   );

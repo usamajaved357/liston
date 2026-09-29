@@ -429,12 +429,12 @@ test("Discover keeps products at risk of a takedown out by default: one like a d
   const risky = again.products.find((p) => p.key === product.key);
   assert.deepStrictEqual([risky.risk.kind, risky.risk.level], ['refused', 'bad']);
   assert.match(risky.risk.text, /brand or intellectual-property/);
-  // Winners hides it unless asked, and says how many it hid.
-  const safe = (await request('GET', `${base}/winners?limit=300`, undefined, t.hunter)).data;
+  // Winners shows it marked by default; hidden only when asked, saying how many it hid.
+  const all = (await request('GET', `${base}/winners?limit=300`, undefined, t.hunter)).data;
+  assert.strictEqual(all.products.find((p) => p.key === product.key)?.risk?.kind, 'refused');
+  const safe = (await request('GET', `${base}/winners?safety=safe&limit=300`, undefined, t.hunter)).data;
   assert.ok(!safe.products.some((p) => p.key === product.key));
   assert.ok(safe.riskHidden >= 1);
-  const all = (await request('GET', `${base}/winners?safety=all&limit=300`, undefined, t.hunter)).data;
-  assert.strictEqual(all.products.find((p) => p.key === product.key)?.risk?.kind, 'refused');
   assert.strictEqual((await request('GET', `${base}/winners?safety=maybe`, undefined, t.hunter)).status, 400);
 });
 

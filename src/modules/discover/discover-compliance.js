@@ -116,28 +116,43 @@ function violationOf(title, brandNames = [], category = '') {
 }
 
 /**
- * The listings Discover may show and the ones it hides:
- * { kept, hidden: { count, restricted, brand, brands: [name] } }.
+ * The VeRO brand a title names as its product, or null: { brand, source }
+ * — 'list' when it's on Liston's own list (VERO_BRANDS), 'ai' when only the
+ * AI's reading names it. Either way Liston's judgement, not eBay's: eBay
+ * hasn't taken the listing down.
+ */
+function veroOf(title, brandNames = []) {
+  const brand = veroBrandIn(title, brandNames);
+  return brand ? { brand, source: VERO_BRANDS.includes(brand.toLowerCase()) ? 'list' : 'ai' } : null;
+}
+
+/**
+ * The listings Discover shows and the ones it hides: { kept, hidden:
+ * { count, restricted }, vero: { count, brands: [name] } }. A restricted or
+ * prohibited item is hidden; a listing naming a VeRO brand is kept, carrying
+ * `vero` ({ brand, source }), for the hunter to judge: the brand is Liston's
+ * guess, not something eBay did.
  */
 function partition(listings, brandNames = []) {
   const kept = [];
-  const hidden = { count: 0, restricted: 0, brand: 0, brands: [] };
+  const hidden = { count: 0, restricted: 0 };
   const brands = new Map();
+  let marked = 0;
   for (const l of listings) {
     const v = violationOf(l.title, brandNames, l.category);
     if (!v) {
       kept.push(l);
-      continue;
-    }
-    hidden.count += 1;
-    if (v.kind === 'restricted') hidden.restricted += 1;
-    else {
-      hidden.brand += 1;
+    } else if (v.kind === 'restricted') {
+      hidden.count += 1;
+      hidden.restricted += 1;
+    } else {
+      marked += 1;
       brands.set(v.label, (brands.get(v.label) || 0) + 1);
+      kept.push({ ...l, vero: veroOf(l.title, brandNames) });
     }
   }
-  hidden.brands = [...brands].sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 6);
-  return { kept, hidden };
+  const vero = { count: marked, brands: [...brands].sort((a, b) => b[1] - a[1]).map(([name]) => name).slice(0, 6) };
+  return { kept, hidden, vero };
 }
 
 /**
@@ -145,7 +160,7 @@ function partition(listings, brandNames = []) {
  * brand split, and the AI's reading when there is one.
  * { level: 'clear' | 'check' | 'risky', subject, titles, brands, ai }.
  */
-function check({ name, listings = [], brands = [], total = 0, advice = null, hidden = null }) {
+function check({ name, listings = [], brands = [], total = 0, advice = null, hidden = null, vero = null }) {
   const subject = termsIn(name);
   const hazmat = new Map();
   const restricted = new Map();
@@ -189,13 +204,15 @@ function check({ name, listings = [], brands = [], total = 0, advice = null, hid
     (brandInfo.branded ?? 0) >= 50 ||
     ai?.brand?.level === 'low' ||
     ai?.safety?.level === 'low';
-  return { level: risky ? 'risky' : check_ ? 'check' : 'clear', subject, titles, brands: brandInfo, ai, hidden: hidden || { count: 0, restricted: 0, brand: 0, brands: [] } };
+  return { level: risky ? 'risky' : check_ ? 'check' : 'clear', subject, titles, brands: brandInfo, ai, hidden: hidden || { count: 0, restricted: 0 }, vero: vero || { count: 0, brands: [] } };
 }
 
 /**
- * A product's takedown risk for this owner, or null. Listings whose titles
- * name a VeRO brand or a restricted item are already hidden (partition);
- * this looks further, at what a title doesn't say:
+ * A product's takedown risk for this owner, or null. Listings naming a
+ * restricted item are already hidden (partition); the rest, marked:
+ *   - its title names a VeRO brand (`product.vero`, from partition): on
+ *     Liston's list ('vero', bad) or only the AI's guess ('vero', warn,
+ *     `source: 'ai'`) — Liston's judgement, never eBay's;
  *   - its Brand item specific is a VeRO brand ('vero', bad);
  *   - eBay refused one of the owner's drafts for a product like it, for
  *     brand or intellectual-property reasons ('refused', bad) or another
@@ -208,8 +225,10 @@ function check({ name, listings = [], brands = [], total = 0, advice = null, hid
  * { kind, level: 'bad' | 'warn', text }.
  */
 function productRisk(product, { refusals = [], rejected = [] } = {}) {
+  const named = product.vero || null;
+  if (named?.source === 'list') return { kind: 'vero', level: 'bad', source: 'list', brand: named.brand, text: `Its title names ${named.brand}, on Liston's list of brands whose owners report listings to eBay (VeRO). eBay hasn't taken these listings down, but one like it can be` };
   const brand = product.brand ? veroBrandIn(product.brand) : null;
-  if (brand) return { kind: 'vero', level: 'bad', text: `Its listings' brand is ${brand}, whose owner takes listings down through VeRO` };
+  if (brand) return { kind: 'vero', level: 'bad', source: 'list', brand, text: `Its listings' brand is ${brand}, on Liston's list of brands whose owners report listings to eBay (VeRO)` };
   const past = refusals.filter((r) => refusalKind(r.message) !== 'words' && aboutProduct(r.title, product.name));
   const ip = past.filter((r) => refusalKind(r.message) === 'ip');
   if (ip.length) return { kind: 'refused', level: 'bad', text: `eBay refused ${ip.length === 1 ? 'one of your drafts' : `${ip.length} of your drafts`} for a product like this, for brand or intellectual-property reasons` };
@@ -218,7 +237,8 @@ function productRisk(product, { refusals = [], rejected = [] } = {}) {
     return { kind: 'rejected', level: 'warn', text: 'Your team rejected a product like this for brand or VeRO risk' };
   }
   if (past.length) return { kind: 'refused', level: 'warn', text: `eBay refused ${past.length === 1 ? 'one of your drafts' : `${past.length} of your drafts`} for a product like this, for a listing policy` };
+  if (named) return { kind: 'vero', level: 'warn', source: 'ai', brand: named.brand, text: `Liston's AI reading thinks ${named.brand} may be a protected brand. It isn't on Liston's VeRO list and eBay hasn't taken these listings down: check the brand before you hunt it` };
   return null;
 }
 
-module.exports = { check, termsIn, flagOf, violationOf, veroBrandIn, partition, productRisk, RESTRICTED, VERO_BRANDS };
+module.exports = { check, termsIn, flagOf, violationOf, veroBrandIn, veroOf, partition, productRisk, RESTRICTED, VERO_BRANDS };

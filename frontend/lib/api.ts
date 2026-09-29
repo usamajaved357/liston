@@ -105,7 +105,9 @@ export interface ListingWork {
   // added, rejected by Liston (the supplier doesn't sell what sells), sent
   // back to the hunter.
   hunted?: number;
-  huntedByListon?: number;
+  // Of them, added as the eBay listing alone from Discover, or from Product research.
+  huntedFromDiscover?: number;
+  huntedFromResearch?: number;
   approved?: number;
   approvedAsAdded?: number;
   rejected?: number;
@@ -263,6 +265,8 @@ export interface ResearchRisk {
   // history: the refused drafts; brand: the brands at issue.
   items?: { title: string; account: string; at: string; reason: string; kind: "ip" | "words" | "policy" }[];
   brands?: string[];
+  // brand: "list", a brand on Liston's VeRO list; "ai", only the AI's guess (never "Don't list" on its own).
+  source?: "list" | "ai" | null;
 }
 
 export interface ResearchPrice {
@@ -1891,8 +1895,10 @@ export interface HuntSummary {
   hunter: HuntPerson | null;
   reviewer: HuntPerson | null;
   autoApproved: boolean;
-  // Hunted from Discover (or found by Liston's old supplier search): never approved as it's added, a person approves or rejects it.
+  // Added as its eBay listing alone (or found by Liston's old supplier search): never approved as it's added, a person approves or rejects it.
   foundByListon: boolean;
+  // Which tool it was hunted from as its listing alone; null when a hunter added it with its supplier.
+  addedFrom: "discover" | "research" | null;
   createdAt: string;
   submittedAt: string;
   decidedAt: string | null;
@@ -1945,8 +1951,8 @@ export interface HuntTimelineEvent {
   auto?: boolean;
   // Added from Liston's old supplier search (products added that way).
   byListon?: boolean;
-  // Hunted from Discover: the eBay listing added first, its supplier after.
-  fromDiscover?: boolean;
+  // Hunted as the eBay listing alone, its supplier after: from Discover or Product research.
+  from?: "discover" | "research" | null;
   // A change to its supplier links (an "updated" event): added (main: its first), made main, taken off.
   supplier?: "added" | "main" | "removed" | null;
   main?: boolean;
@@ -2105,8 +2111,9 @@ export interface DiscoverProduct {
   mine?: { kind: "selling" | "listed" | "drafted" | "hunted" | "rejected" | "similar"; text: string } | null;
   // Other Liston sellers who hunted it in the last two weeks (counted from two; never who).
   crowd?: number;
-  // Its takedown risk for this owner: a VeRO brand specific, eBay's refusals of their drafts, their team's brand-risk rejections.
-  risk?: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string } | null;
+  // Its takedown risk for this owner: a VeRO brand (source "list": Liston's list; "ai": only the AI's guess, never eBay's word),
+  // eBay's refusals of their drafts, their team's brand-risk rejections.
+  risk?: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string; source?: "list" | "ai"; brand?: string } | null;
 }
 // The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
 export interface DiscoverWinnersFilters {
@@ -2278,8 +2285,10 @@ export interface DiscoverCompliance {
   };
   brands: { branded: number | null; top: { name: string; count: number; share: number | null }[] };
   ai: { brand: DiscoverRisk | null; safety: DiscoverRisk | null; summary: string | null } | null;
-  // The leading listings hidden because they'd break eBay's rules: a restricted item, or a VeRO brand as the product.
-  hidden: { count: number; restricted: number; brand: number; brands: string[] };
+  // The leading listings hidden: a restricted item eBay doesn't allow.
+  hidden: { count: number; restricted: number };
+  // The leading listings naming a VeRO brand (Liston's list, or the AI's guess): kept and marked, not hidden.
+  vero?: { count: number; brands: string[] };
 }
 export interface DiscoverPrice {
   recommended: number;
@@ -2694,8 +2703,9 @@ export const api = {
     request<{ checkId: string; result: HuntCheckResult; autoApproves: boolean }>(`/api/connections/${connectionId}/hunting/check`, { method: "POST", body: JSON.stringify(input) }),
   // Discover's Hunt: Liston finds an AliExpress supplier for the listing and adds it, or says why not.
   // Discover's Hunt: the eBay listing added on its own, its supplier added on its page.
-  huntFromListing: (connectionId: string, competitorUrl: string) =>
-    request<HuntFromListing>(`/api/connections/${connectionId}/hunting/from-listing`, { method: "POST", body: JSON.stringify({ competitorUrl }) }),
+  // `from`: the tool it's hunted from, Discover or Product research (recorded on the product).
+  huntFromListing: (connectionId: string, competitorUrl: string, from: "discover" | "research") =>
+    request<HuntFromListing>(`/api/connections/${connectionId}/hunting/from-listing`, { method: "POST", body: JSON.stringify({ competitorUrl, from }) }),
   // A product's supplier links: add one (the first becomes its main supplier), make one main, take one off.
   huntAddSource: (huntId: string, sourceUrl: string) => request<HuntDetail>(`/api/hunting/${huntId}/sources`, { method: "POST", body: JSON.stringify({ sourceUrl }) }),
   huntMakeMainSource: (huntId: string, sourceId: string) => request<HuntDetail>(`/api/hunting/${huntId}/sources/${sourceId}/main`, { method: "POST" }),
@@ -2738,7 +2748,7 @@ export const api = {
     const q = new URLSearchParams();
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
-    return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
+    return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number; marked?: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
   },
   // "Find more products for these filters": more listings that can pass them read in the explored subjects most likely to have them.
   discoverWinnersMore: (connectionId: string, f: DiscoverWinnersFilters = {}) =>

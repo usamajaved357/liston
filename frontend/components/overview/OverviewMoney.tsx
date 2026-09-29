@@ -312,8 +312,9 @@ const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink
     note: "Products found to list",
     of: (w) => num(w.hunted),
     details: [
-      { label: "Added with a supplier", of: (w) => num(w.hunted) - num(w.huntedByListon), hint: "Checked and added by a hunter with its AliExpress supplier" },
-      { label: "From Discover", of: (w) => num(w.huntedByListon), hint: "Hunted from Discover: the eBay listing added first, its supplier added on its page" },
+      { label: "Added with a supplier", of: (w) => num(w.hunted) - num(w.huntedFromDiscover) - num(w.huntedFromResearch), hint: "Checked and added by a hunter with its AliExpress supplier" },
+      { label: "From Discover", of: (w) => num(w.huntedFromDiscover), hint: "Hunted from Discover: the eBay listing added first, its supplier added on its page" },
+      { label: "From Product research", of: (w) => num(w.huntedFromResearch), hint: "Hunted from Product research: the eBay listing added first, its supplier added on its page" },
     ],
   },
   {
@@ -368,7 +369,7 @@ export function ListingCards({ work, loading, huntingHref }: { work: ListingWork
         { value: work.live, text: "live on eBay" },
         { value: work.waiting, text: `draft${work.waiting === 1 ? "" : "s"} waiting to publish` },
         ...[
-          { value: num(work.sourcingNow), text: `hunted from Discover, needing a supplier`, view: "sourcing" as const },
+          { value: num(work.sourcingNow), text: `hunted as a listing, needing a supplier`, view: "sourcing" as const },
           { value: num(work.reviewing), text: `hunted product${num(work.reviewing) === 1 ? "" : "s"} waiting for review`, view: "review" as const },
           { value: num(work.toDraft), text: `approved, still to be drafted`, view: "approved" as const },
           { value: num(work.draftFailed), text: `draft${num(work.draftFailed) === 1 ? "" : "s"} failed, to draft again`, view: "approved" as const, warn: true },

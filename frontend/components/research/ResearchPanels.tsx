@@ -64,8 +64,10 @@ const firstSentence = (text: string) => text.split(/(?<=[.!?])\s/)[0];
 // else the red reason, else the amber one, else the best thing about the
 // market.
 function headline(analysis: ResearchAnalysis) {
-  const brand = analysis.risks.find((r) => r.key === "brand" && r.level === "bad");
-  if (brand?.brands?.length) return `${brand.brands.join(", ")} is a protected brand. Listings that use it get removed under VeRO.`;
+  // A brand on Liston's VeRO list decides it; one only the AI names is said to be its guess.
+  const brand = analysis.risks.find((r) => r.key === "brand" && (r.level === "bad" || (r.level === "warn" && r.source === "ai")));
+  if (brand?.brands?.length && brand.source === "list") return `${brand.brands.join(", ")} ${brand.brands.length === 1 ? "is" : "are"} on Liston's VeRO list: listings that use it can be taken down by the brand's owner.`;
+  if (brand?.brands?.length && brand.source === "ai") return `Liston's AI thinks ${brand.brands.join(", ")} may be a protected brand. It's a guess, not eBay's word: check the brand before you list.`;
   const pick = analysis.verdict.reasons.find((r) => r.tone === "bad") || analysis.verdict.reasons.find((r) => r.tone === "warn") || analysis.verdict.reasons[0];
   return pick ? firstSentence(pick.text.replace(/^[^:]{2,30}:\s*/, "")) : "";
 }

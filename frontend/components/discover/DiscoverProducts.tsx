@@ -27,7 +27,11 @@ function Marks({ product }: { product: DiscoverProduct }) {
       {product.risk && (
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${product.risk.level === "bad" ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-amber-50 text-amber-800 ring-amber-200"}`} title={product.risk.text}>
           <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden />
-          {product.risk.kind === "vero" ? "VeRO risk" : product.risk.kind === "refused" ? "eBay refused one like it" : "Rejected before for brand risk"}
+          {product.risk.kind === "vero"
+            ? `${product.risk.source === "ai" ? "Possible VeRO" : "VeRO brand"}${product.risk.brand ? ` · ${product.risk.brand.replace(/\b\w/g, (c) => c.toUpperCase())}` : ""}`
+            : product.risk.kind === "refused"
+              ? "eBay refused one like it"
+              : "Rejected before for brand risk"}
         </span>
       )}
       {product.mine && (

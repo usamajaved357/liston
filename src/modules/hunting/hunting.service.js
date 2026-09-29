@@ -229,8 +229,10 @@ function summaryOf(row, viewer, sales = []) {
     options: result.summary?.total ?? null,
     hunter: personOf(row.hunter_user_id, row.hunter_name, row.hunter_email),
     reviewer: personOf(row.reviewer_user_id, row.reviewer_name, row.reviewer_email),
-    // Found by Liston's supplier search (Discover's Hunt, Find with Liston): never approved as added.
+    // Added as its eBay listing alone (or, earlier, with Liston's old supplier search): never approved as added.
     foundByListon: Boolean(row.found_by_liston),
+    // Which tool it was hunted from as its listing alone: 'discover', 'research', or null (added with a supplier).
+    addedFrom: row.added_from || null,
     autoApproved: Boolean(!row.found_by_liston && row.reviewer_user_id && row.reviewer_user_id === row.hunter_user_id),
     createdAt: row.created_at,
     submittedAt: row.submitted_at,
@@ -283,8 +285,9 @@ function timelineOf(row, events) {
       auto: Boolean(e.detail?.autoApproved),
       // Added from Liston's old supplier search (kept for products added that way).
       byListon: Boolean(e.detail?.foundByListon),
-      // Hunted from Discover: the eBay listing added first.
-      fromDiscover: Boolean(e.detail?.fromDiscover),
+      // Hunted as the eBay listing alone, from Discover or Product research: 'discover' | 'research' | null.
+      // (A resubmission's detail has its own `from`, the stage it left: not a tool.)
+      from: e.kind === 'hunt.added' ? (['discover', 'research'].includes(e.detail?.from) ? e.detail.from : e.detail?.fromDiscover ? 'discover' : null) : null,
       // A change to its supplier links: 'added' (main: the first), 'main', 'removed'.
       supplier: e.detail?.supplier || null,
       main: Boolean(e.detail?.main),
@@ -323,25 +326,26 @@ async function check(auth, connectionId, { competitorUrl, sourceUrl }) {
 }
 
 /**
- * Discover's Hunt: the eBay listing added to the account's hunting list on
- * its own, read from eBay (its demand, price and risks), waiting in
- * 'sourcing' for someone to add a supplier link on its page. A listing
- * already on the account's list isn't added again: the answer links to it
- * ({ added: false, alreadyHunted }). Like anything hunted from Discover it's
- * never approved as it's added (`found_by_liston`). { added, hunt }.
+ * Hunt from Discover or Product research (`from`): the eBay listing added to
+ * the account's hunting list on its own, read from eBay (its demand, price
+ * and risks), waiting in 'sourcing' for someone to add a supplier link on its
+ * page. A listing already on the account's list isn't added again: the
+ * answer links to it ({ added: false, alreadyHunted }). It's never approved
+ * as it's added (`found_by_liston`), and `added_from` says which tool it
+ * came from. { added, hunt }.
  */
 // Hunts running now, by account and eBay listing: a second click (a retried request, a teammate) waits
 // for the first and gets the same answer, so a listing is never added twice.
 const hunting = new Map();
-function huntListing(auth, connectionId, { competitorUrl }) {
+function huntListing(auth, connectionId, { competitorUrl, from = 'discover' }) {
   const key = `${connectionId}:${ebaySource.legacyItemIdFromUrl(competitorUrl)}`;
   if (hunting.has(key)) return hunting.get(key);
-  const run = huntListingNow(auth, connectionId, competitorUrl).finally(() => hunting.delete(key));
+  const run = huntListingNow(auth, connectionId, competitorUrl, from === 'research' ? 'research' : 'discover').finally(() => hunting.delete(key));
   hunting.set(key, run);
   return run;
 }
 
-async function huntListingNow(auth, connectionId, competitorUrl) {
+async function huntListingNow(auth, connectionId, competitorUrl, from) {
   const viewer = await viewerFor(auth, connectionId);
   if (!viewer.canHunt) refuse("You don't have access to hunting on this account.");
   const itemId = ebaySource.legacyItemIdFromUrl(competitorUrl);
@@ -352,7 +356,7 @@ async function huntListingNow(auth, connectionId, competitorUrl) {
   }
   const read = await readProduct(auth.ownerId, connectionId, { competitorUrl, sourceUrl: null });
   const columns = checkColumns(read);
-  const id = await huntingRepository.insert({ ...columns, ownerId: auth.ownerId, connectionId, hunterId: auth.userId, status: 'sourcing', foundByListon: true });
+  const id = await huntingRepository.insert({ ...columns, ownerId: auth.ownerId, connectionId, hunterId: auth.userId, status: 'sourcing', foundByListon: true, addedFrom: from });
   await recordReading(id, read).catch((err) => logger.warn('Hunting: sales reading not kept', { error: err.message }));
   await activityRepository.record({
     actorUserId: auth.userId,
@@ -361,7 +365,7 @@ async function huntListingNow(auth, connectionId, competitorUrl) {
     subjectType: 'hunt',
     subjectId: id,
     title: columns.title,
-    detail: { fromDiscover: true, needsSupplier: true },
+    detail: { from, fromDiscover: from === 'discover', needsSupplier: true },
   });
   // Discover marks it as the owner's at once. Required here: Discover's module reads this one's tables.
   require('../discover/discover.service').forgetOwner(auth.ownerId);

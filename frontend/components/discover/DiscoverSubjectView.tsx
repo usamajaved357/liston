@@ -286,7 +286,7 @@ export function DiscoverSubjectView({
   const specific = subject.kind === "keyword" || subject.path.length > 1;
   const hidden = data.compliance.hidden;
   const hiddenText = hidden.count
-    ? `${hidden.count} of the leading listings ${hidden.count === 1 ? "is" : "are"} hidden: ${[hidden.restricted ? `${hidden.restricted} restricted on eBay` : null, hidden.brand ? `${hidden.brand} ${hidden.brands.length ? `branded (${hidden.brands.slice(0, 3).join(", ")})` : "a VeRO brand"}` : null].filter(Boolean).join(", ")}. Nothing here counts them.`
+    ? `${hidden.count} of the leading listings ${hidden.count === 1 ? "is" : "are"} hidden: restricted on eBay. Nothing here counts them.`
     : null;
 
   // Sales by price: each band's share of the sales (solid) against its share of the listings (dashed).

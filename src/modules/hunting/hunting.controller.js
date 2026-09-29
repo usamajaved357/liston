@@ -21,7 +21,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // The competitor is optional, as in drafting.
 const checkSchema = z.object({ competitorUrl: z.preprocess(blankToUndefined, competitorUrl.optional()), sourceUrl: z.preprocess(blankToUndefined, sourceUrl) });
 // Discover's Hunt: the eBay listing added on its own, its supplier added on its page.
-const huntListingSchema = z.object({ competitorUrl });
+// `from`: the tool it was hunted from, Discover (new products by category) or Product research (one product's market).
+const huntListingSchema = z.object({ competitorUrl, from: z.enum(['discover', 'research']).default('discover') });
 // A supplier link added to a product.
 const sourceSchema = z.object({ sourceUrl });
 const addSchema = z.object({ checkId: z.string().uuid('Check the product first.'), note: note.optional() });

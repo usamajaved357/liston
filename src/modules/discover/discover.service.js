@@ -461,14 +461,15 @@ async function readPlan(ctx, subject, info, focus, max) {
   }
   // The AI's brand/VeRO and restricted reading, when today's is kept (else the page asks for it).
   const advice = await advisor.keptAdvice(adviceKey(ctx.site, subject)).catch(() => null);
-  // Listings that would break eBay's rules (a restricted item, a VeRO brand as the product) are
-  // hidden, not read, and not counted: Discover never points anyone at them.
+  // A restricted item is hidden, not read and not counted: Discover never points anyone at it. A
+  // listing naming a VeRO brand (Liston's list, or the AI's guess) is kept, marked, for the hunter to judge.
   const brandNames = veroBrands(advice);
-  const { kept, hidden } = compliance.partition(scanRow.listings, brandNames);
+  const { kept, hidden, vero } = compliance.partition(scanRow.listings, brandNames);
   const first = firstReads(subject, info);
   const scanBrands = scanRow.breakdown?.brands || [];
   const scanBrandTotal = scanBrands.reduce((sum, b) => sum + b.count, 0) || scanRow.total || 1;
-  const knownBrands = [...brandNames, ...scanBrands.filter((b) => !b.unbranded && b.count / scanBrandTotal >= 0.05).map((b) => b.name)];
+  // eBay's own brand split, not the AI's VeRO guesses: those listings stay in, marked.
+  const knownBrands = scanBrands.filter((b) => !b.unbranded && b.count / scanBrandTotal >= 0.05).map((b) => b.name);
   const fits = (takenAt) => (l) => focusing.passes(l, focus, { account: ctx.account, brands: knownBrands, takenAt: new Date(takenAt).getTime() });
   const rest = focus ? kept.slice(first).filter(fits(scanRow.taken_at)) : kept.slice(first);
   let readOrder = [...kept.slice(0, first), ...rest];
@@ -482,7 +483,7 @@ async function readPlan(ctx, subject, info, focus, max) {
     found = { ...found, listings: extra };
     readOrder = [...readOrder, ...extra];
   }
-  return { scanRow, advice, brandNames, kept, hidden, rest, readOrder, found, passes: (l) => fits(scanRow.taken_at)(l) };
+  return { scanRow, advice, brandNames, kept, hidden, vero, rest, readOrder, found, passes: (l) => fits(scanRow.taken_at)(l) };
 }
 
 // How many sold counts a subject reads on opening: the deeper (a keyword, a subcategory), the more products it's worth.
@@ -493,7 +494,7 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
   const info = await subjectInfo(ctx.site, subject);
   const max = Math.max(asked, firstReads(subject, info));
   const traffic = canSeeTraffic && subject.kind === 'keyword' ? ownTraffic(ownerId, connectionId, subject.q) : Promise.resolve(null);
-  const { scanRow, advice, brandNames, kept, hidden, rest, readOrder, found } = await readPlan(ctx, subject, info, focus, max);
+  const { scanRow, advice, brandNames, kept, hidden, vero, rest, readOrder, found } = await readPlan(ctx, subject, info, focus, max);
   // Opened: it's in the nightly shared refresh for a few days, read with this account.
   await repo.touchScan(ctx.site.id, subject.key, connectionId).catch(() => {});
   // Answered within a moment with what's read; the rest read on while the page asks again.
@@ -553,8 +554,8 @@ async function exploreNow(ownerId, connectionId, subject, asked, { canSeeTraffic
     keywords: keywords.fromListings(listings, { query: subject.q || info.name, limit: keywordLimit(info) }).map((k) => ({ ...k, flag: flagged(k.term) })),
     brands: brands.slice(0, 8),
     // Before hunting: eBay's word filter, restricted items, brands and VeRO — over every leading
-    // listing, the hidden ones included, so it says what was hidden and why.
-    compliance: compliance.check({ name: info.name, listings: scanRow.listings, brands, total: scanRow.total, advice, hidden }),
+    // listing, the hidden ones included, so it says what was hidden (restricted) and what's marked (VeRO).
+    compliance: compliance.check({ name: info.name, listings: scanRow.listings, brands, total: scanRow.total, advice, hidden, vero }),
     // What you'd sell at and the most a supplier may cost for your target return (your pricing settings).
     price: researchAnalysis.priceAdvice(listings, { pricing: ctx.pricing }),
     // A keyword: the categories its listings sit in, to explore next.
@@ -623,9 +624,9 @@ async function review(ownerId, connectionId, input) {
     breakdown: scanRow.breakdown,
     keywords: keywords.fromListings(listings, { query: subject.q || info.name }),
   });
-  // With the AI's brands known, more listings may be hidden: the page opens the subject again.
-  const { hidden } = compliance.partition(scanRow.listings, veroBrands(advice));
-  return { compliance: compliance.check({ name: info.name, listings: scanRow.listings, brands, total: scanRow.total, advice, hidden }), checked: Boolean(advice), hidden: hidden.count };
+  // With the AI's brands known, more listings are marked: the page opens the subject again.
+  const { hidden, vero } = compliance.partition(scanRow.listings, veroBrands(advice));
+  return { compliance: compliance.check({ name: info.name, listings: scanRow.listings, brands, total: scanRow.total, advice, hidden, vero }), checked: Boolean(advice), hidden: hidden.count, marked: vero.count };
 }
 
 // ---- winners: the best products across everything explored on the site ----------------
@@ -809,7 +810,7 @@ const SELLER_SIZES = { small: [0, 1000], medium: [1000, 10000], large: [10000, I
  * this account, filtered the way a hunter filters — delivery it can match,
  * a price band, a minimum of sales a month, new lately — and sorted.
  */
-async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score', mine = 'show', safety = 'safe', limit = WINNERS_SHOWN } = {}) {
+async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = null, priceMax = null, brand = 'any', rating = 'any', size = 'any', listedWithin = 0, minSales = 0, newOnly = false, sort = 'score', mine = 'show', safety = 'all', limit = WINNERS_SHOWN } = {}) {
   const all = await winnersPool(ownerId, connectionId);
   const words = wordsOfQuery(q);
   const sizeBand = SELLER_SIZES[size] || null;
@@ -825,7 +826,7 @@ async function winners(ownerId, connectionId, { q = '', fit = false, priceMin = 
     if (fit && p.delivery.known && p.delivery.share < 40) return false;
     if (priceMin !== null && (!p.price || p.price.median < priceMin)) return false;
     if (priceMax !== null && (!p.price || p.price.median > priceMax)) return false;
-    // Unbranded: no named brand on its listings (a brand not read yet counts as none; VeRO brands are hidden before this).
+    // Unbranded: no named brand on its listings (a brand not read yet counts as none).
     if (brand === 'unbranded' && p.branded === true) return false;
     if (brand === 'branded' && p.branded !== true) return false;
     // Listed lately: its youngest listing with a sold count is this many days old at most.

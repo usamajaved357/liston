@@ -51,8 +51,8 @@ const SELECT = `
 async function insert(fields) {
   const { rows } = await query(
     `INSERT INTO hunted_products (owner_user_id, connection_id, hunter_user_id, status, competitor_url, competitor_item_id, source_url, source_product_id,
-       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at, sales_score, found_by_liston)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       title, image_url, currency, check_result, headline_profit, headline_roi, sold_per_month, hunter_note, reviewer_user_id, decided_at, sales_score, found_by_liston, added_from)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
      RETURNING id`,
     [
       fields.ownerId,
@@ -75,6 +75,7 @@ async function insert(fields) {
       fields.decidedAt || null,
       fields.salesScore ?? null,
       Boolean(fields.foundByListon),
+      fields.addedFrom || null,
     ]
   );
   return rows[0].id;
@@ -156,12 +157,12 @@ async function counts(connectionId, { viewerId = null, ...filters } = {}) {
  * and how many wait for review now.
  */
 // The Overview's hunting figures for [start, end), with what's behind each:
-// products hunted (of them, from Discover's Hunt, `found_by_liston`), approved (of them, the owner's own, approved as added), rejected
+// products hunted (of them, added as the eBay listing alone from Discover or from Product research, `added_from`), approved (of them, the owner's own, approved as added), rejected
 // (of them, by Liston: the supplier doesn't sell what sells) and sent back;
 // and right now, what needs a supplier, waits for review, is sent back, is approved and still
 // to be drafted, or whose draft failed (hunt-rules.draftStateOf, a draft
 // stuck over 15 minutes counting as failed).
-const EMPTY_OVERVIEW = { hunted: 0, huntedByListon: 0, approved: 0, approvedAsAdded: 0, rejected: 0, rejectedByListon: 0, sentBack: 0, reviewing: 0, sourcingNow: 0, sentBackNow: 0, toDraft: 0, draftFailed: 0 };
+const EMPTY_OVERVIEW = { hunted: 0, huntedFromDiscover: 0, huntedFromResearch: 0, approved: 0, approvedAsAdded: 0, rejected: 0, rejectedByListon: 0, sentBack: 0, reviewing: 0, sourcingNow: 0, sentBackNow: 0, toDraft: 0, draftFailed: 0 };
 async function countForOverview(connectionId, start, end) {
   const inDates = (column) => `${column} >= $2 AND ${column} < $3`;
   const toDraft = `status = 'approved' AND listing_id IS NULL AND cardinality(item_ids) = 0`;
@@ -170,7 +171,8 @@ async function countForOverview(connectionId, start, end) {
   const { rows } = await query(
     `SELECT
        count(*) FILTER (WHERE ${inDates('created_at')})::int AS hunted,
-       count(*) FILTER (WHERE found_by_liston AND ${inDates('created_at')})::int AS "huntedByListon",
+       count(*) FILTER (WHERE added_from = 'discover' AND ${inDates('created_at')})::int AS "huntedFromDiscover",
+       count(*) FILTER (WHERE added_from = 'research' AND ${inDates('created_at')})::int AS "huntedFromResearch",
        count(*) FILTER (WHERE status = 'approved' AND ${inDates('decided_at')})::int AS approved,
        count(*) FILTER (WHERE status = 'approved' AND ${inDates('decided_at')} AND reviewer_user_id = hunter_user_id AND NOT found_by_liston)::int AS "approvedAsAdded",
        count(*) FILTER (WHERE status = 'rejected' AND ${inDates('decided_at')})::int AS rejected,

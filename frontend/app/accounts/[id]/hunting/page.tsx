@@ -12,7 +12,7 @@ import { AccountPageSkeleton } from "@/components/Skeleton";
 import { HuntAddBar, HuntCheck, HuntForm } from "@/components/hunting/HuntForm";
 import { HuntRows, PipelineTabs, SORT_LABELS } from "@/components/hunting/HuntList";
 import { HuntPanel } from "@/components/hunting/HuntPanel";
-import { DiscoverHuntDialog } from "@/components/hunting/DiscoverHuntDialog";
+import { HuntListingDialog } from "@/components/hunting/HuntListingDialog";
 import { PushPrompt } from "@/components/NotificationBell";
 import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 
@@ -185,7 +185,7 @@ function HuntingBody() {
     qs.delete("competitor");
     router.push(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
   }
-  // "Hunt" in Discover: the listing added on its own, its supplier added on its page (DiscoverHuntDialog).
+  // "Hunt" in Discover: the listing added on its own, its supplier added on its page (HuntListingDialog).
   const [sourcing, setSourcing] = useState<string | null>(null);
 
   const viewer = data?.viewer;
@@ -420,10 +420,11 @@ function HuntingBody() {
       )}
 
       {sourcing && (
-        <DiscoverHuntDialog
+        <HuntListingDialog
           key={sourcing}
           connectionId={connection.id}
           competitorUrl={sourcing}
+          from="discover"
           onClose={() => setSourcing(null)}
           onOpenHunt={(id) => {
             setSourcing(null);

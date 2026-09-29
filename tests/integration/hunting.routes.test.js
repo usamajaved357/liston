@@ -279,7 +279,7 @@ test('the tabs: All, Needs a supplier, Waiting for review, Approved, Drafted, Li
   // What's behind each: found by Liston, rejected by Liston (its supplier doesn't sell what sells), sent
   // back; and now, approved and still to be drafted, or its draft failed (stuck drafting counts).
   const { hunt: byListon } = await hunt(t.connectionId, t.hunter.token);
-  await pool.query(`UPDATE hunted_products SET found_by_liston = true WHERE id = $1`, [byListon.id]);
+  await pool.query(`UPDATE hunted_products SET found_by_liston = true, added_from = 'discover' WHERE id = $1`, [byListon.id]);
   await request('POST', `/api/hunting/${byListon.id}/decision`, { decision: 'send_back', note: 'Check the white one' }, t.reviewer.token);
   const { hunt: mismatched } = await hunt(t.connectionId, t.hunter.token);
   await huntingRepository.setDecision(mismatched.id, { status: 'rejected', reject_reason: 'mismatch', decision_note: 'No White' }, null);
@@ -296,7 +296,7 @@ test('the tabs: All, Needs a supplier, Waiting for review, Approved, Drafted, Li
   assert.deepStrictEqual(await huntingRepository.countForOverview(t.connectionId, hour, soon), {
     ...none,
     hunted: 10,
-    huntedByListon: 1,
+    huntedFromDiscover: 1,
     approved: 5,
     approvedAsAdded: 1,
     rejected: 2,
@@ -830,6 +830,16 @@ test("Discover's Hunt adds the eBay listing alone, waiting for a supplier; the f
   const bad = await request('POST', `/api/hunting/${one.data.hunt.id}/sources`, { sourceUrl: supplier(5) }, t.hunter.token);
   assert.deepStrictEqual([bad.data.stage, bad.data.autoRejected], ['rejected', true]);
   aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
+
+  // Hunted from Product research: the same flow, recorded as research's, never as Discover's.
+  const researched = await request('POST', fromListing, { competitorUrl: listing(7), from: 'research' }, t.hunter.token);
+  assert.strictEqual(researched.status, 201, JSON.stringify(researched.data));
+  assert.deepStrictEqual([researched.data.hunt.stage, researched.data.hunt.addedFrom, researched.data.hunt.foundByListon], ['sourcing', 'research', true]);
+  assert.strictEqual(researched.data.hunt.timeline.find((e) => e.kind === 'hunted')?.from, 'research');
+  assert.strictEqual(added.data.hunt.addedFrom, 'discover', 'Discover is the default');
+  const counts = await huntingRepository.countForOverview(t.connectionId, new Date(Date.now() - 3600 * 1000), new Date(Date.now() + 60000));
+  assert.ok(counts.huntedFromDiscover >= 2 && counts.huntedFromResearch === 1, JSON.stringify(counts));
+  assert.strictEqual((await request('POST', fromListing, { competitorUrl: listing(8), from: 'elsewhere' }, t.hunter.token)).status, 400);
 
   // Only for people who hunt; an eBay link is needed.
   assert.strictEqual((await request('POST', fromListing, { competitorUrl: listing(9) }, t.nobody.token)).status, 403);

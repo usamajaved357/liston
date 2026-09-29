@@ -4,19 +4,22 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, HuntFromListing } from "@/lib/api";
 import { STAGE, Thumb, ago, announceHuntingChange } from "./HuntBits";
 
-// Discover's Hunt: the eBay listing added to the hunting list on its own,
-// read from eBay (its demand, price and risks), waiting for someone to add a
-// supplier link on its page. A listing already on the list isn't added again:
-// the dialog links to it.
+// Hunt, in Discover and in Product research (`from`, recorded on the
+// product): the eBay listing added to the hunting list on its own, read from
+// eBay (its demand, price and risks), waiting for someone to add a supplier
+// link on its page. A listing already on the list isn't added again: the
+// dialog links to it.
 
-export function DiscoverHuntDialog({
+export function HuntListingDialog({
   connectionId,
   competitorUrl,
+  from,
   onClose,
   onOpenHunt,
 }: {
   connectionId: string;
   competitorUrl: string;
+  from: "discover" | "research";
   onClose: () => void;
   onOpenHunt: (id: string) => void;
 }) {
@@ -27,15 +30,16 @@ export function DiscoverHuntDialog({
     if (started.current) return;
     started.current = true;
     api
-      .huntFromListing(connectionId, competitorUrl)
+      .huntFromListing(connectionId, competitorUrl, from)
       .then((result) => {
         setState({ result });
         if (result.added) announceHuntingChange();
       })
       .catch((err) => setState({ error: err instanceof ApiError ? err.message : "Couldn't add it just now. Try again." }));
-  }, [connectionId, competitorUrl]);
+  }, [connectionId, competitorUrl, from]);
 
   const working = !state;
+  const keepGoing = from === "research" ? "Keep researching" : "Keep discovering";
   const result = state?.result;
 
   return (
@@ -71,7 +75,7 @@ export function DiscoverHuntDialog({
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
-                Keep discovering
+                {keepGoing}
               </button>
               <button type="button" onClick={() => onOpenHunt(result.hunt.id)} className="btn btn-primary btn-sm">
                 Open it and add a supplier
@@ -88,7 +92,7 @@ export function DiscoverHuntDialog({
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
-                Keep discovering
+                {keepGoing}
               </button>
               <button type="button" onClick={() => onOpenHunt(result.alreadyHunted.id)} className="btn btn-primary btn-sm">
                 Open it

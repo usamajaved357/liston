@@ -177,10 +177,10 @@ export function DiscoverPanel({ connectionId, canSeeTraffic, onHunt }: { connect
       .discoverReview(connectionId, subject)
       .then((d) => {
         setReview({ key: forKey, compliance: d.compliance, checked: d.checked, failed: !d.checked, hidden: d.hidden });
-        // The AI named brands that hide more listings: open the subject again (no eBay call) so
-        // the figures, keywords and Selling now leave them out too.
+        // The AI named brands that mark more products: open the subject again (no eBay call) so
+        // its products carry the marks too.
         setResult((r) => {
-          if (r && r.key === forKey && r.data && r.data.compliance.hidden.count !== d.hidden) setPoll((n) => n + 1);
+          if (r && r.key === forKey && r.data && (r.data.compliance.hidden.count !== d.hidden || (r.data.compliance.vero?.count ?? 0) !== (d.marked ?? 0))) setPoll((n) => n + 1);
           return r;
         });
       })

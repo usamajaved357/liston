@@ -189,7 +189,7 @@ test("a subject's checks: eBay's word filter in its titles, restricted items by 
   assert.strictEqual(compliance.flagOf('magnetic phone mount'), null, '"magnetic" passes eBay\'s filter; "magnet" doesn\'t');
 });
 
-test('listings that would break eBay\'s rules are hidden: a restricted item, or a VeRO brand named as the product (not as what it fits)', () => {
+test('a restricted item is hidden; a VeRO brand named as the product (not as what it fits) is kept and marked, Liston\'s list apart from the AI\'s guess', () => {
   assert.strictEqual(compliance.veroBrandIn('Silicone case for iPhone 15 Pro'), null, 'what it fits is allowed');
   assert.strictEqual(compliance.veroBrandIn('Screen protector compatible with Samsung Galaxy S24'), null);
   assert.ok(['apple', 'iphone'].includes(compliance.veroBrandIn('Apple iPhone 15 Pro 256GB unlocked')));
@@ -199,10 +199,22 @@ test('listings that would break eBay\'s rules are hidden: a restricted item, or 
   assert.strictEqual(compliance.violationOf('Fairy lights battery powered'), null, "a filtered word is a wording problem, not a violation");
   assert.deepStrictEqual(compliance.violationOf('IVG Pro refill pods 20mg 10k puffs', [], 'E-Liquids & E-Cig Cartridges').label, 'Vapes, tobacco and nicotine', 'a restricted eBay category hides its listings too');
 
-  const split = compliance.partition([{ title: 'Nike running socks' }, { title: 'Plain running socks' }, { title: 'Replica football shirt' }, { title: 'Socks for Nike trainers' }], []);
-  assert.deepStrictEqual(split.kept.map((l) => l.title), ['Plain running socks', 'Socks for Nike trainers']);
-  assert.deepStrictEqual(split.hidden, { count: 2, restricted: 1, brand: 1, brands: ['nike'] });
-  assert.deepStrictEqual(compliance.check({ name: 'socks', listings: [], hidden: split.hidden }).hidden, split.hidden);
+  const split = compliance.partition(
+    [{ title: 'Nike running socks' }, { title: 'Plain running socks' }, { title: 'Replica football shirt' }, { title: 'Socks for Nike trainers' }, { title: 'LooseSports hoodie pullover' }],
+    ['LooseSports']
+  );
+  assert.deepStrictEqual(split.kept.map((l) => l.title), ['Nike running socks', 'Plain running socks', 'Socks for Nike trainers', 'LooseSports hoodie pullover'], 'only the restricted item is hidden');
+  assert.deepStrictEqual(split.kept.map((l) => l.vero || null), [{ brand: 'nike', source: 'list' }, null, null, { brand: 'LooseSports', source: 'ai' }]);
+  assert.deepStrictEqual(split.hidden, { count: 1, restricted: 1 });
+  assert.deepStrictEqual(split.vero, { count: 2, brands: ['nike', 'LooseSports'] });
+  const checked = compliance.check({ name: 'socks', listings: [], hidden: split.hidden, vero: split.vero });
+  assert.deepStrictEqual([checked.hidden, checked.vero], [split.hidden, split.vero]);
+
+  // The product carries the mark: Liston's list is a bad risk, the AI's guess only a warning, and neither is hidden by default.
+  assert.deepStrictEqual(compliance.productRisk({ name: 'Nike running socks', vero: { brand: 'nike', source: 'list' } }).level, 'bad');
+  const guess = compliance.productRisk({ name: 'LooseSports hoodie pullover', vero: { brand: 'LooseSports', source: 'ai' } });
+  assert.deepStrictEqual([guess.kind, guess.level, guess.source, guess.brand], ['vero', 'warn', 'ai', 'LooseSports']);
+  assert.match(guess.text, /eBay hasn't taken these listings down/);
 });
 
 const products = require('../../src/modules/discover/discover-products');

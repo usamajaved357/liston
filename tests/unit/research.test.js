@@ -251,9 +251,15 @@ test('risk checks: your own refused drafts for the product, eBay\'s word filter,
   const ai = Object.fromEntries(withAi.map((r) => [r.key, r]));
   assert.strictEqual(ai.history.level, 'ok');
   assert.strictEqual(ai.words.level, 'warn');
-  assert.strictEqual(ai.brand.level, 'bad');
+  // Anker isn't on Liston's VeRO list: the AI's guess holds it at care, said to be a guess, never "Don't list".
+  assert.deepStrictEqual([ai.brand.level, ai.brand.source], ['warn', 'ai']);
   assert.deepStrictEqual(ai.brand.brands, ['Anker']);
+  assert.match(ai.brand.detail, /A guess by Liston's AI, not eBay's word/);
   assert.strictEqual(ai.safety.level, 'warn');
+  const listed = Object.fromEntries(
+    analysis.riskChecks({ query: 'running socks', items: [], breakdown: null, refusals: [], advice: { brandRisk: { level: 'high', brands: ['Nike'], reason: 'Nike enforces VeRO.' }, safetyRisk: { level: 'none', reason: '' } } }).map((r) => [r.key, r])
+  );
+  assert.deepStrictEqual([listed.brand.level, listed.brand.source, listed.brand.brands], ['bad', 'list', ['Nike']], "a brand on Liston's list is Don't list");
 });
 
 const market = (extra = {}) => ({

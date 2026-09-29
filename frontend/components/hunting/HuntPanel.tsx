@@ -37,7 +37,7 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
     case "sourcing":
       return (
         <Banner tone="indigo">
-          <b className="font-semibold">Needs a supplier</b> · hunted from Discover {ago(hunt.createdAt)}
+          <b className="font-semibold">Needs a supplier</b> · hunted from {hunt.addedFrom === "research" ? "Product research" : "Discover"} {ago(hunt.createdAt)}
           {hunt.hunter ? ` by ${hunt.hunter.id === you ? "you" : hunt.hunter.name}` : ""}.
           {hunt.permissions.canEdit
             ? " Add the AliExpress product that supplies it under Suppliers: Liston works out the profit on every option and it goes in for review."
@@ -51,8 +51,8 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
           {hunt.resubmits ? ` · resubmitted ${hunt.resubmits === 1 ? "once" : `${hunt.resubmits} times`}` : ""}.
           {hunt.foundByListon
             ? hunt.permissions.canDecide
-              ? " Hunted from Discover: it's approved only when you approve it here."
-              : " Hunted from Discover: the owner or a reviewer approves or rejects it."
+              ? ` Hunted from ${hunt.addedFrom === "research" ? "Product research" : "Discover"}: it's approved only when you approve it here.`
+              : ` Hunted from ${hunt.addedFrom === "research" ? "Product research" : "Discover"}: the owner or a reviewer approves or rejects it.`
             : hunt.hunter?.id === you && " The owner or a reviewer decides on it."}
         </Banner>
       );
@@ -178,7 +178,7 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
                     : EVENT_WORDS[e.kind]}
                 </b>
                 {e.by ? ` by ${e.by.id === you ? "you" : e.by.name}` : e.system ? " by Liston" : ""}
-                {e.fromDiscover ? " from Discover" : e.byListon ? " (supplier found by Liston)" : ""}
+                {e.from === "research" ? " from Product research" : e.from === "discover" ? " from Discover" : e.byListon ? " (supplier found by Liston)" : ""}
                 {e.auto ? " (the owner's own find, approved as added)" : ""}
                 {e.reason ? ` · ${e.reason}` : ""}
                 <span className="text-[var(--color-muted)]"> · {new Date(e.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
