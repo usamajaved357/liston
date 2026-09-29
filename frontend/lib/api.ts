@@ -137,9 +137,12 @@ export interface OverviewAccount {
 // The Listings tab's chart: the listing pipeline per day, with the stretch before.
 export type ListingTrendKey = "hunted" | "approved" | "rejected" | "drafted" | "published";
 export interface ListingTrendPoint {
+  // A day, or for Today an hour ("2026-09-29T14").
   day: string;
   previousDay: string | null;
   partial: boolean;
+  // An hour of today not reached yet.
+  future?: boolean;
   values: Record<ListingTrendKey, number>;
   previous: Record<ListingTrendKey, number> | null;
 }
@@ -157,6 +160,8 @@ export interface RecentListing {
   url: string | null;
   account: string;
   marketplaceId: string;
+  // The account's eBay site's time zone, for its time.
+  timeZone?: string | null;
 }
 
 // One account's Overview: its money and listing work for a range, in its
@@ -354,11 +359,14 @@ export interface ResearchResult {
 // account's own charges on the day billed), orders and units as counts.
 export type SalesTrendKey = "sales" | "orders" | "units" | "fees" | "earnings" | "profit";
 export interface OverviewTrendPoint {
+  // A day, or for Today an hour ("2026-09-29T14").
   day: string;
   values: Record<SalesTrendKey, number>;
   previous: Record<SalesTrendKey, number> | null;
   previousDay: string | null;
   partial: boolean;
+  // An hour of today not reached yet.
+  future?: boolean;
 }
 
 // A listing that sold most in the dates: units, orders and item sales

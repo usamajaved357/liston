@@ -131,6 +131,7 @@ async function listingExtras(connection, { range, timeZone, start, end, orders }
       url: r.item_id ? `https://${host}/itm/${r.item_id}` : null,
       account: connection.label,
       marketplaceId: siteId,
+      timeZone: tz,
     })),
   };
 }

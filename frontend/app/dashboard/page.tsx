@@ -198,7 +198,7 @@ export default function DashboardPage() {
   const trendCurrency = combined ? combined.money.currency : inView[0]?.currency ?? "GBP";
   const trendNote =
     !combined && inView.length > 1 ? "Your markets sell in different currencies and no exchange rate could be had just now. Pick a market to see its sales by day." : null;
-  const trendCaption = range === "today" ? "Last 7 days" : range === "this_month" ? "This month" : `Last ${rangeLabel}`;
+  const trendCaption = range === "today" ? "Today" : range === "this_month" ? "This month" : `Last ${rangeLabel}`;
   const bestInView = combined
     ? combined.bestSellers ?? []
     : inView

@@ -65,6 +65,17 @@ function dayOf(timestamp, timeZone) {
   return Number.isNaN(date.getTime()) ? null : partsOf(date, timeZone).day;
 }
 
+/** The seller's hour a moment falls on: "2026-09-29T14" (sorts like the moments). */
+function hourOf(timestamp, timeZone) {
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  const p = partsOf(date, timeZone);
+  return `${p.day}T${String(p.hour).padStart(2, '0')}`;
+}
+
+/** A day's 24 hours, as hourOf names them. */
+const hoursOf = (day) => Array.from({ length: 24 }, (_, h) => `${day}T${String(h).padStart(2, '0')}`);
+
 function addDays(day, n) {
   const d = new Date(`${day}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
@@ -331,6 +342,8 @@ function historyReport({ from, to, reads, totals, listedOn, historyFrom = null }
 }
 
 module.exports = {
+  hourOf,
+  hoursOf,
   validTimeZone,
   SITE_TIME_ZONES,
   SYNC_HOUR,

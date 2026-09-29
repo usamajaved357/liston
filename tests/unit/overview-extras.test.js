@@ -96,6 +96,8 @@ test("the business Overview's Today is each account's own eBay site's day, not t
   const o = await overviewService.getOverview('owner', null, { range: 'today', timeZone: 'Asia/Karachi' });
   assert.ok(!asked.mock.calls[0].arguments[1].timeZone, "orders are windowed in the account's site's time zone, not the viewer's");
   const trend = o.markets[0].trend;
-  assert.deepStrictEqual([trend.at(-1).partial, trend.at(-1).values.orders], [true, 0], 'nothing yet today in the UK');
-  assert.strictEqual(trend.at(-2).values.orders, 1, "last night's order is on eBay UK's yesterday");
+  // Today by the hour, yesterday's hours alongside.
+  assert.strictEqual(trend.length, 24);
+  assert.strictEqual(trend.reduce((n, p) => n + p.values.orders, 0), 0, 'nothing yet today in the UK');
+  assert.deepStrictEqual([trend.at(-1).previousDay.slice(-3), trend.at(-1).previous.orders], ['T23', 1], "last night's order is in eBay UK's yesterday, at 23:00");
 });

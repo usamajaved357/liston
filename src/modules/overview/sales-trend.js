@@ -1,4 +1,5 @@
 const analyticsDays = require('../analytics/analytics-days');
+const { rangeDays, trendSlots } = require('./trend-slots');
 
 // The business Overview under its money cards: sales by day for the chosen
 // dates (the previous stretch alongside for comparison) and the products
@@ -10,27 +11,12 @@ const ORDERS_KEPT_DAYS = 90;
 const round2 = (n) => Math.round(n * 100) / 100;
 
 /**
- * The days a range is drawn over, in the seller's (or viewer's) time zone,
- * and the same number of days just before them, or null when those reach
- * past the orders Liston keeps. "Today" is drawn as the last 7 days, so the
- * day has something to stand next to.
+ * The days a range covers, in the seller's time zone (Today: today), and the
+ * same number of days just before them, or null when those reach past the
+ * orders Liston keeps (overview/trend-slots).
  */
 function trendDays(range, today) {
-  let from;
-  let to = today;
-  if (range === 'this_month') from = `${today.slice(0, 7)}-01`;
-  else if (range === 'last_month') {
-    to = analyticsDays.addDays(`${today.slice(0, 7)}-01`, -1);
-    from = `${to.slice(0, 7)}-01`;
-  } else {
-    const n = { today: 7, '7d': 7, '30d': 30, '90d': 90 }[range] || 7;
-    from = analyticsDays.addDays(today, -(n - 1));
-  }
-  const days = analyticsDays.daysBetween(from, to);
-  const previousFrom = analyticsDays.addDays(from, -days.length);
-  const oldestKept = analyticsDays.addDays(today, -(ORDERS_KEPT_DAYS - 1));
-  const previousDays = previousFrom >= oldestKept ? analyticsDays.daysBetween(previousFrom, analyticsDays.addDays(from, -1)) : null;
-  return { days, previousDays };
+  return rangeDays(range, today, { oldest: analyticsDays.addDays(today, -(ORDERS_KEPT_DAYS - 1)) });
 }
 
 // The measures the chart can show, as the money cards count them: what
@@ -44,24 +30,25 @@ const empty = () => Object.fromEntries(KEYS.map((k) => [k, 0]));
 const rounded = (values) => Object.fromEntries(KEYS.map((k) => [k, round2(values[k] || 0)]));
 
 /**
- * Each day's measures, the previous stretch's day alongside:
+ * Each day's measures (Today's: each hour's, `day` then "2026-09-29T14"),
+ * the previous stretch's alongside:
  * [{ day, values: { sales, orders, units, fees, earnings, profit },
- *    previous (the same, or null), previousDay, partial }]. Today is still
- * running (`partial`).
+ *    previous (the same, or null), previousDay, partial, future }]. The day
+ * (or hour) still running is `partial`; an hour not reached yet `future`.
  *
  * @param finances Map orderId -> { fees, earnings } (eBay's figures)
  * @param costs    Map orderId -> { value, currency } (the Source section)
  * @param charges  [{ amount, chargedAt }] the account's charges, in its currency
  */
-function salesTrend(orders, { timeZone, range, today, isCancelled, finances = new Map(), costs = new Map(), charges = [], currency = null }) {
-  const { days, previousDays } = trendDays(range, today);
+function salesTrend(orders, { timeZone, range, today, now = new Date(), isCancelled, finances = new Map(), costs = new Map(), charges = [], currency = null }) {
+  const { slots, previousSlots, current, slotOf } = trendSlots(range, { timeZone, today, now, oldest: analyticsDays.addDays(today, -(ORDERS_KEPT_DAYS - 1)) });
   const byDay = new Map();
   const at = (day) => {
     if (!byDay.has(day)) byDay.set(day, empty());
     return byDay.get(day);
   };
   for (const order of orders || []) {
-    const day = analyticsDays.dayOf(order.createdAt, timeZone);
+    const day = slotOf(order.createdAt);
     if (!day) continue;
     const values = at(day);
     if (!isCancelled(order)) {
@@ -79,7 +66,7 @@ function salesTrend(orders, { timeZone, range, today, isCancelled, finances = ne
     values.profit += (Number(money.earnings) || 0) - orderCost;
   }
   for (const charge of charges) {
-    const day = analyticsDays.dayOf(charge.chargedAt, timeZone);
+    const day = slotOf(charge.chargedAt);
     const amount = Number(charge.amount) || 0;
     if (!day || !amount) continue;
     const values = at(day);
@@ -87,12 +74,13 @@ function salesTrend(orders, { timeZone, range, today, isCancelled, finances = ne
     values.earnings -= amount;
     values.profit -= amount;
   }
-  return days.map((day, i) => ({
+  return slots.map((day, i) => ({
     day,
     values: rounded(byDay.get(day) || {}),
-    previous: previousDays ? rounded(byDay.get(previousDays[i]) || {}) : null,
-    previousDay: previousDays ? previousDays[i] : null,
-    partial: day === today,
+    previous: previousSlots ? rounded(byDay.get(previousSlots[i]) || {}) : null,
+    previousDay: previousSlots ? previousSlots[i] : null,
+    partial: day === current,
+    future: day > current,
   }));
 }
 

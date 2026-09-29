@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ListingTrendKey, ListingTrendPoint, ListingWork, OverviewAccount, RecentListing } from "@/lib/api";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { ViewMenu } from "@/components/ViewMenu";
-import { InlineLegend } from "./OverviewSales";
+import { InlineLegend, trendTerms } from "./OverviewSales";
 
 // Under the Overview's Listings cards, as the Sales tab has its chart and
 // best sellers: the listing pipeline day by day (one measure at a time,
@@ -26,16 +26,21 @@ export function ListingTrendCard({ points, caption }: { points: ListingTrendPoin
   const [measure, setMeasure] = useState<ListingTrendKey>("published");
   const chosen = MEASURES.find((m) => m.key === measure) || MEASURES[0];
   const list = points ?? [];
-  const total = list.reduce((n, p) => n + p.values[measure], 0);
-  const previous = list.reduce((n, p) => n + (p.previous?.[measure] ?? 0), 0);
+  const terms = trendTerms(list);
+  // Hours still to come count on neither side: today so far against yesterday up to the same hour.
+  const reached = list.filter((p) => !p.future);
+  const total = reached.reduce((n, p) => n + p.values[measure], 0);
+  const previous = reached.reduce((n, p) => n + (p.previous?.[measure] ?? 0), 0);
   const change = previous ? (total - previous) / previous : null;
   return (
     <section className="card flex h-full min-w-0 flex-col px-4 pb-3 pt-3.5">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
-          <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">{chosen.label} by day</h2>
+          <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">
+            {chosen.label} by {terms.per}
+          </h2>
           <div className="mt-1">
-            <InlineLegend current={caption} previous={list.length > 0} today={list.some((p) => p.partial)} />
+            <InlineLegend current={caption} previous={list.length > 0} today={list.some((p) => p.partial)} previousLabel={terms.previousLabel} todayLabel={terms.todayLabel} />
           </div>
         </div>
         <div className="flex items-start gap-3">
@@ -44,10 +49,12 @@ export function ListingTrendCard({ points, caption }: { points: ListingTrendPoin
               <b className="text-[15px] font-semibold tabular-nums text-[var(--color-ink)]">{count(total)}</b>
               {change !== null ? (
                 <span className={`mt-0.5 block text-[12px] font-medium tabular-nums ${change >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                  {change >= 0 ? "▲" : "▼"} {Math.abs(Math.round(change * 100))}% vs previous
+                  {change >= 0 ? "▲" : "▼"} {Math.abs(Math.round(change * 100))}% {terms.versus}
                 </span>
               ) : (
-                <span className="mt-0.5 block text-[11.5px]">{count(previous)} before</span>
+                <span className="mt-0.5 block text-[11.5px]">
+                  {count(previous)} {terms.hourly ? "yesterday" : "before"}
+                </span>
               )}
             </p>
           )}
@@ -61,15 +68,15 @@ export function ListingTrendCard({ points, caption }: { points: ListingTrendPoin
           </p>
         ) : (
           <TrendChart
-            points={list.map((p) => ({ day: p.day, value: p.values[measure], previous: p.previous ? p.previous[measure] : null, previousDay: p.previousDay, partial: p.partial }))}
+            points={list.map((p) => ({ day: p.day, value: p.future ? null : p.values[measure], previous: p.previous ? p.previous[measure] : null, previousDay: p.previousDay, partial: p.partial }))}
             height={CHART_HEIGHT}
             legend={false}
-            label={`${chosen.label} per day, ${caption.toLowerCase()}`}
+            label={`${chosen.label} per ${terms.per}, ${caption.toLowerCase()}`}
             format={(v) => (v == null ? "—" : count(v))}
             // Counts: whole numbers only on the side.
             axisFormat={(v) => (Number.isInteger(v) ? count(v) : "")}
             currentLabel={caption}
-            previousLabel="Previous period"
+            previousLabel={terms.previousLabel}
           />
         )}
       </div>
@@ -89,12 +96,14 @@ export function addListingTrends(trends: (ListingTrendPoint[] | null | undefined
   }));
 }
 
-function when(iso: string) {
+// On the account's eBay site's clock, as the chart beside it counts hours and days.
+function when(iso: string, timeZone?: string | null) {
   const d = new Date(iso);
+  const tz = timeZone ? { timeZone } : {};
   const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-  if (days < 1) return d.toLocaleTimeString("en-GB", { hour: "numeric", minute: "2-digit" });
-  if (days < 7) return d.toLocaleDateString("en-GB", { weekday: "short" });
-  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  if (days < 1) return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", ...tz });
+  if (days < 7) return d.toLocaleDateString("en-GB", { weekday: "short", ...tz });
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", ...tz });
 }
 
 export function RecentListingsCard({
@@ -133,7 +142,7 @@ export function RecentListingsCard({
                   <span className="block truncate text-[12.5px] font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{item.title ?? (item.itemId ? `Item ${item.itemId}` : "Listing")}</span>
                   <span className="mt-0.5 block truncate text-[11px] text-[var(--color-muted)]">
                     {showMarket && `${flagOf(item.marketplaceId)} `}
-                    {item.account} · {when(item.publishedAt)}
+                    {item.account} · {when(item.publishedAt, item.timeZone)}
                   </span>
                 </span>
                 <span className="shrink-0 text-right leading-tight">
@@ -175,6 +184,10 @@ const DATE_COLUMNS: { key: keyof ListingWork; label: string; hint: string }[] = 
   { key: "published", label: "Published", hint: "Went live from Liston" },
 ];
 const figureOf = (w: ListingWork | null, key: keyof ListingWork) => (w ? Number(w[key] ?? 0) : 0);
+// The line between what stands now and the chosen dates.
+const GROUP_EDGE = "border-l border-[var(--color-line)]";
+// Every figure column: its heading and its figures centred on the same line, rows centred top to bottom.
+const COLUMN = "whitespace-nowrap px-2 text-center align-middle";
 
 /** What needs someone on an account right now, for its row: failed drafts, then Liston's rejections in the dates. */
 function flagsOf(w: ListingWork | null): string[] {
@@ -235,29 +248,31 @@ export function AccountListingsCard({ accounts, datesLabel, showMarket }: { acco
         ))}
       </ul>
 
-      <div className="mt-2 hidden overflow-x-auto sm:block">
-        <table className="w-full min-w-[760px] text-[12.5px]">
-          <thead className="text-[11px] font-medium text-[var(--color-muted)]">
-            <tr>
-              <th className="px-4 pb-1 text-left font-medium" />
-              <th colSpan={NOW_COLUMNS.length} className="border-b border-[var(--color-line)] px-2 pb-1 text-center font-medium uppercase tracking-wide">
-                Right now
+      <div className="mt-3 hidden overflow-x-auto sm:block">
+        <table className="w-full min-w-[700px] table-fixed border-collapse text-[12.5px]">
+          <colgroup>
+            <col className="w-[23%]" />
+            {[...NOW_COLUMNS, ...DATE_COLUMNS].map((c) => (
+              <col key={c.key} />
+            ))}
+          </colgroup>
+          <thead>
+            {/* Which figures stand now and which are the chosen dates: each title centred over its own columns. */}
+            <tr className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--color-muted)]">
+              <td className="px-4" aria-hidden />
+              <th scope="colgroup" colSpan={NOW_COLUMNS.length} className="px-0 pb-2 text-center align-bottom font-semibold">
+                <span className="mx-3 block border-b border-[var(--color-line)] pb-1.5">Right now</span>
               </th>
-              <th className="w-3" />
-              <th colSpan={DATE_COLUMNS.length} className="border-b border-[var(--color-line)] px-2 pb-1 text-center font-medium uppercase tracking-wide">
-                {datesLabel}
+              <th scope="colgroup" colSpan={DATE_COLUMNS.length} className={`${GROUP_EDGE} px-0 pb-2 text-center align-bottom font-semibold`}>
+                <span className="mx-3 block border-b border-[var(--color-line)] pb-1.5">{datesLabel}</span>
               </th>
             </tr>
-            <tr className="shadow-[0_1px_0_var(--color-line)]">
-              <th className="px-4 py-2 text-left font-medium">Account</th>
-              {NOW_COLUMNS.map((c) => (
-                <th key={c.key} className={`px-2 py-2 text-right font-medium ${c.key === "live" ? "w-[150px]" : ""}`} title={c.hint}>
-                  {c.label}
-                </th>
-              ))}
-              <th />
-              {DATE_COLUMNS.map((c) => (
-                <th key={c.key} className="px-2 py-2 text-right font-medium" title={c.hint}>
+            <tr className="border-b border-[var(--color-line)] text-[11.5px] text-[var(--color-muted)]">
+              <th scope="col" className="px-4 pb-2 text-left font-medium">
+                Account
+              </th>
+              {[...NOW_COLUMNS, ...DATE_COLUMNS].map((c) => (
+                <th key={c.key} scope="col" className={`${COLUMN} pb-2 font-medium ${c.key === DATE_COLUMNS[0].key ? GROUP_EDGE : ""}`} title={c.hint}>
                   {c.label}
                 </th>
               ))}
@@ -266,35 +281,29 @@ export function AccountListingsCard({ accounts, datesLabel, showMarket }: { acco
           <tbody className="tabular-nums">
             {rows.map((a) => {
               const flags = flagsOf(a.listings);
+              const pct = Math.round(share(a) * 100);
               return (
                 <tr key={a.id} className="group border-b border-[var(--color-line)]/70 transition-colors last:border-0 hover:bg-[var(--color-primary-soft)]/40">
-                  <td className="max-w-[260px] px-4 py-2">
+                  <td className="px-4 py-3 align-middle">
                     <Link href={`/accounts/${a.id}`} className="block truncate font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]" title={`Open ${a.label}'s Overview`}>
                       {name(a)}
                     </Link>
+                    {/* Its share of everything live, as a bar. */}
+                    <span className="mt-1.5 block h-1 w-full max-w-[160px] overflow-hidden rounded-full bg-[var(--color-line)]" aria-hidden>
+                      <span className="block h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${pct}%` }} />
+                    </span>
                     {!a.listings ? (
-                      <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">Couldn&apos;t be read from eBay just now</span>
+                      <span className="mt-1 block text-[11px] text-[var(--color-muted)]">Couldn&apos;t be read from eBay just now</span>
                     ) : (
-                      flags.length > 0 && <span className="mt-0.5 block truncate text-[11px] font-medium text-amber-600">{flags.join(" · ")}</span>
+                      flags.length > 0 && <span className="mt-1 block truncate text-[11px] font-medium text-amber-600">{flags.join(" · ")}</span>
                     )}
                   </td>
-                  <td className="px-2 py-2 text-right">
-                    <span className="flex items-center justify-end gap-2">
-                      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--color-line)]" aria-hidden>
-                        <span className="block h-full rounded-full bg-[var(--color-primary)]" style={{ width: `${Math.round(share(a) * 100)}%` }} />
-                      </span>
-                      <span className="w-10 font-semibold text-[var(--color-ink)]">{a.listings ? count(figureOf(a.listings, "live")) : "—"}</span>
-                      <span className="w-9 text-[11px] text-[var(--color-muted)]">{a.listings && totalLive > 0 ? `${Math.round(share(a) * 100)}%` : ""}</span>
-                    </span>
+                  <td className={`${COLUMN} py-3`}>
+                    <span className="block font-semibold text-[var(--color-ink)]">{a.listings ? count(figureOf(a.listings, "live")) : "—"}</span>
+                    {a.listings && totalLive > 0 && <span className="mt-0.5 block text-[11px] text-[var(--color-muted)]">{pct}% of live</span>}
                   </td>
-                  {NOW_COLUMNS.slice(1).map((c) => (
-                    <td key={c.key} className="px-2 py-2 text-right">
-                      {cell(a, c.key)}
-                    </td>
-                  ))}
-                  <td />
-                  {DATE_COLUMNS.map((c) => (
-                    <td key={c.key} className="px-2 py-2 text-right">
+                  {[...NOW_COLUMNS.slice(1), ...DATE_COLUMNS].map((c) => (
+                    <td key={c.key} className={`${COLUMN} py-3 ${c.key === DATE_COLUMNS[0].key ? GROUP_EDGE : ""}`}>
                       {cell(a, c.key)}
                     </td>
                   ))}
@@ -305,21 +314,9 @@ export function AccountListingsCard({ accounts, datesLabel, showMarket }: { acco
           {rows.length > 1 && (
             <tfoot className="tabular-nums">
               <tr className="border-t border-[var(--color-line)] bg-[var(--color-paper)]/60 font-semibold text-[var(--color-ink)]">
-                <td className="px-4 py-2">All {rows.length} accounts</td>
-                <td className="px-2 py-2 text-right">
-                  <span className="flex items-center justify-end gap-2">
-                    <span className="w-10">{count(totalLive)}</span>
-                    <span className="w-9" />
-                  </span>
-                </td>
-                {NOW_COLUMNS.slice(1).map((c) => (
-                  <td key={c.key} className="px-2 py-2 text-right">
-                    {count(total(c.key))}
-                  </td>
-                ))}
-                <td />
-                {DATE_COLUMNS.map((c) => (
-                  <td key={c.key} className="px-2 py-2 text-right">
+                <td className="px-4 py-2.5 align-middle">All {rows.length} accounts</td>
+                {[...NOW_COLUMNS, ...DATE_COLUMNS].map((c) => (
+                  <td key={c.key} className={`${COLUMN} py-2.5 ${c.key === DATE_COLUMNS[0].key ? GROUP_EDGE : ""}`}>
                     {count(total(c.key))}
                   </td>
                 ))}

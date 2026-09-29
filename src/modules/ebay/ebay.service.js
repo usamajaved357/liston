@@ -1074,13 +1074,17 @@ function localMidnight(day, timeZone) {
 // Resolves a named range (or explicit custom from/to) to a concrete window.
 // Returns null for 'all_time', which has no single window — see
 // getEarningsSummary, which walks backwards in chunks instead. With the
-// seller's `timeZone`, Today and the months start at their midnight (an
-// order at 00:30 in London is today's, not yesterday's in UTC).
+// seller's `timeZone`, every named range starts at a midnight there (an
+// order at 00:30 in London is today's, not yesterday's in UTC), and 7, 30
+// and 90 days are whole days: today and the six (29, 89) before it.
 function resolveRangeWindow(range, from, to, timeZone = null) {
   const now = new Date();
-  if (timeZone && ['today', 'this_month', 'last_month'].includes(range)) {
+  if (timeZone && ['today', '7d', '30d', '90d', 'this_month', 'last_month'].includes(range)) {
     const today = analyticsDays.today(timeZone, now);
     if (range === 'today') return [localMidnight(today, timeZone), now];
+    // Whole days, today and the ones before it, as the Overview's charts draw them and Seller Hub counts.
+    const days = { '7d': 7, '30d': 30, '90d': 90 }[range];
+    if (days) return [localMidnight(analyticsDays.addDays(today, -(days - 1)), timeZone), now];
     const thisMonth = `${today.slice(0, 7)}-01`;
     if (range === 'this_month') return [localMidnight(thisMonth, timeZone), now];
     const lastMonth = `${analyticsDays.addDays(thisMonth, -1).slice(0, 7)}-01`;

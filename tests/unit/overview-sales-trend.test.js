@@ -10,7 +10,7 @@ test('a range is drawn over its days, with the same number of days before it whi
   const week = trendDays('7d', TODAY);
   assert.deepStrictEqual([week.days[0], week.days.at(-1), week.days.length], ['2026-09-20', TODAY, 7]);
   assert.deepStrictEqual([week.previousDays[0], week.previousDays.at(-1)], ['2026-09-13', '2026-09-19']);
-  assert.deepStrictEqual(trendDays('today', TODAY).days.length, 7, 'today stands next to the week before it');
+  assert.deepStrictEqual(trendDays('today', TODAY), { days: [TODAY], previousDays: ['2026-09-25'] }, 'today stands next to yesterday');
   const month = trendDays('this_month', TODAY);
   assert.deepStrictEqual([month.days[0], month.days.length, month.previousDays[0]], ['2026-09-01', 26, '2026-08-06']);
   const last = trendDays('last_month', TODAY);
@@ -34,6 +34,7 @@ test("sales by day count what buyers paid, cancelled orders left out, in the vie
     previous: { sales: 7.5, orders: 1, units: 0, fees: 0, earnings: 0, profit: 0 },
     previousDay: '2026-09-19',
     partial: true,
+    future: false,
   });
   assert.deepStrictEqual(trend.find((p) => p.day === '2026-09-24').values.orders, 0, 'the cancelled order is left out');
   assert.ok(trend.slice(0, -1).every((p) => !p.partial));
@@ -90,4 +91,17 @@ test("accounts' trends add up day by day, a market's converts into the main curr
   // Same units: A$100 is £50 at 2.0, so it ranks above £40.
   const merged = mergeBestSellers([uk, au], { limit: 2, rateOf: (i) => (i.currency === 'AUD' ? 2 : 1) });
   assert.deepStrictEqual(merged.map((i) => i.itemId), ['2', '1']);
+});
+
+test("Today's sales hour by hour in the seller's time zone, against yesterday's same hours", () => {
+  const orders = [
+    { createdAt: '2026-09-26T07:15:00Z', total: { amount: 10 } }, // 08:15 BST
+    { createdAt: '2026-09-26T07:45:00Z', total: { amount: 5 } },
+    { createdAt: '2026-09-25T07:30:00Z', total: { amount: 4 } }, // yesterday 08:30
+  ];
+  const trend = salesTrend(orders, { timeZone: 'Europe/London', range: 'today', today: TODAY, now: new Date('2026-09-26T08:10:00Z'), isCancelled });
+  assert.strictEqual(trend.length, 24);
+  const eight = trend.find((p) => p.day === '2026-09-26T08');
+  assert.deepStrictEqual([eight.values.sales, eight.values.orders, eight.previous.sales, eight.previousDay], [15, 2, 4, '2026-09-25T08']);
+  assert.deepStrictEqual([trend.find((p) => p.partial).day, trend.filter((p) => p.future).length], ['2026-09-26T09', 14]);
 });

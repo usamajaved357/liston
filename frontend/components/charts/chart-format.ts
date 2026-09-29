@@ -41,13 +41,21 @@ export function moneyAmount(amount: number | null | undefined, currency: string 
 // noon UTC so no viewer's time zone shifts them to the day before.
 const at = (day: string) => new Date(`${day}T12:00:00Z`);
 
-/** "20 Sep" */
+// An hour of a day ("2026-09-20T14", the seller's own clock) for a chart of Today.
+const HOUR = /^(\d{4}-\d{2}-\d{2})T(\d{2})$/;
+export const isHour = (key: string) => HOUR.test(key);
+
+/** "20 Sep"; an hour "14:00". */
 export function dayLabel(day: string): string {
+  const hour = HOUR.exec(day);
+  if (hour) return `${hour[2]}:00`;
   return at(day).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
-/** "Sat 20 Sep" */
+/** "Sat 20 Sep"; an hour "Sat 20 Sep, 14:00–15:00". */
 export function dayLabelLong(day: string): string {
+  const hour = HOUR.exec(day);
+  if (hour) return `${dayLabelLong(hour[1])}, ${hour[2]}:00–${String((Number(hour[2]) + 1) % 24).padStart(2, "0")}:00`;
   return at(day).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
 }
 

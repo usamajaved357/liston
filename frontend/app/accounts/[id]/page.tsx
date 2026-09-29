@@ -302,7 +302,7 @@ function OwnerDashboard({ connectionId, reloadKey, onSynced }: DashboardProps) {
               {data && (
                 <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
                   <div className="min-w-0 lg:col-span-2">
-                    <ListingTrendCard points={data.listingTrend ?? null} caption={range === "today" ? "Last 7 days" : range === "this_month" ? "This month" : range === "last_month" ? "Last month" : `Last ${RANGES.find((r) => r.key === range)?.label ?? ""}`} />
+                    <ListingTrendCard points={data.listingTrend ?? null} caption={range === "today" ? "Today" : range === "this_month" ? "This month" : range === "last_month" ? "Last month" : `Last ${RANGES.find((r) => r.key === range)?.label ?? ""}`} />
                   </div>
                   <RecentListingsCard items={data.recentListings ?? []} showMarket={false} flagOf={() => ""} empty={range === "today" ? "Nothing published from Liston today yet." : undefined} />
                 </div>

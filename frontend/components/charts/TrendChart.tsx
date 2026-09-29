@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { dayLabel, dayLabelLong, niceTicks } from "./chart-format";
+import { dayLabel, dayLabelLong, isHour, niceTicks } from "./chart-format";
 import { useWidth } from "./useWidth";
 import { monotonePath } from "./curve";
 
@@ -305,7 +305,8 @@ export function TrendChart({
                 <svg width="12" height="4" aria-hidden>
                   <line x1="0" y1="2" x2="12" y2="2" stroke="var(--color-muted)" strokeWidth="1.5" strokeDasharray="2 2" />
                 </svg>
-                {activePoint.previousDay ? xLabel(activePoint.previousDay) : previousLabel}
+                {/* An hour's own label ("14:00") would read the same as today's: the period's name instead. */}
+                {activePoint.previousDay && !isHour(activePoint.previousDay) ? xLabel(activePoint.previousDay) : previousLabel}
               </span>
               <span className="font-medium tabular-nums text-[var(--color-ink)]">{format(activePoint.previous ?? null)}</span>
             </div>

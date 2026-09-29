@@ -4,7 +4,7 @@ import { useState } from "react";
 import { OverviewBestSeller, OverviewTrendPoint, SalesTrendKey } from "@/lib/api";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { ViewMenu } from "@/components/ViewMenu";
-import { moneyAmount } from "@/components/charts/chart-format";
+import { isHour, moneyAmount } from "@/components/charts/chart-format";
 import { formatAmount, maskAmount } from "./OverviewMoney";
 
 // Under the business Overview's money cards: how sales moved day by day
@@ -25,9 +25,34 @@ const MEASURES: { key: SalesTrendKey; label: string; money: boolean }[] = [
 ];
 const count = (n: number) => n.toLocaleString("en-GB");
 
+/**
+ * How a chart of the Overview reads: by day, or for Today by the hour (the
+ * hours still to come drawn as nothing, today so far set against yesterday
+ * up to the same hour).
+ */
+export function trendTerms(points: { day: string }[]) {
+  const hourly = points.some((p) => isHour(p.day));
+  return hourly
+    ? { hourly, per: "hour", previousLabel: "Yesterday", versus: "vs yesterday", todayLabel: "This hour so far" }
+    : { hourly, per: "day", previousLabel: "Previous period", versus: "vs previous", todayLabel: "Today so far" };
+}
+
 // Which line is which, on one line: the chosen dates (solid), the stretch
-// before (dashed) and today so far (hollow point).
-export function InlineLegend({ current, previous, today }: { current: string; previous: boolean; today: boolean }) {
+// before (dashed) and today so far (hollow point). Today's chart is by the
+// hour: yesterday before it, this hour so far.
+export function InlineLegend({
+  current,
+  previous,
+  today,
+  previousLabel = "Previous period",
+  todayLabel = "Today so far",
+}: {
+  current: string;
+  previous: boolean;
+  today: boolean;
+  previousLabel?: string;
+  todayLabel?: string;
+}) {
   return (
     <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-[var(--color-muted)]">
       <span className="inline-flex items-center gap-1.5">
@@ -39,7 +64,7 @@ export function InlineLegend({ current, previous, today }: { current: string; pr
           <svg width="14" height="4" aria-hidden>
             <line x1="1" y1="2" x2="13" y2="2" stroke="var(--color-muted)" strokeWidth="2" strokeDasharray="3 2.5" strokeLinecap="round" />
           </svg>
-          Previous period
+          {previousLabel}
         </span>
       )}
       {today && (
@@ -47,7 +72,7 @@ export function InlineLegend({ current, previous, today }: { current: string; pr
           <svg width="10" height="10" aria-hidden>
             <circle cx="5" cy="5" r="3.5" fill="var(--color-panel)" stroke="var(--color-primary)" strokeWidth="1.8" />
           </svg>
-          Today so far
+          {todayLabel}
         </span>
       )}
     </span>
@@ -72,9 +97,12 @@ export function SalesTrendCard({
   const [measure, setMeasure] = useState<SalesTrendKey>("sales");
   const chosen = MEASURES.find((m) => m.key === measure) || MEASURES[0];
   const list = points ?? [];
-  const total = list.reduce((sum, p) => sum + (p.values?.[measure] ?? 0), 0);
+  const terms = trendTerms(list);
+  // Hours still to come count on neither side.
+  const reached = list.filter((p) => !p.future);
+  const total = reached.reduce((sum, p) => sum + (p.values?.[measure] ?? 0), 0);
   const hasPrevious = list.some((p) => p.previous != null);
-  const previous = hasPrevious ? list.reduce((sum, p) => sum + (p.previous?.[measure] ?? 0), 0) : null;
+  const previous = hasPrevious ? reached.reduce((sum, p) => sum + (p.previous?.[measure] ?? 0), 0) : null;
   // A change is only meaningful against something positive (profit can dip below nothing).
   const change = previous && previous > 0 ? (total - previous) / previous : null;
   const figure = (v: number) => (chosen.money ? (hidden ? maskAmount(currency) : formatAmount(v, currency)) : count(v));
@@ -82,9 +110,11 @@ export function SalesTrendCard({
     <section className="card flex h-full min-w-0 flex-col px-4 pb-3 pt-3.5">
       <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
         <div className="min-w-0">
-          <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">{chosen.label} by day</h2>
+          <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">
+            {chosen.label} by {terms.per}
+          </h2>
           <div className="mt-1">
-            <InlineLegend current={caption} previous={hasPrevious} today={list.some((p) => p.partial)} />
+            <InlineLegend current={caption} previous={hasPrevious} today={list.some((p) => p.partial)} previousLabel={terms.previousLabel} todayLabel={terms.todayLabel} />
           </div>
         </div>
         <div className="flex items-start gap-3">
@@ -93,10 +123,12 @@ export function SalesTrendCard({
               <b className="text-[15px] font-semibold tabular-nums text-[var(--color-ink)]">{figure(total)}</b>
               {change !== null ? (
                 <span className={`mt-0.5 block text-[12px] font-medium tabular-nums ${(chosen.key === "fees" ? change <= 0 : change >= 0) ? "text-emerald-600" : "text-rose-600"}`}>
-                  {change >= 0 ? "▲" : "▼"} {Math.abs(Math.round(change * 100))}% vs previous
+                  {change >= 0 ? "▲" : "▼"} {Math.abs(Math.round(change * 100))}% {terms.versus}
                 </span>
               ) : previous !== null ? (
-                <span className="mt-0.5 block text-[11.5px] tabular-nums">{figure(previous)} before</span>
+                <span className="mt-0.5 block text-[11.5px] tabular-nums">
+                  {figure(previous)} {terms.hourly ? "yesterday" : "before"}
+                </span>
               ) : null}
             </p>
           )}
@@ -112,16 +144,16 @@ export function SalesTrendCard({
           </p>
         ) : (
           <TrendChart
-            points={list.map((p) => ({ day: p.day, value: p.values?.[measure] ?? 0, previous: p.previous ? p.previous[measure] : null, previousDay: p.previousDay, partial: p.partial }))}
+            points={list.map((p) => ({ day: p.day, value: p.future ? null : p.values?.[measure] ?? 0, previous: p.previous ? p.previous[measure] : null, previousDay: p.previousDay, partial: p.partial }))}
             height={CHART_HEIGHT}
             legend={false}
-            label={`${chosen.label} per day, ${caption.toLowerCase()}`}
+            label={`${chosen.label} per ${terms.per}, ${caption.toLowerCase()}`}
             format={(v) => (v == null ? "—" : figure(v))}
             axisFormat={(v) =>
               chosen.money ? (hidden ? "" : moneyAmount(v, currency, { compact: true }).replace(/\.00$/, "")) : Number.isInteger(v) ? count(v) : ""
             }
             currentLabel={caption}
-            previousLabel="Previous period"
+            previousLabel={terms.previousLabel}
           />
         )}
       </div>
