@@ -14,18 +14,22 @@ export function EditorHeader({
   title,
   chips,
   actions,
+  onBack,
 }: {
   backHref: string;
   backLabel: string;
   title: string;
   chips?: React.ReactNode;
   actions?: React.ReactNode;
+  // Before leaving (unsaved changes, say): call preventDefault() on the click to stay.
+  onBack?: (e: React.MouseEvent<HTMLAnchorElement>) => void;
 }) {
   return (
     <header className="z-40 flex-shrink-0 border-b border-[var(--color-line)] bg-[var(--color-panel)]">
       <div className="grid h-14 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 sm:gap-4 sm:px-6">
         <Link
           href={backHref}
+          onClick={onBack}
           aria-label={backLabel}
           title={backLabel}
           className="justify-self-start flex h-9 w-9 items-center justify-center rounded-full border border-[var(--color-line)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"

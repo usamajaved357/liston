@@ -500,8 +500,20 @@ function analyse({ competitor, source, pricing = {}, fees, shipping = null, site
   result.checks = checksFor({ competitor, source, result, refusals, target });
   // A supplier that doesn't sell what the eBay listing sells: Liston rejects it itself.
   result.mismatch = matchCheck(competitor, source, currency);
+  // The eBay listing alone (hunted from Discover, its supplier not added yet): its demand, price and
+  // risks, nothing about a supplier. `source` is null until one's added.
+  if (!source) {
+    result.source = null;
+    result.options = [];
+    result.mismatch = null;
+    result.checks = result.checks.filter((c) => LISTING_CHECKS.includes(c.key));
+    result.summary = { ...result.summary, total: 0, inStock: 0, profitable: 0, belowTarget: 0, verdict: 'no_supplier' };
+    result.warnings = [];
+  }
   return result;
 }
+// The checks that need only the eBay listing.
+const LISTING_CHECKS = ['brand', 'words', 'history', 'demand'];
 
 // ---- risks ------------------------------------------------------------------------------
 
@@ -528,7 +540,9 @@ function checksFor({ competitor, source, result, refusals = [], target }) {
     level: brand ? 'warn' : 'ok',
     detail: brand
       ? `Listed under the brand "${brand}". Make sure it isn't VeRO-protected, or that the product really is generic before listing it as Unbranded.`
-      : 'Unbranded on both listings.',
+      : source
+        ? 'Unbranded on both listings.'
+        : 'Unbranded on the eBay listing.',
   });
 
   const words = hazmatWords(`${competitor?.title || ''} ${source?.title || ''}`);

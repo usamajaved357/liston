@@ -21,6 +21,10 @@ router.get('/:huntId', ...guard, huntingController.detail);
 router.patch('/:huntId', ...guard, huntingController.update);
 router.delete('/:huntId', ...guard, huntingController.remove);
 router.post('/:huntId/recheck', ...guard, huntingController.recheck);
+// Its supplier links: add one, make one the main supplier, take one off.
+router.post('/:huntId/sources', ...guard, huntingController.addSource);
+router.post('/:huntId/sources/:sourceId/main', ...guard, huntingController.makeMainSource);
+router.delete('/:huntId/sources/:sourceId', ...guard, huntingController.removeSource);
 router.post('/:huntId/resubmit', ...guard, huntingController.resubmit);
 router.post('/:huntId/decision', ...guard, huntingController.decide);
 router.post('/:huntId/draft', ...guard, huntingController.draftStart);

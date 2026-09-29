@@ -513,3 +513,45 @@ test('the price range leaves out listings priced far from the rest: a £117 bund
   assert.ok(s.bands.every((b) => b.from < 20), 'no band stretched out to £117');
   assert.deepStrictEqual(researchStats.typicalPrices([1, 50, 100]), [1, 50, 100], 'too few to judge: all kept');
 });
+
+test("Unbranded asks eBay for listings whose Brand says so, in the search's main category, and drops titles naming a brand; every listing is marked: a VeRO brand or restricted item, eBay refusing one like it, eBay removing one like it", async () => {
+  const discoverRepository = require('../../src/modules/discover/discover.repository');
+  mock.method(appState, 'get', async () => null);
+  mock.method(appState, 'set', async () => {});
+  mock.method(connectionService, 'getConnectionSummary', async () => ({ platform_key: 'ebay', marketplace: { id: 'EBAY_GB' } }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, owner, action) => action({ accessToken: 't' }));
+  mock.method(listingRepository, 'findPolicyRefusals', async () => [{ title: 'Cotton ankle socks black', message: 'This listing may be in violation of the VeRO intellectual property policy', account: 'Shop', at: '2026-09-01' }]);
+  mock.method(discoverRepository, 'ownerBrandRejections', async () => []);
+  const breakdown = { brands: [{ name: 'Nike', count: 60, unbranded: false }, { name: 'Unbranded', count: 40, unbranded: true }], categories: [{ id: '11511', name: 'Socks', count: 90 }], categoryId: '11511' };
+  const item = (id, title) => browseResearch.mapSummary({ itemId: `v1|${id}|0`, legacyItemId: id, title, price: { value: '6.99', currency: 'GBP' } });
+  const calls = mock.method(browseResearch, 'search', async (input) =>
+    input.aspectFilter
+      ? { total: 4, items: [item('1', 'Nike crew socks 3 pairs'), item('2', 'Cotton ankle socks black 5 pairs'), item('3', 'Plain merino wool hiking socks for men 3 pairs'), item('4', 'Chanel logo socks')], breakdown: null, calls: 1 }
+      : { total: 200, items: [item('9', 'Nike crew socks'), item('4', 'Chanel logo socks')], breakdown, calls: 1 }
+  );
+  mock.method(browseResearch, 'soldCount', async () => ({ sold: 2, calls: 1 }));
+  mock.method(salesHistory, 'soldListings', async () => ({
+    available: true,
+    total: 1,
+    items: [{ itemId: 'v1|77|0', legacyItemId: '77', title: 'Plain merino wool hiking socks for men 3 pairs', image: null, url: null, price: 5, shipping: 0, currency: 'GBP', sold: 9, lastSoldAt: '2026-09-20T10:00:00Z', seller: 'x', country: 'GB' }],
+  }));
+  mock.method(ebayService, 'listingStates', async () => ({ states: { 77: 'removed' } }));
+
+  const result = await researchService.search('owner', 'conn', { q: 'socks', brand: 'unbranded', delivery: 'all' });
+  const narrowed = calls.mock.calls.find((c) => c.arguments[0].aspectFilter).arguments[0];
+  assert.deepStrictEqual([narrowed.categoryId, narrowed.aspectFilter], ['11511', 'categoryId:11511,Brand:{Unbranded|Unbranded/Generic|Generic|Does not apply}']);
+  // Titles naming a brand ("Nike", on 60% of the search; Chanel, a VeRO brand) are left out, the rest kept.
+  assert.deepStrictEqual(result.items.map((i) => i.legacyItemId), ['2', '3']);
+  assert.deepStrictEqual([result.brandFilter.byEbay, result.brandFilter.dropped], [true, 2]);
+  const marksOf = Object.fromEntries(result.items.map((i) => [i.legacyItemId, i.marks]));
+  assert.strictEqual(marksOf['2'].risk.kind, 'refused', "eBay refused the owner's draft for one like it (intellectual property)");
+  assert.strictEqual(marksOf['2'].risk.level, 'bad');
+  assert.deepStrictEqual(marksOf['3'].removedLike, { title: 'Plain merino wool hiking socks for men 3 pairs' }, 'eBay removed one like it in the last 90 days');
+
+  // Any brand: the plain search, every listing kept and marked: a VeRO brand as the product.
+  const any = await researchService.search('owner', 'conn', { q: 'socks', delivery: 'all' });
+  assert.deepStrictEqual([any.items.map((i) => i.legacyItemId), any.brandFilter], [['9', '4'], null]);
+  const anyMarks = Object.fromEntries(any.items.map((i) => [i.legacyItemId, i.marks]));
+  assert.deepStrictEqual(anyMarks['4'].violation, { kind: 'brand', label: 'chanel' });
+  assert.deepStrictEqual([anyMarks['9'].violation, anyMarks['9'].brand], [{ kind: 'brand', label: 'nike' }, 'Nike'], "Nike is on Liston's VeRO list too");
+});

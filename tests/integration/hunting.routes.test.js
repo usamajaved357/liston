@@ -225,12 +225,12 @@ test('the filters: profit a sale, demand, when it was added and not already else
   assert.strictEqual((await ids('profit=4')).all, 3);
 });
 
-test('the tabs: All, Waiting for review, Approved, Drafted, Listed, Rejected, and My hunts for each person; a drafted product stays on the page', async () => {
+test('the tabs: All, Needs a supplier, Waiting for review, Approved, Drafted, Listed, Rejected, and My hunts for each person; a drafted product stays on the page', async () => {
   const t = await team();
   const { hunt: mine } = await hunt(t.connectionId, t.hunter.token);
   await hunt(t.connectionId, t.ownerToken); // the owner's: approved as added
   const list = await request('GET', `/api/connections/${t.connectionId}/hunting?view=mine`, undefined, t.hunter.token);
-  assert.deepStrictEqual(list.data.views, ['all', 'review', 'approved', 'drafted', 'listed', 'rejected', 'mine']);
+  assert.deepStrictEqual(list.data.views, ['all', 'sourcing', 'review', 'approved', 'drafted', 'listed', 'rejected', 'mine']);
   assert.strictEqual(list.data.view, 'mine');
   assert.deepStrictEqual(list.data.items.map((h) => h.id), [mine.id]);
   assert.strictEqual(list.data.counts.mine, 1);
@@ -755,180 +755,83 @@ test('the hunter resubmits a rejected product for review; one Liston rejected is
   }
 });
 
-test("Discover's Hunt finds the supplier itself: the best AliExpress product rated 4+ at the target return is added for review; otherwise nothing is added and it says why", async () => {
+test("Discover's Hunt adds the eBay listing alone, waiting for a supplier; the first supplier link sends it for review, more are kept beside it and one made main; a reviewer changes its eBay link and every figure follows", async () => {
   const t = await team();
-  const url = `/api/connections/${t.connectionId}/hunting/auto-source`;
-  const real = aliexpressSource.findSuppliers;
-  const realShipping = aliexpressSource.fetchShipping;
-  // Discover's Hunt adds a listing to an account once: each case hunts a listing of its own.
+  const fromListing = `/api/connections/${t.connectionId}/hunting/from-listing`;
   const listing = (n) => `https://www.ebay.co.uk/itm/5550000000${String(n).padStart(2, '0')}`;
-  const alike = (id, via, over = {}) => ({ productId: id, title: 'TWS Wireless Earbuds Bluetooth 5.3 Headphones', imageUrl: null, price: 3, rating: 4.7, orders: '1000+', url: `https://www.aliexpress.com/item/100500${id}.html`, via, ...over });
-  // The photos are compared by the AI (tested in unit/product-match): here it says whatever `looks` says.
-  const productMatch = require('../../src/modules/ai-generation/product-match.service');
-  const realLooks = productMatch.sameAsListing;
-  const realFetchPhoto = aliexpressSource.fetchPhoto;
-  const realReadPhoto = aliexpressSource.readPhoto;
-  let looks = () => ({ same: true, why: 'Same earbuds and case' });
-  const compared = [];
-  const compare = async ({ candidates }) => {
-    compared.push(candidates.map((c) => c.title));
-    return candidates.map((c) => looks(c));
+  const supplier = (n) => `https://www.aliexpress.com/item/10050099999${String(n).padStart(2, '0')}.html`;
+  const count = async () => (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.reviewer.token)).data.items.length;
+
+  // Hunted from Discover: the listing read from eBay, no supplier yet, waiting in "needs a supplier".
+  const added = await request('POST', fromListing, { competitorUrl: listing(1) }, t.hunter.token);
+  assert.strictEqual(added.status, 201, JSON.stringify(added.data));
+  const h = added.data.hunt;
+  assert.deepStrictEqual([added.data.added, h.stage, h.sources, h.result.source, h.foundByListon], [true, 'sourcing', [], null, true]);
+  assert.ok(h.result.demand.soldPerMonth > 0 && h.result.competitor.lowestPrice > 0, 'its demand and price from eBay');
+  assert.deepStrictEqual([h.permissions.canEdit, h.permissions.canDecide], [true, false]);
+  const list = await request('GET', `/api/connections/${t.connectionId}/hunting?view=sourcing`, undefined, t.hunter.token);
+  assert.deepStrictEqual([list.data.counts.sourcing, list.data.items.map((i) => i.id)], [1, [h.id]]);
+  // Nothing to decide yet.
+  assert.strictEqual((await request('POST', `/api/hunting/${h.id}/decision`, { decision: 'approve' }, t.reviewer.token)).status, 403);
+  // Hunted again (a second click, a teammate): not added twice, a link to it; two at once make one.
+  const again = await request('POST', fromListing, { competitorUrl: listing(1) }, t.reviewer.token);
+  assert.deepStrictEqual([again.status, again.data.added, again.data.alreadyHunted.id, again.data.alreadyHunted.stage], [200, false, h.id, 'sourcing']);
+  const before = await count();
+  const [one, two] = await Promise.all([listing(2), listing(2)].map((u) => request('POST', fromListing, { competitorUrl: u }, t.hunter.token)));
+  assert.deepStrictEqual([one.data.hunt?.id, await count()], [two.data.hunt?.id, before + 1]);
+
+  // Its first supplier link: checked against the listing, its main supplier, in for review.
+  const first = await request('POST', `/api/hunting/${h.id}/sources`, { sourceUrl: supplier(1) }, t.hunter.token);
+  assert.strictEqual(first.status, 201, JSON.stringify(first.data));
+  assert.deepStrictEqual([first.data.stage, first.data.sources.length, first.data.sources[0].main, first.data.sources[0].rating], ['pending', 1, true, 4.8]);
+  assert.ok(first.data.headline.profit > 0);
+  assert.strictEqual((await request('POST', `/api/hunting/${h.id}/sources`, { sourceUrl: supplier(1) }, t.hunter.token)).status, 400, 'already its main supplier');
+  // More suppliers, kept beside it with their own figures (a reviewer adds one too).
+  aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, priceText: 'GBP 2.00', variants: SOURCE.variants.map((v) => ({ ...v, priceText: 'GBP 2.00' })), sourceUrl: u });
+  const second = await request('POST', `/api/hunting/${h.id}/sources`, { sourceUrl: supplier(2) }, t.reviewer.token);
+  assert.strictEqual(second.status, 201, JSON.stringify(second.data));
+  const [main, other] = second.data.sources;
+  assert.deepStrictEqual([main.main, other.main, other.addedBy.id], [true, false, t.reviewer.id]);
+  assert.ok(other.profit > main.profit, 'the cheaper supplier earns more');
+  assert.strictEqual(second.data.headline.profit, main.profit, "the product's figures stay the main supplier's");
+  // Made the main supplier: its figures become the product's, the old one kept beside it.
+  const switched = await request('POST', `/api/hunting/${h.id}/sources/${other.id}/main`, undefined, t.reviewer.token);
+  assert.strictEqual(switched.status, 200, JSON.stringify(switched.data));
+  assert.deepStrictEqual([switched.data.sources[0].url, switched.data.sourceUrl, switched.data.sources.length], [supplier(2), supplier(2), 2]);
+  assert.ok(switched.data.headline.profit > main.profit);
+  // Taken off: the other one (the main one can't be).
+  const kept = switched.data.sources.find((x) => !x.main);
+  const removed = await request('DELETE', `/api/hunting/${h.id}/sources/${kept.id}`, undefined, t.reviewer.token);
+  assert.deepStrictEqual([removed.status, removed.data.sources.length], [200, 1]);
+  assert.strictEqual((await request('DELETE', `/api/hunting/${h.id}/sources/not-a-uuid`, undefined, t.reviewer.token)).status, 404);
+  // Someone who only drafts can't change it (a product waiting for review isn't theirs to see).
+  assert.strictEqual((await request('POST', `/api/hunting/${h.id}/sources`, { sourceUrl: supplier(3) }, t.lister.token)).status, 404);
+
+  // A reviewer changes its eBay link while it waits: every supplier checked again against the new listing.
+  await request('POST', `/api/hunting/${h.id}/sources`, { sourceUrl: supplier(3) }, t.reviewer.token);
+  let reads = 0;
+  aliexpressSource.fetchProduct = async (u) => {
+    reads += 1;
+    return { ...SOURCE, sourceUrl: u };
   };
-  productMatch.sameAsListing = compare;
-  aliexpressSource.fetchPhoto = async () => Buffer.from('photo');
-  try {
-    // Nothing that looks like it: nothing checked, nothing added.
-    // (And the photo couldn't be fetched: it says it searched by the title only.)
-    aliexpressSource.findSuppliers = async () => ({ image: [], text: [alike('0000001', 'text', { title: 'Silicone phone case' })], errors: ["Image search: the eBay photo couldn't be read (timed out)"] });
-    const none = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
-    assert.strictEqual(none.status, 200, JSON.stringify(none.data));
-    assert.deepStrictEqual([none.data.found, /none looks like the same product/.test(none.data.reason)], [false, true]);
-    assert.match(none.data.note, /Photo search wasn't available just now/);
-    assert.strictEqual(none.data.tried[0].ok, false);
+  ebaySource.fetchListing = async (url) => ({ ...COMPETITOR, variants: COMPETITOR.variants.map((v) => ({ ...v, priceText: 'GBP 19.99' })), priceText: 'GBP 19.99', sourceUrl: url });
+  const moved = await request('PATCH', `/api/hunting/${h.id}`, { competitorUrl: listing(3) }, t.reviewer.token);
+  assert.strictEqual(moved.status, 200, JSON.stringify(moved.data));
+  assert.deepStrictEqual([moved.data.competitorUrl, moved.data.stage, reads], [listing(3), 'pending', 2], 'the main and the other supplier, each read once');
+  assert.ok(moved.data.sources.every((x) => x.profit > 5), 'the figures at the new listing\'s price');
+  ebaySource.fetchListing = async (url) => ({ ...COMPETITOR, sourceUrl: url });
 
-    // Alike, but rated under 4 stars on AliExpress: checked, turned down with why.
-    aliexpressSource.findSuppliers = async () => ({ image: [alike('0000002', 'image')], text: [], errors: [] });
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, supplier: { ...SOURCE.supplier, rating: 3.6 }, sourceUrl: u });
-    const low = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
-    assert.deepStrictEqual([low.data.found, low.data.tried[0].why], [false, 'Rated 3.6 stars, under 4']);
-    assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.hunter.token)).data.items.length, 0, 'nothing added');
+  // The owner adding a supplier to one hunted from Discover: in for review all the same, never approved as added.
+  const byOwner = (await request('POST', fromListing, { competitorUrl: listing(4) }, t.ownerToken)).data.hunt;
+  const ownerSupplied = await request('POST', `/api/hunting/${byOwner.id}/sources`, { sourceUrl: supplier(4) }, t.ownerToken);
+  assert.deepStrictEqual([ownerSupplied.data.stage, ownerSupplied.data.permissions.canDecide], ['pending', true]);
+  // A first supplier that doesn't sell what sells: rejected by Liston, with why.
+  aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, variants: [SOURCE.variants[0]], sourceUrl: u });
+  const bad = await request('POST', `/api/hunting/${one.data.hunt.id}/sources`, { sourceUrl: supplier(5) }, t.hunter.token);
+  assert.deepStrictEqual([bad.data.stage, bad.data.autoRejected], ['rejected', true]);
+  aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
 
-    // Rated 4.8 and earning the target, but postage isn't free: turned down.
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
-    aliexpressSource.findSuppliers = async () => ({ image: [alike('0000003', 'image')], text: [alike('0000004', 'text')], errors: [] });
-    const paid = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
-    assert.deepStrictEqual([paid.data.found, paid.data.tried[0].why], [false, "Postage isn't free (0.99 a parcel)"]);
-
-    // Free over £8 (AliExpress's Choice): found. From the add form, kept as a check for the hunter to add.
-    aliexpressSource.fetchShipping = async () => ({ cost: 0.99, freeOver: 8, minDays: 5, maxDays: 8, company: 'AliExpress Standard', tracking: true, currency: 'GBP' });
-
-    // The photos are only compared for ones that pass everything else, best first: both here, and
-    // neither is the same product, so nothing is offered.
-    looks = () => ({ same: false, why: 'Over-ear headphones, not earbuds' });
-    compared.length = 0;
-    const unlike = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
-    assert.strictEqual(unlike.status, 200, JSON.stringify(unlike.data));
-    assert.deepStrictEqual([unlike.data.found, compared.length], [false, 2]);
-    assert.match(unlike.data.reason, /is the same product in the photos/);
-    assert.deepStrictEqual(unlike.data.tried.map((r) => r.why), ['Not the same product in the photos: Over-ear headphones, not earbuds', 'Not the same product in the photos: Over-ear headphones, not earbuds']);
-    // One failing the other checks is never compared: rated under 4, it isn't asked about.
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, supplier: { ...SOURCE.supplier, rating: 3.6 }, sourceUrl: u });
-    compared.length = 0;
-    await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
-    assert.strictEqual(compared.length, 0, 'no AI call for a supplier that fails anyway');
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
-    // The AI can't answer just now: nothing is picked unseen.
-    productMatch.sameAsListing = async () => {
-      throw new Error("the photos couldn't be compared (overloaded)");
-    };
-    const down = await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.hunter.token);
-    assert.strictEqual(down.data.found, false);
-    assert.match(down.data.reason, /couldn't compare the supplier's photos with the eBay listing's just now/);
-    // Two of the listing's photos are the supplier's own: the same product, no AI asked.
-    const sharp = require('sharp');
-    const picture = (shapes) =>
-      sharp(
-        Buffer.from(
-          `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fafafa"/><stop offset="1" stop-color="#9a9a9a"/></linearGradient>` +
-            `<radialGradient id="r"><stop offset="0" stop-color="#eee"/><stop offset="1" stop-color="#222"/></radialGradient></defs><rect width="400" height="400" fill="url(#g)"/>${shapes}</svg>`
-        )
-      )
-        .png()
-        .toBuffer();
-    const pictures = {
-      'https://i.ebayimg.com/1/s-l500.jpg': await picture('<circle cx="140" cy="200" r="90" fill="url(#r)"/><rect x="250" y="80" width="90" height="240" fill="url(#r)"/>'),
-      'https://i.ebayimg.com/2/s-l500.jpg': await picture('<rect x="60" y="60" width="120" height="120" fill="url(#r)"/><circle cx="280" cy="290" r="70" fill="url(#r)"/>'),
-    };
-    COMPETITOR.referenceImages = Object.keys(pictures);
-    aliexpressSource.readPhoto = async (u) => pictures[u];
-    // The supplier's copies: smaller, as JPEGs.
-    const copies = await Promise.all(Object.values(pictures).map((b) => sharp(b).resize(300).jpeg({ quality: 70 }).toBuffer()));
-    const theirs = { 'https://ae01.alicdn.com/1.jpg': copies[0], 'https://ae01.alicdn.com/2.jpg': copies[1] };
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, imageUrls: Object.keys(theirs), sourceUrl: u });
-    aliexpressSource.fetchPhoto = async (u) => theirs[u] || null;
-    productMatch.sameAsListing = compare;
-    compared.length = 0;
-    const own = await request('POST', url, { competitorUrl: COMPETITOR_URL, add: false }, t.hunter.token);
-    assert.deepStrictEqual([own.data.found, compared.length], [true, 0]);
-    COMPETITOR.referenceImages = [];
-    aliexpressSource.readPhoto = realReadPhoto;
-    aliexpressSource.fetchPhoto = async () => Buffer.from('photo');
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
-    looks = () => ({ same: true, why: 'Same earbuds and case' });
-    const kept = await request('POST', url, { competitorUrl: COMPETITOR_URL, add: false }, t.hunter.token);
-    assert.strictEqual(kept.status, 200, JSON.stringify(kept.data));
-    assert.deepStrictEqual([kept.data.found, typeof kept.data.checkId, kept.data.autoApproves], [true, 'string', false]);
-    assert.match(kept.data.sourceUrl, /\/item\/1005000000003\.html$/, 'alike on every figure: the photo match');
-    assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.hunter.token)).data.items.length, 0, 'not added yet');
-    const fromForm = await request('POST', `/api/connections/${t.connectionId}/hunting`, { checkId: kept.data.checkId, note: 'Liston found it' }, t.hunter.token);
-    assert.deepStrictEqual([fromForm.status, fromForm.data.stage, fromForm.data.sourceUrl], [201, 'pending', kept.data.sourceUrl]);
-
-    // From Discover: added for review at once, the hunter's, with a note saying Liston found it.
-    const found = await request('POST', url, { competitorUrl: listing(1) }, t.hunter.token);
-    assert.strictEqual(found.status, 201, JSON.stringify(found.data));
-    assert.strictEqual(found.data.found, true);
-    assert.deepStrictEqual([found.data.hunt.stage, found.data.hunt.hunter.id], ['pending', t.hunter.id]);
-    assert.match(found.data.hunt.hunterNote, /Supplier found by Liston \(AliExpress image search\): rated 4.8 stars/);
-    assert.strictEqual(found.data.tried.length, 2);
-    assert.ok(found.data.supplier.roi >= 60);
-    assert.strictEqual(found.data.hunt.foundByListon, true);
-    // Hunting the same listing again (a second click, a retried request, a teammate): nothing added, a link to it.
-    const count = async () => (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.hunter.token)).data.items.length;
-    const listed = await count();
-    const again = await request('POST', url, { competitorUrl: listing(1) }, t.reviewer.token);
-    assert.strictEqual(again.status, 200, JSON.stringify(again.data));
-    assert.deepStrictEqual([again.data.found, again.data.alreadyHunted.id, again.data.alreadyHunted.stage, again.data.alreadyHunted.hunter.id], [false, found.data.hunt.id, 'pending', t.hunter.id]);
-    assert.strictEqual(await count(), listed);
-    // Two at the same moment: one search, one product, both told of it.
-    const [one, two] = await Promise.all([listing(6), listing(6)].map((u) => request('POST', url, { competitorUrl: u }, t.hunter.token)));
-    assert.deepStrictEqual([one.data.hunt?.id, await count()], [two.data.hunt?.id, listed + 1]);
-
-    // Never approved as added, the owner's included: it waits until someone opens it and approves it.
-    const byOwner = await request('POST', url, { competitorUrl: listing(2) }, t.ownerToken);
-    assert.strictEqual(byOwner.status, 201, JSON.stringify(byOwner.data));
-    assert.deepStrictEqual([byOwner.data.hunt.stage, byOwner.data.hunt.autoApproved, byOwner.data.hunt.foundByListon, byOwner.data.hunt.permissions.canDecide], ['pending', false, true, true]);
-    assert.strictEqual((await request('POST', url, { competitorUrl: COMPETITOR_URL, add: false }, t.ownerToken)).data.autoApproves, false, 'the add form adds it for review too');
-    const ownerApproves = await request('POST', `/api/hunting/${byOwner.data.hunt.id}/decision`, { decision: 'approve' }, t.ownerToken);
-    assert.deepStrictEqual([ownerApproves.status, ownerApproves.data.stage], [200, 'approved']);
-    // A reviewer's Liston find waits too, and they may decide on it (Liston found it, not they).
-    const byReviewer = await request('POST', url, { competitorUrl: listing(3) }, t.reviewer.token);
-    assert.deepStrictEqual([byReviewer.data.hunt.stage, byReviewer.data.hunt.permissions.canDecide], ['pending', true]);
-    const reviewerRejects = await request('POST', `/api/hunting/${byReviewer.data.hunt.id}/decision`, { decision: 'reject', reason: 'low_demand' }, t.reviewer.token);
-    assert.deepStrictEqual([reviewerRejects.status, reviewerRejects.data.stage], [200, 'rejected']);
-
-    // Matches and earns, but under the account's target return: shown with its figures, never added
-    // by itself; the hunter adds it with a click. A loss is still no match.
-    const target = Math.ceil(found.data.supplier.roi) + 20;
-    await pool.query(
-      `UPDATE connections SET settings = COALESCE(settings, '{}'::jsonb) || jsonb_build_object('pricing', COALESCE(settings->'pricing', '{}'::jsonb) || jsonb_build_object('targetRoiPercent', $2::int)) WHERE id = $1`,
-      [t.connectionId, target]
-    );
-    const before = (await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.hunter.token)).data.items.length;
-    const under = await request('POST', url, { competitorUrl: listing(4) }, t.hunter.token);
-    assert.strictEqual(under.status, 200, JSON.stringify(under.data));
-    assert.deepStrictEqual([under.data.found, under.data.belowTarget, under.data.targetRoi, typeof under.data.checkId, under.data.hunt], [true, true, target, 'string', undefined]);
-    assert.ok(under.data.supplier.profit > 0 && under.data.supplier.roi < target);
-    assert.deepStrictEqual([under.data.supplier.ok, under.data.supplier.belowTarget], [false, true]);
-    assert.match(under.data.addNote, new RegExp(`under the ${target}% target`));
-    assert.strictEqual((await request('GET', `/api/connections/${t.connectionId}/hunting?view=all`, undefined, t.hunter.token)).data.items.length, before, 'not added by itself');
-    const addedUnder = await request('POST', `/api/connections/${t.connectionId}/hunting`, { checkId: under.data.checkId, note: under.data.addNote }, t.hunter.token);
-    assert.deepStrictEqual([addedUnder.status, addedUnder.data.stage], [201, 'pending']);
-    // Dearer than the eBay price: a loss, not a match.
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, variants: SOURCE.variants.map((v) => ({ ...v, priceText: 'GBP 99.00' })), sourceUrl: u });
-    const loss = await request('POST', url, { competitorUrl: listing(5) }, t.hunter.token);
-    assert.deepStrictEqual([loss.data.found, loss.data.tried[0].belowTarget, loss.data.tried[0].why], [false, false, "Loses money at the competitor's price"]);
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
-
-    // Only for people who hunt; an eBay link is needed.
-    assert.strictEqual((await request('POST', url, { competitorUrl: COMPETITOR_URL }, t.nobody.token)).status, 403);
-    assert.strictEqual((await request('POST', url, { competitorUrl: 'https://example.com/x' }, t.hunter.token)).status, 400);
-  } finally {
-    COMPETITOR.referenceImages = [];
-    productMatch.sameAsListing = realLooks;
-    aliexpressSource.fetchPhoto = realFetchPhoto;
-    aliexpressSource.readPhoto = realReadPhoto;
-    aliexpressSource.findSuppliers = real;
-    aliexpressSource.fetchShipping = realShipping;
-    aliexpressSource.fetchProduct = async (u) => ({ ...SOURCE, sourceUrl: u });
-  }
+  // Only for people who hunt; an eBay link is needed.
+  assert.strictEqual((await request('POST', fromListing, { competitorUrl: listing(9) }, t.nobody.token)).status, 403);
+  assert.strictEqual((await request('POST', fromListing, { competitorUrl: 'https://example.com/x' }, t.hunter.token)).status, 400);
 });

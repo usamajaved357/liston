@@ -1,26 +1,21 @@
 "use client";
 
 import { FormEvent, RefObject, useEffect, useId, useRef, useState } from "react";
-import { api, ApiError, HuntCheckResult, HuntDetail, HuntSourceTry } from "@/lib/api";
+import { api, ApiError, HuntCheckResult, HuntDetail } from "@/lib/api";
 import { Alert } from "@/components/Alert";
 import { HuntResult } from "./HuntResult";
 import { HuntIcon, Thumb, VERDICT, announceHuntingChange, profitInk, roiText, signedMoney } from "./HuntBits";
-import { SourceTryRow } from "./AutoSourceDialog";
 
 // "Hunt a product": paste the AliExpress product (and, optionally, the
-// competitor's eBay listing), or let Liston find the supplier for the
-// competitor ("Find with Liston": by its photo and title, rated 4.0+, free
-// postage, at the target return), see the profit on every option, then add it
+// competitor's eBay listing), see the profit on every option, then add it
 // for review from the page's footer (the owner's own finds are approved as
 // they're added). Nothing is saved until Add; a check is held half an hour.
+// More supplier links are added on the product's page once it's added.
 
 const STEPS = ["Reading the competitor on eBay", "Reading the supplier on AliExpress", "Asking AliExpress for postage", "Working out the profit on every option"];
-// "Find with Liston": the supplier searched for, then the closest matches checked.
-const FIND_STEPS = ["Reading the competitor on eBay", "Searching AliExpress by its photo and title", "Checking the closest matches: rating, postage, profit", "Picking the best: 4.0+ stars, free postage, your target return"];
-
-function Progress({ step, competitor, finding = false }: { step: number; competitor: boolean; finding?: boolean }) {
+export function Progress({ step, competitor }: { step: number; competitor: boolean }) {
   // Without a competitor, eBay isn't read.
-  const steps = finding ? FIND_STEPS : competitor ? STEPS : STEPS.slice(1);
+  const steps = competitor ? STEPS : STEPS.slice(1);
   const at = Math.min(step, steps.length - 1);
   return (
     <div className="card mt-4 p-5">
@@ -165,55 +160,20 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  // "Find with Liston": looking, what it found (the supplier, of how many), or why none would do.
-  const [finding, setFinding] = useState(false);
-  const [found, setFound] = useState<{ supplier: HuntSourceTry; checked: number; note?: string | null; targetRoi?: number } | null>(null);
-  const [notFound, setNotFound] = useState<{ reason: string; tried: HuntSourceTry[]; note?: string | null } | null>(null);
-  const currency = checked?.result.currency || "GBP";
   const sourceRef = useRef<HTMLInputElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!busy) return;
-    const timer = setInterval(() => setStep((s) => Math.min(s + 1, STEPS.length - 1)), finding ? 2800 : 1500);
+    const timer = setInterval(() => setStep((s) => Math.min(s + 1, STEPS.length - 1)), 1500);
     return () => clearInterval(timer);
-  }, [busy, finding]);
-
-  // Liston finds the supplier for the competitor: the link filled in and the check shown, to add with a note.
-  async function findSupplier() {
-    setBusy(true);
-    setFinding(true);
-    setStep(0);
-    setError(null);
-    setFound(null);
-    setNotFound(null);
-    onChecked(null);
-    try {
-      const data = await api.huntFindSupplier(connectionId, competitorUrl.trim());
-      if (data.found) {
-        setSourceUrl(data.sourceUrl);
-        // Under the target return: still the supplier that matches, shown with its figures to judge.
-        setFound({ supplier: data.supplier, checked: data.tried.length, note: data.note, targetRoi: data.belowTarget ? data.targetRoi : undefined });
-        onChecked({ checkId: data.checkId, result: data.result, autoApproves: data.autoApproves });
-        requestAnimationFrame(() => resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-      } else {
-        setNotFound({ reason: data.reason, tried: data.tried, note: data.note });
-      }
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't look for a supplier just now. Try again.");
-    } finally {
-      setBusy(false);
-      setFinding(false);
-    }
-  }
+  }, [busy]);
 
   async function check(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setStep(0);
     setError(null);
-    setFound(null);
-    setNotFound(null);
     onChecked(null);
     try {
       const data = await api.huntCheck(connectionId, { competitorUrl: competitorUrl.trim() || undefined, sourceUrl: sourceUrl.trim() });
@@ -269,25 +229,9 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
           <button type="submit" disabled={busy || !sourceUrl.trim()} className="btn btn-primary px-4 text-[13px]" style={{ height: 36 }}>
             {busy ? "Checking…" : checked ? "Check again" : "Check profit"}
           </button>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:col-span-3 lg:-mt-0.5">
-            <p className="text-[11px] text-[var(--color-muted)]">
-              The competitor sets the market price, the best seller and how many sell. Without one, each option is priced at your target return, as a draft would be.
-            </p>
-            {/* No supplier yet: Liston finds one for the competitor (rated 4.0+, free postage, at the target return). */}
-            <button
-              type="button"
-              onClick={findSupplier}
-              disabled={busy || !competitorUrl.trim()}
-              title={competitorUrl.trim() ? "Search AliExpress for this listing by its photo and title" : "Paste the competitor's eBay listing first"}
-              className="inline-flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full border border-[var(--color-primary)]/30 bg-[var(--color-primary-soft)] px-3 text-[12px] font-semibold text-[var(--color-primary)] transition-colors hover:border-[var(--color-primary)]/60 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
-                <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.7" />
-                <path d="M13.2 13.2L17 17" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-              </svg>
-              {finding ? "Finding a supplier…" : "No supplier? Find one with Liston"}
-            </button>
-          </div>
+          <p className="text-[11px] text-[var(--color-muted)] lg:col-span-3 lg:-mt-0.5">
+            The competitor sets the market price, the best seller and how many sell. Without one, each option is priced at your target return, as a draft would be.
+          </p>
         </div>
       </form>
 
@@ -296,44 +240,10 @@ export function HuntForm({ connectionId, marketName, initialCompetitor, checked,
           <Alert>{error}</Alert>
         </div>
       )}
-      {busy && <Progress step={step} competitor={Boolean(competitorUrl.trim())} finding={finding} />}
-
-      {notFound && (
-        <div className="card mt-4 p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-600">No supplier found</p>
-          <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-ink)]">{notFound.reason}</p>
-          {notFound.note && <p className="mt-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[12px] text-amber-900">{notFound.note}</p>}
-          {notFound.tried.length > 0 && (
-            <ul className="mt-3 max-h-[260px] divide-y divide-[var(--color-line)] overflow-y-auto rounded-xl border border-[var(--color-line)] px-3">
-              {notFound.tried.map((t) => (
-                <SourceTryRow key={t.url} t={t} currency={currency} />
-              ))}
-            </ul>
-          )}
-          <p className="mt-2 text-[12px] text-[var(--color-muted)]">Paste a supplier link yourself to check it.</p>
-        </div>
-      )}
+      {busy && <Progress step={step} competitor={Boolean(competitorUrl.trim())} />}
 
       {checked && (
         <div ref={resultRef} className="mt-4 scroll-mt-4 animate-[fadeIn_200ms_ease-out]">
-          {found && (
-            <div className={`mb-3 flex items-center gap-3 rounded-[var(--radius-card)] border px-4 py-3 ${found.targetRoi !== undefined ? "border-amber-200 bg-amber-50/70" : "border-emerald-200 bg-emerald-50/70"}`}>
-              <Thumb src={found.supplier.imageUrl} size={40} />
-              <p className="min-w-0 flex-1 text-[12.5px] leading-snug text-[var(--color-ink)]">
-                {found.targetRoi !== undefined ? (
-                  <>
-                    <b className="font-semibold">Liston found a matching supplier, under your target</b>: rated {found.supplier.rating} stars, free postage, {found.supplier.roi}% return against your {found.targetRoi}% target
-                  </>
-                ) : (
-                  <>
-                    <b className="font-semibold">Liston found this supplier</b>: rated {found.supplier.rating} stars, free postage, {found.supplier.roi}% return
-                  </>
-                )}
-                {found.checked > 1 ? `, the best of ${found.checked} checked` : ""}. Its link is filled in; add it below with your note{found.targetRoi !== undefined ? " if the lower return will do" : ""}.
-                {found.note && <span className="mt-0.5 block text-[11.5px] text-amber-800">{found.note}</span>}
-              </p>
-            </div>
-          )}
           <HuntResult result={checked.result} />
         </div>
       )}
@@ -352,7 +262,7 @@ export function HuntAddBar({ connectionId, checked, onDiscard, onAdded }: { conn
   const { result } = checked;
   const head = result.summary.headline;
   const unpriced = result.summary.verdict === "unpriced";
-  const title = result.competitor?.title || result.source.title;
+  const title = result.competitor?.title || result.source?.title || "Product";
 
   async function add() {
     setBusy(true);
@@ -372,7 +282,7 @@ export function HuntAddBar({ connectionId, checked, onDiscard, onAdded }: { conn
       {error && <p className="mb-2 text-[12.5px] font-medium text-[var(--color-danger)]">{error}</p>}
       <div className="flex flex-col gap-2.5 md:flex-row md:items-center md:gap-4">
         <div className="flex min-w-0 items-center gap-3 md:w-[300px] md:flex-shrink-0">
-          <Thumb src={result.source.imageUrl} size={40} className="rounded-lg" />
+          <Thumb src={result.source?.imageUrl ?? result.competitor?.imageUrl ?? null} size={40} className="rounded-lg" />
           <div className="min-w-0">
             <p className="truncate text-[13px] font-medium text-[var(--color-ink)]">{title}</p>
             <p className="flex items-center gap-1.5 text-[12px] text-[var(--color-muted)]">

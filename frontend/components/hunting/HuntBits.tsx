@@ -9,6 +9,8 @@ import { initials } from "@/components/team/team-shared";
 // good its profit is, who hunted it.
 
 const ICON: Record<HuntStage, React.ReactNode> = {
+  // A link to add: the supplier.
+  sourcing: <path d="M8.5 11.5l3-3M9 7l.9-.9a2.5 2.5 0 013.5 3.5l-.9.9M11 13l-.9.9a2.5 2.5 0 01-3.5-3.5l.9-.9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />,
   pending: <path d="M10 6v4.2l2.6 1.6" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />,
   sent_back: <path d="M8 6.5L5 9.5l3 3M5.5 9.5h6a3 3 0 010 6H10" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />,
   approved: <path d="M6.5 10.3l2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />,
@@ -18,6 +20,7 @@ const ICON: Record<HuntStage, React.ReactNode> = {
 };
 
 export const STAGE: Record<HuntStage, { label: string; chip: string; dot: string; icon: string }> = {
+  sourcing: { label: "Needs a supplier", chip: "bg-slate-100 text-slate-700 ring-slate-300", dot: "bg-slate-500", icon: "bg-slate-600" },
   pending: { label: "Waiting for review", chip: "bg-indigo-50 text-indigo-700 ring-indigo-200", dot: "bg-indigo-500", icon: "bg-indigo-600" },
   sent_back: { label: "Sent back", chip: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500", icon: "bg-amber-500" },
   approved: { label: "Approved", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500", icon: "bg-emerald-600" },
@@ -132,6 +135,7 @@ export const VERDICT: Record<HuntVerdict, { label: string; tone: Tone; ink: stri
   loss: { label: "Loses money", tone: "bad", ink: "text-rose-700", soft: "bg-rose-50 ring-rose-200" },
   unpriced: { label: "No competitor", tone: "unknown", ink: "text-indigo-700", soft: "bg-indigo-50/70 ring-indigo-200" },
   unknown: { label: "Profit unknown", tone: "unknown", ink: "text-[var(--color-muted)]", soft: "bg-[var(--color-paper)] ring-[var(--color-line)]" },
+  no_supplier: { label: "Needs a supplier", tone: "unknown", ink: "text-[var(--color-muted)]", soft: "bg-[var(--color-paper)] ring-[var(--color-line)]" },
 };
 
 export function VerdictChip({ verdict }: { verdict: HuntVerdict }) {

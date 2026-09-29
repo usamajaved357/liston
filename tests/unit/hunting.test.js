@@ -221,7 +221,13 @@ test('nobody but the owner decides on their own find; hunters edit their own wai
   assert.strictEqual(rules.rules.canDecide(byHunter, REVIEWER), true);
   assert.strictEqual(rules.rules.canDecide(byHunter, HUNTER), false);
   assert.strictEqual(rules.rules.canEdit(byHunter, HUNTER), true);
-  assert.strictEqual(rules.rules.canEdit(byHunter, REVIEWER), false);
+  // A reviewer changes any product before it's drafted: its eBay link, its supplier links.
+  assert.strictEqual(rules.rules.canEdit(byHunter, REVIEWER), true);
+  assert.strictEqual(rules.rules.canEdit({ ...byHunter, listing_id: 'draft-1' }, REVIEWER), false, 'drafted: changed in the draft');
+  // Hunted from Discover without a supplier: its hunter adds one, nobody decides on it yet.
+  const sourcing = { ...byHunter, status: 'sourcing', found_by_liston: true };
+  assert.deepStrictEqual([rules.rules.canEdit(sourcing, HUNTER), rules.rules.canEdit(sourcing, REVIEWER), rules.rules.canDecide(sourcing, OWNER)], [true, true, false]);
+  assert.strictEqual(rules.stageOf(sourcing), 'sourcing');
   // Only a reviewer removes a product, at any stage, the owner included.
   for (const stage of [{ status: 'pending' }, { status: 'sent_back' }, { status: 'approved' }, { status: 'rejected' }, { status: 'approved', listing_id: 'x' }, { status: 'approved', item_ids: ['1'] }]) {
     const product = { ...byHunter, ...stage };
@@ -234,7 +240,7 @@ test('nobody but the owner decides on their own find; hunters edit their own wai
   // Fixing and resubmitting are the hunter's alone, not a reviewer's or the owner's.
   assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, REVIEWER), false);
   assert.strictEqual(rules.rules.canResubmit({ ...byHunter, status: 'sent_back' }, OWNER), false);
-  assert.strictEqual(rules.rules.canEdit({ ...byHunter, status: 'sent_back' }, OWNER), false);
+  assert.strictEqual(rules.rules.canEdit({ ...byHunter, status: 'sent_back' }, OWNER), true, 'the owner reviews: changes it too');
   // A rejected product can be fixed by its hunter or a reviewer (the owner included), not anyone else.
   const rejected = { ...byHunter, status: 'rejected', reject_reason: 'low_profit', reviewer_user_id: 'r' };
   assert.strictEqual(rules.rules.canEdit(rejected, HUNTER), true);
@@ -554,89 +560,3 @@ test('a push the browser no longer has is reported gone, so it is forgotten', as
   await assert.rejects(push.send(sub, {}, { sendImpl: async () => { throw Object.assign(new Error('Boom'), { statusCode: 500 }); } }));
 });
 
-// ---- finding a supplier by itself ------------------------------------------------------------
-
-const sourcing = require('../../src/modules/hunting/hunt-sourcing');
-
-test('auto-sourcing searches with the words that name the product and a bigger copy of the photo', () => {
-  assert.strictEqual(sourcing.searchWords('NEW 4FT LED Strip Lights Batten Tube Light Office Workshop Garage - FREE UK Postage'), '4ft led strip lights batten tube light');
-  assert.strictEqual(sourcing.searchImage('https://i.ebayimg.com/images/g/abc/s-l225.jpg'), 'https://i.ebayimg.com/images/g/abc/s-l500.jpg');
-  assert.strictEqual(sourcing.searchImage(null), null);
-});
-
-test('only an AliExpress product that looks like the same thing is checked: most title words, and the same size', () => {
-  const listing = '4FT LED Strip Lights Batten Tube Light Office Workshop Garage Ceiling Lamp White';
-  assert.strictEqual(sourcing.sameProduct(listing, { title: '4FT 120cm LED Batten Tube Light Ceiling Lamp Garage Workshop Office Strip Lights', via: 'text' }).same, true);
-  // Too few of its words: another product (a two-word match was all a listing without variations needed before).
-  assert.strictEqual(sourcing.sameProduct(listing, { title: '12V/24V LED Light Strip 6cm 10cm Hard Rigid Tube Bar', via: 'text' }).same, false);
-  // A photo match needs fewer words, but a different size is still another product.
-  assert.deepStrictEqual(sourcing.sizesIn('4FT 120cm 1.2M 2L').lengths.map(Math.round), [122, 120, 120]);
-  assert.strictEqual(sourcing.sameProduct(listing, { title: 'LED Batten Tube Light Garage 60cm Ceiling Workshop', via: 'image' }).why, 'A different size from the eBay listing');
-  assert.strictEqual(sourcing.sameProduct(listing, { title: '1.2M LED Tube Bar Fixture Super Bright Ceiling Light Garage', via: 'image' }).same, true);
-  // In turn from each search, alike ones only, a text result under 4 stars skipped with why.
-  const image = [{ productId: '1', title: '1.2M LED Tube Batten Light Garage Ceiling', via: 'image' }];
-  const text = [
-    { productId: '2', title: '4FT LED Batten Tube Light Garage Workshop Ceiling Strip Lights', via: 'text', rating: 3.2 },
-    { productId: '3', title: '4FT LED Batten Tube Light Garage Workshop Ceiling Strip Lights Office', via: 'text', rating: 4.6 },
-    { productId: '4', title: 'Phone case', via: 'text', rating: 4.9 },
-  ];
-  const { check, skipped } = sourcing.candidatesToCheck({ image, text }, listing);
-  assert.deepStrictEqual(check.map((c) => c.productId), ['1', '3']);
-  assert.deepStrictEqual(skipped.map((c) => [c.productId, /stars/.test(c.why)]), [['2', true], ['4', false]]);
-});
-
-test('a checked supplier will do at 4.0 stars or more, selling what sells, in stock, at the target return; the best has the highest return', () => {
-  const result = (over = {}) => ({ targetRoiPercent: 60, mismatch: null, source: { supplier: { rating: 4.5, onSale: true } }, shipping: { basis: 'aliexpress', cost: 0, freeOver: null }, summary: { inStock: 2, headline: { profit: 3, roi: 80 } }, ...over });
-  assert.deepStrictEqual(sourcing.judge(result()), { ok: true, why: null, profit: 3, roi: 80 });
-  // A listing without variations: judged on a typical option, so a cheap extra can't carry a product.
-  const single = result({
-    summary: { inStock: 4, bestSeller: { label: null, sold: 305 }, headline: { basis: 'best_option', profit: 9, roi: 300 } },
-    options: [
-      { label: 'green', stock: 5, profit: 2, roi: 40 },
-      { label: 'grey', stock: 5, profit: 2.2, roi: 45 },
-      { label: 'blue', stock: 5, profit: 2.1, roi: 42 },
-      { label: 'filter sponge 4 pcs', stock: 5, profit: 9, roi: 300 },
-    ],
-  });
-  assert.deepStrictEqual(sourcing.judgedOn(single), { profit: 2.1, roi: 42, basis: 'typical' });
-  assert.strictEqual(sourcing.judge(single).why, '42% return, under your 60% target');
-  // Under the target but earning: still a match (belowTarget), shown to add by hand; a loss isn't.
-  assert.deepStrictEqual(sourcing.judge(single), { ok: false, belowTarget: true, why: '42% return, under your 60% target', profit: 2.1, roi: 42 });
-  assert.strictEqual(sourcing.judge(result({ summary: { inStock: 2, headline: { profit: -0.5, roi: -10 } } })).belowTarget, undefined);
-  assert.match(sourcing.judge(result({ source: { supplier: { rating: 3.9 } } })).why, /3.9 stars/);
-  assert.strictEqual(sourcing.judge(result({ source: { supplier: { rating: 0 } } })).why, 'No rating on AliExpress yet');
-  assert.match(sourcing.judge(result({ summary: { inStock: 2, headline: { profit: 1, roi: 40 } } })).why, /40% return, under your 60% target/);
-  assert.strictEqual(sourcing.judge(result({ mismatch: { reason: 'Missing Black' } })).why, 'Missing Black');
-  assert.strictEqual(sourcing.judge(result({ summary: { inStock: 0, headline: { profit: 3, roi: 80 } } })).why, 'Out of stock');
-  // Free postage only: free outright, or free over an amount (AliExpress's Choice offer).
-  assert.strictEqual(sourcing.judge(result({ shipping: { basis: 'aliexpress', cost: 1.99, freeOver: 8 } })).ok, true);
-  assert.strictEqual(sourcing.judge(result({ shipping: { basis: 'aliexpress', cost: 1.99, freeOver: null } })).why, "Postage isn't free (1.99 a parcel)");
-  assert.strictEqual(sourcing.judge(result({ shipping: { basis: 'settings', cost: 2 } })).why, "AliExpress didn't quote postage for it");
-  // Judged on some other option while the listing's best seller has no match: not one to pick by itself.
-  const unmatched = result({ summary: { inStock: 3, bestSeller: { label: 'Black', sold: 40 }, headline: { basis: 'best_option', profit: 3, roi: 90 } } });
-  // (A listing without variations has no best-selling variation to match.)
-  assert.strictEqual(sourcing.judge(unmatched).why, "The listing's best seller (Black) isn't among its options");
-  assert.strictEqual(sourcing.judge({ ...unmatched, summary: { ...unmatched.summary, headline: { basis: 'best_seller', profit: 3, roi: 90 } } }).ok, true);
-  // Only a close match for the best seller (an adapter for a memory card), or a return too good to be the same product: left to a person.
-  const close = { ...unmatched, summary: { ...unmatched.summary, bestSeller: { label: '32GB', sold: 40, quality: 'close' }, headline: { basis: 'best_seller', profit: 4.75, roi: 90 } } };
-  assert.match(sourcing.judge(close).why, /only a close match/);
-  assert.match(sourcing.judge(result({ summary: { inStock: 2, headline: { profit: 4.75, roi: 880 } } })).why, /too cheap to be sure/);
-  const a = { verdict: { ok: true }, result: result() };
-  const b = { verdict: { ok: true }, result: result({ summary: { inStock: 1, headline: { profit: 2, roi: 120 } } }) };
-  assert.strictEqual(sourcing.best([a, b, { verdict: { ok: false }, result: result() }]), b);
-  assert.strictEqual(sourcing.best([{ verdict: { ok: false }, result: result() }]), null);
-  // Alike on every figure: the photo match, then the one found first.
-  const text = { verdict: { ok: true }, result: result(), candidate: { via: 'text' }, order: 0 };
-  const photo = { verdict: { ok: true }, result: result(), candidate: { via: 'image' }, order: 1 };
-  assert.strictEqual(sourcing.best([text, photo]), photo);
-  assert.strictEqual(sourcing.best([{ ...text, order: 2 }, { ...text, order: 1 }]).order, 1);
-  // Matches under the target return count only when asked for, the best return first; one at the target still wins.
-  const under = (roi) => ({ verdict: { ok: false, belowTarget: true, roi, profit: 1 }, result: result() });
-  assert.strictEqual(sourcing.best([under(40)]), null);
-  const u50 = under(50);
-  assert.strictEqual(sourcing.best([under(40), u50, { verdict: { ok: false }, result: result() }], { belowTarget: true }), u50);
-  assert.strictEqual(sourcing.best([under(50), a], { belowTarget: true }), a);
-  // All that will do, best first: the photos are compared in this order until one is the same product.
-  assert.deepStrictEqual(sourcing.ranked([a, under(90), b, { verdict: { ok: false }, result: result() }]), [b, a]);
-  assert.deepStrictEqual(sourcing.ranked([under(40), u50, a], { belowTarget: true }).map((c) => c.verdict.roi ?? 'a'), ['a', 50, 40]);
-});

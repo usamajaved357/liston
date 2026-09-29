@@ -9,6 +9,8 @@ const searchSchema = z.object({
   // Which listings to compare with, by delivery time next to the account's
   // postage policy; left out: those like the account's, when it's known.
   delivery: z.enum(['similar', 'faster', 'slower', 'all']).optional(),
+  // Unbranded: only listings whose Brand says unbranded (eBay's filter in the search's main category).
+  brand: z.enum(['any', 'unbranded']).default('any'),
 });
 
 async function search(req, res, next) {

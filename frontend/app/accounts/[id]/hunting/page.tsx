@@ -12,7 +12,7 @@ import { AccountPageSkeleton } from "@/components/Skeleton";
 import { HuntAddBar, HuntCheck, HuntForm } from "@/components/hunting/HuntForm";
 import { HuntRows, PipelineTabs, SORT_LABELS } from "@/components/hunting/HuntList";
 import { HuntPanel } from "@/components/hunting/HuntPanel";
-import { AutoSourceDialog } from "@/components/hunting/AutoSourceDialog";
+import { DiscoverHuntDialog } from "@/components/hunting/DiscoverHuntDialog";
 import { PushPrompt } from "@/components/NotificationBell";
 import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 
@@ -25,7 +25,7 @@ import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 // tab (?tab=discover) is where hunters find what to hunt: categories and
 // keywords, what's selling, a watchlist.
 
-const VIEWS: HuntView[] = ["all", "review", "approved", "drafted", "listed", "rejected", "mine"];
+const VIEWS: HuntView[] = ["all", "sourcing", "review", "approved", "drafted", "listed", "rejected", "mine"];
 
 // The filter menu's choices; the server takes only these values.
 const PROFIT_STEPS = [1, 2, 3, 5, 10];
@@ -75,8 +75,6 @@ function HuntingBody() {
   const [showForm, setShowForm] = useState(Boolean(search.get("competitor")));
   // A fresh form after each add.
   const [formKey, setFormKey] = useState(0);
-  // A competitor picked in Discover ("Hunt this"), filled into a fresh form.
-  const [prefill, setPrefill] = useState<string | null>(null);
   const tab: "products" | "discover" = search.get("tab") === "discover" ? "discover" : "products";
 
   // The page's place in the URL, so a shared or reopened link lands the same.
@@ -187,17 +185,8 @@ function HuntingBody() {
     qs.delete("competitor");
     router.push(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
   }
-  // "Hunt" in Discover: Liston looks for the AliExpress supplier itself (AutoSourceDialog).
+  // "Hunt" in Discover: the listing added on its own, its supplier added on its page (DiscoverHuntDialog).
   const [sourcing, setSourcing] = useState<string | null>(null);
-  // No supplier found (or the seller would rather choose): back to the products with the form open and the competitor filled in.
-  function huntFromDiscover(url: string) {
-    setPrefill(url);
-    setFormKey((k) => k + 1);
-    setChecked(null);
-    setAdded(null);
-    setShowForm(true);
-    changeTab("products");
-  }
 
   const viewer = data?.viewer;
   const perms = connection?.permissions;
@@ -299,7 +288,7 @@ function HuntingBody() {
             key={formKey}
             connectionId={connection.id}
             marketName={market?.name ?? "eBay"}
-            initialCompetitor={prefill ?? (formKey === 0 ? search.get("competitor") : null)}
+            initialCompetitor={formKey === 0 ? search.get("competitor") : null}
             checked={checked}
             onChecked={onChecked}
             onClose={() => {
@@ -431,20 +420,15 @@ function HuntingBody() {
       )}
 
       {sourcing && (
-        <AutoSourceDialog
+        <DiscoverHuntDialog
           key={sourcing}
           connectionId={connection.id}
           competitorUrl={sourcing}
-          currency={connection.marketplace?.currency || "GBP"}
           onClose={() => setSourcing(null)}
           onOpenHunt={(id) => {
             setSourcing(null);
             refresh();
             open(id);
-          }}
-          onManual={(url) => {
-            setSourcing(null);
-            huntFromDiscover(url);
           }}
         />
       )}

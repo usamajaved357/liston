@@ -294,7 +294,7 @@ export function SalesCards({
 
 // The listing pipeline, stage by stage: products hunted, approved or rejected
 // (product hunting), then drafted and published in Liston, all in the chosen
-// dates, each with what's behind it (found by Liston or by the team, rejected
+// dates, each with what's behind it (from Discover or added with a supplier, rejected
 // by a reviewer or by Liston for a supplier that doesn't match, drafted from a
 // hunted product or not). What's live, waiting and stuck right now sits
 // underneath.
@@ -312,8 +312,8 @@ const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink
     note: "Products found to list",
     of: (w) => num(w.hunted),
     details: [
-      { label: "By your team", of: (w) => num(w.hunted) - num(w.huntedByListon), hint: "Checked and added by a hunter with a supplier they chose" },
-      { label: "Found by Liston", of: (w) => num(w.huntedByListon), hint: "Discover's Hunt or Find with Liston picked the AliExpress supplier" },
+      { label: "Added with a supplier", of: (w) => num(w.hunted) - num(w.huntedByListon), hint: "Checked and added by a hunter with its AliExpress supplier" },
+      { label: "From Discover", of: (w) => num(w.huntedByListon), hint: "Hunted from Discover: the eBay listing added first, its supplier added on its page" },
     ],
   },
   {
@@ -361,13 +361,14 @@ const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink
  * The Listings tab's cards and what stands right now. `huntingHref`: on one
  * account's Overview, the Hunting page's tab for a figure (a link each).
  */
-export function ListingCards({ work, loading, huntingHref }: { work: ListingWork | null; loading?: boolean; huntingHref?: (view: "review" | "approved" | "all") => string }) {
+export function ListingCards({ work, loading, huntingHref }: { work: ListingWork | null; loading?: boolean; huntingHref?: (view: "sourcing" | "review" | "approved" | "all") => string }) {
   // Right now, the hunting figures only when there are any; the ones that need someone first.
-  const now: { value: number; text: string; view?: "review" | "approved" | "all"; warn?: boolean }[] = work
+  const now: { value: number; text: string; view?: "sourcing" | "review" | "approved" | "all"; warn?: boolean }[] = work
     ? [
         { value: work.live, text: "live on eBay" },
         { value: work.waiting, text: `draft${work.waiting === 1 ? "" : "s"} waiting to publish` },
         ...[
+          { value: num(work.sourcingNow), text: `hunted from Discover, needing a supplier`, view: "sourcing" as const },
           { value: num(work.reviewing), text: `hunted product${num(work.reviewing) === 1 ? "" : "s"} waiting for review`, view: "review" as const },
           { value: num(work.toDraft), text: `approved, still to be drafted`, view: "approved" as const },
           { value: num(work.draftFailed), text: `draft${num(work.draftFailed) === 1 ? "" : "s"} failed, to draft again`, view: "approved" as const, warn: true },

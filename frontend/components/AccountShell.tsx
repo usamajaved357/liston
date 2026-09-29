@@ -63,7 +63,7 @@ function useHuntBadge(connectionId: string, enabled: boolean, permissions?: Reco
     const load = () =>
       api
         .huntBadge(connectionId)
-        .then((b) => !cancelled && setBadge(listerOnly ? b.approved : b.review + b.sentBack))
+        .then((b) => !cancelled && setBadge(listerOnly ? b.approved : b.review + b.sentBack + (b.sourcing ?? 0)))
         .catch(() => {});
     load();
     window.addEventListener("liston:hunting", load);

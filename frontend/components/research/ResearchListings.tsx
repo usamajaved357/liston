@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { ResearchItem } from "@/lib/api";
 import { formatShortDate } from "@/lib/format";
-import { age, bigMoney, count, flag, money } from "./format";
+import { age, bigMoney, count, flag, landed, money } from "./format";
+import { MarkBadges } from "./ResearchFilters";
 
 // The listings of a search, one row each: what it sells for, how many it has
 // sold and what that came to, when it went live, and the two things to do
@@ -20,7 +21,6 @@ export const RESEARCH_SORTS: { key: ResearchSort; label: string }[] = [
 ];
 
 export function sortResearch(items: ResearchItem[], sort: ResearchSort) {
-  const landed = (i: ResearchItem) => (i.price?.value ?? 0) + (i.shipping?.cost ?? 0);
   return [...items].sort((a, b) => {
     if (sort === "sold") return (b.sold ?? -1) - (a.sold ?? -1);
     if (sort === "revenue") return (b.revenue ?? -1) - (a.revenue ?? -1);
@@ -75,6 +75,11 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
                 )}
                 {item.topRated && <span className="rounded bg-emerald-50 px-1.5 text-[11px] text-emerald-700">Top rated</span>}
               </p>
+              {item.marks && (
+                <p className="mt-1 flex flex-wrap items-center gap-1">
+                  <MarkBadges marks={item.marks} />
+                </p>
+              )}
             </div>
           </div>
           <div className="mt-2 flex items-end gap-3 pl-[4.25rem]">
@@ -165,6 +170,11 @@ export function ResearchListings({ items, currency, connectionId, maxSold, canHu
                       {item.hasVariations && <span className="rounded bg-[var(--color-paper)] px-1.5 text-[11px] ring-1 ring-inset ring-[var(--color-line)]">Options</span>}
                       {item.topRated && <span className="rounded bg-emerald-50 px-1.5 text-[11px] text-emerald-700">Top rated</span>}
                     </p>
+                    {item.marks && (
+                      <p className="mt-1 flex flex-wrap items-center gap-1">
+                        <MarkBadges marks={item.marks} />
+                      </p>
+                    )}
                   </div>
                 </div>
               </td>

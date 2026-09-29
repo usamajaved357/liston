@@ -559,7 +559,8 @@ function NoCompetitor({ target }: { target: number }) {
 
 export function HuntResult({ result }: { result: HuntCheckResult }) {
   const { competitor: c, source: s, currency, shipping, demand } = result;
-  const supplier = s.supplier;
+  // Hunted from Discover, no supplier yet: the eBay listing's side alone, the profit once one's added.
+  const supplier = s?.supplier ?? null;
   const postage = c?.postage ? (c.postage.cost ? `+ ${money(c.postage.cost, currency)} postage` : "Free postage") : null;
   return (
     <div className="space-y-4">
@@ -570,7 +571,7 @@ export function HuntResult({ result }: { result: HuntCheckResult }) {
           <p className="mt-1 text-[12px] text-rose-800/80">Liston rejects a product like this automatically. The supplier can have more options than the eBay listing, never fewer.</p>
         </div>
       )}
-      <Verdict result={result} />
+      {s && <Verdict result={result} />}
       <Duplicates items={result.duplicates || []} />
       <Checks result={result} />
       <HuntSales result={result} />
@@ -609,6 +610,14 @@ export function HuntResult({ result }: { result: HuntCheckResult }) {
           />
         </ProductCard>
         )}
+        {!s ? (
+          <section className="flex flex-col justify-center rounded-[var(--radius-card)] border border-dashed border-[var(--color-line-strong)] bg-[var(--color-paper)]/50 px-5 py-6 text-center">
+            <p className="text-[13px] font-semibold text-[var(--color-ink)]">No supplier yet</p>
+            <p className="mx-auto mt-1 max-w-xs text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+              Add the AliExpress product that supplies it under Suppliers: Liston works out the profit on every option against this listing.
+            </p>
+          </section>
+        ) : (
         <ProductCard
           kind="aliexpress"
           title={s.title}
@@ -641,9 +650,10 @@ export function HuntResult({ result }: { result: HuntCheckResult }) {
             </dd>
           </div>
         </ProductCard>
+        )}
       </div>
 
-      <OptionsTable result={result} />
+      {s && <OptionsTable result={result} />}
     </div>
   );
 }
