@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { api, ApiError, type OrderCases, type OrderDetailResponse, type OrderSourcing } from "@/lib/api";
@@ -134,6 +134,18 @@ export default function OrderDetailPage() {
       cancelled = true;
     };
   }, [params.id, params.orderId, reloadKey, data?.actionsEnabled]);
+
+  // Opened at its cases or its cancellation request (from the Inbox, "#cases" / "#cancel-request"):
+  // taken there once they've loaded, since they come in after the page.
+  const jumped = useRef(false);
+  useEffect(() => {
+    if (jumped.current) return;
+    const target = window.location.hash.slice(1);
+    const el = target ? document.getElementById(target) : null;
+    if (!el) return;
+    jumped.current = true;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [cases, data]);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -337,6 +349,7 @@ export default function OrderDetailPage() {
               </div>
             )}
             {order.cancelRequests.some((r) => r.state === "REQUESTED") && (
+              <div id="cancel-request" className="scroll-mt-4">
               <Alert variant="warning">
                 <span className="flex flex-wrap items-center justify-between gap-2">
                   <span>
@@ -356,9 +369,12 @@ export default function OrderDetailPage() {
                   </span>
                 </span>
               </Alert>
+              </div>
             )}
             {cases && (cases.returns.length > 0 || cases.inquiries.length > 0 || cases.disputes.length > 0) && (
-              <CasesPanel cases={cases} order={order} currency={currency} onAct={(c) => setCaseAction(c)} />
+              <div id="cases" className="scroll-mt-4">
+                <CasesPanel cases={cases} order={order} currency={currency} onAct={(c) => setCaseAction(c)} />
+              </div>
             )}
             {order.buyerCheckoutNotes && (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-[13px] text-amber-900">

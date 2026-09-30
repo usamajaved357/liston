@@ -11,6 +11,7 @@ const userEvents = require('../realtime/user-events');
 const inboxRepository = require('./inbox.repository');
 const rules = require('./inbox-rules');
 const orderMessages = require('../orders/order-messages');
+const orderIssues = require('./order-issues.service');
 const marketplaces = require('../ebay/marketplaces');
 const logger = require('../../utils/logger');
 
@@ -215,7 +216,7 @@ async function imagesFor(connectionIds, itemIds) {
 
 const personOf = (id, name, email) => (id ? { id, name: name || (email ? String(email).split('@')[0] : 'Someone') } : null);
 
-function rowShape(r, accounts, items) {
+function rowShape(r, accounts, items, issues = new Map()) {
   const item = r.reference_id ? items.get(String(r.reference_id)) : null;
   return {
     conversationId: r.conversation_id,
@@ -235,7 +236,16 @@ function rowShape(r, accounts, items) {
     assignee: personOf(r.assigned_to, r.assignee_name, r.assignee_email),
     workStatus: r.work_status,
     labels: r.labels || [],
+    // An open return, case or dispute on the buyer's order for the item, or a cancellation they asked for (Orders access only).
+    issue: issues.get(`${r.connection_id}:${r.conversation_id}`) || null,
   };
+}
+
+// The accounts (of these) where this person may see orders: the owner's all, a member's with Orders access.
+async function ordersAccess(auth, ids) {
+  if (auth.role === 'owner') return new Set(ids);
+  const ok = await Promise.all(ids.map((id) => teamRepository.resolvePermission(auth.userId, id, 'orders')));
+  return new Set(ids.filter((id, i) => ok[i]));
 }
 
 function syncShape(states, ids) {
@@ -261,8 +271,15 @@ async function list(auth, { connectionId = null, folder = 'buyers', show = 'all'
   const rows = await inboxRepository.listConversations(ids, { folder, show, q, userId: auth.userId, before, limit });
   const items = await imagesFor(ids, rows.map((r) => r.reference_id));
   const byId = new Map(accounts.map((a) => [a.id, a]));
+  // Open returns, cases and disputes, and buyers' cancellation requests, for whoever may see the orders.
+  const withOrders = await ordersAccess(auth, ids);
+  orderIssues.refreshStale([...withOrders], auth.ownerId).catch(() => {});
+  const issues = new Map();
+  for (const id of withOrders) {
+    for (const [conv, issue] of await orderIssues.issuesFor(id, rows.filter((r) => r.connection_id === id))) issues.set(`${id}:${conv}`, issue);
+  }
   return {
-    conversations: rows.map((r) => rowShape(r, byId, items)),
+    conversations: rows.map((r) => rowShape(r, byId, items, issues)),
     counts: await inboxRepository.counts(ids),
     sync: syncShape(states, ids),
     hasMore: rows.length >= limit,
@@ -307,6 +324,8 @@ function orderShape(connectionId, o, referenceId, images) {
     tracking,
     items: lines.map((l) => ({ itemId: String(l.itemId || ''), title: l.title, quantity: l.quantityPurchased || 1, variation: (l.variation || []).map((v) => `${v.name}: ${v.value}`).join(', ') || null, image: images.get(String(l.itemId))?.image || null })),
     aboutThis: Boolean(referenceId && lines.some((l) => String(l.itemId) === String(referenceId))),
+    // The buyer asked to cancel and the seller hasn't answered (the order page approves or declines it).
+    cancelRequested: ebayService.CANCEL_REQUESTED_STATUSES.has(o.cancelStatus),
     url: `/accounts/${connectionId}/orders/${encodeURIComponent(o.orderId)}`,
   };
 }
@@ -347,8 +366,8 @@ async function contextOf(auth, account, conv) {
   };
 }
 
-function conversationShape(conv, account, items) {
-  return rowShape(conv, new Map([[account.id, account]]), items || new Map());
+function conversationShape(conv, account, items, issues) {
+  return rowShape(conv, new Map([[account.id, account]]), items || new Map(), issues);
 }
 
 /**
@@ -391,8 +410,12 @@ async function thread(auth, connectionId, conversationId, { markRead = true } = 
   }
   const [messages, context] = await Promise.all([inboxRepository.messagesOf(connectionId, conversationId), contextOf(auth, account, conv)]);
   const items = await imagesFor([connectionId], [conv.reference_id]);
+  const issues = new Map();
+  if ((await ordersAccess(auth, [connectionId])).size) {
+    for (const [id, issue] of await orderIssues.issuesFor(connectionId, [conv])) issues.set(`${connectionId}:${id}`, issue);
+  }
   return {
-    conversation: conversationShape(conv, account, items),
+    conversation: conversationShape(conv, account, items, issues),
     messages: messages.map((m) => messageShape(m, conv.type)),
     context,
     stale,

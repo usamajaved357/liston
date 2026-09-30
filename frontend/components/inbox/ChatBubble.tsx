@@ -18,12 +18,15 @@ export const BUBBLE_MAX = "max-w-[85%] sm:max-w-[min(65%,440px)]";
 /**
  * The row a bubble sits in: its side, and the gap above it (a new run gets
  * more room). `roomy` (eBay messages): 8px between one person's messages in
- * a run, 16px before the next run, where team chat keeps WhatsApp's 2px / 10px.
+ * a run, 16px before the next run, and bubbles close to the chat's edges
+ * (12–20px, the tail inside that), where team chat keeps WhatsApp's 2px /
+ * 10px and wider margins.
  */
 export function BubbleRow({ mine, first, roomy = false, children, className = "", ...rest }: { mine: boolean; first: boolean; roomy?: boolean; children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
   const gap = roomy ? (first ? "mt-4" : "mt-2") : first ? "mt-2.5" : "mt-0.5";
+  const sides = roomy ? "px-[clamp(12px,1.5%,20px)]" : "px-[clamp(14px,4%,48px)]";
   return (
-    <div className={`flex px-[clamp(14px,4%,48px)] ${mine ? "justify-end" : "justify-start"} ${gap} ${className}`} {...rest}>
+    <div className={`flex ${sides} ${mine ? "justify-end" : "justify-start"} ${gap} ${className}`} {...rest}>
       {children}
     </div>
   );
@@ -43,11 +46,15 @@ function Tail({ mine }: { mine: boolean }) {
   );
 }
 
-/** The bubble itself: its colour, corner, shadow and tail. What's inside brings its own padding. */
-export function Bubble({ mine, tail, children, className = "" }: { mine: boolean; tail: boolean; children: ReactNode; className?: string }) {
+/**
+ * The bubble itself: its colour, corner, shadow and tail. What's inside
+ * brings its own padding. `sharp` (eBay messages): the same shape with a
+ * crisper edge (6px corners, a fine outline and a firmer shadow underneath).
+ */
+export function Bubble({ mine, tail, sharp = false, children, className = "" }: { mine: boolean; tail: boolean; sharp?: boolean; children: ReactNode; className?: string }) {
   return (
     <div
-      className={`relative min-w-0 max-w-full rounded-lg text-[13.5px] leading-[19px] text-[var(--color-ink)] shadow-[var(--shadow-bubble)] ${mine ? "bg-[var(--color-bubble-out)]" : "bg-[var(--color-panel)]"} ${
+      className={`relative min-w-0 max-w-full text-[13.5px] leading-[19px] text-[var(--color-ink)] ${sharp ? "rounded-md shadow-[var(--shadow-bubble-sharp)]" : "rounded-lg shadow-[var(--shadow-bubble)]"} ${mine ? "bg-[var(--color-bubble-out)]" : "bg-[var(--color-panel)]"} ${
         tail ? (mine ? "rounded-tr-none" : "rounded-tl-none") : ""
       } ${className}`}
     >

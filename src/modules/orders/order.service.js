@@ -275,6 +275,12 @@ async function getOrderCases(connectionId, userId, orderId) {
   const cases = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
     ebayService.getOrderCases(credentials, { orderId, legacyOrderId: order?.legacyOrderId })
   );
+  // The Inbox's marks for this buyer's conversations follow at once (not on its next ten-minute read).
+  if (!cases.unavailable) {
+    require('../inbox/order-issues.service')
+      .noteOrder(connectionId, { orderIds: [orderId, order?.legacyOrderId], buyer: order?.buyer?.username || null, itemIds: (order?.lineItems || []).map((l) => l.itemId), cases })
+      .catch(() => {});
+  }
   return { returns: cases.returns, inquiries: cases.inquiries, disputes: cases.disputes, unavailable: cases.unavailable, returnDeclineReasons: Object.entries(RETURN_DECLINE_REASONS).map(([code, label]) => ({ code, label })) };
 }
 

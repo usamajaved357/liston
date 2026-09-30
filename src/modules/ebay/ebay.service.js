@@ -1871,6 +1871,41 @@ async function getOrderCases(credentials, { orderId, legacyOrderId }) {
   };
 }
 
+// Every open return, item-not-received request and payment dispute on the
+// account (the latest 50 of each eBay lists), for the Inbox to mark the
+// conversations they're about: each with its order, buyer and item where
+// eBay names them, and when the seller must answer by. Read-only and
+// best-effort: a list eBay won't give is left out.
+async function getOpenCases(credentials) {
+  if (!canManageOrders(credentials)) return { cases: [], unavailable: 'scope' };
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || 'EBAY_GB';
+  const quiet = (label, p) =>
+    p.catch((err) => {
+      logger[/\(404\)/.test(err.message) ? 'debug' : 'warn'](`Could not read the account's open ${label}`, { error: err.message });
+      return null;
+    });
+  const [returns, inquiries, disputes] = await Promise.all([
+    quiet('returns', ebayPostOrder.searchReturns(accessToken, {}, marketplaceId)),
+    quiet('inquiries', ebayPostOrder.searchInquiries(accessToken, {}, marketplaceId)),
+    quiet('payment disputes', ebayFulfillment.getPaymentDisputeSummaries(accessToken, {}, marketplaceId)),
+  ]);
+  const text = (v) => (v === undefined || v === null || v === '' ? null : String(v));
+  const cases = [
+    ...(returns?.members || []).map((r) => ({ ...mapReturn(r), kind: 'return', orderId: text(r.orderId), buyer: text(r.buyerLoginName) })),
+    ...(inquiries?.members || []).map((i) => ({ ...mapInquiry(i), kind: 'inquiry', orderId: text(i.orderId), buyer: text(i.buyer || i.buyerLoginName) })),
+    ...(disputes?.paymentDisputeSummaries || []).map((d) => ({ ...mapDispute(d), kind: 'dispute', orderId: text(d.orderId), buyer: text(d.buyerUsername), itemId: text(d.lineItems?.[0]?.itemId) })),
+  ]
+    .filter((c) => !c.closed)
+    .map(({ id, kind, orderId, buyer, itemId, respondBy }) => ({ id, kind, orderId, buyer, itemId: itemId || null, respondBy: respondBy || null }));
+  return {
+    cases,
+    unavailable: returns === null && inquiries === null && disputes === null ? 'error' : null,
+    credentialsChanged,
+    credentials: refreshedCredentials,
+  };
+}
+
 // Declines a buyer's cancellation request (no refund, order stands).
 async function declineCancellation(credentials, { connectionId, cancelId }) {
   if (!canManageOrders(credentials)) throw scopeMissingError();
@@ -2318,11 +2353,21 @@ async function getItemSummariesCached(accessToken, itemIds, siteId) {
   return out;
 }
 
+// eBay's cancel statuses (Trading's names; Fulfillment's mapped onto them)
+// that mean the order really was cancelled: CancelComplete and the
+// CancelClosed… family. A buyer's request still waiting on the seller
+// (CancelRequest, CancelPending), or one declined or failed (CancelRejected,
+// CancelFailed), leaves the order standing: eBay itself shows those orders
+// as Completed, shipped and delivered.
+const isCancelledStatus = (status) => status === 'CancelComplete' || /^CancelClosed/.test(String(status || ''));
+// A buyer's cancellation request the seller hasn't answered yet.
+const CANCEL_REQUESTED_STATUSES = new Set(['CancelRequest', 'CancelPending']);
+
 // Classifies an order the way eBay's Seller Hub visually groups them —
 // Trading API has no single field for this, so it's derived from payment
 // and shipping state actually present on the order.
 function classifyOrderStatus(order) {
-  if (order.cancelStatus && order.cancelStatus !== 'NotApplicable') return 'cancelled';
+  if (isCancelledStatus(order.cancelStatus)) return 'cancelled';
   if (order.status === 'Cancelled') return 'cancelled';
   if (order.checkoutStatus !== 'Complete') return 'awaiting_payment';
   if (!order.shippedTime) return 'awaiting_dispatch';
@@ -2675,6 +2720,8 @@ module.exports = {
   ordersInRange,
   syncOrderFinances,
   classifyOrderStatus,
+  CANCEL_REQUESTED_STATUSES,
+  getOpenCases,
   setDeliveryCheckInterval,
   getEarningsSummary,
   resolveRangeWindow,

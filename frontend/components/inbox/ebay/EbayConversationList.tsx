@@ -9,9 +9,10 @@ import { colorFor, initialOf, listTime, shortAgo } from "../inbox-format";
 // under it for the view (Unread with its count, Customers, From eBay), the
 // archive as a row at the top of the list (a view of its own with a way
 // back), then the conversations newest first: the item's photo with the
-// buyer's initial on it, who, when, the item, the last line (after a reply
-// arrow, as eBay has it, when you had the last word), and what needs you:
-// unread, or how long the buyer has been waiting.
+// buyer's initial on it, who, when, the item (with a mark for an open
+// return, case or dispute, or a cancellation the buyer asked for), the last
+// line (after a reply arrow, as eBay has it, when you had the last word),
+// and what needs you: unread, or how long the buyer has been waiting.
 
 export type EbayView = "buyers" | "unread" | "ebay" | "archived";
 
@@ -19,6 +20,20 @@ export function EbayMark({ size = 36, rounded = "rounded-full" }: { size?: numbe
   return (
     <span className={`flex flex-shrink-0 items-center justify-center bg-[var(--color-ink)] font-bold tracking-tight text-white ${rounded}`} style={{ width: size, height: size, fontSize: Math.round(size * 0.3) }} aria-label="eBay">
       eBay
+    </span>
+  );
+}
+
+/** An open return, case or dispute on the buyer's order (rose), or a cancellation they asked for (amber). */
+export function IssueBadge({ issue, className = "" }: { issue: NonNullable<EbayConversationRow["issue"]>; className?: string }) {
+  const due = issue.respondBy ? new Date(issue.respondBy).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : null;
+  return (
+    <span
+      className={`inline-flex flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1.5 text-[10px] font-semibold leading-4 ${issue.kind === "cancel" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-600"} ${className}`}
+      title={due ? `${issue.label}: respond by ${due}` : issue.label}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${issue.kind === "cancel" ? "bg-amber-500" : "bg-rose-500"}`} aria-hidden />
+      {issue.label}
     </span>
   );
 }
@@ -60,9 +75,12 @@ function Row({ c, active, showAccount, onOpen, now }: { c: EbayConversationRow; 
           <span className={`min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-[var(--color-ink)] ${unread ? "font-semibold" : "font-medium"}`}>{ebay ? "eBay" : c.otherParty || "Member"}</span>
           {c.latestAt && <span className={`flex-shrink-0 text-[11px] tabular-nums ${unread ? "font-semibold text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`}>{listTime(c.latestAt)}</span>}
         </span>
-        <span className="block truncate text-[11.5px] leading-4 text-[var(--color-muted)]/90">
-          {showAccount && c.account.label ? <span className="font-medium text-[var(--color-ink)]/70">{c.account.label} · </span> : null}
-          {subtitle}
+        <span className="flex items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate text-[11.5px] leading-4 text-[var(--color-muted)]/90">
+            {showAccount && c.account.label ? <span className="font-medium text-[var(--color-ink)]/70">{c.account.label} · </span> : null}
+            {subtitle}
+          </span>
+          {c.issue && <IssueBadge issue={c.issue} />}
         </span>
         <span className="flex items-center gap-2">
           <span className={`min-w-0 flex-1 truncate text-[12px] leading-[18px] ${unread ? "font-medium text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>

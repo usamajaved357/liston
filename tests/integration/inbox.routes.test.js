@@ -10,6 +10,10 @@ const connectionService = require('../../src/modules/connections/connection.serv
 const connectionRepository = require('../../src/modules/connections/connection.repository');
 const ebayMessage = require('../../src/modules/ebay/api/ebay.message');
 const inboxService = require('../../src/modules/inbox/inbox.service');
+const orderIssues = require('../../src/modules/inbox/order-issues.service');
+const ebayPostOrder = require('../../src/modules/ebay/api/ebay.postorder');
+const ebayFulfillment = require('../../src/modules/ebay/api/ebay.fulfillment');
+const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
 
 // The Inbox's eBay messages, with eBay's Message API stood in for: the
 // account's conversations read into Liston (all the first time, then only
@@ -235,6 +239,60 @@ test("a conversation read in Liston stays read when eBay's list still says unrea
     assert.strictEqual(await unreadOf(), 1);
     await syncAgain();
     assert.strictEqual(await unreadOf(), 1, 'marked unread stays unread');
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test("a buyer's conversation is marked with an open return (eBay's for the whole account) or the cancellation they asked for, for those who may see orders", async () => {
+  const t = await setup({ scopes: [inboxService.SCOPE, ebayOauth.SCOPE_FULFILLMENT] });
+  stubEbay({ buyers: [conv('c1', { buyer: 'and_630713', item: '358376442432' }), conv('c2', { buyer: 'lotsofstuff1244', item: '111222333', at: ago(40) })] });
+  const order = (orderId, buyerUserId, itemId, extra = {}) =>
+    pool.query(`INSERT INTO ebay_orders (connection_id, order_id, created_at, data) VALUES ($1, $2, now(), $3)`, [
+      t.connection.id,
+      orderId,
+      JSON.stringify({ orderId, buyerUserId, checkoutStatus: 'Complete', cancelStatus: 'NotApplicable', total: { amount: 5, currency: 'GBP' }, lineItems: [{ itemId, title: 'Thing' }], ...extra }),
+    ]);
+  await order('20-00001-00001', 'and_630713', '358376442432', { shippedTime: ago(3000), deliveredAt: ago(1000) });
+  await order('20-00002-00002', 'lotsofstuff1244', '111222333', { cancelStatus: 'CancelPending' });
+  const searched = [];
+  mock.method(ebayPostOrder, 'searchReturns', async (token, filters) => {
+    searched.push(['returns', filters]);
+    return {
+      members: [
+        { returnId: 'R1', orderId: '20-00001-00001', buyerLoginName: 'and_630713', state: 'RETURN_REQUESTED', creationInfo: { item: { itemId: '358376442432' } }, sellerResponseDue: { respondByDate: { value: '2026-10-03T10:00:00.000Z' } } },
+        { returnId: 'R0', orderId: '20-00001-00001', buyerLoginName: 'and_630713', state: 'CLOSED', creationInfo: { item: { itemId: '358376442432' } } },
+      ],
+    };
+  });
+  mock.method(ebayPostOrder, 'searchInquiries', async () => ({ members: [] }));
+  mock.method(ebayFulfillment, 'getPaymentDisputeSummaries', async () => ({ paymentDisputeSummaries: [] }));
+  try {
+    const base = `/api/connections/${t.connection.id}/inbox`;
+    await inboxService.sync(t.connection.id, t.owner.id);
+    await orderIssues.refresh(t.connection.id, t.owner.id);
+    assert.deepStrictEqual(searched, [['returns', {}]], "one read for the whole account, not one per order");
+
+    const rows = (await request('GET', base, undefined, t.owner.token)).data.conversations;
+    const byId = Object.fromEntries(rows.map((r) => [r.conversationId, r.issue]));
+    assert.deepStrictEqual(byId.c1, { kind: 'return', label: 'Return open', respondBy: '2026-10-03T10:00:00.000Z', orderId: '20-00001-00001' }, 'the open return, not the closed one');
+    assert.deepStrictEqual(byId.c2, { kind: 'cancel', label: 'Cancel requested', respondBy: null, orderId: '20-00002-00002' });
+
+    // Opened: the header's mark, and the order as it stands (a request waiting isn't a cancelled order).
+    const opened = (await request('GET', `${base}/c2`, undefined, t.owner.token)).data;
+    assert.strictEqual(opened.conversation.issue.kind, 'cancel');
+    assert.deepStrictEqual([opened.context.order.cancelRequested, opened.context.order.status], [true, 'awaiting_dispatch']);
+
+    // The order page reads the return closed: the mark goes at once.
+    await orderIssues.noteOrder(t.connection.id, { orderIds: ['20-00001-00001'], buyer: 'and_630713', itemIds: ['358376442432'], cases: { returns: [{ id: 'R1', closed: true }], inquiries: [], disputes: [] } });
+    assert.strictEqual((await request('GET', base, undefined, t.owner.token)).data.conversations.find((r) => r.conversationId === 'c1').issue, null);
+
+    // A member with the Inbox but not Orders sees no marks.
+    const email = `inbox-issues-${crypto.randomUUID()}@example.com`;
+    const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, t.owner.token);
+    await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'inbox', allowed: true }] }, t.owner.token);
+    const sara = (await request('POST', '/api/auth/login', { email, password: 'memberpassword123' })).data.token;
+    assert.deepStrictEqual((await request('GET', base, undefined, sara)).data.conversations.map((r) => r.issue), [null, null]);
   } finally {
     mock.restoreAll();
   }

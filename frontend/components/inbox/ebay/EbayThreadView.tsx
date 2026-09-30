@@ -6,10 +6,11 @@ import { FileRow, PhotoGrid } from "../MessageFiles";
 import { RichText } from "../MessageBubble";
 import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, LatestButton, MenuItem, Meta, PopMenu } from "../ChatBubble";
 import { colorFor, dayLabel, initialOf, timeLabel } from "../inbox-format";
-import { EbayMark } from "./EbayConversationList";
+import { EbayMark, IssueBadge } from "./EbayConversationList";
 
 // One eBay conversation, as WhatsApp shows a chat: a slim header (who,
-// and what it's about; its name or the details button opens the order and
+// and what it's about, with a mark for an open return, case or dispute or a
+// cancellation the buyer asked for that opens the order's page there; its name or the details button opens the order and
 // listing beside it; "…" holds mark unread and archive), then the messages
 // on the chat wallpaper, the day in a chip that stays at the top while its
 // messages scroll by: the buyer's white on the left, yours tinted on the
@@ -40,7 +41,7 @@ function Notice({ m, first }: { m: EbayMessage; first: boolean }) {
   return (
     <BubbleRow mine={false} first={first} roomy>
       <div className="flex min-w-0 max-w-[92%] flex-col sm:max-w-[min(80%,540px)]">
-        <Bubble mine={false} tail={first}>
+        <Bubble mine={false} tail={first} sharp>
           {m.subject && <p className="px-[9px] pt-[7px] text-[13.5px] font-semibold leading-[19px] text-[var(--color-ink)]">{m.subject}</p>}
           <BubbleText meta={<span>{timeLabel(m.createdAt)}</span>} className="text-[var(--color-ink)]/90">
             {m.text ? <RichText text={m.text.trimEnd()} /> : null}
@@ -72,7 +73,7 @@ function Message({ m, first }: { m: EbayMessage; first: boolean }) {
   return (
     <BubbleRow mine={mine} first={first} roomy>
       <div className={`flex min-w-0 flex-col ${BUBBLE_MAX} ${mine ? "items-end" : "items-start"}`}>
-        <Bubble mine={mine} tail={first}>
+        <Bubble mine={mine} tail={first} sharp>
           {photos.length > 0 && (
             <div className="p-[3px]">
               <PhotoGrid photos={photos.map((p) => ({ src: p.url, name: p.name || "photo", download: p.url }))} overlay={!text && !files.length ? <Meta onPhoto>{meta}</Meta> : undefined} />
@@ -212,6 +213,18 @@ export function EbayThreadView({
               <span className="block truncate text-[12px] leading-4 text-[var(--color-muted)]">{about}</span>
             </span>
           </button>
+          {conv?.issue && (
+            // An open return, case or dispute, or a cancellation the buyer asked for: handled on the order's page, opened at that part.
+            <a
+              href={conv.issue.orderId ? `/accounts/${conv.account.id}/orders/${encodeURIComponent(conv.issue.orderId)}#${conv.issue.kind === "cancel" ? "cancel-request" : "cases"}` : data.context.order?.url || "#"}
+              target="_blank"
+              rel="noopener"
+              className="mr-1 hidden flex-shrink-0 transition-opacity hover:opacity-80 sm:inline-flex"
+              title="Open on the order's page to answer it"
+            >
+              <IssueBadge issue={conv.issue} className="!px-2 !py-0.5 !text-[11px]" />
+            </a>
+          )}
           {!ebay && (
             <HeaderButton label={detailsOpen ? "Hide details" : "Order and listing details"} onClick={onToggleDetails} active={detailsOpen}>
               <svg viewBox="0 0 24 24" fill="none" className="h-[19px] w-[19px]" aria-hidden>

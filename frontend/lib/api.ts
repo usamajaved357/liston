@@ -3248,6 +3248,8 @@ export interface EbayConversationRow {
   assignee: { id: string; name: string } | null;
   workStatus: "open" | "waiting" | "done";
   labels: string[];
+  // An open return, item-not-received request or payment dispute on the buyer's order for the item, or a cancellation they asked for (Orders access only).
+  issue: { kind: "return" | "inquiry" | "dispute" | "cancel"; label: string; respondBy: string | null; orderId: string | null } | null;
 }
 export interface EbayInboxList {
   conversations: EbayConversationRow[];
@@ -3282,6 +3284,8 @@ export interface EbayOrderSummary {
   tracking: { number: string; carrier: string | null }[];
   items: { itemId: string; title: string; quantity: number; variation: string | null; image: string | null }[];
   aboutThis: boolean;
+  // The buyer asked to cancel and the seller hasn't answered.
+  cancelRequested: boolean;
   url: string;
 }
 export interface EbayThread {

@@ -170,6 +170,19 @@ async function updateConversation(connectionId, conversationId, fields) {
   await query(`UPDATE ebay_conversations SET ${sets.join(', ')} WHERE connection_id = $1 AND conversation_id = $2`, params);
 }
 
+/** These buyers' orders on this account: order id, buyer (lower case), eBay's cancel status and the items, newest first. */
+async function orderFactsByBuyers(connectionId, buyers) {
+  const names = [...new Set(buyers.filter(Boolean).map((b) => String(b).toLowerCase()))];
+  if (!names.length) return [];
+  const { rows } = await query(
+    `SELECT order_id, lower(data->>'buyerUserId') AS buyer, data->>'cancelStatus' AS cancel_status,
+            ARRAY(SELECT li->>'itemId' FROM jsonb_array_elements(coalesce(data->'lineItems', '[]'::jsonb)) li) AS item_ids
+       FROM ebay_orders WHERE connection_id = $1 AND lower(data->>'buyerUserId') = ANY($2) ORDER BY created_at DESC`,
+    [connectionId, names]
+  );
+  return rows;
+}
+
 /** The buyer's orders on this account, newest first (the thread's side panel). */
 async function ordersByBuyer(connectionId, buyer, limit = 10) {
   if (!buyer) return [];
@@ -233,6 +246,7 @@ async function forgetMember(username) {
 }
 
 module.exports = {
+  orderFactsByBuyers,
   markReadHere,
   markUnreadHere,
   upsertConversations,

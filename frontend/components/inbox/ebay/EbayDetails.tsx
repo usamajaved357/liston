@@ -7,8 +7,10 @@ import { colorFor, initialOf, listTime, money } from "../inbox-format";
 // A buyer conversation's details, beside the chat when asked for (the
 // header's details button, or its name): who the buyer is, the order it's
 // about (its state, what they paid, the way from ordered to delivered,
-// tracking, what they bought, any open return or case with its deadline),
-// the listing, the buyer's other orders and their other conversations.
+// tracking, what they bought, any open return or case with its deadline
+// and a cancellation they asked for, each opening the order's page at the
+// part that answers it), the listing, the buyer's other orders and their
+// other conversations.
 // Orders and listings open in Liston in a new tab (a small "Open" pill in
 // the section's heading), so the chat stays put.
 // On a wide screen it sits beside the chat; on a smaller one over it.
@@ -146,6 +148,13 @@ function OrderBlock({ order, connectionId }: { order: EbayOrderSummary; connecti
           </FragmentRow>
         ))}
       </dl>
+      {order.cancelRequested && (
+        <a href={`${order.url}#cancel-request`} target="_blank" rel="noopener" className="flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 transition-colors hover:bg-amber-100">
+          <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500" aria-hidden />
+          <span className="flex-1 font-semibold">Cancellation requested</span>
+          <span className="text-[11.5px]">approve or decline</span>
+        </a>
+      )}
       {cases && cases.length > 0 && (
         <div className="space-y-1.5">
           {cases.map((c) => (
