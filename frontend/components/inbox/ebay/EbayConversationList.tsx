@@ -1,12 +1,12 @@
 "use client";
 
-import { ReactNode } from "react";
 import { EbayConversationRow, EbayInboxList } from "@/lib/api";
+import { PillTabs } from "@/components/PillTabs";
 import { useNow } from "@/lib/useMyEvents";
 import { colorFor, initialOf, listTime, shortAgo } from "../inbox-format";
 
-// The eBay Inbox's list, as WhatsApp's chat list: search at the top, chips
-// under it for the view (Buyers, Unread with its count, From eBay), the
+// The eBay Inbox's list, as WhatsApp's chat list: search at the top, tabs
+// under it for the view (Unread with its count, Customers, From eBay), the
 // archive as a row at the top of the list (a view of its own with a way
 // back), then the conversations newest first: the item's photo with the
 // buyer's initial on it, who, when, the item, the last line (after a reply
@@ -86,22 +86,6 @@ function Row({ c, active, showAccount, onOpen, now }: { c: EbayConversationRow; 
   );
 }
 
-function Chip({ active, onClick, children, count }: { active: boolean; onClick: () => void; children: ReactNode; count?: number }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full px-3.5 text-[13px] font-medium transition-colors ${
-        active ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "border border-[var(--color-line)] text-[var(--color-muted)] hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"
-      }`}
-    >
-      {children}
-      {count ? <span className={`text-[11.5px] font-semibold tabular-nums ${active ? "" : "text-[var(--color-primary)]"}`}>{count > 99 ? "99+" : count}</span> : null}
-    </button>
-  );
-}
-
 const archiveIcon = (
   <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
     <rect x="3.5" y="4.5" width="17" height="4.5" rx="1.2" stroke="currentColor" strokeWidth="1.7" />
@@ -153,7 +137,7 @@ export function EbayConversationList({
           <p className="text-[15px] font-semibold text-[var(--color-ink)]">Archived</p>
         </div>
       ) : (
-        <div className="flex-shrink-0 space-y-2.5 px-3 pb-2 pt-3">
+        <div className="flex-shrink-0 space-y-2 px-3 pb-2 pt-3">
           <label className="flex h-9 items-center gap-2.5 rounded-full bg-[var(--color-paper)] px-3.5 ring-1 ring-transparent transition-shadow focus-within:bg-[var(--color-panel)] focus-within:ring-[var(--color-primary)]/50">
             <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>
               <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.9" />
@@ -168,17 +152,16 @@ export function EbayConversationList({
               </button>
             )}
           </label>
-          <div className="flex items-center gap-1.5 overflow-x-auto [scrollbar-width:none]" role="group" aria-label="Show">
-            <Chip active={view === "buyers"} onClick={() => onView("buyers")}>
-              Buyers
-            </Chip>
-            <Chip active={view === "unread"} onClick={() => onView("unread")} count={unreadAll}>
-              Unread
-            </Chip>
-            <Chip active={view === "ebay"} onClick={() => onView("ebay")} count={counts?.ebay}>
-              From eBay
-            </Chip>
-          </div>
+          <PillTabs
+            tabs={[
+              { key: "unread" as const, label: "Unread", count: unreadAll || undefined, countTone: "alert" },
+              { key: "buyers" as const, label: "Customers" },
+              { key: "ebay" as const, label: "From eBay", count: counts?.ebay || undefined, countTone: "alert" },
+            ]}
+            value={view}
+            onChange={onView}
+            label="Show"
+          />
         </div>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">

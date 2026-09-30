@@ -14,7 +14,8 @@ import { EbayMark } from "./EbayConversationList";
 // on the chat wallpaper, the day in a chip that stays at the top while its
 // messages scroll by: the buyer's white on the left, yours tinted on the
 // right, each run of one person's messages with a tail on its first, the
-// time in each bubble's corner, photos as an album inside the bubble.
+// time in each bubble's corner (8px between them, 16px before the other
+// side's), photos as an album inside the bubble.
 // eBay's own messages are bubbles too, their links as buttons along the
 // bottom. A round button takes you back to the latest once you scroll up.
 
@@ -37,7 +38,7 @@ function HeaderButton({ label, onClick, active = false, children }: { label: str
 
 function Notice({ m, first }: { m: EbayMessage; first: boolean }) {
   return (
-    <BubbleRow mine={false} first={first}>
+    <BubbleRow mine={false} first={first} roomy>
       <div className="flex min-w-0 max-w-[92%] flex-col sm:max-w-[min(80%,540px)]">
         <Bubble mine={false} tail={first}>
           {m.subject && <p className="px-[9px] pt-[7px] text-[13.5px] font-semibold leading-[19px] text-[var(--color-ink)]">{m.subject}</p>}
@@ -69,7 +70,7 @@ function Message({ m, first }: { m: EbayMessage; first: boolean }) {
   const text = m.text.trimEnd();
   const meta = <span>{timeLabel(m.createdAt)}</span>;
   return (
-    <BubbleRow mine={mine} first={first}>
+    <BubbleRow mine={mine} first={first} roomy>
       <div className={`flex min-w-0 flex-col ${BUBBLE_MAX} ${mine ? "items-end" : "items-start"}`}>
         <Bubble mine={mine} tail={first}>
           {photos.length > 0 && (

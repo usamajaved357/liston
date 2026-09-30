@@ -196,6 +196,50 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
   }
 });
 
+test("a conversation read in Liston stays read when eBay's list still says unread (the seller had the last word), until the buyer writes again or it's marked unread", async () => {
+  const t = await setup();
+  // eBay's list: the seller's "You're welcome." last, and eBay still counting one unread.
+  const buyers = [conv('c1', { fromSeller: true, text: "You're welcome.", unread: 1, at: ago(20) })];
+  const calls = stubEbay({ buyers, threads: { c1: [{ messageId: 'm1', sender: 'and_630713', recipient: 'walexo_shop', body: 'Okay thank you', createdAt: ago(40), media: [] }, { messageId: 'c1-last', sender: 'walexo_shop', recipient: 'and_630713', body: "You're welcome.", createdAt: ago(20), media: [] }] } });
+  try {
+    const base = `/api/connections/${t.connection.id}/inbox`;
+    const unreadOf = async () => (await request('GET', base, undefined, t.owner.token)).data.conversations[0].unread;
+    const syncAgain = async () => {
+      await pool.query('UPDATE ebay_inbox_sync SET last_sync_at = now() - interval \'1 hour\' WHERE connection_id = $1', [t.connection.id]);
+      await inboxService.sync(t.connection.id, t.owner.id);
+    };
+    await inboxService.sync(t.connection.id, t.owner.id);
+    assert.strictEqual(await unreadOf(), 1, "never opened in Liston: eBay's word");
+
+    // Opened: read, and eBay told.
+    assert.strictEqual((await request('GET', `${base}/c1`, undefined, t.owner.token)).status, 200);
+    assert.strictEqual(await unreadOf(), 0);
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepStrictEqual(calls.update.map((u) => u.read), [true]);
+
+    // eBay's list still says 1 unread: it stays read, and isn't counted as a change.
+    calls.list.length = 0;
+    await syncAgain();
+    assert.strictEqual(await unreadOf(), 0, "eBay's stale count doesn't make it unread again");
+    assert.strictEqual((await request('GET', `${base}/unread`, undefined, t.owner.token)).data.unread, 0);
+
+    // The buyer writes again: unread.
+    buyers[0] = { ...conv('c1', { text: 'One more question', unread: 1, at: ago(1) }), latestMessage: { ...conv('c1', { text: 'One more question', at: ago(1) }).latestMessage, messageId: 'c1-new' } };
+    await syncAgain();
+    assert.strictEqual(await unreadOf(), 1, "a newer message from the buyer: eBay's count again");
+
+    // Read again, then marked unread by hand: unread, and it stays so after eBay's list is read.
+    await request('GET', `${base}/c1`, undefined, t.owner.token);
+    assert.strictEqual(await unreadOf(), 0);
+    await request('POST', `${base}/c1/read`, { read: false }, t.owner.token);
+    assert.strictEqual(await unreadOf(), 1);
+    await syncAgain();
+    assert.strictEqual(await unreadOf(), 1, 'marked unread stays unread');
+  } finally {
+    mock.restoreAll();
+  }
+});
+
 test('an account connected before messages were added is asked to reconnect, and the list says so', async () => {
   const t = await setup({ scopes: ['https://api.ebay.com/oauth/api_scope/sell.fulfillment'] });
   const calls = stubEbay({ buyers: [conv('c1')] });

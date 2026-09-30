@@ -114,5 +114,20 @@ function warningsFor(text) {
   return out;
 }
 
+/**
+ * How many are unread in a conversation eBay lists (`unread`, its latest
+ * message `latestAt`, whether that was the seller's), given when someone
+ * last read it in Liston (`readAt`): nothing is unread once it's been read
+ * up to its latest message, or when the last word is the seller's since it
+ * was read here; only a newer message from the buyer brings eBay's count
+ * back. (eBay's list can keep saying "unread" after it was marked read.)
+ * The same rule guards the write in inboxRepository.upsertConversations.
+ */
+function unreadAfterRead(unread, { latestAt, latestFromSeller }, readAt) {
+  if (!readAt) return unread;
+  if (latestFromSeller || !latestAt || new Date(latestAt).getTime() <= new Date(readAt).getTime()) return 0;
+  return unread;
+}
+
 module.exports = {
-  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, previewOf, waitingSince, looksHtml, same };
+  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, previewOf, waitingSince, looksHtml, same, unreadAfterRead };

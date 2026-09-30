@@ -155,7 +155,8 @@ function sync(connectionId, ownerId, { full = false } = {}) {
               const rows = conversations.map((c) => conversationRow(c, seller, status));
               const fresh = rows.filter((r) => {
                 const k = known.get(r.conversationId);
-                return !k || k.latest_message_id !== r.latestMessageId || k.status !== r.status || k.unread_count !== r.unreadCount;
+                // eBay's unread count as Liston keeps it (read here stays read until the buyer writes again).
+                return !k || k.latest_message_id !== r.latestMessageId || k.status !== r.status || k.unread_count !== rules.unreadAfterRead(r.unreadCount, r, k.read_at);
               });
               if (fresh.length) {
                 await inboxRepository.upsertConversations(connectionId, fresh);
@@ -380,8 +381,9 @@ async function thread(auth, connectionId, conversationId, { markRead = true } = 
       logger.warn('Inbox: conversation not read from eBay', { connectionId, conversationId, error: err.message });
     }
   }
+  // Opened is read, here (up to its latest message, so eBay's list can't make it unread again) and on eBay when it was unread.
+  if (markRead) await inboxRepository.markReadHere(connectionId, conversationId);
   if (markRead && conv.unread_count > 0) {
-    await inboxRepository.updateConversation(connectionId, conversationId, { unread_count: 0 });
     withEbay(connectionId, auth.ownerId, ({ accessToken, marketplaceId }) => ebayMessage.updateConversation(accessToken, { conversationId, type: conv.type, read: true }, marketplaceId))
       .then(() => announce(connectionId, auth.ownerId, { conversationId }))
       .catch((err) => logger.warn('Inbox: not marked read on eBay', { connectionId, conversationId, error: err.message }));
@@ -410,7 +412,8 @@ async function setRead(auth, connectionId, conversationId, read) {
   const conv = await inboxRepository.findConversation(connectionId, conversationId);
   if (!conv) throw new InboxError('Conversation not found.', 404);
   await withEbay(connectionId, auth.ownerId, ({ accessToken, marketplaceId }) => ebayMessage.updateConversation(accessToken, { conversationId, type: conv.type, read }, marketplaceId));
-  await inboxRepository.updateConversation(connectionId, conversationId, { unread_count: read ? 0 : Math.max(1, conv.unread_count) });
+  if (read) await inboxRepository.markReadHere(connectionId, conversationId);
+  else await inboxRepository.markUnreadHere(connectionId, conversationId);
   await announce(connectionId, auth.ownerId, { conversationId });
   return { ok: true };
 }

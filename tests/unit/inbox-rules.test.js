@@ -21,3 +21,15 @@ test('who a conversation is with, which messages are the seller\'s, and whether 
   assert.strictEqual(rules.waitingSince({ type: 'FROM_MEMBERS', latest_from_seller: true, latest_at: '2026-09-30T10:00:00Z' }), null);
   assert.strictEqual(rules.waitingSince({ type: 'FROM_EBAY', latest_from_seller: false, latest_at: '2026-09-30T10:00:00Z' }), null);
 });
+
+test("unread as Liston keeps it: read here up to the latest message stays read whatever eBay's list says, until the buyer writes again", () => {
+  const readAt = '2026-09-30T18:23:31.000Z';
+  // Never read in Liston: eBay's count.
+  assert.strictEqual(rules.unreadAfterRead(1, { latestAt: '2026-09-30T18:00:00Z', latestFromSeller: false }, null), 1);
+  // Read here up to that message, eBay still says 1: read.
+  assert.strictEqual(rules.unreadAfterRead(1, { latestAt: '2026-09-30T18:23:31Z', latestFromSeller: false }, readAt), 0);
+  // The seller had the last word since it was read here: read.
+  assert.strictEqual(rules.unreadAfterRead(1, { latestAt: '2026-09-30T19:00:00Z', latestFromSeller: true }, readAt), 0);
+  // The buyer wrote after it was read: eBay's count again.
+  assert.strictEqual(rules.unreadAfterRead(2, { latestAt: '2026-09-30T19:00:00Z', latestFromSeller: false }, readAt), 2);
+});

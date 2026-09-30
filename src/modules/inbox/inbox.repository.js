@@ -14,7 +14,10 @@ async function upsertConversations(connectionId, rows) {
        ON CONFLICT (connection_id, conversation_id) DO UPDATE SET
          type = EXCLUDED.type, status = EXCLUDED.status, title = EXCLUDED.title, reference_type = EXCLUDED.reference_type,
          reference_id = EXCLUDED.reference_id, other_party = coalesce(EXCLUDED.other_party, ebay_conversations.other_party),
-         unread_count = EXCLUDED.unread_count, latest_message_id = EXCLUDED.latest_message_id, latest_preview = EXCLUDED.latest_preview,
+         -- Read here up to its latest message (or the seller has the last word since): eBay's "unread" doesn't bring it back (inbox-rules.unreadAfterRead).
+         unread_count = CASE WHEN ebay_conversations.read_at IS NOT NULL AND (EXCLUDED.latest_from_seller OR EXCLUDED.latest_at IS NULL OR EXCLUDED.latest_at <= ebay_conversations.read_at)
+           THEN 0 ELSE EXCLUDED.unread_count END,
+         latest_message_id = EXCLUDED.latest_message_id, latest_preview = EXCLUDED.latest_preview,
          latest_subject = EXCLUDED.latest_subject, latest_at = EXCLUDED.latest_at, latest_from_seller = EXCLUDED.latest_from_seller,
          started_at = coalesce(ebay_conversations.started_at, EXCLUDED.started_at), synced_at = now()
        RETURNING (xmax = 0) AS inserted,
@@ -30,7 +33,7 @@ async function upsertConversations(connectionId, rows) {
 /** The stored latest message id of each of these conversations: Map(id -> latest_message_id). */
 async function latestIds(connectionId, conversationIds) {
   if (!conversationIds.length) return new Map();
-  const { rows } = await query(`SELECT conversation_id, latest_message_id, status, unread_count FROM ebay_conversations WHERE connection_id = $1 AND conversation_id = ANY($2)`, [connectionId, conversationIds]);
+  const { rows } = await query(`SELECT conversation_id, latest_message_id, status, unread_count, read_at FROM ebay_conversations WHERE connection_id = $1 AND conversation_id = ANY($2)`, [connectionId, conversationIds]);
   return new Map(rows.map((r) => [r.conversation_id, r]));
 }
 
@@ -137,6 +140,25 @@ async function hasMessage(connectionId, messageId) {
   return rows.length > 0;
 }
 
+/**
+ * Read in Liston: nothing unread, and read up to its latest message (that
+ * message's time, from what's kept, never the clock: a buyer's message
+ * eBay hasn't handed over yet stays unread when it comes).
+ */
+async function markReadHere(connectionId, conversationId) {
+  await query(
+    `UPDATE ebay_conversations SET unread_count = 0,
+       read_at = GREATEST(read_at, latest_at, (SELECT max(created_at) FROM ebay_messages m WHERE m.connection_id = $1 AND m.conversation_id = $2))
+      WHERE connection_id = $1 AND conversation_id = $2`,
+    [connectionId, conversationId]
+  );
+}
+
+/** Marked unread by someone: at least one unread, and not read here (eBay's count rules again). */
+async function markUnreadHere(connectionId, conversationId) {
+  await query(`UPDATE ebay_conversations SET unread_count = GREATEST(unread_count, 1), read_at = NULL WHERE connection_id = $1 AND conversation_id = $2`, [connectionId, conversationId]);
+}
+
 async function updateConversation(connectionId, conversationId, fields) {
   const sets = [];
   const params = [connectionId, conversationId];
@@ -196,7 +218,8 @@ async function recordSync(connectionId, { full = false, error = null } = {}) {
 async function addSent(connectionId, conversationId, m) {
   await upsertMessages(connectionId, conversationId, [{ ...m, fromSeller: true, read: true }]);
   await query(
-    `UPDATE ebay_conversations SET latest_message_id = $3, latest_preview = $4, latest_at = $5, latest_from_seller = true, unread_count = 0
+    `UPDATE ebay_conversations SET latest_message_id = $3, latest_preview = $4, latest_at = $5, latest_from_seller = true, unread_count = 0,
+       read_at = GREATEST(read_at, $5::timestamptz)
       WHERE connection_id = $1 AND conversation_id = $2`,
     [connectionId, conversationId, m.messageId, m.preview, m.createdAt]
   );
@@ -210,6 +233,8 @@ async function forgetMember(username) {
 }
 
 module.exports = {
+  markReadHere,
+  markUnreadHere,
   upsertConversations,
   latestIds,
   upsertMessages,

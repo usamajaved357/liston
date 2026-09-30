@@ -221,7 +221,7 @@ export function EbayInbox({
     ? "Nothing matches your search."
     : data?.sync.neverSynced && !data.sync.error
       ? "Reading your conversations from eBay…"
-      : { archived: "Nothing archived.", ebay: "No messages from eBay.", unread: "You're all caught up.", buyers: "No buyer messages yet." }[view];
+      : { archived: "Nothing archived.", ebay: "No messages from eBay.", unread: "You're all caught up.", buyers: "No messages from customers yet." }[view];
   const conv = thread?.conversation;
 
   return (

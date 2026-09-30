@@ -15,10 +15,15 @@ import { createPortal } from "react-dom";
 // A bubble's widest: most of a phone's width, about two thirds of a chat pane, never a wall of text.
 export const BUBBLE_MAX = "max-w-[85%] sm:max-w-[min(65%,440px)]";
 
-/** The row a bubble sits in: its side, and the gap above it (a new run gets more room). */
-export function BubbleRow({ mine, first, children, className = "", ...rest }: { mine: boolean; first: boolean; children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
+/**
+ * The row a bubble sits in: its side, and the gap above it (a new run gets
+ * more room). `roomy` (eBay messages): 8px between one person's messages in
+ * a run, 16px before the next run, where team chat keeps WhatsApp's 2px / 10px.
+ */
+export function BubbleRow({ mine, first, roomy = false, children, className = "", ...rest }: { mine: boolean; first: boolean; roomy?: boolean; children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
+  const gap = roomy ? (first ? "mt-4" : "mt-2") : first ? "mt-2.5" : "mt-0.5";
   return (
-    <div className={`flex px-[clamp(14px,4%,48px)] ${mine ? "justify-end" : "justify-start"} ${first ? "mt-2.5" : "mt-0.5"} ${className}`} {...rest}>
+    <div className={`flex px-[clamp(14px,4%,48px)] ${mine ? "justify-end" : "justify-start"} ${gap} ${className}`} {...rest}>
       {children}
     </div>
   );
