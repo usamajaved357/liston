@@ -3223,3 +3223,103 @@ export const inboxApi = {
   notificationSettings: () => request<NotificationSettings>(`/api/chat/settings`),
   saveNotificationSettings: (input: Partial<NotificationSettings>) => request<NotificationSettings>(`/api/chat/settings`, { method: "PUT", body: JSON.stringify(input) }),
 };
+
+// ---- Inbox: eBay messages -----------------------------------------------------------
+
+export type EbayFolder = "buyers" | "ebay" | "archived" | "all";
+export type EbayShow = "all" | "unread" | "waiting" | "mine";
+// One conversation in a list: a buyer's (FROM_MEMBERS) or eBay's own (FROM_EBAY).
+export interface EbayConversationRow {
+  conversationId: string;
+  account: { id: string; label: string | null };
+  type: "FROM_MEMBERS" | "FROM_EBAY";
+  status: "ACTIVE" | "ARCHIVE" | "DELETE";
+  title: string | null;
+  otherParty: string | null;
+  referenceId: string | null;
+  image: string | null;
+  unread: number;
+  latestPreview: string | null;
+  latestSubject: string | null;
+  latestAt: string | null;
+  latestFromSeller: boolean;
+  // When the buyer started waiting for an answer (they spoke last).
+  waitingSince: string | null;
+  assignee: { id: string; name: string } | null;
+  workStatus: "open" | "waiting" | "done";
+  labels: string[];
+}
+export interface EbayInboxList {
+  conversations: EbayConversationRow[];
+  counts: { buyers: number; ebay: number; waiting: number };
+  sync: { syncedAt: string | null; syncing: boolean; neverSynced: boolean; error: { message: string; scope: boolean } | null };
+  hasMore: boolean;
+  accounts: { id: string; label: string }[];
+}
+export interface EbayMessage {
+  id: string;
+  fromSeller: boolean;
+  sender: string | null;
+  subject: string | null;
+  text: string;
+  // eBay's notices: their links, as buttons.
+  links: { text: string; url: string }[];
+  media: { name: string | null; type: string | null; url: string; image: boolean }[];
+  read: boolean | null;
+  createdAt: string;
+}
+export interface EbayOrderSummary {
+  orderId: string;
+  status: string;
+  statusLabel: string;
+  total: { amount: number; currency: string } | null;
+  createdAt: string | null;
+  paidAt: string | null;
+  shippedAt: string | null;
+  deliveredAt: string | null;
+  estimatedDelivery: { min: string | null; max: string } | null;
+  dispatchBy: string | null;
+  tracking: { number: string; carrier: string | null }[];
+  items: { itemId: string; title: string; quantity: number; variation: string | null; image: string | null }[];
+  aboutThis: boolean;
+  url: string;
+}
+export interface EbayThread {
+  conversation: EbayConversationRow;
+  messages: EbayMessage[];
+  context: {
+    item: { itemId: string; title: string | null; image: string | null; price: { amount: number; currency: string } | null; url: string | null; ebayUrl: string } | null;
+    listing: ListonCard | null;
+    orders: EbayOrderSummary[];
+    order: EbayOrderSummary | null;
+    ordersHidden: boolean;
+    otherConversations: { conversationId: string; title: string | null; referenceId: string | null; preview: string | null; at: string | null }[];
+  };
+  // eBay couldn't be read just now: what's kept is shown.
+  stale: { message: string } | null;
+}
+
+export const ebayInboxApi = {
+  list: (connectionId: string | null, params: { folder?: EbayFolder; show?: EbayShow; q?: string; before?: string; refresh?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (params.folder) q.set("folder", params.folder);
+    if (params.show && params.show !== "all") q.set("show", params.show);
+    if (params.q) q.set("q", params.q);
+    if (params.before) q.set("before", params.before);
+    if (params.refresh) q.set("refresh", "1");
+    const path = connectionId ? `/api/connections/${connectionId}/inbox` : `/api/inbox`;
+    return request<EbayInboxList>(`${path}${q.toString() ? `?${q}` : ""}`);
+  },
+  thread: (connectionId: string, conversationId: string) => request<EbayThread>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}`),
+  setRead: (connectionId: string, conversationId: string, read: boolean) =>
+    request<{ ok: true }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: JSON.stringify({ read }) }),
+  setStatus: (connectionId: string, conversationId: string, status: "ACTIVE" | "ARCHIVE") =>
+    request<{ ok: true }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/status`, { method: "POST", body: JSON.stringify({ status }) }),
+  refresh: (connectionId: string) => request<{ changed: number }>(`/api/connections/${connectionId}/inbox/refresh`, { method: "POST" }),
+  // A reply to a buyer. Text eBay blocks comes back as `warnings` (sent: false) unless `confirm`.
+  reply: (connectionId: string, conversationId: string, input: { text: string; fileIds?: string[]; confirm?: boolean }) =>
+    request<{ sent: true; message: EbayMessage } | { sent: false; warnings: { kind: string; text: string }[] }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+};

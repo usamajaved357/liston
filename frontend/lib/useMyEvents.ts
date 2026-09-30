@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 // The signed-in person's live channel (GET /api/me/events): one stream per
 // tab, shared by everything that listens (the Inbox, the sidebar's unread
@@ -158,4 +158,16 @@ export function useChatUnreadValue(): Unread {
     () => unread,
     () => unread
   );
+}
+
+// ---- the time, for "waiting 3h" ------------------------------------------------------
+
+/** The time now, moving on every minute (for labels like "Waiting 3h"). */
+export function useNow(everyMs = 60 * 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), everyMs);
+    return () => clearInterval(t);
+  }, [everyMs]);
+  return now;
 }

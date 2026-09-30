@@ -82,6 +82,8 @@ function createApp() {
   app.use('/api/files', requireAuth, requireAccess, require('./modules/files/files.routes'));
   app.use('/api/references', requireAuth, requireAccess, require('./modules/references/references.routes'));
   app.use('/api/chat', requireAuth, requireAccess, require('./modules/chat/chat.routes'));
+  // Every account's eBay messages the person may read (the Inbox outside an account).
+  app.get('/api/inbox', requireAuth, requireAccess, require('./modules/inbox/inbox.controller').listAll);
   // The bytes of shared files, by signed or unguessable link (an <img> sends no sign-in).
   app.use('/media', require('./modules/files/media.routes'));
 

@@ -43,3 +43,21 @@ export function colorFor(id: string | null | undefined): string {
 
 /** Minutes after midnight as "22:00". */
 export const clock = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+
+export function money(amount: number | null | undefined, currency = "GBP"): string {
+  if (amount === null || amount === undefined || !Number.isFinite(Number(amount))) return "";
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(amount));
+  } catch {
+    return `${currency} ${Number(amount).toFixed(2)}`;
+  }
+}
+
+/** "5m", "3h", "2d": how long ago, short. */
+export function shortAgo(iso: string, now = Date.now()): string {
+  const m = Math.max(0, Math.round((now - new Date(iso).getTime()) / 60000));
+  if (m < 60) return `${Math.max(1, m)}m`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}

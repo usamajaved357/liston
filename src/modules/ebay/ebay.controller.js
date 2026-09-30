@@ -95,17 +95,22 @@ function accountDeletionChallenge(req, res) {
   return res.status(200).json({ challengeResponse: hash.digest('hex') });
 }
 
-// The actual account-deletion notification payload. Liston stores no eBay
-// end-user personal data outside of the connected seller's own connection
-// record (no shopper/buyer PII is persisted anywhere) — acknowledging with
-// 200 is all compliance requires; nothing needs to be deleted on our side.
+// The actual account-deletion notification payload: eBay's 200 at once,
+// then the member's conversations and messages in the Inbox are deleted
+// (the Inbox keeps buyers' messages; nothing else here is keyed by them).
 function accountDeletionNotification(req, res) {
   // eBay sends one for every eBay user who closes their account, to every
   // app — a couple a minute — so it's logged at debug, not info.
   logger.debug('eBay account-deletion notification received', {
     notificationId: req.body?.notification?.notificationId,
   });
-  return res.status(200).json({});
+  res.status(200).json({});
+  const username = req.body?.notification?.data?.username;
+  if (username) {
+    require('../inbox/inbox.service')
+      .forgetMember(String(username))
+      .catch((err) => logger.warn('Inbox: closed member not forgotten', { error: err.message }));
+  }
 }
 
 // eBay Platform Notifications: something changed on a subscribed account.

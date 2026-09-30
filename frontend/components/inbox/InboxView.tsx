@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PillTabs } from "@/components/PillTabs";
 import { useChatUnreadValue } from "@/lib/useMyEvents";
 import { TeamChat } from "./TeamChat";
+import { EbayInbox } from "./ebay/EbayInbox";
 
 // The Inbox, in two modes switched at the top: Team chat (the owner and
 // their team, across every account) and eBay messages (buyers and eBay,
@@ -43,7 +44,7 @@ export function InboxView({ me, isOwner, connectionId = null, canSeeEbay = true 
             ...(canSeeEbay ? [{ key: "ebay" as const, label: "eBay messages" }] : []),
           ]}
           value={mode}
-          onChange={(m) => go({ mode: m === "team" ? null : m, c: null })}
+          onChange={(m) => go({ mode: m === "team" ? null : m, c: null, e: null })}
           label="Inbox"
         />
       </div>
@@ -51,12 +52,7 @@ export function InboxView({ me, isOwner, connectionId = null, canSeeEbay = true 
         {mode === "team" ? (
           <TeamChat me={me} isOwner={isOwner} activeId={activeId} onActiveChange={(id) => go({ c: id })} />
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-            <p className="text-[15px] font-semibold text-[var(--color-ink)]">eBay messages come next</p>
-            <p className="mt-1 max-w-md text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-              Buyer questions and eBay&apos;s messages{connectionId ? " for this account" : " for every account"}, with the order and any return or case beside each conversation, are the next part of the Inbox being built.
-            </p>
-          </div>
+          <EbayInbox connectionId={connectionId} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} />
         )}
       </div>
     </div>
