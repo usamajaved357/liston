@@ -3150,6 +3150,8 @@ export interface EbayMessage {
   text: string;
   // eBay's notices: their links, as buttons.
   links: { text: string; url: string }[];
+  // eBay's notices: the notice's own HTML, drawn as eBay designed it (null for plain text).
+  html: string | null;
   media: { name: string | null; type: string | null; url: string; image: boolean }[];
   read: boolean | null;
   createdAt: string;

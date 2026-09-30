@@ -299,8 +299,9 @@ function messageShape(m, type) {
     sender: m.sender,
     subject: m.subject,
     text: rules.htmlToText(m.body, { dropLinks: type === 'FROM_EBAY' }),
-    // eBay's notices: their links as buttons.
+    // eBay's notices: their links as buttons, and the notice as eBay designed it (drawn when there is one).
     links: type === 'FROM_EBAY' ? rules.linksIn(m.body) : [],
+    html: type === 'FROM_EBAY' ? rules.noticeHtml(m.body) : null,
     media: (m.media || []).map((x) => ({ name: x.name, type: x.type, url: x.url, image: x.type === 'IMAGE' || /\.(jpe?g|png|gif|webp)(\?|$)/i.test(x.url || '') })),
     read: m.read,
     createdAt: m.created_at,

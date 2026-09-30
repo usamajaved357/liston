@@ -11,6 +11,15 @@ test("eBay's HTML notices become readable text, their links buttons; plain text 
   assert.strictEqual(rules.previewOf('x'.repeat(300)).length, 158);
 });
 
+test("an eBay notice keeps its own HTML for the page to draw, trimmed of scripts, frames and Outlook-only comments; plain text has none", () => {
+  const html = '<!DOCTYPE html><html><head><style>.b{color:#3665f3}</style><script>alert(1)</script></head><body style="margin:0"><!--[if mso]><table><![endif]--><table width="600"><tr><td><a class="b" href="https://www.ebay.co.uk/sh/fin">See details</a><iframe src="https://x.test"></iframe><img src="https://ir.ebaystatic.com/logo.png" alt="eBay"></td></tr></table><script src="https://x.test/a.js"></script></body></html>';
+  const out = rules.noticeHtml(html);
+  for (const kept of ['<style>.b{color:#3665f3}</style>', '<body style="margin:0">', '<table width="600">', 'See details</a>', 'src="https://ir.ebaystatic.com/logo.png"']) assert.ok(out.includes(kept), `keeps ${kept}`);
+  assert.ok(!/script|iframe|mso|x\.test/i.test(out), 'nothing that runs or embeds');
+  assert.strictEqual(rules.noticeHtml('Your case is closed.'), null);
+  assert.strictEqual(rules.noticeHtml(''), null);
+});
+
 test('who a conversation is with, which messages are the seller\'s, and whether a buyer is waiting', () => {
   const c = (sender, recipient, type = 'FROM_MEMBERS') => ({ type, latestMessage: { sender, recipient } });
   assert.strictEqual(rules.otherPartyOf(c('buyer1', 'Walexo_Shop'), 'walexo_shop'), 'buyer1');

@@ -461,3 +461,30 @@ test("eBay refusing the archive never stops the inbox being read: the buyers' an
     mock.restoreAll();
   }
 });
+
+test("eBay's own messages come with eBay's HTML for the page to draw as eBay designed it, its links as buttons too; a buyer's never", async () => {
+  const t = await setup();
+  const notice = '<html><head><style>h1{font-size:24px}</style></head><body><h1>&pound;143.00 was sent to your bank account</h1><a href="https://www.ebay.co.uk/sh/fin">See details</a><script>x()</script></body></html>';
+  stubEbay({
+    buyers: [conv('c1', { text: '<p>Is it <b>real</b> leather?</p>' })],
+    ebay: [conv('e1', { type: 'FROM_EBAY', text: notice, title: 'We sent your payout' })],
+    threads: {
+      e1: [{ messageId: 'e1-last', body: notice, sender: 'eBay', recipient: 'walexo_shop', subject: 'We sent your payout', createdAt: ago(30), media: [] }],
+      c1: [{ messageId: 'c1-last', body: '<p>Is it <b>real</b> leather?</p>', sender: 'and_630713', recipient: 'walexo_shop', createdAt: ago(30), media: [] }],
+    },
+  });
+  try {
+    await inboxService.sync(t.connection.id, t.owner.id);
+    const base = `/api/connections/${t.connection.id}/inbox`;
+    const opened = await request('GET', `${base}/e1`, undefined, t.owner.token);
+    assert.strictEqual(opened.status, 200, JSON.stringify(opened.data));
+    const [m] = opened.data.messages;
+    assert.ok(m.html.includes('<h1>&pound;143.00 was sent to your bank account</h1>') && m.html.includes('See details</a>'), "eBay's own layout");
+    assert.ok(!m.html.includes('<script'), 'trimmed of scripts');
+    assert.deepStrictEqual([m.text, m.links], ['£143.00 was sent to your bank account', [{ text: 'See details', url: 'https://www.ebay.co.uk/sh/fin' }]], 'the text and buttons stay for a notice that has no layout');
+    const buyer = await request('GET', `${base}/c1`, undefined, t.owner.token);
+    assert.deepStrictEqual([buyer.data.messages[0].text, buyer.data.messages[0].html, buyer.data.messages[0].links], ['Is it real leather?', null, []], "a buyer's message stays a text bubble");
+  } finally {
+    mock.restoreAll();
+  }
+});

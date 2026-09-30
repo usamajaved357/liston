@@ -1,6 +1,7 @@
 // The eBay Inbox's rules, pure: who a conversation is with, which messages
 // are the seller's, eBay's HTML notices made readable (text, with their
-// links as buttons), previews, and how long a buyer has been waiting.
+// links as buttons) and kept as eBay designed them (the page draws that),
+// previews, and how long a buyer has been waiting.
 
 const same = (a, b) => Boolean(a && b && String(a).toLowerCase() === String(b).toLowerCase());
 
@@ -72,6 +73,23 @@ function linksIn(input) {
   return out;
 }
 
+/**
+ * An eBay notice's own HTML, as eBay designed it (its layout, buttons,
+ * photos), for the page to draw: null when it's plain text. Trimmed of what
+ * never draws there (scripts, embedded frames and objects, Outlook-only
+ * comments); the page cleans it again and draws it in a sandboxed frame
+ * where nothing can run.
+ */
+function noticeHtml(input) {
+  const s = String(input || '');
+  if (!looksHtml(s)) return null;
+  return s
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|noscript|iframe|object|embed|applet|frameset)\b[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(script|iframe|object|embed|applet|frame|base)\b[^>]*>/gi, '')
+    .trim();
+}
+
 /** A list row's line: the message's text, to 160 characters. */
 function previewOf(body) {
   const text = htmlToText(body).replace(/\s+/g, ' ').trim();
@@ -130,4 +148,4 @@ function unreadAfterRead(unread, { latestAt, latestFromSeller }, readAt) {
 }
 
 module.exports = {
-  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, previewOf, waitingSince, looksHtml, same, unreadAfterRead };
+  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, noticeHtml, previewOf, waitingSince, looksHtml, same, unreadAfterRead };

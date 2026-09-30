@@ -8,6 +8,7 @@ import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, LatestButton, MenuI
 import { colorFor, dayLabel, initialOf, timeLabel } from "../inbox-format";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { EbayMark, IssueBadge } from "./EbayConversationList";
+import { NoticeCard } from "./EbayNotice";
 
 // One eBay conversation, as WhatsApp shows a chat: a slim header (who,
 // and what it's about: a tag for an order, a listing or neither, then the
@@ -19,10 +20,23 @@ import { EbayMark, IssueBadge } from "./EbayConversationList";
 // right, each run of one person's messages with a tail on its first, the
 // time in each bubble's corner (8px between them, 16px before the other
 // side's), photos as an album inside the bubble.
-// eBay's own messages are bubbles too, their links as buttons along the
-// bottom. A round button takes you back to the latest once you scroll up.
+// eBay's own messages are drawn as eBay designs them (EbayNotice): the
+// conversation opens at the top of the latest, older ones folded to a line
+// above it; a notice with no layout of its own is a bubble, its links as
+// buttons along the bottom. In a buyer's conversation a round button takes
+// you back to the latest once you scroll up.
 
 const RUN_MS = 5 * 60 * 1000;
+
+// Where a conversation opens: a buyer's at its last message, eBay's with its latest notice's top just under the day chip.
+function toLatest(el: HTMLElement, ebay: boolean) {
+  const notice = ebay ? el.querySelector<HTMLElement>("[data-latest-notice]") : null;
+  if (!notice) {
+    el.scrollTop = el.scrollHeight;
+    return;
+  }
+  el.scrollTop = Math.max(0, notice.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 48);
+}
 
 function HeaderButton({ label, onClick, active = false, children }: { label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; active?: boolean; children: ReactNode }) {
   return (
@@ -78,9 +92,9 @@ function TopicTag({ topic }: { topic: Topic }) {
   );
 }
 
-function Notice({ m, first }: { m: EbayMessage; first: boolean }) {
+function Notice({ m, first, latest }: { m: EbayMessage; first: boolean; latest: boolean }) {
   return (
-    <BubbleRow mine={false} first={first} roomy>
+    <BubbleRow mine={false} first={first} roomy data-latest-notice={latest || undefined}>
       <div className="flex min-w-0 max-w-[92%] flex-col sm:max-w-[min(80%,540px)]">
         <Bubble mine={false} tail={first} sharp>
           {m.subject && <p className="px-[9px] pt-[7px] text-[13.5px] font-semibold leading-[19px] text-[var(--color-ink)]">{m.subject}</p>}
@@ -177,35 +191,37 @@ export function EbayThreadView({
   // The "…" menu's button while it's open.
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
+  // eBay's notices opened or folded here (by default only the latest is open).
+  const [opened, setOpened] = useState<Record<string, boolean>>({});
   const conv = data?.conversation;
   const ebay = conv?.type === "FROM_EBAY";
   const count = data?.messages.length || 0;
 
-  // Opened at the latest message; kept there as new ones arrive and photos load.
+  // Opened at the latest message (eBay's: at the top of its latest notice, to read down from its headline); kept there as new ones arrive and photos load.
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [conv?.conversationId, count]);
+    if (el) toLatest(el, ebay);
+  }, [conv?.conversationId, count, ebay]);
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const t = setTimeout(() => (el.scrollTop = el.scrollHeight), 400);
+    const t = setTimeout(() => toLatest(el, ebay), 400);
     return () => clearTimeout(t);
-  }, [conv?.conversationId, count]);
-  // At the latest, it stays there when the pane changes size (the window, the details panel).
+  }, [conv?.conversationId, count, ebay]);
+  // At the latest, a buyer's conversation stays there when the pane changes size (the window, the details panel).
   const away = useRef(false);
   useEffect(() => {
     away.current = awayFromLatest;
   }, [awayFromLatest]);
   useEffect(() => {
     const el = scroller.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el || ebay || typeof ResizeObserver === "undefined") return;
     const watch = new ResizeObserver(() => {
       if (!away.current) el.scrollTop = el.scrollHeight;
     });
     watch.observe(el);
     return () => watch.disconnect();
-  }, [conv?.conversationId]);
+  }, [conv?.conversationId, ebay]);
 
   if (!data) {
     return (
@@ -234,6 +250,7 @@ export function EbayThreadView({
     if (days[days.length - 1]?.key !== key) days.push({ key, label: dayLabel(m.createdAt), items: [] });
     days[days.length - 1].items.push(m);
   }
+  const latestId = messages[messages.length - 1]?.id;
   const joins = (a: EbayMessage | undefined, b: EbayMessage) => Boolean(a && a.fromSeller === b.fromSeller && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) < RUN_MS);
 
   return (
@@ -312,12 +329,16 @@ export function EbayThreadView({
                 <DayChip label={day.label} sticky />
                 {day.items.map((m, i) => {
                   const first = !joins(day.items[i - 1], m);
-                  return ebay ? <Notice key={m.id} m={m} first={first} /> : <Message key={m.id} m={m} first={first} />;
+                  if (!ebay) return <Message key={m.id} m={m} first={first} />;
+                  const latest = m.id === latestId;
+                  if (!m.html) return <Notice key={m.id} m={m} first={first} latest={latest} />;
+                  const open = opened[m.id] ?? latest;
+                  return <NoticeCard key={m.id} m={{ ...m, html: m.html }} open={open} latest={latest} onToggle={() => setOpened((was) => ({ ...was, [m.id]: !open }))} />;
                 })}
               </div>
             ))}
           </div>
-          {awayFromLatest && <LatestButton onClick={() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })} />}
+          {awayFromLatest && !ebay && <LatestButton onClick={() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })} />}
         </div>
         {composer}
       </div>
