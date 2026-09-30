@@ -6,14 +6,16 @@ import { Meta } from "../ChatBubble";
 import { timeLabel } from "../inbox-format";
 
 // eBay's own messages as eBay designs them: each notice's HTML (its
-// headline, figures, buttons and photos) drawn in a card the width eBay
-// lays its emails out for, under a slim line with the subject and the time.
+// headline, figures, buttons, photos, fonts and sizes are all eBay's) drawn
+// in a card up to 560px wide under a slim line with the subject and the time,
+// at 80% of eBay's size so its type sits with Liston's (eBay sets its emails
+// large for phones; on a phone-width card it stays at eBay's own size).
 // The HTML is cleaned first (nothing that runs, embeds or submits; links
 // only to web, mail or phone addresses, each opening in a new tab) and drawn
 // in a sandboxed frame that can't run anything whatever is left, with a
 // policy that loads only pictures, styles and fonts. The frame takes the
-// notice's height; a notice laid out wider than the card is scaled down to
-// fit rather than cut off. Older notices in a conversation fold to one line
+// notice's height; a notice laid out wider than that is scaled down further
+// to fit rather than cut off. Older notices in a conversation fold to one line
 // (subject, first words, time) and open on a click.
 
 // Never drawn: what runs, embeds, submits or points the page elsewhere.
@@ -79,14 +81,19 @@ export function noticeDocument(html: string): string {
   return `<!doctype html>${doc.documentElement.outerHTML}`;
 }
 
-/** The frame takes its notice's height, the notice scaled down to the card's width when it's laid out wider. */
+// eBay's size, scaled to sit with Liston's type on a card at least PHONE_WIDTH wide.
+const READ_SCALE = 0.8;
+const PHONE_WIDTH = 440;
+
+/** The frame takes its notice's height, the notice at READ_SCALE (smaller still when it's laid out wider than the card). */
 function fitFrame(el: HTMLIFrameElement | null) {
   const doc = el?.contentDocument;
   if (!el || !doc?.body) return;
   doc.body.style.zoom = "";
   const width = el.clientWidth;
   const wide = Math.max(doc.body.scrollWidth, doc.documentElement.scrollWidth);
-  if (width && wide > width + 1) doc.body.style.zoom = String(width / wide);
+  const zoom = width ? Math.min(width >= PHONE_WIDTH ? READ_SCALE : 1, width / wide) : 1;
+  if (zoom < 1) doc.body.style.zoom = String(zoom);
   el.style.height = `${Math.ceil(doc.documentElement.getBoundingClientRect().height)}px`;
 }
 
@@ -133,7 +140,7 @@ export function NoticeCard({ m, open, onToggle, latest }: { m: EbayMessage & { h
   const preview = m.text.replace(/\s+/g, " ").trim();
   return (
     <div className="flex mt-4 px-[clamp(12px,1.5%,20px)]" data-latest-notice={latest || undefined}>
-      <article className="w-full max-w-[640px] overflow-hidden rounded-md bg-[var(--color-panel)] shadow-[var(--shadow-bubble-sharp)]">
+      <article className="w-full max-w-[560px] overflow-hidden rounded-md bg-[var(--color-panel)] shadow-[var(--shadow-bubble-sharp)]">
         <button
           type="button"
           onClick={onToggle}
