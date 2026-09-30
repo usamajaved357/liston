@@ -1,16 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ApiError, EbayMessage, SharedFile, ebayInboxApi, uploadFile } from "@/lib/api";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ApiError, EbayMessage, EbayThread, SharedFile, ebayInboxApi, uploadFile } from "@/lib/api";
+import { useIsPhone } from "@/lib/useIsPhone";
 import { fileSize } from "../inbox-format";
+import { SavedReply, matchReplies, replyFacts } from "./saved-replies";
 
-// Replying to a buyer: text up to eBay's 2,000 characters (Ctrl/Cmd+Enter
-// sends; Enter is a new line, as buyer messages often run to several), up to
-// 5 photos, PDFs, Word documents or text files (attached, dropped or
-// pasted), uploaded for eBay at once. Anything eBay blocks or flags
-// (contact details, links off eBay, paying outside eBay) is shown before it
-// goes, with "Send anyway". A real message to a real buyer: it goes only
-// when Send is pressed.
+// Replying to a buyer: text up to eBay's 2,000 characters (Enter sends and
+// Shift+Enter starts a new line, as in WhatsApp; on a phone Enter is a new
+// line and the arrow sends), up to 5 photos, PDFs, Word documents or text
+// files (attached, dropped or pasted), uploaded for eBay at once. "@" puts
+// the buyer's name where it's typed (Backspace straight after gives the
+// "@" back); "/" (or the saved-replies button) lists the saved replies by
+// name, and picking one loads it, filled in, into the box to read and
+// change. Anything eBay blocks or flags (contact details, links off eBay,
+// paying outside eBay) is shown before it goes, with "Send anyway". A real
+// message to a real buyer: it goes only when Enter or Send is pressed.
 
 const MAX = 2000;
 const ACCEPT = "image/jpeg,image/png,image/gif,image/webp,application/pdf,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain";
@@ -19,7 +24,10 @@ type Pending = { key: string; name: string; size: number; progress: number; file
 // What's being written to each buyer, kept while you move between conversations.
 const drafts = new Map<string, string>();
 
-export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { connectionId: string; conversationId: string; buyer: string | null; onSent: (m: EbayMessage) => void }) {
+// The saved replies open: from "/" typed at `start` (with what's typed after it), or from the button (start -1).
+type Slash = { start: number; query: string; index: number };
+
+export function EbayComposer({ connectionId, conversationId, buyer, thread, onSent }: { connectionId: string; conversationId: string; buyer: string | null; thread: EbayThread; onSent: (m: EbayMessage) => void }) {
   const key = `${connectionId}~${conversationId}`;
   const [text, setText] = useState(() => drafts.get(key) || "");
   const [pending, setPending] = useState<Pending[]>([]);
@@ -28,16 +36,75 @@ export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { 
   const [warnings, setWarnings] = useState<{ kind: string; text: string }[] | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  const phone = useIsPhone();
+  const [slash, setSlash] = useState<Slash | null>(null);
+  // The name "@" just put in, so Backspace straight after gives the "@" back.
+  const [named, setNamed] = useState<{ start: number; end: number } | null>(null);
+  // Where the cursor goes once the text it's in has rendered.
+  const caret = useRef<number | null>(null);
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const facts = useMemo(() => replyFacts(thread), [thread]);
+  const options = slash ? matchReplies(slash.query) : [];
+  const menuOpen = Boolean(slash) && options.length > 0;
 
   useEffect(() => {
     drafts.set(key, text);
   }, [key, text]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = area.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(220, el.scrollHeight)}px`;
+    if (caret.current !== null) {
+      el.focus();
+      el.setSelectionRange(caret.current, caret.current);
+      caret.current = null;
+    }
   }, [text]);
+  useEffect(() => {
+    if (slash) optionRefs.current[slash.index]?.scrollIntoView({ block: "nearest" });
+  }, [slash]);
+
+  // "/" at the start of a word, with what's typed after it up to the cursor (a short run, no new line).
+  function slashAt(value: string, at: number): Slash | null {
+    const before = value.slice(0, at);
+    const i = before.lastIndexOf("/");
+    if (i < 0 || (i > 0 && !/\s/.test(before[i - 1]))) return null;
+    const query = before.slice(i + 1);
+    if (query.length > 30 || /\n/.test(query) || !matchReplies(query).length) return null;
+    return { start: i, query, index: slash && slash.start === i && slash.query === query ? slash.index : 0 };
+  }
+
+  function onType(value: string, at: number) {
+    setNamed(null);
+    // "@" typed where a word starts: the buyer's name in its place.
+    if (value.length === text.length + 1 && value[at - 1] === "@" && (at === 1 || !/[\p{L}\p{N}]/u.test(value[at - 2]))) {
+      const name = facts.name;
+      setText(`${value.slice(0, at - 1)}${name}${value.slice(at)}`.slice(0, MAX + 200));
+      caret.current = at - 1 + name.length;
+      setNamed({ start: at - 1, end: at - 1 + name.length });
+      setSlash(null);
+      return;
+    }
+    setText(value);
+    if (warnings) setWarnings(null);
+    setSlash(slashAt(value, at));
+  }
+
+  function pick(reply: SavedReply) {
+    const body = reply.text(facts);
+    const el = area.current;
+    const from = slash && slash.start >= 0 ? slash.start : (el?.selectionStart ?? text.length);
+    const to = slash && slash.start >= 0 ? slash.start + 1 + slash.query.length : (el?.selectionEnd ?? from);
+    const before = text.slice(0, from);
+    const after = text.slice(to);
+    // Into an empty box (or one with only the "/" in it) it's the whole message.
+    const next = before.trim() || after.trim() ? `${before}${body}${after}` : body;
+    setText(next);
+    caret.current = before.trim() || after.trim() ? before.length + body.length : body.length;
+    setSlash(null);
+    setNamed(null);
+  }
 
   function addFiles(files: File[]) {
     const room = 5 - pending.length;
@@ -56,6 +123,7 @@ export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { 
   }
 
   const uploading = pending.some((p) => !p.file && !p.error);
+  const placeholder = phone ? `Reply to ${buyer || "the buyer"}` : `Reply to ${buyer || "the buyer"}  ·  "/" for saved replies, "@" for their name`;
   const canSend = text.trim().length > 0 && text.length <= MAX && !uploading && !sending;
 
   async function send(confirm = false) {
@@ -83,7 +151,7 @@ export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { 
 
   return (
     <div
-      className="border-t border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2"
+      className="relative border-t border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2"
       onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
       onDrop={(e) => {
         const files = Array.from(e.dataTransfer.files || []);
@@ -100,6 +168,41 @@ export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { 
         }
       }}
     >
+      {menuOpen && slash && (
+        <div className="absolute bottom-full left-3 right-3 z-20 mb-2 max-w-[480px] overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-[var(--shadow-pop)]">
+          <div className="flex items-center justify-between gap-3 px-4 pb-1.5 pt-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Saved replies</p>
+            {!phone && <p className="text-[11px] text-[var(--color-muted)]">Enter to use · Esc to close</p>}
+          </div>
+          <div className="max-h-[min(340px,50vh)] overflow-y-auto px-1.5 pb-1.5" role="listbox" aria-label="Saved replies">
+            {options.map((r, i) => {
+              const preview = r.text(facts).split("\n\n").slice(1).join(" ");
+              const active = i === slash.index;
+              return (
+                <button
+                  key={r.key}
+                  ref={(el) => {
+                    optionRefs.current[i] = el;
+                  }}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onMouseEnter={() => setSlash({ ...slash, index: i })}
+                  onClick={() => pick(r)}
+                  className={`block w-full rounded-xl px-2.5 py-2 text-left transition-colors ${active ? "bg-[var(--color-primary-soft)]" : ""}`}
+                >
+                  <span className="flex items-baseline gap-2">
+                    <span className={`text-[13px] font-semibold ${active ? "text-[var(--color-primary)]" : "text-[var(--color-ink)]"}`}>{r.name}</span>
+                    <span className="truncate text-[11.5px] text-[var(--color-muted)]">{r.hint}</span>
+                  </span>
+                  <span className="mt-0.5 line-clamp-2 text-[12px] leading-[17px] text-[var(--color-muted)]">{preview}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {warnings && (
         <div className="mb-2.5 rounded-2xl bg-amber-50 p-3 ring-1 ring-inset ring-amber-200">
           <p className="text-[12.5px] font-semibold text-amber-900">eBay may block or flag this message</p>
@@ -157,6 +260,23 @@ export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { 
             <path d="M20 11.5l-7.8 7.8a5 5 0 01-7.1-7.1l8.5-8.5a3.3 3.3 0 014.7 4.7l-8.5 8.5a1.7 1.7 0 01-2.4-2.4l7.8-7.8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            area.current?.focus();
+            setSlash(slash ? null : { start: -1, query: "", index: 0 });
+          }}
+          title={'Saved replies (or type "/")'}
+          aria-label="Saved replies"
+          aria-expanded={menuOpen}
+          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-colors ${menuOpen ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"}`}
+        >
+          <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
+            <path d="M4.5 6.5A2.5 2.5 0 017 4h10a2.5 2.5 0 012.5 2.5v7A2.5 2.5 0 0117 16h-6.5l-4 3.5V16H7a2.5 2.5 0 01-2.5-2.5v-7z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+            <path d="M8.5 8.5h7M8.5 11.5h4.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+        </button>
         <input
           ref={input}
           type="file"
@@ -172,22 +292,47 @@ export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { 
           ref={area}
           rows={1}
           value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            if (warnings) setWarnings(null);
-          }}
+          onChange={(e) => onType(e.target.value, e.target.selectionStart ?? e.target.value.length)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            if (menuOpen && slash) {
+              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                const step = e.key === "ArrowDown" ? 1 : -1;
+                setSlash({ ...slash, index: (slash.index + step + options.length) % options.length });
+                return;
+              }
+              if (e.key === "Enter" || e.key === "Tab") {
+                e.preventDefault();
+                pick(options[Math.min(slash.index, options.length - 1)]);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setSlash(null);
+                return;
+              }
+            }
+            const el = e.currentTarget;
+            if (e.key === "Backspace" && named && el.selectionStart === named.end && el.selectionEnd === named.end && text.slice(named.start, named.end) === facts.name) {
+              e.preventDefault();
+              setText(`${text.slice(0, named.start)}@${text.slice(named.end)}`);
+              caret.current = named.start + 1;
+              setNamed(null);
+              return;
+            }
+            if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || (!e.shiftKey && !phone))) {
               e.preventDefault();
               send();
             }
           }}
-          placeholder={`Reply to ${buyer || "the buyer"}`}
+          onClick={(e) => slash && slash.start >= 0 && setSlash(slashAt(text, e.currentTarget.selectionStart ?? text.length))}
+          onBlur={() => setSlash(null)}
+          placeholder={placeholder}
           className="max-h-[200px] min-h-[32px] flex-1 resize-none bg-transparent px-1 py-[6px] text-[13px] leading-[1.45] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
           aria-label="Reply"
         />
         {text.length > MAX - 400 && <span className={`flex-shrink-0 self-center px-1 text-[10.5px] tabular-nums ${text.length > MAX ? "font-semibold text-rose-600" : "text-[var(--color-muted)]"}`}>{MAX - text.length}</span>}
-        <button type="button" onClick={() => send()} disabled={!canSend} aria-label="Send" title="Send to the buyer on eBay (Ctrl/Cmd+Enter)" className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary)] text-white transition-colors hover:bg-[var(--color-primary-hover)] disabled:bg-[var(--color-line)] disabled:text-[var(--color-muted)]">
+        <button type="button" onClick={() => send()} disabled={!canSend} aria-label="Send" title={phone ? "Send to the buyer on eBay" : "Send to the buyer on eBay (Enter)"} className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary)] text-white transition-colors hover:bg-[var(--color-primary-hover)] disabled:bg-[var(--color-line)] disabled:text-[var(--color-muted)]">
           {sending ? (
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
           ) : (

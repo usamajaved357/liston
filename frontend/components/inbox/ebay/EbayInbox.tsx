@@ -260,12 +260,13 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
                 })
               }
               composer={
-                conv && conv.type === "FROM_MEMBERS" ? (
+                thread && conv && conv.type === "FROM_MEMBERS" ? (
                   <EbayComposer
                     key={`composer-${conv.account.id}~${conv.conversationId}`}
                     connectionId={conv.account.id}
                     conversationId={conv.conversationId}
                     buyer={conv.otherParty}
+                    thread={thread}
                     onSent={(m) => {
                       setLoaded((l) => (l && l.thread ? { ...l, thread: { ...l.thread, messages: [...l.thread.messages.filter((x) => x.id !== m.id), m] } } : l));
                       reloadList();

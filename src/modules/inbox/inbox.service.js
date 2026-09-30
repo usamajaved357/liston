@@ -10,6 +10,7 @@ const referencesService = require('../references/references.service');
 const userEvents = require('../realtime/user-events');
 const inboxRepository = require('./inbox.repository');
 const rules = require('./inbox-rules');
+const orderMessages = require('../orders/order-messages');
 const marketplaces = require('../ebay/marketplaces');
 const logger = require('../../utils/logger');
 
@@ -335,6 +336,8 @@ async function contextOf(auth, account, conv) {
         }
       : null,
     listing,
+    // What to call the buyer in a reply ("@", saved replies): the first name on their latest order (Orders access only).
+    buyerName: orders.length ? orderMessages.firstName(orders[0]) : null,
     orders: shaped,
     // The order this conversation is about (its item), else the buyer's latest.
     order: shaped.find((o) => o.aboutThis) || null,

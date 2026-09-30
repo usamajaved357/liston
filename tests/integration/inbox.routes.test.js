@@ -123,7 +123,7 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
   await pool.query(`INSERT INTO ebay_orders (connection_id, order_id, created_at, data) VALUES ($1, $2, now(), $3)`, [
     t.connection.id,
     orderId,
-    JSON.stringify({ orderId, buyerUserId: 'and_630713', checkoutStatus: 'Complete', cancelStatus: 'NotApplicable', shippedTime: ago(2000), total: { amount: 8.49, currency: 'GBP' }, lineItems: [{ itemId: '358376442432', title: 'Coconut Oil Squishy', trackingNumber: 'TRK1', trackingCarrier: 'Royal Mail' }] }),
+    JSON.stringify({ orderId, buyerUserId: 'and_630713', buyerName: 'ANDREW JONES', checkoutStatus: 'Complete', cancelStatus: 'NotApplicable', shippedTime: ago(2000), total: { amount: 8.49, currency: 'GBP' }, lineItems: [{ itemId: '358376442432', title: 'Coconut Oil Squishy', trackingNumber: 'TRK1', trackingCarrier: 'Royal Mail' }] }),
   ]);
   const calls = stubEbay({
     buyers: [conv('c1')],
@@ -147,6 +147,7 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
     const order = opened.data.context.order;
     assert.deepStrictEqual([order.orderId, order.statusLabel, order.tracking[0].number, order.url], [orderId, 'Dispatched', 'TRK1', `/accounts/${t.connection.id}/orders/${orderId}`]);
     assert.strictEqual(opened.data.context.item.ebayUrl, 'https://www.ebay.co.uk/itm/358376442432');
+    assert.strictEqual(opened.data.context.buyerName, 'Andrew', "what to call them: the first name on their order, not shouted");
     await new Promise((r) => setTimeout(r, 50));
     assert.deepStrictEqual(calls.update, [{ conversationId: 'c1', type: 'FROM_MEMBERS', read: true }], 'read on eBay too');
     assert.strictEqual(opened.data.conversation.unread, 0);
@@ -175,7 +176,7 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
     await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'inbox', allowed: true }] }, t.owner.token);
     const member = (await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' })).data.token;
     const seen = await request('GET', `${base}/c1`, undefined, member);
-    assert.deepStrictEqual([seen.data.context.orders, seen.data.context.ordersHidden], [[], true]);
+    assert.deepStrictEqual([seen.data.context.orders, seen.data.context.ordersHidden, seen.data.context.buyerName], [[], true, null], 'no orders, no name from them');
     const other = `inbox-other-${crypto.randomUUID()}@example.com`;
     const added2 = await request('POST', '/api/team/members', { email: other, password: 'memberpassword123', name: 'Tom' }, t.owner.token);
     await request('PUT', `/api/team/members/${added2.data.id || added2.data.member?.id}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'orders', allowed: true }] }, t.owner.token);

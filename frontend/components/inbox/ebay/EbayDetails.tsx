@@ -9,7 +9,8 @@ import { colorFor, initialOf, listTime, money } from "../inbox-format";
 // about (its state, what they paid, the way from ordered to delivered,
 // tracking, what they bought, any open return or case with its deadline),
 // the listing, the buyer's other orders and their other conversations.
-// Orders and listings open in Liston in a new tab, so the chat stays put.
+// Orders and listings open in Liston in a new tab (a small "Open" pill in
+// the section's heading), so the chat stays put.
 // On a wide screen it sits beside the chat; on a smaller one over it.
 
 const STATUS_TONE: Record<string, string> = {
@@ -48,7 +49,7 @@ function useOpenCases(connectionId: string, orderId: string | null) {
 function Section({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
   return (
     <section className="border-t border-[var(--color-line)] px-5 py-4">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex min-h-7 items-center justify-between gap-3">
         <h4 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">{title}</h4>
         {action}
       </div>
@@ -58,20 +59,19 @@ function Section({ title, children, action }: { title: string; children: ReactNo
 }
 
 const arrow = (
-  <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+  <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3" aria-hidden>
     <path d="M8 5h7v7M15 5l-9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 
-function OpenLink({ href, children, primary = false, external = false }: { href: string; children: ReactNode; primary?: boolean; external?: boolean }) {
+// Opens a Liston page in a new tab: a small soft pill in its section's heading, as the app's other quiet actions.
+function OpenLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <a
       href={href}
       target="_blank"
-      rel={external ? "noopener noreferrer" : "noopener"}
-      className={`flex h-9 flex-1 items-center justify-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold transition-colors ${
-        primary ? "bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)]" : "border border-[var(--color-line)] text-[var(--color-ink)] hover:border-[var(--color-primary)]/40 hover:text-[var(--color-primary)]"
-      }`}
+      rel="noopener"
+      className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--color-primary-soft)] pl-2.5 pr-2 text-[12px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)] hover:text-white"
     >
       {children}
       {arrow}
@@ -178,11 +178,6 @@ function OrderBlock({ order, connectionId }: { order: EbayOrderSummary; connecti
           ))}
         </ul>
       )}
-      <div className="flex gap-2">
-        <OpenLink href={order.url} primary>
-          Open order
-        </OpenLink>
-      </div>
     </div>
   );
 }
@@ -224,7 +219,7 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
         </div>
 
         {order ? (
-          <Section title="Order">
+          <Section title="Order" action={<OpenLink href={order.url}>Open order</OpenLink>}>
             <OrderBlock order={order} connectionId={connectionId} />
           </Section>
         ) : ordersHidden ? (
@@ -234,7 +229,7 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
         ) : null}
 
         {item && (
-          <Section title={order ? "Listing" : "Asked about"}>
+          <Section title={order ? "Listing" : "Asked about"} action={item.url ? <OpenLink href={item.url}>Open listing</OpenLink> : undefined}>
             <div className="flex items-start gap-3">
               {item.image ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -262,12 +257,6 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
               </p>
             )}
             {!order && !ordersHidden && <p className="mt-2.5 text-[12px] text-[var(--color-muted)]">Asked before buying: no order from this buyer for it yet.</p>}
-            <div className="mt-3 flex gap-2">
-              {item.url && <OpenLink href={item.url}>Open listing</OpenLink>}
-              <OpenLink href={item.ebayUrl} external>
-                View on eBay
-              </OpenLink>
-            </div>
           </Section>
         )}
 

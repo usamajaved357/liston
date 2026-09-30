@@ -3290,6 +3290,8 @@ export interface EbayThread {
   context: {
     item: { itemId: string; title: string | null; image: string | null; price: { amount: number; currency: string } | null; url: string | null; ebayUrl: string } | null;
     listing: ListonCard | null;
+    // What to call the buyer in a reply: the first name on their latest order (Orders access only).
+    buyerName: string | null;
     orders: EbayOrderSummary[];
     order: EbayOrderSummary | null;
     ordersHidden: boolean;
