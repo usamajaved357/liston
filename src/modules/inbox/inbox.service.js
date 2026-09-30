@@ -13,6 +13,9 @@ const rules = require('./inbox-rules');
 const orderMessages = require('../orders/order-messages');
 const orderIssues = require('./order-issues.service');
 const marketplaces = require('../ebay/marketplaces');
+const mirror = require('../ebay/ebay-mirror.repository');
+const orderRepository = require('../orders/order.repository');
+const threadFacts = require('./thread-facts');
 const logger = require('../../utils/logger');
 
 // The Inbox's eBay messages: every conversation an account has with buyers
@@ -306,7 +309,7 @@ function messageShape(m, type) {
 
 const ORDER_STATUS = { awaiting_payment: 'Awaiting payment', awaiting_dispatch: 'To dispatch', dispatched: 'Dispatched', delivered: 'Delivered', cancelled: 'Cancelled' };
 
-function orderShape(connectionId, o, referenceId, images) {
+function orderShape(connectionId, o, referenceId, images, { sourcing = [], marketplace = null } = {}) {
   const lines = o.lineItems || [];
   const tracking = lines.filter((l) => l.trackingNumber).map((l) => ({ number: l.trackingNumber, carrier: l.trackingCarrier || null }));
   const status = ebayService.classifyOrderStatus(o);
@@ -326,8 +329,43 @@ function orderShape(connectionId, o, referenceId, images) {
     aboutThis: Boolean(referenceId && lines.some((l) => String(l.itemId) === String(referenceId))),
     // The buyer asked to cancel and the seller hasn't answered (the order page approves or declines it).
     cancelRequested: ebayService.CANCEL_REQUESTED_STATUSES.has(o.cancelStatus),
+    // How it goes, where to, and the supplier order behind it (Liston's own records).
+    postage: lines[0]?.shippingService || null,
+    shipTo: threadFacts.shipTo(o.shippingAddress, marketplace),
+    supplier: threadFacts.supplierOrders(sourcing),
     url: `/accounts/${connectionId}/orders/${encodeURIComponent(o.orderId)}`,
   };
+}
+
+/**
+ * What the details panel adds about the listing, from Liston's own copies:
+ * its state, watchers, when it was listed, sales (and with Analytics access
+ * views) over the last 30 days, its supplier and specifics.
+ */
+async function listingInsightsFor(auth, connectionId, itemId) {
+  const owner = auth.role === 'owner';
+  const [canListings, canAnalytics] = owner
+    ? [true, true]
+    : await Promise.all([teamRepository.resolvePermission(auth.userId, connectionId, 'listings'), teamRepository.resolvePermission(auth.userId, connectionId, 'analytics')]);
+  if (!canListings) return null;
+  const since = new Date(Date.now() - threadFacts.DAYS * 86400000);
+  const [snapshot, traffic, orders, summaries, supplierUrl] = await Promise.all([
+    inboxRepository.listingSnapshotItem(connectionId, itemId),
+    canAnalytics ? inboxRepository.listingTrafficSince(connectionId, itemId, since.toISOString().slice(0, 10)) : null,
+    inboxRepository.ordersForItemSince(connectionId, itemId, since),
+    mirror.loadItemSummaries([String(itemId)]),
+    inboxRepository.supplierUrlFor(connectionId, itemId),
+  ]);
+  const isCancelled = (o) => ebayService.classifyOrderStatus(o) === 'cancelled';
+  return threadFacts.listingInsights({
+    snapshot,
+    traffic,
+    sold: threadFacts.soldFrom(orders, itemId, isCancelled),
+    summary: summaries.get(String(itemId))?.summary || null,
+    supplierUrl,
+    canListings,
+    canAnalytics,
+  });
 }
 
 /** What sits beside a thread: the listing it's about, the buyer's orders (with Orders access), their other conversations. */
@@ -335,13 +373,18 @@ async function contextOf(auth, account, conv) {
   const connectionId = account.id;
   const buyerThread = conv.type === 'FROM_MEMBERS';
   const canOrders = auth.role === 'owner' || (await teamRepository.resolvePermission(auth.userId, connectionId, 'orders'));
-  const [orders, listingCards, others] = await Promise.all([
+  const [orders, listingCards, others, insights] = await Promise.all([
     buyerThread && canOrders ? inboxRepository.ordersByBuyer(connectionId, conv.other_party) : [],
     conv.reference_id ? referencesService.resolve(auth, [{ kind: 'listing', id: String(conv.reference_id), connectionId }]).catch(() => [null]) : [null],
     buyerThread ? inboxRepository.otherConversations(connectionId, conv.other_party, conv.conversation_id) : [],
+    buyerThread && conv.reference_id ? listingInsightsFor(auth, connectionId, conv.reference_id).catch(() => null) : null,
   ]);
-  const images = await imagesFor([connectionId], [conv.reference_id, ...orders.flatMap((o) => (o.lineItems || []).map((l) => l.itemId))]);
-  const shaped = orders.map((o) => orderShape(connectionId, o, conv.reference_id, images));
+  const [images, sourcingRows] = await Promise.all([
+    imagesFor([connectionId], [conv.reference_id, ...orders.flatMap((o) => (o.lineItems || []).map((l) => l.itemId))]),
+    orders.length ? orderRepository.listSourcingForOrders(connectionId, orders.map((o) => o.orderId)) : [],
+  ]);
+  const marketplace = marketplaces.byId(account.marketplaceId);
+  const shaped = orders.map((o) => orderShape(connectionId, o, conv.reference_id, images, { sourcing: sourcingRows.filter((r) => r.order_id === o.orderId), marketplace }));
   const item = conv.reference_id ? images.get(String(conv.reference_id)) : null;
   const listing = listingCards[0] && !listingCards[0].locked ? listingCards[0] : null;
   return {
@@ -353,6 +396,7 @@ async function contextOf(auth, account, conv) {
           price: item?.price || null,
           url: listing?.url || null,
           ebayUrl: `https://${marketplaces.byId(account.marketplaceId)?.itemHost || 'www.ebay.co.uk'}/itm/${conv.reference_id}`,
+          insights,
         }
       : null,
     listing,

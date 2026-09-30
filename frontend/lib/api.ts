@@ -3307,13 +3307,33 @@ export interface EbayOrderSummary {
   aboutThis: boolean;
   // The buyer asked to cancel and the seller hasn't answered.
   cancelRequested: boolean;
+  // How it goes and where to ("Greenock, PA15 4TB"), and the supplier order behind each line (Liston's own records).
+  postage: string | null;
+  shipTo: string | null;
+  supplier: { status: "to_order" | "ordered" | "shipped" | "delivered" | "problem"; statusLabel: string; orderNo: string | null; tracking: string | null; carrier: string | null; placedAt: string | null; placedBy: string | null }[];
   url: string;
+}
+// What the details panel adds about a conversation's listing, from Liston's own copies (Listings access; views and conversion with Analytics).
+export interface EbayListingInsights {
+  // Live, ended, or not in the account's kept listings (null).
+  live: boolean | null;
+  watchers: number | null;
+  listedAt: string | null;
+  endedAt: string | null;
+  // Sold (from orders) and viewed (stored traffic) over the last `days` days.
+  days: number;
+  sold: number | null;
+  views: number | null;
+  impressions: number | null;
+  conversion: number | null;
+  supplierUrl: string | null;
+  specifics: { name: string; value: string }[];
 }
 export interface EbayThread {
   conversation: EbayConversationRow;
   messages: EbayMessage[];
   context: {
-    item: { itemId: string; title: string | null; image: string | null; price: { amount: number; currency: string } | null; url: string | null; ebayUrl: string } | null;
+    item: { itemId: string; title: string | null; image: string | null; price: { amount: number; currency: string } | null; url: string | null; ebayUrl: string; insights: EbayListingInsights | null } | null;
     listing: ListonCard | null;
     // What to call the buyer in a reply: the first name on their latest order (Orders access only).
     buyerName: string | null;

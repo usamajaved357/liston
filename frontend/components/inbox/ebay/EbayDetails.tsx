@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useState } from "react";
-import { api, EbayOrderSummary, EbayThread, OrderCases, OrderMoney } from "@/lib/api";
+import { api, EbayListingInsights, EbayOrderSummary, EbayThread, OrderCases, OrderMoney } from "@/lib/api";
 import { colorFor, initialOf, listTime, money } from "../inbox-format";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 
@@ -10,9 +10,12 @@ import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 // about (its state, what they paid, the way from ordered to delivered,
 // tracking, what they bought, any open return or case with its deadline
 // and a cancellation they asked for, each opening the order's page at the
-// part that answers it), what it made (eBay's fees, the earnings and where
-// the funds are, the supplier cost, the profit), the listing, the buyer's
-// other orders and their other conversations.
+// part that answers it; its postage, where it's going and the supplier
+// order behind it), what it made (eBay's fees, the earnings and where the
+// funds are, the supplier cost, the profit), the listing (live or ended,
+// watchers, sales and views over 30 days, when listed, its supplier, item
+// specifics: all from Liston's own copies), the buyer's other orders and
+// their other conversations.
 // Orders and listings open in Liston in a new tab ("Order details",
 // "Listing details": underlined links in the section's heading), so the
 // chat stays put.
@@ -150,7 +153,22 @@ function OrderBlock({ order, connectionId }: { order: EbayOrderSummary; connecti
             <Copyable text={t.number} />
           </FragmentRow>
         ))}
+        {order.postage && (
+          <FragmentRow label="Postage">
+            <span className="block truncate text-[var(--color-ink)]" title={order.postage}>
+              {order.postage}
+            </span>
+          </FragmentRow>
+        )}
+        {order.shipTo && (
+          <FragmentRow label="Ships to">
+            <span className="block truncate text-[var(--color-ink)]" title={order.shipTo}>
+              {order.shipTo}
+            </span>
+          </FragmentRow>
+        )}
       </dl>
+      <SupplierOrders order={order} />
       {order.cancelRequested && (
         <a href={`${order.url}#cancel-request`} target="_blank" rel="noopener" className="flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900 transition-colors hover:bg-amber-100">
           <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500" aria-hidden />
@@ -288,6 +306,145 @@ function EarningsSection({ order, connectionId }: { order: EbayOrderSummary; con
   );
 }
 
+const SUPPLIER_TONE: Record<string, string> = {
+  to_order: "bg-amber-50 text-amber-700",
+  ordered: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
+  shipped: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
+  delivered: "bg-emerald-50 text-emerald-700",
+  problem: "bg-rose-50 text-rose-600",
+};
+
+// The supplier order behind each line (the order page's Source section),
+// for answering "where's my order": its state, number, tracking and when
+// it was placed. Nothing recorded on an order still to dispatch says so.
+function SupplierOrders({ order }: { order: EbayOrderSummary }) {
+  const lines = order.supplier || [];
+  const waiting = !lines.length && order.status === "awaiting_dispatch";
+  if (!lines.length && !waiting) return null;
+  return (
+    <div className="rounded-xl border border-[var(--color-line)] px-3.5 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[12px] font-semibold text-[var(--color-ink)]">Supplier order</span>
+        {waiting && <span className={`rounded-full px-2 text-[11px] font-semibold leading-5 ${SUPPLIER_TONE.to_order}`}>Not ordered yet</span>}
+        {lines.length === 1 && <span className={`rounded-full px-2 text-[11px] font-semibold leading-5 ${SUPPLIER_TONE[lines[0].status] || SUPPLIER_TONE.ordered}`}>{lines[0].statusLabel}</span>}
+      </div>
+      {lines.map((l, i) => (
+        <div key={i} className={lines.length > 1 ? "mt-2.5 border-t border-[var(--color-line)] pt-2.5" : "mt-2"}>
+          {lines.length > 1 && <span className={`rounded-full px-2 text-[11px] font-semibold leading-5 ${SUPPLIER_TONE[l.status] || SUPPLIER_TONE.ordered}`}>{l.statusLabel}</span>}
+          <dl className={`grid grid-cols-[76px_1fr] items-center gap-x-3 gap-y-1.5 text-[12.5px] ${lines.length > 1 ? "mt-2" : ""}`}>
+            {l.orderNo && (
+              <FragmentRow label="Order no.">
+                <Copyable text={l.orderNo} />
+              </FragmentRow>
+            )}
+            {l.tracking && (
+              <FragmentRow label={l.carrier || "Tracking"}>
+                <Copyable text={l.tracking} />
+              </FragmentRow>
+            )}
+            {l.placedAt && (
+              <FragmentRow label="Ordered">
+                <span className="text-[var(--color-ink)]">
+                  {date(l.placedAt)}
+                  {l.placedBy && <span className="text-[var(--color-muted)]"> by {l.placedBy}</span>}
+                </span>
+              </FragmentRow>
+            )}
+          </dl>
+          {!l.orderNo && !l.tracking && !l.placedAt && <p className="text-[12px] text-[var(--color-muted)]">No supplier order number yet.</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const fullDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+const hostOf = (url: string) => {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "");
+    return /aliexpress\./.test(host) ? "AliExpress" : host;
+  } catch {
+    return "Supplier";
+  }
+};
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-lg bg-[var(--color-paper)] px-2.5 py-2">
+      <p className="truncate text-[10.5px] font-medium text-[var(--color-muted)]">{label}</p>
+      <p className="mt-0.5 text-[14px] font-semibold tabular-nums text-[var(--color-ink)]">{value}</p>
+    </div>
+  );
+}
+
+const SPECIFICS_SHOWN = 5;
+
+// What Liston keeps about the listing: watchers, sales and views over the
+// last 30 days, when it was listed, its supplier and item specifics (to
+// answer "is it real leather?" without opening eBay).
+function ListingInsights({ insights: x }: { insights: EbayListingInsights }) {
+  const [allSpecifics, setAllSpecifics] = useState(false);
+  const stats = [
+    x.watchers !== null ? { label: "Watchers", value: x.watchers.toLocaleString() } : null,
+    x.sold !== null ? { label: `Sold ${x.days}d`, value: x.sold.toLocaleString() } : null,
+    x.views !== null ? { label: `Views ${x.days}d`, value: x.views.toLocaleString() } : null,
+    x.conversion !== null ? { label: "Conversion", value: `${x.conversion}%` } : null,
+  ].filter(Boolean) as { label: string; value: string }[];
+  const specifics = allSpecifics ? x.specifics : x.specifics.slice(0, SPECIFICS_SHOWN);
+  return (
+    <div className="mt-3 space-y-3">
+      {stats.length > 0 && (
+        // Up to three in a row; four as two pairs, so no label is cut short.
+        <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${stats.length === 4 ? 2 : stats.length}, minmax(0, 1fr))` }}>
+          {stats.map((st) => (
+            <Stat key={st.label} label={st.label} value={st.value} />
+          ))}
+        </div>
+      )}
+      {(x.listedAt || x.endedAt || x.supplierUrl) && (
+        <dl className="grid grid-cols-[88px_1fr] items-center gap-x-3 gap-y-2 text-[12.5px]">
+          {x.listedAt && (
+            <FragmentRow label="Listed">
+              <span className="text-[var(--color-ink)]">{fullDate(x.listedAt)}</span>
+            </FragmentRow>
+          )}
+          {x.endedAt && (
+            <FragmentRow label="Ended">
+              <span className="text-[var(--color-ink)]">{fullDate(x.endedAt)}</span>
+            </FragmentRow>
+          )}
+          {x.supplierUrl && (
+            <FragmentRow label="Supplier">
+              <a href={x.supplierUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-[var(--color-primary)] underline decoration-[var(--color-primary)]/35 decoration-1 underline-offset-[3px] transition-colors hover:decoration-[var(--color-primary)]">
+                {hostOf(x.supplierUrl)}
+              </a>
+            </FragmentRow>
+          )}
+        </dl>
+      )}
+      {x.specifics.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[12px] font-semibold text-[var(--color-ink)]">Item specifics</p>
+          <dl className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-1 text-[12px]">
+            {specifics.map((sp) => (
+              <FragmentRow key={sp.name} label={sp.name}>
+                <span className="block truncate text-[var(--color-ink)]" title={sp.value}>
+                  {sp.value}
+                </span>
+              </FragmentRow>
+            ))}
+          </dl>
+          {x.specifics.length > SPECIFICS_SHOWN && (
+            <button type="button" onClick={() => setAllSpecifics((v) => !v)} className="mt-1.5 text-[12px] font-medium text-[var(--color-primary)] hover:underline">
+              {allSpecifics ? "Show fewer" : `Show all ${x.specifics.length}`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FragmentRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
@@ -350,6 +507,12 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-2 text-[13px] font-medium leading-[18px] text-[var(--color-ink)]">{item.title || `Item ${item.itemId}`}</p>
                 <p className="mt-1 flex flex-wrap items-center gap-x-2 text-[11.5px] text-[var(--color-muted)]">
+                  {item.insights?.live !== null && item.insights?.live !== undefined && (
+                    <span className={`inline-flex items-center gap-1 font-medium ${item.insights.live ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${item.insights.live ? "bg-emerald-500" : "bg-slate-400"}`} aria-hidden />
+                      {item.insights.live ? "Live" : "Ended"}
+                    </span>
+                  )}
                   <span className="font-mono">{item.itemId}</span>
                   {item.price && <span className="font-medium text-[var(--color-ink)]">{money(item.price.amount, item.price.currency)}</span>}
                 </p>
@@ -366,7 +529,8 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
                 )}
               </p>
             )}
-            {!order && !ordersHidden && <p className="mt-2.5 text-[12px] text-[var(--color-muted)]">Asked before buying: no order from this buyer for it yet.</p>}
+            {item.insights && <ListingInsights insights={item.insights} />}
+            {!order && !ordersHidden && <p className="mt-3 text-[12px] text-[var(--color-muted)]">Asked before buying: no order from this buyer for it yet.</p>}
           </Section>
         )}
 

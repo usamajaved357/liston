@@ -193,6 +193,56 @@ async function ordersByBuyer(connectionId, buyer, limit = 10) {
   return rows.map((r) => r.data);
 }
 
+// ---- what the details panel adds about the listing (Liston's own copies, no eBay call) ----
+
+/** The listing as the account's kept listings have it: { item, live }, the live copy first; null in neither. */
+async function listingSnapshotItem(connectionId, itemId) {
+  const { rows } = await query(
+    `SELECT s.kind, item FROM ebay_snapshots s
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.data->'items', '[]'::jsonb)) item
+      WHERE s.connection_id = $1 AND s.kind IN ('listings:active', 'listings:inactive') AND item->>'itemId' = $2
+      ORDER BY s.kind = 'listings:active' DESC LIMIT 1`,
+    [connectionId, String(itemId)]
+  );
+  return rows[0] ? { item: rows[0].item, live: rows[0].kind === 'listings:active' } : null;
+}
+
+/** The listing's views and impressions over the stored days since `since` (a date), and how many days are stored. */
+async function listingTrafficSince(connectionId, itemId, since) {
+  const { rows } = await query(
+    `SELECT COALESCE(sum(views), 0)::int AS views, COALESCE(sum(total_impressions), 0)::int AS impressions, count(*)::int AS days
+       FROM ebay_traffic_days WHERE connection_id = $1 AND listing_id = $2 AND day >= $3`,
+    [connectionId, String(itemId), since]
+  );
+  return rows[0];
+}
+
+/** The account's orders since a time with a line for the item (Liston's copy). */
+async function ordersForItemSince(connectionId, itemId, since) {
+  const { rows } = await query(
+    `SELECT o.data FROM ebay_orders o
+      WHERE o.connection_id = $1 AND o.created_at >= $3
+        AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(o.data->'lineItems', '[]'::jsonb)) li WHERE li->>'itemId' = $2)`,
+    [connectionId, String(itemId), since]
+  );
+  return rows.map((r) => r.data);
+}
+
+/** Where the listing's product is bought: the supplier link of the draft it was published from, else of the hunted product it went live as. */
+async function supplierUrlFor(connectionId, itemId) {
+  const { rows } = await query(
+    `SELECT url FROM (
+       SELECT source_data->'source'->>'sourceUrl' AS url, 1 AS rank, updated_at FROM listings
+        WHERE connection_id = $1 AND external_product_id = $2 AND source_data->'source'->>'sourceUrl' IS NOT NULL
+       UNION ALL
+       SELECT source_url, 2, updated_at FROM hunted_products
+        WHERE connection_id = $1 AND $2 = ANY(item_ids) AND source_url IS NOT NULL
+     ) found ORDER BY rank, updated_at DESC LIMIT 1`,
+    [connectionId, String(itemId)]
+  );
+  return rows[0]?.url || null;
+}
+
 /** The buyer's other conversations on this account. */
 async function otherConversations(connectionId, buyer, exceptId, limit = 6) {
   if (!buyer) return [];
@@ -259,6 +309,10 @@ module.exports = {
   hasMessage,
   updateConversation,
   ordersByBuyer,
+  listingSnapshotItem,
+  listingTrafficSince,
+  ordersForItemSince,
+  supplierUrlFor,
   otherConversations,
   syncState,
   syncStates,

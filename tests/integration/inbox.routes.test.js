@@ -200,6 +200,94 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
   }
 });
 
+test("the details panel's listing and order facts come from Liston's own copies, each for those who may see it", async () => {
+  const t = await setup();
+  const item = String(400000000000 + Math.floor(Math.random() * 99999999));
+  const orderId = `21-${item.slice(-5)}-00001`;
+  const day = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  await pool.query(`INSERT INTO ebay_snapshots (connection_id, kind, data) VALUES ($1, 'listings:active', $2)`, [
+    t.connection.id,
+    JSON.stringify({ items: [{ itemId: item, title: 'Leather Cord Necklace', price: { amount: 4.99, currency: 'GBP' }, quantity: 20, quantitySold: 12, quantityAvailable: 8, watchCount: 3, startTime: '2026-07-01T09:00:00.000Z', sku: 'CORD-1' }] }),
+  ]);
+  await pool.query(`INSERT INTO ebay_orders (connection_id, order_id, created_at, data) VALUES ($1, $2, now() - interval '2 days', $3), ($1, $4, now() - interval '3 days', $5), ($1, $6, now() - interval '60 days', $7)`, [
+    t.connection.id,
+    orderId,
+    JSON.stringify({ orderId, buyerUserId: 'and_630713', checkoutStatus: 'Complete', cancelStatus: 'NotApplicable', total: { amount: 9.98, currency: 'GBP' }, shippingAddress: { name: 'Andrew Jones', city: 'Greenock', postalCode: 'Pa154tb', country: 'United Kingdom', street1: '13 Garvald Street' }, lineItems: [{ itemId: item, title: 'Leather Cord Necklace', quantityPurchased: 2, shippingService: 'Royal Mail Tracked 48' }] }),
+    `${orderId}-b`,
+    JSON.stringify({ orderId: `${orderId}-b`, buyerUserId: 'someone_else', checkoutStatus: 'Complete', cancelStatus: 'NotApplicable', lineItems: [{ itemId: item, quantityPurchased: 1 }] }),
+    `${orderId}-old`,
+    JSON.stringify({ orderId: `${orderId}-old`, buyerUserId: 'someone_else', checkoutStatus: 'Complete', cancelStatus: 'NotApplicable', lineItems: [{ itemId: item, quantityPurchased: 5 }] }),
+  ]);
+  await pool.query(
+    `INSERT INTO order_sourcing (connection_id, order_id, line_item_id, status, source_platform, source_order_no, tracking_number, carrier, placed_at, cost_value, cost_currency, notes)
+     VALUES ($1, $2, 'L1', 'shipped', 'aliexpress', '8123456', 'LP00123GB', 'Cainiao', now() - interval '1 day', 2.10, 'GBP', 'team only')`,
+    [t.connection.id, orderId]
+  );
+  await pool.query(
+    `INSERT INTO ebay_traffic_days (connection_id, day, listing_id, impressions, total_impressions, views, transactions, final) VALUES ($1, $2, $3, 500, 500, 40, 1, true), ($1, $4, $3, 700, 700, 60, 2, true), ($1, $5, $3, 900, 900, 99, 0, true)`,
+    [t.connection.id, day(3), item, day(10), day(45)]
+  );
+  await pool.query(`INSERT INTO ebay_item_summaries (item_id, data, fetched_at) VALUES ($1, $2, now()) ON CONFLICT (item_id) DO UPDATE SET data = EXCLUDED.data`, [
+    item,
+    JSON.stringify({ itemId: item, specifics: { Material: ['Leather'], Length: ['45-60cm'], MPN: ['Does Not Apply'] } }),
+  ]);
+  await pool.query(`INSERT INTO listings (connection_id, status, external_product_id, source_data, generated_data) VALUES ($1, 'published', $2, $3, '{}')`, [
+    t.connection.id,
+    item,
+    JSON.stringify({ source: { sourceUrl: 'https://www.aliexpress.com/item/1005001.html' }, competitor: {} }),
+  ]);
+  stubEbay({ buyers: [conv('f1', { item })], threads: { f1: [{ messageId: 'f1-last', body: 'Is it real leather?', sender: 'and_630713', recipient: 'walexo_shop', createdAt: ago(30), media: [] }] } });
+  try {
+    await inboxService.sync(t.connection.id, t.owner.id);
+    const base = `/api/connections/${t.connection.id}/inbox`;
+    const { data } = await request('GET', `${base}/f1`, undefined, t.owner.token);
+
+    assert.deepStrictEqual(data.context.item.insights, {
+      live: true,
+      watchers: 3,
+      listedAt: '2026-07-01T09:00:00.000Z',
+      endedAt: null,
+      days: 30,
+      sold: 3,
+      views: 100,
+      impressions: 1200,
+      conversion: 3,
+      supplierUrl: 'https://www.aliexpress.com/item/1005001.html',
+      // (in the order Postgres keeps a jsonb object's keys)
+      specifics: [
+        { name: 'Length', value: '45-60cm' },
+        { name: 'Material', value: 'Leather' },
+      ],
+    }, 'the last 30 days only: the older order and traffic day left out');
+    const order = data.context.order;
+    assert.strictEqual(order.postage, 'Royal Mail Tracked 48');
+    assert.strictEqual(order.shipTo, 'Greenock, PA154TB');
+    assert.deepStrictEqual(order.supplier, [{ status: 'shipped', statusLabel: 'Shipped', orderNo: '8123456', tracking: 'LP00123GB', carrier: 'Cainiao', placedAt: order.supplier[0].placedAt, placedBy: null }]);
+    assert.ok(!JSON.stringify(order).includes('team only') && !JSON.stringify(order).includes('13 Garvald'), 'no notes or street address');
+
+    // Inbox and Orders, not Listings: the order's facts, none of the listing's.
+    const add = async (features) => {
+      const email = `inbox-facts-${crypto.randomUUID()}@example.com`;
+      const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, t.owner.token);
+      await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: features.map((feature) => ({ connectionId: t.connection.id, feature, allowed: true })) }, t.owner.token);
+      return (await request('POST', '/api/auth/login', { email, password: 'memberpassword123' })).data.token;
+    };
+    const ordersOnly = await request('GET', `${base}/f1`, undefined, await add(['inbox', 'orders']));
+    assert.strictEqual(ordersOnly.data.context.item.insights, null);
+    assert.strictEqual(ordersOnly.data.context.order.postage, 'Royal Mail Tracked 48');
+
+    // Listings without Analytics: the listing's facts without its views.
+    const listings = await request('GET', `${base}/f1`, undefined, await add(['inbox', 'listings']));
+    const insights = listings.data.context.item.insights;
+    assert.deepStrictEqual([insights.watchers, insights.sold, insights.views, insights.conversion, insights.supplierUrl], [3, 3, null, null, 'https://www.aliexpress.com/item/1005001.html']);
+    assert.strictEqual(listings.data.context.order, null, 'and no orders');
+  } finally {
+    mock.restoreAll();
+    // Item summaries are shared by every account, so the test's own goes by hand.
+    await pool.query('DELETE FROM ebay_item_summaries WHERE item_id = $1', [item]);
+  }
+});
+
 test("a conversation read in Liston stays read when eBay's list still says unread (the seller had the last word), until the buyer writes again or it's marked unread", async () => {
   const t = await setup();
   // eBay's list: the seller's "You're welcome." last, and eBay still counting one unread.
