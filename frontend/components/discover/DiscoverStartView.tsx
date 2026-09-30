@@ -8,8 +8,8 @@ import { AccountDelivery, BudgetLine, CardHeader, Chevron, FlagTag, Quiet, Score
 
 // Where Discover starts (the search box above is on every screen): a slim
 // header with the size of what's been explored, then tabs (DiscoverPanel)
-// for the products, the keywords, the categories, and the watchlist with
-// what the team explored lately. These are the header and two tabs' bodies.
+// for the categories, the keywords, and the watchlist with what the team
+// explored lately. These are the header and two tabs' bodies.
 
 const SCORE_DOT = { strong: "bg-emerald-500", fair: "bg-amber-500", weak: "bg-rose-500" } as const;
 
@@ -30,28 +30,22 @@ function Stat({ value, label, title }: { value: string; label: string; title?: s
 }
 
 /** What Discover does, in two lines, and the size of what's been explored on the site. */
-// `matched`: the products the Products tab's filters leave, shown against everything found.
-export function DiscoverHero({ data, matched = null }: { data: DiscoverStart; matched?: number | null }) {
-  const w = data.winners;
-  const filtered = w && matched !== null && matched !== w.total;
+export function DiscoverHero({ data }: { data: DiscoverStart }) {
+  const pool = data.pool;
   return (
     <section className="card overflow-hidden">
       <div className="flex flex-col gap-3 bg-[linear-gradient(135deg,#eef2ff_0%,#f8fafc_55%,#ecfdf5_100%)] px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0 max-w-2xl">
-          <h2 className="text-[16px] font-semibold leading-tight text-[var(--color-ink)]">Find the next product to sell on {data.market.name}</h2>
+          <h2 className="text-[16px] font-semibold leading-tight text-[var(--color-ink)]">Find where to hunt on {data.market.name}</h2>
           <p className="mt-1 text-[12px] leading-relaxed text-[var(--color-muted)]">
-            Search or open a category: Liston reads its leading listings and sold counts, groups the same product across sellers and scores it for you. Everything explored
-            joins one pool of products and keywords. <AccountDelivery account={data.account} />
+            Search or open a category: Liston reads its leading listings and their sold counts, then judges it on demand, competition, price and whether you can match
+            the sellers, the same for every subcategory and keyword under it. Everything explored joins one ranking of categories and keywords. <AccountDelivery account={data.account} />
           </p>
         </div>
         <div className="grid flex-shrink-0 grid-cols-3 gap-2 lg:w-[400px]">
-          <Stat
-            value={filtered ? count(matched) : w ? count(w.total) : "—"}
-            label={filtered ? `of ${count(w.total)} match` : "products found"}
-            title={filtered ? `${count(matched)} of the ${count(w.total)} products found match your filters` : undefined}
-          />
-          <Stat value={w?.keywords !== undefined ? count(w.keywords) : "—"} label="keywords that sell" />
-          <Stat value={w ? count(w.pool.subjects) : "—"} label="explored" />
+          <Stat value={pool ? count(pool.categories) : "—"} label="categories ranked" />
+          <Stat value={pool ? count(pool.keywords) : "—"} label="keywords that sell" />
+          <Stat value={pool ? count(pool.subjects) : "—"} label="explored" />
         </div>
       </div>
     </section>
@@ -60,8 +54,8 @@ export function DiscoverHero({ data, matched = null }: { data: DiscoverStart; ma
 
 // The Categories tab: one card, its tabs showing the categories each way —
 // All (eBay's top-level ones, to browse), the ones explored ranked by sales,
-// opportunity, live listings or trend (new and rising products: eBay doesn't
-// share buyers' search volume with apps, so momentum stands in for it), and
+// opportunity, live listings or trend (new and rising leading listings: eBay
+// doesn't share buyers' search volume with apps, so momentum stands in), and
 // the account's own. Ranked ones share one table with the ranking column
 // picked out; colour is kept for the opportunity score alone.
 
@@ -73,7 +67,7 @@ const RANKED: Record<Ranked, { label: string; note: string; by: (a: DiscoverBest
   listings: { label: "Most listings", note: "The biggest markets by live listings: the most buyers, and the most competition.", by: (a, b) => b.total - a.total || b.monthlySales - a.monthlySales },
   trending: {
     label: "Trending",
-    note: "Where the most products are new or selling faster lately. eBay doesn't share buyers' search volume, so momentum stands in for it.",
+    note: "Where the most leading listings are new or selling faster lately. eBay doesn't share buyers' search volume, so momentum stands in for it.",
     by: (a, b) => b.rising - a.rising || b.monthlySales - a.monthlySales,
     keep: (c) => c.rising > 0,
   },
@@ -151,7 +145,7 @@ function RankedCategories({ rows, rank, currency, onOpen }: { rows: DiscoverBest
   if (!sorted.length) {
     return (
       <div className="px-4 pb-4">
-        <Quiet>{rank === "trending" ? "No explored category has new or rising products yet." : "Nothing explored on this site yet. Open a category under All and it joins these rankings."}</Quiet>
+        <Quiet>{rank === "trending" ? "No explored category has new or rising listings yet." : "Nothing explored on this site yet. Open a category under All and it joins these rankings."}</Quiet>
       </div>
     );
   }
@@ -171,7 +165,7 @@ function RankedCategories({ rows, rank, currency, onOpen }: { rows: DiscoverBest
               </th>
               <th className={head("price")}>Price</th>
               <th className={head("score")}>Opportunity</th>
-              <th className={head("trend")} title="Of its products in the Products tab, how many are new or selling faster lately">
+              <th className={head("trend")} title="Of its leading listings read, how many are new or selling faster lately">
                 New or rising
               </th>
             </tr>
@@ -197,7 +191,7 @@ function RankedCategories({ rows, rank, currency, onOpen }: { rows: DiscoverBest
                     {c.score}
                   </span>
                 </td>
-                <td className={cell("trend")}>{c.products ? `${c.rising} of ${c.products}` : "—"}</td>
+                <td className={cell("trend")}>{c.read ? `${c.rising} of ${c.read}` : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -270,8 +264,8 @@ function YourCategories({ rows, onOpen, scoring }: { rows: DiscoverCategoryCard[
 }
 
 const TAB_NOTES: Record<"all" | "yours", string> = {
-  all: "eBay's top-level categories. Open one for its products, keywords and its own subcategories, best selling first.",
-  yours: "Where the listings Liston made for this account sit: a good place to find the next product.",
+  all: "eBay's top-level categories. Open one for its figures, keywords and its own subcategories, best selling first.",
+  yours: "Where the listings Liston made for this account sit: a good place to look next.",
 };
 
 /** The Categories tab: every way to look at the categories, one tab each. */

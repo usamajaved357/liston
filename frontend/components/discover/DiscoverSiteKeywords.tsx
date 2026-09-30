@@ -9,7 +9,7 @@ import { Chevron, Quiet, ScoreBadge } from "./discover-ui";
 // phrases of the titles that sell (their sales a month where they sell
 // most, and how much better those titles sell than the rest), and the
 // keywords already searched with their own market (live listings, the
-// opportunity). Open one to see its products, keywords and categories.
+// opportunity). Open one to see its figures, keywords and categories.
 // Its words come from the search beside the tabs.
 // eBay doesn't share buyers' search volume with apps, so demand is the
 // sales themselves; "Your searches" (the account's own impressions) sits
@@ -105,7 +105,7 @@ export function DiscoverSiteKeywords({
             </thead>
             <tbody className="divide-y divide-[var(--color-line)]">
               {data.keywords.map((k) => (
-                <tr key={k.term} onClick={() => onOpen({ q: k.term })} className="group cursor-pointer hover:bg-[var(--color-paper)]/60" title={`Open “${k.term}”: its products, keywords and categories`}>
+                <tr key={k.term} onClick={() => onOpen({ q: k.term })} className="group cursor-pointer hover:bg-[var(--color-paper)]/60" title={`Open “${k.term}”: its figures, keywords and categories`}>
                   <td className="px-4 py-2.5 text-left">
                     <span className="flex items-center gap-1.5">
                       <span className="truncate font-medium text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{k.term}</span>

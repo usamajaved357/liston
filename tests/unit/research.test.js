@@ -116,6 +116,39 @@ test('a listing\'s sold count is eBay\'s estimate; a listing with variations add
   assert.deepStrictEqual(await browseResearch.soldCount({ itemId: 'v1|374106955627|0' }, 'EBAY_GB'), { sold: 602, calls: 0 }, 'kept');
 });
 
+test("Discover's listing read: eBay's sold estimate, brand, category and listing date from one Browse call; a variation group added up", async () => {
+  mock.method(ebayBrowse, 'getItem', async (itemId) => {
+    assert.strictEqual(itemId, 'v1|374100000001|0');
+    return { estimatedAvailabilities: [{ estimatedSoldQuantity: 81 }], brand: 'Lumineo', categoryId: 20697, itemCreationDate: '2026-07-01T09:00:00.000Z' };
+  });
+  mock.method(ebayBrowse, 'getItemsByItemGroup', async (legacyId) => {
+    assert.strictEqual(legacyId, '388700000002');
+    // No Brand field, only the Brand aspect (item specifics).
+    return {
+      items: [
+        { estimatedAvailabilities: [{ estimatedSoldQuantity: 30 }], categoryId: '11700', localizedAspects: [{ name: 'Brand', value: 'Unbranded' }], itemCreationDate: '2026-05-02T00:00:00.000Z' },
+        { estimatedAvailabilities: [{ estimatedSoldQuantity: 12 }], categoryId: '11700' },
+      ],
+    };
+  });
+  assert.deepStrictEqual(await browseResearch.listingRead({ itemId: 'v1|374100000001|0', legacyItemId: '374100000001' }, 'EBAY_GB'), {
+    sold: 81,
+    brand: 'Lumineo',
+    categoryId: '20697',
+    startedAt: '2026-07-01T09:00:00.000Z',
+    calls: 1,
+  });
+  assert.deepStrictEqual(await browseResearch.listingRead({ itemId: 'v1|388700000002|7', legacyItemId: '388700000002', hasVariations: true }, 'EBAY_GB'), {
+    sold: 42,
+    brand: 'Unbranded',
+    categoryId: '11700',
+    startedAt: '2026-05-02T00:00:00.000Z',
+    calls: 1,
+  });
+  // What research reads next for the same listing is the one just read, no second call.
+  assert.deepStrictEqual(browseResearch.keptSold('v1|374100000001|0', 'EBAY_GB'), 81);
+});
+
 test('research reads the top listings\' sold counts within its daily share, then stops', async () => {
   let saved = null;
   mock.method(appState, 'get', async () => saved);

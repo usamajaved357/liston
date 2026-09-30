@@ -169,10 +169,37 @@ async function soldCount({ itemId, legacyItemId, hasVariations }, marketplaceId)
   return { sold, calls: 1 };
 }
 
+// A listing's brand as eBay's Browse item gives it: its Brand field, else its Brand aspect.
+const brandOf = (item) => (item?.brand ? String(item.brand) : (item?.localizedAspects || []).find((a) => /^brand$/i.test(a.name || ''))?.value || null);
+
+/**
+ * What Discover keeps of a listing, per eBay's Browse API: how many it has
+ * sold (estimatedSoldQuantity; a listing with variations, its group summed),
+ * its brand, category and when it was listed. One call (Browse's own
+ * allowance, never Trading's). Resolves to { sold, brand, categoryId,
+ * startedAt, calls }.
+ */
+async function listingRead({ itemId, legacyItemId, hasVariations }, marketplaceId) {
+  const soldOf = (item) => (item?.estimatedAvailabilities || []).reduce((sum, a) => sum + (Number(a.estimatedSoldQuantity) || 0), 0);
+  let items;
+  if (hasVariations && legacyItemId) items = (await ebayBrowse.getItemsByItemGroup(legacyItemId, marketplaceId)).items || [];
+  else items = [await ebayBrowse.getItem(itemId, marketplaceId)];
+  const first = items.find(Boolean) || {};
+  const sold = items.reduce((sum, item) => sum + soldOf(item), 0);
+  soldCounts.set(`${marketplaceId}:${itemId}`, { at: Date.now(), value: sold });
+  return {
+    sold,
+    brand: items.map(brandOf).find(Boolean) || null,
+    categoryId: first.categoryId ? String(first.categoryId) : null,
+    startedAt: first.itemCreationDate || null,
+    calls: 1,
+  };
+}
+
 /** Test hook. */
 function forget() {
   searches.clear();
   soldCounts.clear();
 }
 
-module.exports = { search, searchListings, soldCount, keptSold, mapSummary, breakdownOf, forget, SEARCH_LIMIT, NO_BRAND };
+module.exports = { search, searchListings, soldCount, listingRead, keptSold, mapSummary, breakdownOf, forget, SEARCH_LIMIT, NO_BRAND };

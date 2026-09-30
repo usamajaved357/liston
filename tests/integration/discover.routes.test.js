@@ -16,12 +16,15 @@ const researchService = require('../../src/modules/research/research.service');
 const analyticsService = require('../../src/modules/analytics/analytics.service');
 const discoverBudget = require('../../src/modules/discover/discover-budget');
 const discoverService = require('../../src/modules/discover/discover.service');
+const browseUsage = require('../../src/modules/ebay/browse-usage');
 const advisor = require('../../src/modules/ai-generation/research-advisor.service');
 
-// Discover end to end against the local database: scans kept a day and
-// shared, each listing's sold count read once a day, subcategories ranked
-// in the background, watches, and who may use it. eBay is replaced at its
-// readers (Browse search, Trading GetItem, Taxonomy).
+// Discover end to end against the local database: categories and keywords
+// only, scans kept a day and shared, each listing's sold count read once a
+// day through Browse, subcategories ranked in the background, watches, the
+// day's and each account's share of reads, and who may use it. eBay is
+// replaced at its readers (Browse search, Browse item reads, Taxonomy);
+// Trading is watched, to prove Discover never calls it.
 
 const app = createApp();
 let server;
@@ -30,12 +33,13 @@ const run = crypto.randomInt(100000, 999999);
 const PARENT = `9${run}`;
 const CHILDREN = [`8${run}1`, `8${run}2`];
 const KEYWORD = `fountain ${run}`;
-const calls = { search: 0, sold: 0, focused: [] };
+const calls = { search: 0, sold: 0, trading: 0 };
 
 // A subject's listings: 30 of them, the first ones selling fastest, all from
 // different sellers; the keyword ones have "cat water fountain" in their titles.
 function listingsFor({ categoryId, q }) {
-  const base = categoryId || `7${run}`;
+  // A lamp keyword's listings are its own (the per-account test reads them fresh); other keywords share one set.
+  const base = categoryId || (q && /lamp/.test(q) ? `3${run}` : `7${run}`);
   return Array.from({ length: 80 }, (_, i) => ({
     itemId: `v1|${base}${String(i).padStart(2, '0')}|0`,
     legacyItemId: `${base}${String(i).padStart(2, '0')}`,
@@ -55,12 +59,6 @@ function listingsFor({ categoryId, q }) {
 test.before(async () => {
   mock.method(browseResearch, 'searchListings', async (input) => {
     calls.search += 1;
-    // A search narrowed to the hunter's filters (Load more): other listings, all within the price.
-    if (String(input.filter || '').includes('price:')) {
-      calls.focused.push(input);
-      const items = Array.from({ length: 30 }, (_, i) => ({ ...listingsFor({ categoryId: `5${run}` })[i], price: { value: 75 + i, currency: 'GBP' } }));
-      return { total: 30, items, breakdown: null, calls: 1 };
-    }
     const items = listingsFor(input);
     return {
       total: input.categoryId === CHILDREN[1] ? 90000 : 1200,
@@ -69,19 +67,18 @@ test.before(async () => {
       calls: 1,
     };
   });
-  mock.method(trading, 'getItemSales', async (token, itemId) => {
+  mock.method(browseResearch, 'listingRead', async (listing) => {
     calls.sold += 1;
-    const i = Number(String(itemId).slice(-2));
+    const itemId = String(listing.legacyItemId);
+    const i = Number(itemId.slice(-2));
     // The first listings sell fastest; the second child's hardly sell.
-    const slow = String(itemId).startsWith(CHILDREN[1]);
-    return {
-      itemId,
-      sold: slow ? 0 : Math.max(0, 120 - i * 4),
-      brand: i % 7 === 0 ? 'Lumineo' : 'Unbranded',
-      options: i === 0 ? [{ label: 'Warm white', sold: 20, price: 12 }, { label: 'Motion sensor', sold: 100, price: 14 }] : null,
-      categoryId: CHILDREN[0],
-      startedAt: new Date(Date.now() - 60 * 86400000).toISOString(),
-    };
+    const slow = itemId.startsWith(CHILDREN[1]);
+    return { sold: slow ? 0 : Math.max(0, 120 - i * 4), brand: i % 7 === 0 ? 'Lumineo' : 'Unbranded', categoryId: CHILDREN[0], startedAt: new Date(Date.now() - 60 * 86400000).toISOString(), calls: 1 };
+  });
+  // Discover never reads Trading (orders and listings keep that pool): counted, to prove it stays at none.
+  mock.method(trading, 'getItemSales', async () => {
+    calls.trading += 1;
+    throw new Error('Discover must not call Trading');
   });
   mock.method(taxonomy, 'getCategoryPath', async (site, id) => {
     if (String(id) === PARENT) return [{ id: PARENT, name: 'Test Lighting' }];
@@ -97,18 +94,20 @@ test.before(async () => {
   mock.method(ebayService, 'ensureValidAccessToken', async (credentials) => ({ accessToken: 'x', credentials, credentialsChanged: false }));
   mock.method(researchService, 'accountDelivery', async () => ({ min: 7, max: 9, policyName: 'AliExpress', serviceName: 'Courier' }));
   discoverBudget._reset();
+  browseUsage._reset();
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   baseUrl = `http://localhost:${server.address().port}`;
 });
 
 test.after(async () => {
+  assert.strictEqual(calls.trading, 0, 'no Trading call from Discover, ever');
   mock.restoreAll();
   await new Promise((resolve) => server.close(resolve));
-  await pool.query(`DELETE FROM discover_scans WHERE subject = ANY($1)`, [[`c:${PARENT}`, ...CHILDREN.map((c) => `c:${c}`), `q:${KEYWORD}`, `q:parrot cage ${run}`, 'q:night light motion sensor']]);
+  await pool.query(`DELETE FROM discover_scans WHERE subject = ANY($1)`, [[`c:${PARENT}`, ...CHILDREN.map((c) => `c:${c}`), `q:${KEYWORD}`, `q:parrot cage ${run}`, 'q:night light motion sensor', `q:desk lamp ${run}`, `q:floor lamp ${run}`]]);
   await pool.query(`DELETE FROM discover_listing_reads WHERE item_id LIKE $1 OR item_id LIKE $2 OR item_id LIKE $3 OR item_id LIKE $4 OR item_id LIKE $5`, [`9${run}%`, `8${run}%`, `7${run}%`, `6${run}%`, `5${run}%`]);
   await pool.query(`DELETE FROM discover_scans WHERE subject = ANY($1)`, [[`c:6${run}`, `c:4${run}`]]);
-  await pool.query(`DELETE FROM discover_listing_reads WHERE item_id LIKE $1`, [`4${run}%`]);
+  await pool.query(`DELETE FROM discover_listing_reads WHERE item_id LIKE $1 OR item_id LIKE $2`, [`4${run}%`, `3${run}%`]);
   await pool.end();
 });
 
@@ -159,40 +158,21 @@ test('Discover explores a category: its leading listings, their sold counts read
   const d = first.data;
   assert.strictEqual(d.subject.name, 'Test Lighting');
   assert.strictEqual(d.figures.total, 1200);
-  assert.deepStrictEqual(d.reads, { asked: 50, read: 50, of: 79, focused: 0, more: true, stopped: false, signInFailed: false, step: 50, reading: false, progress: { done: 50, of: 50 } });
+  assert.deepStrictEqual(d.reads, { asked: 50, read: 50, of: 79, stopped: false, reading: false, progress: { done: 50, of: 50 } });
   assert.strictEqual(calls.sold, 50, 'the first 50 listings read');
-  // Fastest first, with its best-selling option first.
-  assert.strictEqual(d.listings[0].itemId, `${PARENT}00`);
-  assert.deepStrictEqual(d.listings[0].options.map((o) => o.label), ['Motion sensor', 'Warm white']);
-  assert.strictEqual(d.listings[0].soldPerMonth, 60);
-  assert.ok(d.listings.some((l) => l.overseas), 'where each ships from');
+  // Categories and keywords only: no products, no listings to hunt from here.
+  assert.ok(!('products' in d) && !('listings' in d) && !('rising' in d), Object.keys(d).join(','));
+  assert.deepStrictEqual(d.momentum, { rising: d.momentum.rising, read: 50 });
+  assert.ok(d.charts.countries.some((c) => c.key === 'CN'), 'where the sales ship from');
   assert.strictEqual(d.opportunity.score, d.opportunity.parts.reduce((sum, p) => sum + p.points, 0));
   assert.ok(d.keywords.some((k) => k.term === 'motion sensor'), JSON.stringify(d.keywords.map((k) => k.term)));
   assert.ok(d.keywords.every((k) => typeof k.sold === 'number'), 'each keyword with what its listings sold');
-  // A listing that would break eBay's rules is hidden, never pointed at, and counted in Before you hunt.
-  assert.ok(!d.listings.some((l) => /knife/i.test(l.title)));
+  // A listing that would break eBay's rules is hidden, never read, and counted in Before you hunt.
   assert.deepStrictEqual([d.compliance.hidden.count, d.compliance.hidden.restricted], [1, 1]);
-  assert.ok(d.products.length > 0 && d.products[0].reasons.length >= 3, 'the products here, best to hunt first, with why');
-  assert.ok(d.products[0].perMonth > 0 && d.products[0].itemIds.length >= 1);
-
-  // Winners: the best products across everything explored on the site, with a hunter's filters.
-  const winners = await request('GET', `${base}/winners?sort=sales&minSales=10`, undefined, t.hunter);
-  assert.strictEqual(winners.status, 200, JSON.stringify(winners.data));
-  assert.ok(winners.data.pool.subjects >= 1 && winners.data.products.length > 0);
-  assert.ok(winners.data.products.every((p) => p.perMonth >= 10 && p.from && p.from.name));
-  assert.ok(winners.data.products.some((p) => p.from.name === 'Test Lighting'));
-  const priced = await request('GET', `${base}/winners?priceMin=25&brand=unbranded`, undefined, t.hunter);
-  // Unbranded: no named brand on its listings (a brand not read yet counts as none, as the filter says).
-  assert.ok(priced.data.products.every((p) => p.price.median >= 25 && p.branded !== true), JSON.stringify(priced.data.products.map((p) => [p.price.median, p.branded])));
-  // The pool is the whole site's (other subjects too), so: nothing 60 days old passes "this month", and the test listings pass "3 months".
-  const lately = await request('GET', `${base}/winners?listedWithin=30`, undefined, t.hunter);
-  assert.ok(lately.data.products.every((p) => p.newestDays !== null && p.newestDays <= 30 && p.from.name !== 'Test Lighting'));
-  assert.ok((await request('GET', `${base}/winners?listedWithin=90`, undefined, t.hunter)).data.products.some((p) => p.from.name === 'Test Lighting'));
-  assert.strictEqual((await request('GET', `${base}/winners?sort=sideways`, undefined, t.hunter)).status, 400);
-  // A page of Winners at a time: "Load more" asks for more.
-  const page = await request('GET', `${base}/winners?limit=1`, undefined, t.hunter);
-  assert.strictEqual(page.data.products.length, 1);
-  assert.ok(page.data.matched >= 1);
+  assert.ok(!d.keywords.some((k) => /knife/i.test(k.term)));
+  // The products finder and its "find more" are gone.
+  assert.strictEqual((await request('GET', `${base}/winners`, undefined, t.hunter)).status, 404);
+  assert.strictEqual((await request('POST', `${base}/winners/more`, {}, t.hunter)).status, 404);
   // The site's keywords: the terms of the titles that sell, best-selling first, each saying where it sells most.
   const kw = await request('GET', `${base}/keywords`, undefined, t.hunter);
   assert.strictEqual(kw.status, 200, JSON.stringify(kw.data));
@@ -210,8 +190,10 @@ test('Discover explores a category: its leading listings, their sold counts read
   const lighting = bestSelling.find((c) => c.id === PARENT);
   assert.ok(lighting, JSON.stringify(bestSelling.map((c) => c.name)));
   assert.deepStrictEqual([lighting.name, lighting.path], ['Test Lighting', []]);
-  assert.ok(lighting.monthlySales > 0 && lighting.selling > 0 && lighting.products > 0 && lighting.total === 1200);
-  assert.ok(Number.isInteger(lighting.rising) && lighting.rising <= lighting.products, 'its new or rising products: trending');
+  assert.ok(lighting.monthlySales > 0 && lighting.selling > 0 && lighting.total === 1200);
+  assert.ok(Number.isInteger(lighting.rising) && lighting.rising <= lighting.read, 'its new or rising leading listings: trending');
+  const hero = (await request('GET', base, undefined, t.hunter)).data.pool;
+  assert.ok(hero.categories >= 1 && hero.keywords >= 1 && !('winners' in (await request('GET', base, undefined, t.hunter)).data), JSON.stringify(hero));
   assert.ok(lighting.keyword && !/knife/i.test(lighting.keyword));
   const monthly = bestSelling.map((c) => c.monthlySales);
   assert.deepStrictEqual(monthly, [...monthly].sort((a, b) => b - a), 'best-selling first');
@@ -222,14 +204,14 @@ test('Discover explores a category: its leading listings, their sold counts read
   const searches = calls.search;
   await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter);
   assert.deepStrictEqual([calls.search, calls.sold], [searches, 50]);
-  // Read more: the next listings only.
+  // Asking for more reads changes nothing: every subject reads its first 50, no more.
   const more = await request('GET', `${base}/explore?categoryId=${PARENT}&reads=100`, undefined, t.hunter);
-  assert.deepStrictEqual([more.data.reads.read, calls.sold], [79, 79], 'every listing but the hidden one');
+  assert.deepStrictEqual([more.data.reads.read, calls.sold], [50, 50]);
   // Yesterday's readings stand: opening it again the next day reads nothing new.
   await pool.query(`UPDATE discover_listing_reads SET day = day - 1 WHERE item_id LIKE $1`, [`${PARENT}%`]);
   const soldBefore = calls.sold;
-  const nextDay = await request('GET', `${base}/explore?categoryId=${PARENT}&reads=100`, undefined, t.hunter);
-  assert.deepStrictEqual([nextDay.data.reads.read, calls.sold], [79, soldBefore], "yesterday's readings are used, not bought again");
+  const nextDay = await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter);
+  assert.deepStrictEqual([nextDay.data.reads.read, calls.sold], [50, soldBefore], "yesterday's readings are used, not bought again");
 
   // Ranking the subcategories answers at once and runs on; explore shows how far it has got.
   const rank = await request('POST', `${base}/rank`, { categoryId: PARENT }, t.hunter);
@@ -254,8 +236,8 @@ test('a keyword explores the same way, reads stop when the day’s share is used
   const base = `/api/connections/${t.connectionId}/discover`;
 
   // The day's reads used up: the keyword is scanned but nothing is read.
-  const limit = config.discover.tradingDailyCalls;
-  config.discover.tradingDailyCalls = 0;
+  const limit = config.discover.readsDailyCalls;
+  config.discover.readsDailyCalls = 0;
   const before = calls.sold;
   try {
     const empty = await request('GET', `${base}/explore?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter);
@@ -263,10 +245,10 @@ test('a keyword explores the same way, reads stop when the day’s share is used
     assert.deepStrictEqual([empty.data.reads.read, empty.data.reads.stopped, calls.sold], [0, true, before]);
     assert.strictEqual(empty.data.opportunity.parts[0].value, 'Not read yet');
   } finally {
-    config.discover.tradingDailyCalls = limit;
+    config.discover.readsDailyCalls = limit;
   }
   const kw = await request('GET', `${base}/explore?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter);
-  assert.strictEqual(kw.data.reads.read, 79, 'a keyword reads more on opening (every listing here but the hidden one)');
+  assert.strictEqual(kw.data.reads.read, 50, 'a keyword reads its first 50, like every subject');
   assert.strictEqual(kw.data.subject.kind, 'keyword');
   assert.ok(!kw.data.keywords.some((k) => k.term === 'fountain'), "the keyword's own words aren't news");
 
@@ -296,7 +278,8 @@ test('a keyword explores the same way, reads stop when the day’s share is used
   const list = await request('GET', `${base}/watches`, undefined, t.ownerToken);
   assert.deepStrictEqual(list.data.items.map((w) => w.kind).sort(), ['category', 'keyword']);
   const watchedKeyword = list.data.items.find((w) => w.kind === 'keyword');
-  assert.strictEqual(watchedKeyword.figures.read, 79);
+  assert.strictEqual(watchedKeyword.figures.read, 50);
+  assert.ok(watchedKeyword.momentum && !('rising' in watchedKeyword), 'its momentum, no listing rows');
   assert.strictEqual(watchedKeyword.createdBy, 'hunter');
   assert.strictEqual((await request('GET', `${base}/explore?q=${encodeURIComponent(KEYWORD)}`, undefined, t.hunter)).data.watch.id, added.data.id);
   assert.strictEqual((await request('DELETE', `${base}/watches/${added.data.id}`, undefined, t.hunter)).status, 204);
@@ -338,117 +321,69 @@ test("your keywords come from the account's own traffic, for whoever sees its an
   assert.deepStrictEqual(suggested.data.categories, [{ id: '123', name: 'Night Lights', path: ['Home', 'Lighting'], leaf: true }]);
 });
 
-// A hunted product for `ownerId` on `connectionId`, from the competitor listing `itemId`.
-async function huntedFixture(ownerId, connectionId, itemId, status = 'pending') {
-  const huntingRepository = require('../../src/modules/hunting/hunting.repository');
-  return huntingRepository.insert({
-    ownerId,
-    connectionId,
-    hunterId: ownerId,
-    status,
-    competitorUrl: `https://www.ebay.co.uk/itm/${itemId}`,
-    competitorItemId: String(itemId),
-    sourceUrl: 'https://www.aliexpress.com/item/1005001234567890.html',
-    sourceProductId: '1005001234567890',
-    title: 'Discover fixture',
-    imageUrl: null,
-    currency: 'GBP',
-    checkResult: { summary: { verdict: 'strong', headline: {} }, options: [] },
-    headlineProfit: 3,
-    headlineRoi: 60,
-    soldPerMonth: 10,
-  });
-}
-
-async function otherOwner() {
-  const email = `discover-other-${crypto.randomUUID()}@example.com`;
-  const { data } = await request('POST', '/api/auth/signup', { email, password: 'testpassword123' });
-  const connection = await connectionService.createConnection(data.user.id, { platformKey: 'ebay', label: 'Other Store', credentials: { accessToken: 'x' } });
-  return { ownerId: data.user.id, connectionId: connection.id };
-}
-
-test("Discover says what the owner already has, how many other Liston sellers hunt a product (never who), and keeps each eBay site's market to itself", async () => {
+test("each eBay site's keywords and categories are its own: an eBay US account sees nothing explored on eBay UK", async () => {
   const t = await team();
   const base = `/api/connections/${t.connectionId}/discover`;
-  const first = await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter);
-  assert.strictEqual(first.status, 200, JSON.stringify(first.data));
-  // The fixture's listings group into one product: it's both the owner's (hunted) and crowded.
-  const mineProduct = first.data.products[0];
-  const crowdedProduct = mineProduct;
-  assert.ok(mineProduct, 'a product to mark');
-  assert.ok(first.data.products.every((p) => p.mine === null && p.crowd === 0), 'nothing yours or crowded yet');
-
-  // The owner hunted it; two other teams did too (a third team long ago doesn't count).
-  await huntedFixture(t.ownerId, t.connectionId, mineProduct.itemIds[0], 'rejected');
-  const others = [await otherOwner(), await otherOwner(), await otherOwner()];
-  for (const o of others) await huntedFixture(o.ownerId, o.connectionId, crowdedProduct.itemIds[0]);
-  await pool.query(`UPDATE hunted_products SET created_at = now() - interval '40 days' WHERE owner_user_id = $1`, [others[2].ownerId]);
-  discoverService.forgetOwner(t.ownerId);
-
-  const again = (await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter)).data;
-  const byKey = new Map(again.products.map((p) => [p.key, p]));
-  assert.deepStrictEqual(byKey.get(mineProduct.key).mine, { kind: 'rejected', text: 'Rejected before on Discover Store' });
-  const crowded = byKey.get(crowdedProduct.key);
-  assert.strictEqual(crowded.crowd, 2);
-  assert.ok(crowded.reasons.some((r) => r.good === false && /Hunted by 2 other Liston sellers/.test(r.text)));
-  assert.strictEqual(crowded.score, crowdedProduct.score - 4, 'a few points off, never who');
-  assert.ok(!JSON.stringify(crowded).includes(others[0].ownerId));
-
-  // Winners: marked by default, hidden when asked.
-  const shownAll = await request('GET', `${base}/winners?mine=show&limit=300`, undefined, t.hunter);
-  assert.strictEqual(shownAll.data.products.find((p) => p.key === mineProduct.key)?.mine?.kind, 'rejected');
-  const hidden = await request('GET', `${base}/winners?mine=hide&limit=300`, undefined, t.hunter);
-  assert.ok(!hidden.data.products.some((p) => p.key === mineProduct.key));
-  assert.ok(hidden.data.mineHidden >= 1);
-
-  // The same owner's eBay US account sees eBay US's market only: nothing explored on eBay UK.
+  assert.strictEqual((await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter)).status, 200);
   const us = await connectionService.createConnection(t.ownerId, { platformKey: 'ebay', label: 'US Store', credentials: { accessToken: 'x' }, settings: { ebay: { marketplaceId: 'EBAY_US' } } }, { planChecked: true });
-  const usWinners = await request('GET', `/api/connections/${us.id}/discover/winners?limit=300`, undefined, t.ownerToken);
-  assert.strictEqual(usWinners.status, 200, JSON.stringify(usWinners.data));
-  assert.strictEqual(usWinners.data.market.id, 'EBAY_US');
-  assert.ok(!usWinners.data.products.some((p) => p.from.name === 'Test Lighting'));
   const usKeywords = await request('GET', `/api/connections/${us.id}/discover/keywords?limit=400`, undefined, t.ownerToken);
-  assert.ok(!usKeywords.data.keywords.some((k) => k.from?.name === 'Test Lighting'));
+  assert.strictEqual(usKeywords.status, 200, JSON.stringify(usKeywords.data));
   assert.strictEqual(usKeywords.data.market.id, 'EBAY_US');
+  assert.ok(!usKeywords.data.keywords.some((k) => k.from?.name === 'Test Lighting'));
+  const usStart = await request('GET', `/api/connections/${us.id}/discover`, undefined, t.ownerToken);
+  assert.ok(!usStart.data.bestCategories.some((c) => c.id === PARENT));
 });
 
-test("Discover keeps products at risk of a takedown out by default: one like a draft eBay refused the owner for, or their team rejected for brand risk; shown marked when asked", async () => {
-  const listingRepository = require('../../src/modules/listings/listing.repository');
-  const t = await team();
-  const base = `/api/connections/${t.connectionId}/discover`;
-  const first = (await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter)).data;
-  const product = first.products[0];
-  assert.ok(product && first.products.every((p) => p.risk === null), 'nothing at risk yet');
+test("each account has its own day of reads, so one busy hunter can't spend everyone's; past Discover's share of eBay's Browse pool nothing is read", async () => {
+  const a = await team();
+  const b = await team();
+  const lamp = `desk lamp ${run}`;
+  const perAccount = config.discover.accountDailyReads;
+  config.discover.accountDailyReads = 10;
+  try {
+    const first = await request('GET', `/api/connections/${a.connectionId}/discover/explore?q=${encodeURIComponent(lamp)}`, undefined, a.hunter);
+    assert.strictEqual(first.status, 200, JSON.stringify(first.data));
+    assert.deepStrictEqual([first.data.reads.read, first.data.reads.stopped, first.data.budget.used.account], [10, true, 10], "this account's 10 for the day");
+    // Asked again the same day: this account has nothing left, so nothing more is read.
+    const soldAfterA = calls.sold;
+    const again = await request('GET', `/api/connections/${a.connectionId}/discover/explore?q=${encodeURIComponent(lamp)}`, undefined, a.hunter);
+    assert.deepStrictEqual([again.data.reads.read, calls.sold], [10, soldAfterA]);
+    // Another account on the site uses its own day: the 10 already read are shared, it reads the next 10.
+    const other = await request('GET', `/api/connections/${b.connectionId}/discover/explore?q=${encodeURIComponent(lamp)}`, undefined, b.hunter);
+    assert.deepStrictEqual([other.data.reads.read, calls.sold - soldAfterA], [20, 10]);
+  } finally {
+    config.discover.accountDailyReads = perAccount;
+  }
 
-  // eBay refused one of the owner's drafts for this product, for VeRO.
-  const draft = await listingRepository.createDraft({ connectionId: t.connectionId, sku: null, platformOfferId: null, platformGroupKey: null, generatedData: { title: product.name } });
-  await pool.query("UPDATE listings SET error_message = $2 WHERE id = $1", [draft.id, 'eBay: This listing may be in violation of the VeRO programme (intellectual property).']);
-  discoverService.forgetOwner(t.ownerId);
-
-  const again = (await request('GET', `${base}/explore?categoryId=${PARENT}`, undefined, t.hunter)).data;
-  const risky = again.products.find((p) => p.key === product.key);
-  assert.deepStrictEqual([risky.risk.kind, risky.risk.level], ['refused', 'bad']);
-  assert.match(risky.risk.text, /brand or intellectual-property/);
-  // Winners shows it marked by default; hidden only when asked, saying how many it hid.
-  const all = (await request('GET', `${base}/winners?limit=300`, undefined, t.hunter)).data;
-  assert.strictEqual(all.products.find((p) => p.key === product.key)?.risk?.kind, 'refused');
-  const safe = (await request('GET', `${base}/winners?safety=safe&limit=300`, undefined, t.hunter)).data;
-  assert.ok(!safe.products.some((p) => p.key === product.key));
-  assert.ok(safe.riskHidden >= 1);
-  assert.strictEqual((await request('GET', `${base}/winners?safety=maybe`, undefined, t.hunter)).status, 400);
+  // eBay says the Browse pool is 80% used (every server on Liston's keys, research and drafting too): past
+  // Discover's 60%, a new keyword is searched from the kept scans only, and nothing is read.
+  browseUsage.applyEbayFigure({ rateLimits: [{ apiName: 'Browse', resources: [{ name: 'buy.browse', rates: [{ limit: 5000, remaining: 1000, reset: new Date(Date.now() + 3600e3).toISOString() }] }] }] });
+  try {
+    const soldBefore = calls.sold;
+    // A subcategory with most of its leading listings not read yet (its ranking read 8).
+    const paused = await request('GET', `/api/connections/${b.connectionId}/discover/explore?categoryId=${CHILDREN[0]}`, undefined, b.hunter);
+    assert.strictEqual(paused.status, 200, JSON.stringify(paused.data));
+    assert.strictEqual(paused.data.budget.paused, true);
+    assert.strictEqual(paused.data.budget.reads, 0);
+    assert.strictEqual(calls.sold, soldBefore, 'no read while the pool is past its share');
+    const unseen = await request('GET', `/api/connections/${b.connectionId}/discover/explore?q=${encodeURIComponent(`floor lamp ${run}`)}`, undefined, b.hunter);
+    assert.strictEqual(unseen.status, 429, 'a subject never searched waits for tomorrow');
+  } finally {
+    browseUsage._reset();
+  }
 });
 
 test('a subject answers at once with what is read, reads the rest in the background, and fills in when asked again', async () => {
   const t = await team();
   const base = `/api/connections/${t.connectionId}/discover`;
-  // A subcategory (it reads 100 on opening), only its few ranking reads made so far.
+  // A subcategory, only its few ranking reads made so far.
   const sub = CHILDREN[1];
-  const real = trading.getItemSales;
+  const real = browseResearch.listingRead;
   discoverService._quickMs(50);
   // Slow reads: 50 listings at 30ms each, six at a time, take longer than the page waits.
-  const slow = mock.method(trading, 'getItemSales', async (token, itemId) => {
+  const slow = mock.method(browseResearch, 'listingRead', async () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
-    return { itemId, sold: 40, brand: 'Unbranded', options: null, categoryId: CHILDREN[1], startedAt: new Date(Date.now() - 60 * 86400000).toISOString() };
+    return { sold: 40, brand: 'Unbranded', categoryId: CHILDREN[1], startedAt: new Date(Date.now() - 60 * 86400000).toISOString(), calls: 1 };
   });
   try {
     const first = await request('GET', `${base}/explore?categoryId=${sub}`, undefined, t.hunter);
@@ -460,82 +395,12 @@ test('a subject answers at once with what is read, reads the rest in the backgro
     assert.strictEqual(again.data.reads.reading, false);
     assert.strictEqual(again.data.reads.progress.done, again.data.reads.progress.of);
     assert.ok(again.data.reads.read > first.data.reads.read, 'filled in');
-    const calls = slow.mock.callCount();
-    assert.ok(calls <= again.data.reads.progress.of, 'each listing read once, not again for the second ask');
+    const reads = slow.mock.callCount();
+    assert.ok(reads <= again.data.reads.progress.of, 'each listing read once, not again for the second ask');
   } finally {
     slow.mock.restore();
-    trading.getItemSales = real;
+    browseResearch.listingRead = real;
     discoverService._quickMs();
-  }
-});
-
-test("Load more reads only listings that can pass the page's filters, then searches eBay within them for more; never the rest", async () => {
-  const t = await team();
-  const base = `/api/connections/${t.connectionId}/discover`;
-  const CATEGORY = `6${run}`;
-  // Opened: its first 50 leading listings read in eBay's order (the figures stand on them).
-  const opened = await request('GET', `${base}/explore?categoryId=${CATEGORY}`, undefined, t.hunter);
-  assert.strictEqual(opened.status, 200, JSON.stringify(opened.data));
-  assert.deepStrictEqual([opened.data.reads.read, opened.data.reads.of, opened.data.reads.focused], [50, 79, 0], 'of the 79 leading listings kept (one hidden)');
-  const soldBefore = calls.sold;
-  // Load more with Price £70+ (unbranded): the leading listings from £70 (the 58th on), then eBay searched
-  // within the price for more, all read; the ones under £70 never read.
-  const more = await request('GET', `${base}/explore?categoryId=${CATEGORY}&reads=100&priceMin=70&brand=unbranded`, undefined, t.hunter);
-  assert.strictEqual(more.status, 200, JSON.stringify(more.data));
-  assert.strictEqual(calls.sold - soldBefore, 50, '22 leading listings from £70 and 28 found for the filters');
-  const read = async (ids) => (await pool.query('SELECT item_id FROM discover_listing_reads WHERE item_id = ANY($1)', [ids])).rows.length;
-  const under = Array.from({ length: 7 }, (_, i) => `${CATEGORY}${51 + i}`); // £63–£69
-  assert.strictEqual(await read(under), 0, 'nothing under the price is read');
-  const focused = calls.focused.at(-1);
-  assert.deepStrictEqual([focused.categoryId, focused.offset, /price:\[59\.5\.\.\],priceCurrency:GBP/.test(focused.filter), /Brand:\{Unbranded/.test(focused.aspectFilter)], [CATEGORY, 0, true, true]);
-  assert.strictEqual(more.data.reads.focused, 50);
-  assert.ok(more.data.products.some((p) => p.itemIds.some((id) => id.startsWith(`5${run}`))), 'products from the listings found for the filters');
-  // The subject's own figures stay on its leading listings.
-  assert.strictEqual(more.data.reads.of, 79);
-  // Loading more again searches the next page only when those run out; nothing is read twice.
-  const soldAfter = calls.sold;
-  const searches = calls.focused.length;
-  const again = await request('GET', `${base}/explore?categoryId=${CATEGORY}&reads=100&priceMin=70&brand=unbranded`, undefined, t.hunter);
-  assert.deepStrictEqual([calls.sold, calls.focused.length, again.data.reads.focused], [soldAfter, searches, 50]);
-});
-
-test("Find more for the Products tab's filters reads only listings that can pass them, where matching products come from; the tab, the list and the counts follow", async () => {
-  const t = await team();
-  const base = `/api/connections/${t.connectionId}/discover`;
-  const discoverRepo = require('../../src/modules/discover/discover.repository');
-  // The pool from this run's subjects only (the dev database may hold real ones).
-  const realScans = discoverRepo.scansForSite;
-  mock.method(discoverRepo, 'scansForSite', async (...args) => (await realScans(...args)).filter((row) => row.subject.includes(String(run))));
-  try {
-    // A child category of this run, its first reads made (ranking read 8 of it; opening reads its first 100).
-    await request('GET', `${base}/explore?categoryId=${CHILDREN[0]}`, undefined, t.hunter);
-    const read = async (ids) => (await pool.query('SELECT item_id FROM discover_listing_reads WHERE item_id = ANY($1)', [ids])).rows.map((r) => r.item_id);
-    const before = (await request('GET', `${base}/winners?priceMin=70`, undefined, t.hunter)).data;
-    assert.ok(before.products.every((p) => p.price.median >= 70));
-    const soldBefore = calls.sold;
-    const ours = async () =>
-      (await pool.query('SELECT item_id FROM discover_listing_reads WHERE item_id LIKE ANY($1)', [[`9${run}%`, `8${run}%`, `7${run}%`, `6${run}%`, `5${run}%`]])).rows.map((r) => r.item_id);
-    const readBefore = new Set(await ours());
-    const more = await request('POST', `${base}/winners/more`, { priceMin: '70' }, t.hunter);
-    assert.strictEqual(more.status, 200, JSON.stringify(more.data));
-    assert.ok(more.data.read > 0 && more.data.subjects.length > 0, JSON.stringify(more.data));
-    assert.strictEqual(calls.sold - soldBefore, more.data.read, 'each listing read once');
-    // Every listing it read passes the price (a fixture listing is priced £12 + its number, one found by the
-    // filtered search £75 + its number): none under £70 was bought.
-    const priceOf = (id) => (id.startsWith(`5${run}`) ? 75 : 12) + Number(id.slice(-2));
-    const newlyRead = (await ours()).filter((id) => !readBefore.has(id));
-    assert.ok(newlyRead.length > 0 && newlyRead.every((id) => priceOf(id) >= 70), JSON.stringify(newlyRead));
-    void read;
-    const after = (await request('GET', `${base}/winners?priceMin=70`, undefined, t.hunter)).data;
-    assert.ok(after.matched >= before.matched);
-    // Asked again with nothing left to read for the filters: says so, reads nothing.
-    let last = more.data;
-    for (let i = 0; i < 10 && last.more; i += 1) last = (await request('POST', `${base}/winners/more`, { priceMin: '70' }, t.hunter)).data;
-    const soldEnd = calls.sold;
-    const done = (await request('POST', `${base}/winners/more`, { priceMin: '70' }, t.hunter)).data;
-    assert.deepStrictEqual([done.read, done.more, calls.sold], [0, false, soldEnd]);
-  } finally {
-    discoverRepo.scansForSite = realScans;
   }
 });
 

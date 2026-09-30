@@ -174,16 +174,20 @@ const config = {
     // button; off under tests unless a test turns it on.
     autoDraft: process.env.HUNTING_AUTO_DRAFT ? process.env.HUNTING_AUTO_DRAFT !== 'off' : !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test',
   },
-  // Discover, the Hunting page's tab for finding what to hunt
-  // (discover/discover-budget.js). Sold counts come from Trading GetItem, a
-  // separate 5,000-a-day pool: at most this many a day, at background
-  // priority (the governor keeps the last 20% for orders and listings).
-  // Scans are Browse searches, from the Browse pool research and drafting
-  // share. The nightly re-read of watched categories and keywords is off on
-  // a machine that shouldn't spend the shared allowances.
+  // Discover, the Hunting page's tab for judging categories and keywords
+  // (discover/discover-budget.js). Everything it reads comes from eBay's
+  // Browse API, never Trading (orders, listings and publishing keep that
+  // pool): scans are Browse searches, sold counts Browse item reads — at
+  // most readsDailyCalls a day, accountDailyReads of them per account (one
+  // busy hunter can't take everyone's day), and none once eBay's own count
+  // of the Browse pool passes browsePoolShare (research and drafting keep
+  // the rest). The nightly re-read of watched categories and keywords is off
+  // on a machine that shouldn't spend the shared allowances.
   discover: {
-    tradingDailyCalls: parseInt(process.env.DISCOVER_TRADING_DAILY_CALLS || '2000', 10),
+    readsDailyCalls: parseInt(process.env.DISCOVER_READS_DAILY_CALLS || '1500', 10),
+    accountDailyReads: parseInt(process.env.DISCOVER_ACCOUNT_DAILY_READS || '400', 10),
     browseDailyCalls: parseInt(process.env.DISCOVER_BROWSE_DAILY_CALLS || '400', 10),
+    browsePoolShare: Number(process.env.DISCOVER_BROWSE_POOL_SHARE || '0.6'),
     watchEnabled: process.env.DISCOVER_WATCH !== 'off',
   },
   analytics: {

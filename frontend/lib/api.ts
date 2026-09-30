@@ -2065,103 +2065,7 @@ export interface MemberHunting {
   reasons: (HuntReason & { count: number })[];
 }
 
-// ---- Discover (the Hunting page's tab for finding what to hunt) ----------------
-
-export interface DiscoverListing {
-  itemId: string;
-  title: string;
-  image: string | null;
-  url: string | null;
-  price: { value: number; currency: string } | null;
-  shipping: { cost: number; free: boolean } | null;
-  landed: number | null; // price with postage
-  seller: { username: string; feedbackScore: number | null; feedbackPercentage: number | null } | null;
-  overseas: boolean;
-  country: string | null;
-  category: string | null;
-  categoryId: string | null;
-  createdAt: string | null;
-  daysLive: number | null;
-  delivery: { min: number | null; max: number | null; compared: "faster" | "similar" | "slower" | "unknown" };
-  sold: number | null; // eBay's total, null until read
-  soldPerMonth: number | null;
-  options: { label: string; sold: number; price: number | null }[] | null; // best-selling first
-  optionCount: number;
-  readDay: string | null;
-  recent: { sold: number; days: number; from: string; to: string } | null; // sold between two readings
-  lift?: number | null; // rising: selling this many times faster lately than over its life
-  flag?: DiscoverFlag | null;
-}
-// A product: the same thing sold by several sellers, grouped, judged the way a hunter judges it.
-export interface DiscoverProduct {
-  key: string;
-  name: string;
-  image: string | null;
-  url: string | null;
-  category: string | null;
-  categoryId: string | null;
-  listings: number;
-  itemIds: string[];
-  read: number;
-  sellers: number;
-  selling: number; // sellers selling it every month
-  perMonth: number;
-  sold: number;
-  price: { low: number; median: number; high: number } | null;
-  delivery: { known: boolean; share: number | null; sellers: number; perMonth: number | null }; // sales from sellers delivering like you or slower
-  leaderShare: number | null;
-  momentum: "rising" | "new" | "steady" | "quiet";
-  lift: number | null;
-  newestDays: number | null;
-  oldestDays?: number | null; // its oldest listing with a sold count: what `sold` was sold in
-  recent: { sold: number; days: number } | null;
-  score: number;
-  band: DiscoverOpportunity["band"];
-  parts: { demand: number; proven: number; fit: number; room: number; momentum: number; spread: number };
-  reasons: { good: boolean | null; text: string }[];
-  flag: DiscoverFlag | null;
-  brand: string | null;
-  branded: boolean | null; // null until a reading carries the brand
-  seller: { username: string | null; score: number | null; percentage: number | null }; // the leading listing's seller
-  smallestSellerScore: number | null; // the smallest seller selling it every month
-  from?: { kind: "category" | "keyword"; value: string; name: string; path: string[] };
-  // What the owner already has of it: their live listing is among its listings, a listing Liston made
-  // came from it, it was hunted (and where that got to), or a live listing has a very similar title.
-  mine?: { kind: "selling" | "listed" | "drafted" | "hunted" | "rejected" | "similar"; text: string } | null;
-  // Other Liston sellers who hunted it in the last two weeks (counted from two; never who).
-  crowd?: number;
-  // Its takedown risk for this owner: a VeRO brand (source "list": Liston's list; "ai": only the AI's guess, never eBay's word),
-  // eBay's refusals of their drafts, their team's brand-risk rejections.
-  risk?: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string; source?: "list" | "ai"; brand?: string } | null;
-}
-// The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
-export interface DiscoverWinnersFilters {
-  q?: string;
-  fit?: boolean;
-  priceMin?: number | null;
-  priceMax?: number | null;
-  brand?: "any" | "unbranded" | "branded";
-  rating?: "any" | "top" | "good" | "weak";
-  size?: "any" | "small" | "medium" | "large";
-  listedWithin?: number | null; // days: its youngest listing with a sold count is at most this old
-  minSales?: number;
-  newOnly?: boolean;
-  sort?: "score" | "sales" | "rising" | "new" | "price";
-  // Products the owner already has: shown and marked, or left out (a similar title is only ever marked).
-  mine?: "show" | "hide";
-  // VeRO and the owner's eBay history: products at risk hidden ("safe") or shown marked ("all").
-  safety?: "safe" | "all";
-}
-export interface DiscoverWinners {
-  products: DiscoverProduct[];
-  matched: number;
-  mineHidden?: number;
-  riskHidden?: number;
-  pool: { subjects: number; listings: number; read: number };
-  market: { id: string; name: string; currency: string };
-  account: { min: number; max: number } | null;
-  at: string;
-}
+// ---- Discover (the Hunting page's tab for judging categories and keywords) ------
 
 // A keyword worth hunting across everything explored on the site: its sales a month (a searched
 // keyword's own market; otherwise the titles with it where it sells most), eBay's sold counts, its lift
@@ -2245,12 +2149,14 @@ export interface DiscoverChild {
     takenAt: string;
   } | null;
 }
+// Discover's day of eBay Browse calls: sold-count reads left (the account's, when it asks) and searches;
+// `paused` once eBay's count of the Browse pool passes Discover's share (research and drafting keep the rest).
 export interface DiscoverBudget {
-  trading: number;
+  reads: number;
   browse: number;
-  tradingPaused: boolean;
-  used: { trading: number; browse: number };
-  limits: { trading: number; browse: number };
+  paused: boolean;
+  used: { reads: number; account: number; browse: number };
+  limits: { reads: number; account: number; browse: number };
   resetAt: string;
 }
 export interface DiscoverAccount {
@@ -2330,16 +2236,15 @@ export interface DiscoverExplore {
   figures: DiscoverFigures;
   opportunity: DiscoverOpportunity;
   recent: { sold: number; days: number; listings: number } | null;
-  rising: DiscoverListing[];
-  products: DiscoverProduct[];
-  listings: DiscoverListing[];
+  // Of its leading listings read, how many are new or selling faster lately.
+  momentum: { rising: number; read: number };
   keywords: DiscoverKeyword[];
   brands: { name: string; count: number; unbranded: boolean }[];
   categories: { id: string; name: string; count: number }[];
   children: DiscoverChild[];
   // `reading`: sold counts still being read in the background (the page asks again); `progress`: how far.
-  // `of`: the leading listings read from eBay; `focused`: listings read beyond them for the filters (Load more).
-  reads: { asked: number; read: number; of?: number; focused?: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number; reading?: boolean; progress?: { done: number; of: number } };
+  // `of`: the leading listings kept (restricted ones hidden); `stopped`: the day's reads ran out first.
+  reads: { asked: number; read: number; of: number; stopped: boolean; reading?: boolean; progress?: { done: number; of: number } };
   watch: { id: string } | null;
   ranking: { total: number; done: number } | null;
   market: { id: string; name: string; currency: string; country?: string; flag?: string };
@@ -2369,8 +2274,7 @@ export interface DiscoverBestCategory {
   score: number;
   band: DiscoverOpportunity["band"];
   keyword: string | null;
-  products: number;
-  // Of its products, how many are new or rising: trending.
+  // Of its leading listings read, how many are new or selling faster lately: trending.
   rising: number;
 }
 export interface DiscoverStart {
@@ -2382,8 +2286,8 @@ export interface DiscoverStart {
   yourScoring?: { total: number; done: number } | null;
   topCategories: DiscoverCategoryCard[];
   watches: number;
-  // The best products across everything explored on the site, for the start screen.
-  winners: { products: DiscoverProduct[]; total: number; keywords?: number; pool: { subjects: number; listings: number; read: number } } | null;
+  // The size of everything explored on the site: its keywords that sell and the categories ranked.
+  pool: { keywords: number; categories: number; subjects: number; listings: number; read: number } | null;
   watchPreview: DiscoverWatch[];
   // What anyone on the site explored in the last few days (shared across accounts).
   recent: { kind: "category" | "keyword"; value: string; name: string; path: string[]; openedAt: string; flag?: DiscoverFlag | null; scanned: { score: number; band: DiscoverOpportunity["band"]; total: number; monthlySales: number } | null }[];
@@ -2401,7 +2305,7 @@ export interface DiscoverWatch {
   figures: { total: number; medianPerMonth: number | null; selling: number; read: number; price: number | null } | null;
   opportunity?: { score: number; band: DiscoverOpportunity["band"] };
   recent?: { sold: number; days: number; listings: number } | null;
-  rising?: DiscoverListing[];
+  momentum?: { rising: number; read: number };
 }
 export interface DiscoverWatchList {
   items: DiscoverWatch[];
@@ -2485,24 +2389,6 @@ function researchQuery(params: ResearchParams): URLSearchParams {
 }
 
 // The Products tab's filters as query values (the Winners list, and Find more with the same).
-function winnersQuery(f: DiscoverWinnersFilters): URLSearchParams {
-  const q = new URLSearchParams();
-  if (f.q) q.set("q", f.q);
-  if (f.fit) q.set("fit", "1");
-  if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
-  if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
-  if (f.brand && f.brand !== "any") q.set("brand", f.brand);
-  if (f.rating && f.rating !== "any") q.set("rating", f.rating);
-  if (f.size && f.size !== "any") q.set("size", f.size);
-  if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
-  if (f.minSales) q.set("minSales", String(f.minSales));
-  if (f.newOnly) q.set("newOnly", "1");
-  if (f.sort) q.set("sort", f.sort);
-  if (f.mine) q.set("mine", f.mine);
-  if (f.safety) q.set("safety", f.safety);
-  return q;
-}
-
 export const api = {
   signup: (email: string, password: string, extra: { name?: string; accessNote?: string } = {}) =>
     request<AuthResponse>("/api/auth/signup", {
@@ -2747,22 +2633,10 @@ export const api = {
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },
   discoverStart: (connectionId: string) => request<DiscoverStart>(`/api/connections/${connectionId}/discover`),
-  // `focus`: the page's filters when loading more: only listings that can pass them are read.
-  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number, focus?: DiscoverWinnersFilters | null) => {
+  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef) => {
     const q = new URLSearchParams();
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
-    if (reads) q.set("reads", String(reads));
-    if (focus) {
-      if (focus.q) q.set("fq", focus.q);
-      if (focus.fit) q.set("fit", "1");
-      if (focus.priceMin !== null && focus.priceMin !== undefined) q.set("priceMin", String(focus.priceMin));
-      if (focus.priceMax !== null && focus.priceMax !== undefined) q.set("priceMax", String(focus.priceMax));
-      if (focus.brand && focus.brand !== "any") q.set("brand", focus.brand);
-      if (focus.rating && focus.rating !== "any") q.set("rating", focus.rating);
-      if (focus.size && focus.size !== "any") q.set("size", focus.size);
-      if (focus.listedWithin) q.set("listedWithin", String(focus.listedWithin));
-    }
     return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
   },
   discoverReview: (connectionId: string, subject: DiscoverSubjectRef) => {
@@ -2770,17 +2644,6 @@ export const api = {
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
     return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number; marked?: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
-  },
-  // "Find more products for these filters": more listings that can pass them read in the explored subjects most likely to have them.
-  discoverWinnersMore: (connectionId: string, f: DiscoverWinnersFilters = {}) =>
-    request<{ read: number; subjects: string[]; more: boolean; signInFailed?: boolean; stopped?: boolean }>(`/api/connections/${connectionId}/discover/winners/more`, {
-      method: "POST",
-      body: JSON.stringify(Object.fromEntries(winnersQuery(f).entries())),
-    }),
-  discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}, limit?: number) => {
-    const q = winnersQuery(f);
-    if (limit) q.set("limit", String(limit));
-    return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
   },
   // The keywords worth hunting across everything explored on the site.
   discoverKeywords: (connectionId: string, f: { q?: string; sort?: DiscoverSiteKeywordSort; searchedOnly?: boolean; limit?: number } = {}) => {

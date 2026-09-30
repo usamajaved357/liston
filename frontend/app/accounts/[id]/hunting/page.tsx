@@ -12,7 +12,6 @@ import { AccountPageSkeleton } from "@/components/Skeleton";
 import { HuntAddBar, HuntCheck, HuntForm } from "@/components/hunting/HuntForm";
 import { HuntRows, PipelineTabs, SORT_LABELS } from "@/components/hunting/HuntList";
 import { HuntPanel } from "@/components/hunting/HuntPanel";
-import { HuntListingDialog } from "@/components/hunting/HuntListingDialog";
 import { PushPrompt } from "@/components/NotificationBell";
 import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 
@@ -22,8 +21,8 @@ import { DiscoverPanel } from "@/components/discover/DiscoverPanel";
 // reviewer before anyone may draft it. Reviewers see the queue; listers
 // see what's approved, ready to draft. Each team member's hunting figures
 // are on their own page in the owner's Team area, not here. The Discover
-// tab (?tab=discover) is where hunters find what to hunt: categories and
-// keywords, what's selling, a watchlist.
+// tab (?tab=discover) is where hunters judge where to hunt: categories and
+// keywords at every level, what's selling, a watchlist.
 
 const VIEWS: HuntView[] = ["all", "sourcing", "review", "approved", "drafted", "listed", "rejected", "mine"];
 
@@ -185,9 +184,6 @@ function HuntingBody() {
     qs.delete("competitor");
     router.push(`/accounts/${params.id}/hunting${qs.toString() ? `?${qs.toString()}` : ""}`, { scroll: false });
   }
-  // "Hunt" in Discover: the listing added on its own, its supplier added on its page (HuntListingDialog).
-  const [sourcing, setSourcing] = useState<string | null>(null);
-
   const viewer = data?.viewer;
   const perms = connection?.permissions;
   const canHunt = viewer ? viewer.canHunt : !perms || Boolean(perms.hunting || perms.hunting_review);
@@ -270,7 +266,7 @@ function HuntingBody() {
       }
     >
       {tab === "discover" && canDiscover ? (
-        <DiscoverPanel connectionId={connection.id} canSeeTraffic={canSeeTraffic} onHunt={setSourcing} />
+        <DiscoverPanel connectionId={connection.id} canSeeTraffic={canSeeTraffic} />
       ) : (
       <div className="space-y-5">
         {added && !checked && (
@@ -419,20 +415,6 @@ function HuntingBody() {
       </div>
       )}
 
-      {sourcing && (
-        <HuntListingDialog
-          key={sourcing}
-          connectionId={connection.id}
-          competitorUrl={sourcing}
-          from="discover"
-          onClose={() => setSourcing(null)}
-          onOpenHunt={(id) => {
-            setSourcing(null);
-            refresh();
-            open(id);
-          }}
-        />
-      )}
       {openId && <HuntPanel key={`${openId}-${editing}`} huntId={openId} you={user.id} onClose={closePanel} onChanged={refresh} startEditing={editing} />}
     </AccountShell>
   );

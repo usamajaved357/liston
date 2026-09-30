@@ -33,7 +33,7 @@ export const SORT_LABELS: Record<HuntSort, string> = {
 };
 
 const EMPTY: Record<HuntView, { title: string; text: string }> = {
-  sourcing: { title: "Nothing waiting for a supplier", text: "Products hunted from Discover or Product research wait here until someone opens them and adds the AliExpress product that supplies them." },
+  sourcing: { title: "Nothing waiting for a supplier", text: "Products hunted from Product research wait here until someone opens them and adds the AliExpress product that supplies them." },
   review: { title: "Nothing waiting for review", text: "New finds from the team land here for a decision." },
   approved: { title: "Nothing approved waiting", text: "Approved products draft themselves and move to Drafted. One whose draft failed stays here with the reason; open it to try again." },
   drafted: { title: "Nothing drafted yet", text: "Approved products show here once their draft is made, until they go live." },

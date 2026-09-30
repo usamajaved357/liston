@@ -136,13 +136,17 @@ export function AccountDelivery({ account }: { account: DiscoverAccount | null }
 }
 
 /** What's left of the day's eBay reads for Discover. */
+// Discover's day of eBay Browse calls (never Trading's: orders and listings keep that): this
+// account's sold-count reads, Discover's in all, its searches, and when the Browse pool pauses it.
 export function BudgetLine({ budget }: { budget: DiscoverBudget }) {
   const reset = budget.resetAt ? new Date(budget.resetAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : null;
+  const n = (v: number) => v.toLocaleString("en-GB");
   return (
     <p className="text-[11px] text-[var(--color-muted)]">
-      eBay reads today: {budget.used.trading.toLocaleString("en-GB")} of {budget.limits.trading.toLocaleString("en-GB")} sold counts · {budget.used.browse} of {budget.limits.browse} searches
+      Sold counts read today: {n(budget.used.account)} of {n(budget.limits.account)} for this account ({n(budget.used.reads)} of {n(budget.limits.reads)} in all) · {n(budget.used.browse)} of{" "}
+      {n(budget.limits.browse)} searches
       {reset && <> · resets at {reset}</>}
-      {budget.tradingPaused && <span className="text-amber-700"> · sold counts paused so orders keep eBay&apos;s last calls today</span>}
+      {budget.paused && <span className="text-amber-700"> · paused: eBay&apos;s Browse allowance is mostly used today, and research and drafting keep the rest</span>}
     </p>
   );
 }
@@ -192,7 +196,7 @@ export function FlagTag({ flag }: { flag: import("@/lib/api").DiscoverFlag | nul
   );
 }
 
-// The search beside a tab row: words in whatever the open tab lists (products, keywords).
+// The search beside a tab row: words in whatever the open tab lists (keywords).
 export function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (next: string) => void; placeholder: string }) {
   return (
     <label className="relative min-w-[180px] flex-1 sm:max-w-[260px] sm:flex-none sm:basis-[240px]">

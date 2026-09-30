@@ -3,12 +3,12 @@
 import { DiscoverSubjectRef, DiscoverWatchList } from "@/lib/api";
 import { count, money } from "@/components/research/format";
 import { ago } from "@/components/hunting/HuntBits";
-import { CardHeader, Chevron, perMonth, Quiet, ScoreBadge, Thumb } from "./discover-ui";
+import { CardHeader, Chevron, perMonth, Quiet, ScoreBadge } from "./discover-ui";
 
 // The categories and keywords the team watches on this account, read again
 // every night: each with its opportunity, its leading listings' sales, what
-// they sold lately (the difference between two days' readings) and which
-// of them are rising.
+// they sold lately (the difference between two days' readings) and how many
+// of them are new or rising.
 
 export function DiscoverWatchlist({
   data,
@@ -25,7 +25,7 @@ export function DiscoverWatchlist({
   return (
     <section className="card overflow-hidden">
       <div className="p-4 pb-3">
-        <CardHeader title="Watchlist" note={`${data.items.length} of ${data.limit} watched · Liston reads each one again every night, so its recent sales and rising listings build up`} />
+        <CardHeader title="Watchlist" note={`${data.items.length} of ${data.limit} watched · Liston reads each one again every night, so its recent sales and momentum build up`} />
       </div>
       {!data.items.length ? (
         <div className="border-t border-[var(--color-line)] px-4">
@@ -41,7 +41,9 @@ export function DiscoverWatchlist({
                 <th className="px-3 py-2 text-center">Monthly sales</th>
                 <th className="px-3 py-2 text-center">Lately</th>
                 <th className="px-3 py-2 text-center">Live</th>
-                <th className="w-[20%] px-3 py-2">Rising</th>
+                <th className="px-3 py-2 text-center" title="Of its leading listings read, how many are new or selling faster lately">
+                  New or rising
+                </th>
                 <th className="w-[52px] px-4 py-2">
                   <span className="sr-only">Remove</span>
                 </th>
@@ -90,19 +92,7 @@ export function DiscoverWatchlist({
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-center tabular-nums">{w.figures ? count(w.figures.total) : "—"}</td>
-                    <td className="px-3 py-2.5">
-                      {w.rising && w.rising.length ? (
-                        <span className="flex items-center gap-1">
-                          {w.rising.map((l) => (
-                            <a key={l.itemId} href={l.url || undefined} target="_blank" rel="noreferrer" title={`${l.title}${l.recent ? `: ${l.recent.sold} sold in ${l.recent.days} days` : ""}`}>
-                              <Thumb src={l.image} size={28} />
-                            </a>
-                          ))}
-                        </span>
-                      ) : (
-                        <span className="text-[11.5px] text-[var(--color-muted)]">—</span>
-                      )}
-                    </td>
+                    <td className="px-3 py-2.5 text-center tabular-nums">{w.momentum?.read ? `${w.momentum.rising} of ${w.momentum.read}` : "—"}</td>
                     <td className="px-4 py-2.5 text-center">
                       <button
                         type="button"

@@ -5,19 +5,12 @@ import {
   DiscoverChild,
   DiscoverExplore,
   DiscoverSubjectRef,
-  DiscoverWinnersFilters,
   DiscoverYourTraffic,
 } from "@/lib/api";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { ShareBar, ShareTone } from "@/components/charts/ShareBar";
 import { count, flag, money } from "@/components/research/format";
 import { ago } from "@/components/hunting/HuntBits";
-import { DiscoverProducts } from "./DiscoverProducts";
-import {
-  DEFAULT_FILTERS,
-  DiscoverProductFilters,
-  filterProducts,
-} from "./DiscoverProductFilters";
 import { DiscoverCompliance } from "./DiscoverCompliance";
 import { PillTabs } from "@/components/PillTabs";
 import { SegmentedControl } from "@/components/charts/SegmentedControl";
@@ -31,19 +24,20 @@ import {
   perMonth,
   Quiet,
   ScoreBadge,
-  SearchBox,
   StarIcon,
   StatTile,
 } from "./discover-ui";
 
-type View = "products" | "subcategories" | "keywords" | "market";
+type View = "subcategories" | "keywords" | "market";
 
 // One category or keyword in Discover, laid out like the Analytics page:
 // the headline figures as tiles (with what a supplier may cost at the
 // account's target return), your own traffic on a keyword, "Before you
-// hunt" (brands and VeRO, restricted items, eBay's word filter), the app's
-// own charts of where the sales are, the subcategories ranked, the keywords
-// that sell with the brand split, and what's selling now.
+// hunt" (brands and VeRO, restricted items, eBay's word filter), then tabs:
+// the subcategories ranked (each opening the same page, one level down),
+// the keywords that sell with the brand split, and the market picture (the
+// app's own charts of where the sales are). It lists no products: it says
+// where to hunt, and the hunter finds the product there.
 
 const intAxis = (v: number) => (Number.isInteger(v) ? count(v) : "");
 const pctText = (v: number | null) =>
@@ -200,14 +194,44 @@ function ScoreCard({ data }: { data: DiscoverExplore }) {
   );
 }
 
+// How far its sold counts have got: still being read in the background (a bar, the figures filling
+// in), else what the figures stand on and why some weren't read (the day's reads, the Browse pool).
+function ReadStatus({ data }: { data: DiscoverExplore }) {
+  const r = data.reads;
+  const hidden = data.compliance.hidden.count;
+  if (r.reading && r.progress) {
+    return (
+      <div className="card px-4 py-2.5" aria-live="polite">
+        <p className="flex items-center gap-2 text-[11.5px] text-[var(--color-muted)]">
+          <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-primary)]/25 border-t-[var(--color-primary)]" aria-hidden />
+          Reading sold counts: {r.progress.done} of {r.progress.of} leading listings. The figures fill in as they&apos;re read.
+        </p>
+        <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--color-paper)]">
+          <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-500" style={{ width: `${Math.round((100 * r.progress.done) / Math.max(1, r.progress.of))}%` }} />
+        </div>
+      </div>
+    );
+  }
+  const why = !r.stopped
+    ? null
+    : data.budget.paused
+      ? "eBay's Browse allowance is mostly used today, so the rest wait until it resets."
+      : data.budget.reads <= 0 && data.budget.used.account >= data.budget.limits.account
+        ? `This account's ${data.budget.limits.account} sold-count reads for today are used, so the rest wait until tomorrow.`
+        : "Today's sold-count reads ran out before every listing was read.";
+  return (
+    <p className={`text-[11.5px] ${why ? "text-amber-700" : "text-[var(--color-muted)]"}`}>
+      From the sold counts of {count(r.read)} of its {count(r.of)} leading listings
+      {hidden ? ` (${hidden} more hidden: a restricted item on eBay, never counted)` : ""}.{why ? ` ${why}` : ""}
+    </p>
+  );
+}
+
 export function DiscoverSubjectView({
   data,
   onOpen,
   onBack,
   backLabel,
-  onHunt,
-  onReadMore,
-  readingMore,
   onRank,
   onToggleWatch,
   watchBusy,
@@ -219,10 +243,6 @@ export function DiscoverSubjectView({
   onOpen: (subject: DiscoverSubjectRef) => void;
   onBack: () => void;
   backLabel: string;
-  onHunt: (url: string) => void;
-  // Load more: the listings read next are the ones that can pass these filters.
-  onReadMore: (filters: DiscoverWinnersFilters) => void;
-  readingMore: boolean;
   onRank: () => void;
   onToggleWatch: () => void;
   watchBusy: boolean;
@@ -232,33 +252,8 @@ export function DiscoverSubjectView({
 }) {
   const { subject, figures: f, market, charts } = data;
   const currency = market.currency;
-  const [filters, setFilters] =
-    useState<DiscoverWinnersFilters>(DEFAULT_FILTERS);
-  const [view, setView] = useState<View>("products");
-  const shownProducts = useMemo(
-    () => filterProducts(data.products, filters),
-    [data.products, filters],
-  );
-  // "Load more": what it found, said once the page answers (new products, and how many pass the filters).
-  const [loadedFrom, setLoadedFrom] = useState<{ asked: number; products: number; shown: number } | null>(null);
-  const loadMore = () => {
-    setLoadedFrom({ asked: data.reads.asked, products: data.products.length, shown: shownProducts.length });
-    onReadMore(filters);
-  };
-  const loadNote =
-    loadedFrom && data.reads.asked > loadedFrom.asked
-      ? (() => {
-          const found = Math.max(0, data.products.length - loadedFrom.products);
-          const passing = Math.max(0, shownProducts.length - loadedFrom.shown);
-          if (!found) return { text: "The next listings for these filters added no new products: they're more of the same ones.", hidden: false };
-          return {
-            text: `${found} new product${found === 1 ? "" : "s"} found${passing ? `, ${passing} matching your filters` : ", none matching your filters"}.`,
-            hidden: passing === 0,
-          };
-        })()
-      : null;
-  // Everything read, filters loosened but still VeRO safe: for when the defaults leave few.
-  const showAll = () => setFilters({ ...DEFAULT_FILTERS, q: filters.q, sort: filters.sort, priceMin: null, minSales: 0, fit: false, brand: "any", mine: "show" });
+  // A category with subcategories opens on them (the way down); a keyword or a leaf on its keywords.
+  const [view, setView] = useState<View>(data.children.length ? "subcategories" : "keywords");
   // Subcategories best-selling first (or by opportunity, or by live listings): the ones fetched ranked,
   // then the rest by how many listings they hold, a restricted one last. The top seller is marked.
   const [childSort, setChildSort] = useState<"sales" | "score" | "live">("sales");
@@ -284,10 +279,6 @@ export function DiscoverSubjectView({
   const read = f.demand.read;
   // A top-level category is too broad for "Before you hunt": it shows on a keyword or a subcategory.
   const specific = subject.kind === "keyword" || subject.path.length > 1;
-  const hidden = data.compliance.hidden;
-  const hiddenText = hidden.count
-    ? `${hidden.count} of the leading listings ${hidden.count === 1 ? "is" : "are"} hidden: restricted on eBay. Nothing here counts them.`
-    : null;
 
   // Sales by price: each band's share of the sales (solid) against its share of the listings (dashed).
   const bandSales = charts.priceBands.reduce((n, b) => n + b.perMonth, 0);
@@ -506,126 +497,30 @@ export function DiscoverSubjectView({
         />
       )}
 
-      {/* What to look at, as tabs, so nothing sits below a long list: the products (the point), its
-          subcategories (each with its own products and keywords), the keywords that sell, the market picture. */}
+      {/* Where its figures come from: sold counts still being read (the figures fill in), or why some weren't. */}
+      <ReadStatus data={data} />
+
+      {/* What to look at, as tabs, so nothing sits below a long list: its subcategories (each the same page,
+          one level down), the keywords that sell, the market picture. */}
       <div className="flex flex-wrap items-center gap-2">
-        {view === "products" && <SearchBox value={filters.q || ""} onChange={(q) => setFilters({ ...filters, q })} placeholder="Words in the product" />}
         <PillTabs<View>
           label="Show"
           value={view}
           onChange={setView}
           tabs={[
-            { key: "products", label: "Products", count: data.products.length },
             ...(data.children.length ? [{ key: "subcategories" as View, label: "Subcategories", count: data.children.length }] : []),
             { key: "keywords", label: "Keywords", count: data.keywords.length },
             { key: "market", label: "Market picture" },
           ]}
         />
         <p className="ml-auto text-[11.5px] text-[var(--color-muted)]">
-          {view === "products"
-            ? "The same product under several sellers is one row, scored the way a hunter judges it."
-            : view === "subcategories"
-              ? "Open one for its own products, keywords and subcategories: the deeper, the more specific."
-              : view === "keywords"
-                ? "The phrases of the titles that sell here: open one to find its products."
-                : "Sales by day, by price and across the leading listings; the score; who's selling and how they deliver."}
+          {view === "subcategories"
+            ? "Open one for its own figures, keywords and subcategories: the deeper, the more specific."
+            : view === "keywords"
+              ? "The phrases of the titles that sell here: open one to see its own figures."
+              : "Sales by day, by price and across the leading listings; the score; who's selling and how they deliver."}
         </p>
       </div>
-
-      {/* The products here, the way a hunter reads them: the page's point. */}
-      {view === "products" && (
-        <section className="card min-w-0">
-          <div className="p-4 pb-3">
-            <CardHeader
-              title="Products here, best to hunt first"
-              note={`Sales a month together, how many sellers make a living from it, what buyers pay, how much of its sales come from sellers delivering like you, and whether it's rising or new. Each says why.${hiddenText ? ` ${hiddenText}` : ""}`}
-              aside={
-                <span className="text-[12px] tabular-nums text-[var(--color-muted)]">
-                  {shownProducts.length === data.products.length ? (
-                    `${data.products.length} products`
-                  ) : (
-                    <>
-                      {shownProducts.length} of {data.products.length} products match{" "}
-                      <button type="button" onClick={showAll} className="font-medium text-[var(--color-primary)] hover:underline">
-                        Show all
-                      </button>
-                    </>
-                  )}
-                </span>
-              }
-            />
-            <div className="mt-3 border-t border-[var(--color-line)] pt-3">
-              <DiscoverProductFilters
-                filters={filters}
-                onChange={setFilters}
-                currency={currency}
-                delivery={data.account}
-              />
-            </div>
-          </div>
-          <div className="border-t border-[var(--color-line)]">
-            <DiscoverProducts
-              products={shownProducts}
-              currency={currency}
-              onHunt={onHunt}
-              empty={
-                !read
-                  ? "Products show once sold counts are read."
-                  : data.products.length
-                    ? "No product here matches these filters. Loosen one, or load more products."
-                    : data.reads.reading
-                      ? "Reading sold counts: products appear here as they're read."
-                      : "No product here sells yet."
-              }
-            />
-          </div>
-          {/* Sold counts still being read in the background: how far, the products filling in above. */}
-          {data.reads.reading && data.reads.progress && (
-            <div className="border-t border-[var(--color-line)] px-4 py-2" aria-live="polite">
-              <div className="flex items-center justify-between gap-3 text-[11.5px] text-[var(--color-muted)]">
-                <span className="inline-flex items-center gap-2">
-                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-primary)]/25 border-t-[var(--color-primary)]" aria-hidden />
-                  Reading sold counts: {data.reads.progress.done} of {data.reads.progress.of} listings. Products fill in as they&apos;re read.
-                </span>
-              </div>
-              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[var(--color-paper)]">
-                <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-500" style={{ width: `${Math.round((100 * data.reads.progress.done) / Math.max(1, data.reads.progress.of))}%` }} />
-              </div>
-            </div>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-line)] px-4 py-2.5">
-            <p className="text-[11.5px] text-[var(--color-muted)]">
-              {loadNote && (
-                <span className="mr-1.5 font-medium text-[var(--color-ink)]">
-                  {loadNote.text}
-                  {loadNote.hidden && (
-                    <button type="button" onClick={showAll} className="ml-1 font-medium text-[var(--color-primary)] hover:underline">
-                      Show all products
-                    </button>
-                  )}
-                </span>
-              )}
-              {data.reads.signInFailed
-                ? "Sold counts need this account's eBay sign-in, which didn't work: reconnect the account, or ask the owner to."
-                : data.reads.stopped
-                  ? "Today's sold-count reads ran out before every listing was read."
-                  : `From the ${read} leading listings read of ${data.reads.of ?? data.listings.length}${
-                      data.reads.focused ? `, and ${data.reads.focused} more read for your filters` : ""
-                    }${data.reads.more ? "; loading more reads only listings that can pass your filters" : ""}.`}
-            </p>
-            {data.reads.more && !data.reads.stopped && !data.reads.reading && (
-              <button
-                type="button"
-                onClick={loadMore}
-                disabled={readingMore}
-                className="btn btn-secondary btn-sm !h-8 !text-[12.5px]"
-              >
-                {readingMore ? "Reading listings for your filters…" : `Load more products for these filters`}
-              </button>
-            )}
-          </div>
-        </section>
-      )}
 
       {view === "keywords" && (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">

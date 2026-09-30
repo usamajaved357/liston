@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError, HuntFromListing } from "@/lib/api";
 import { STAGE, Thumb, ago, announceHuntingChange } from "./HuntBits";
 
-// Hunt, in Discover and in Product research (`from`, recorded on the
-// product): the eBay listing added to the hunting list on its own, read from
+// Hunt, in Product research (`from`, recorded on the product; Discover's
+// older hunts say "discover"): the eBay listing added to the hunting list on its own, read from
 // eBay (its demand, price and risks), waiting for someone to add a supplier
 // link on its page. A listing already on the list isn't added again: the
 // dialog links to it.
