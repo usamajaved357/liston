@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ApiError, EbayConversationRow, EbayFolder, EbayInboxList, EbayShow, EbayThread, ebayInboxApi } from "@/lib/api";
 import { useMyEvents, useViewing } from "@/lib/useMyEvents";
 import { EbayConversationList, EbayView } from "./EbayConversationList";
@@ -12,8 +13,9 @@ import { listTime } from "../inbox-format";
 // The Inbox's eBay messages for one account (or every account the person
 // may read), laid out like WhatsApp: the list (its own search and chips)
 // beside the open conversation, whose order and listing open in a details
-// panel when asked for. Above them only the mode and how fresh Liston's
-// copy of eBay is. The list comes from
+// panel when asked for. How fresh Liston's copy of eBay is sits in the
+// page's header beside the bell (`syncSlot`) on an account's Inbox, or in a
+// row above the panes with the mode switch on the Dashboard's. The list comes from
 // what Liston keeps and is read again from eBay in the background (at once
 // when opened if it's over a minute old, every minute while in view, and
 // whenever Liston hears it changed); the open conversation follows.
@@ -63,7 +65,22 @@ function SyncStatus({ data, onRefresh, refreshing, reconnectHref }: { data: Ebay
   );
 }
 
-export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHref, modeSwitch }: { connectionId: string | null; activeKey: string | null; onActiveChange: (key: string | null) => void; reconnectHref: string | null; modeSwitch: ReactNode }) {
+export function EbayInbox({
+  connectionId,
+  activeKey,
+  onActiveChange,
+  reconnectHref,
+  modeSwitch = null,
+  syncSlot = null,
+}: {
+  connectionId: string | null;
+  activeKey: string | null;
+  onActiveChange: (key: string | null) => void;
+  reconnectHref: string | null;
+  modeSwitch?: ReactNode;
+  // Where in the page's header the sync state goes (an account's Inbox); without it, a row above the panes.
+  syncSlot?: HTMLElement | null;
+}) {
   const [view, setView] = useState<EbayView>("buyers");
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
@@ -194,6 +211,12 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
     setTimeout(() => setRefreshing(false), 1500);
   }
 
+  // The account's sidebar count follows the conversations as they're read here.
+  const unreadNow = data ? data.counts.buyers + data.counts.ebay : null;
+  useEffect(() => {
+    if (connectionId && unreadNow !== null) window.dispatchEvent(new CustomEvent("liston:inbox-unread", { detail: { connectionId, unread: unreadNow } }));
+  }, [connectionId, unreadNow]);
+
   const emptyText = query
     ? "Nothing matches your search."
     : data?.sync.neverSynced && !data.sync.error
@@ -203,11 +226,14 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* On a phone an open conversation has the screen; its back arrow brings this row back. */}
-      <div className={`${activeKey ? "hidden lg:flex" : "flex"} flex-wrap items-center justify-between gap-x-3 gap-y-2`}>
-        {modeSwitch}
-        <SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />
-      </div>
+      {syncSlot && createPortal(<SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />, syncSlot)}
+      {!syncSlot && (
+        // On a phone an open conversation has the screen; its back arrow brings this row back.
+        <div className={`${activeKey ? "hidden lg:flex" : "flex"} flex-wrap items-center justify-between gap-x-3 gap-y-2`}>
+          {modeSwitch}
+          <SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />
+        </div>
+      )}
 
       <div className="card relative flex min-h-0 flex-1 overflow-hidden">
         <div className={`${activeKey ? "hidden lg:flex" : "flex"} min-h-0 w-full lg:w-auto`}>

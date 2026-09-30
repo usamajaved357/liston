@@ -397,6 +397,13 @@ async function thread(auth, connectionId, conversationId, { markRead = true } = 
   };
 }
 
+/** How many of an account's conversations (buyers' and eBay's) are unread, for the sidebar: { unread }. Never reads eBay. */
+async function unread(auth, connectionId) {
+  await requireAccount(auth, connectionId);
+  const counts = await inboxRepository.counts([connectionId]);
+  return { unread: counts.buyers + counts.ebay };
+}
+
 /** Marks a conversation read or unread, here and on eBay. */
 async function setRead(auth, connectionId, conversationId, read) {
   await requireAccount(auth, connectionId);
@@ -485,4 +492,4 @@ async function forgetMember(username) {
   return inboxRepository.forgetMember(username);
 }
 
-module.exports = { list, thread, setRead, setStatus, reply, refresh, sync, accountsFor, forgetMember, InboxError, SCOPE };
+module.exports = { list, thread, unread, setRead, setStatus, reply, refresh, sync, accountsFor, forgetMember, InboxError, SCOPE };

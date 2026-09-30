@@ -13,13 +13,13 @@ import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
 import { NotificationBell } from "@/components/NotificationBell";
-import { useInboxBadge } from "@/lib/useInboxBadge";
+import { useAccountInboxBadge } from "@/lib/useInboxBadge";
 
 interface AccountShellProps {
   children: React.ReactNode;
   header?: React.ReactNode;
   // A page's own controls for the header's right side (a Save button, say),
-  // shown next to the Dashboard button so the two line up.
+  // shown just left of the notifications bell so they line up.
   actions?: React.ReactNode;
   // A full-width row under the title (tabs, say) that stays put while the
   // page scrolls; it spans the same width as the content, so anything
@@ -101,7 +101,8 @@ export function AccountShell({
   const base = `/accounts/${connectionId}`;
   const huntingAccess = canShow("hunting") || canShow("hunting_review") || canShow("listings");
   const huntBadge = useHuntBadge(connectionId, huntingAccess, permissions);
-  const inboxBadge = useInboxBadge();
+  const inboxBadge = useAccountInboxBadge(connectionId, canShow("inbox"));
+  const dashboard = permissions === undefined ? { href: "/dashboard", sub: "All accounts" } : { href: "/connections", sub: "Your accounts" };
 
 
   return (
@@ -188,8 +189,8 @@ export function AccountShell({
               }
             />
           )}
-          {/* Everyone has the Inbox: team chat for all, this account's eBay messages with Inbox access. */}
-          {(
+          {/* The account's Inbox is its eBay messages (team chat is on the Dashboard's Inbox): with Inbox access. */}
+          {canShow("inbox") && (
             <NavItem
               href={`${base}/inbox`}
               active={pathname.startsWith(`${base}/inbox`)}
@@ -248,6 +249,27 @@ export function AccountShell({
           )}
         </nav>
 
+        {/* Back to the Dashboard: an owner's of every account, a member's of the accounts they work on. */}
+        <Link
+          href={dashboard.href}
+          className="group mt-auto flex items-center gap-3 rounded-2xl border border-[var(--color-line)] px-2.5 py-2.5 transition-colors hover:border-[var(--color-primary)]/35 hover:bg-[var(--color-primary-soft)]"
+        >
+          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--color-primary)] text-white shadow-[0_4px_12px_-4px_rgba(79,70,229,0.55)]">
+            <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
+              <rect x="3.5" y="3.5" width="7" height="8" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+              <rect x="13.5" y="3.5" width="7" height="5" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+              <rect x="13.5" y="11.5" width="7" height="9" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+              <rect x="3.5" y="14.5" width="7" height="6" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+            </svg>
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[13px] font-semibold leading-4 text-[var(--color-ink)]">Dashboard</span>
+            <span className="mt-0.5 block text-[11.5px] leading-4 text-[var(--color-muted)]">{dashboard.sub}</span>
+          </span>
+          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-primary)]" aria-hidden>
+            <path d="M8 5l5 5-5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Link>
       </>
       }
     >
@@ -258,29 +280,13 @@ export function AccountShell({
               .page-header); the subtitle hangs below the title. */}
           <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1 basis-[220px]">{header}</div>
-            {/* On a phone the controls take their own row under the title:
-                the way to the Dashboard on the left, the data's freshness and
-                the page's own actions on the right. */}
+            {/* On a phone the controls take their own row under the title, on
+                the right. The notifications bell is always the last thing on
+                the right; the Dashboard is at the bottom of the sidebar. */}
             <div className="page-header-controls max-sm:w-full max-sm:justify-end">
               {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
               <NotificationBell />
-              {/* Back to the Dashboard: an owner's of all accounts, a member's
-                  of the accounts they work on. A dashboard mark, not an arrow,
-                  so it never reads as a page's own Back button. */}
-              <Link
-                  href={permissions === undefined ? "/dashboard" : "/connections"}
-                  title={permissions === undefined ? "All accounts' Dashboard" : "Your Dashboard"}
-                  className="btn btn-sm flex-shrink-0 gap-1.5 bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white max-sm:order-first max-sm:mr-auto"
-                >
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
-                    <rect x="3.5" y="3.5" width="7" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
-                    <rect x="13.5" y="3.5" width="7" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
-                    <rect x="13.5" y="11.5" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
-                    <rect x="3.5" y="14.5" width="7" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.8" />
-                  </svg>
-                  Dashboard
-                </Link>
             </div>
           </div>
           {subheader && <div className="mt-5">{subheader}</div>}

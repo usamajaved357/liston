@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, ApiError, BuyerMessageSettings } from "@/lib/api";
 import { Alert } from "@/components/Alert";
+import { QuickRepliesCard } from "./QuickRepliesCard";
 
-// Settings → Messages: the message Liston sends a buyer once their order is
+// Settings → Messages: the account's quick replies for the Inbox (see
+// QuickRepliesCard), then the message Liston sends a buyer once their order is
 // delivered, asking for feedback on the item and the service and inviting
 // them to reply if anything's wrong. Off until the owner switches it on;
 // {buyer} and {item} are filled in per order. Each order gets it once,
@@ -60,6 +62,7 @@ export function BuyerMessagesTab({ connectionId }: { connectionId: string }) {
 
   return (
     <div className="space-y-6">
+      <QuickRepliesCard connectionId={connectionId} />
       <div className="card overflow-hidden">
         <div className="flex items-start justify-between gap-4 border-b border-[var(--color-line)] px-6 py-5">
           <div>

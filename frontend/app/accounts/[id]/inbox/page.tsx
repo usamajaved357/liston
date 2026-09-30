@@ -1,18 +1,21 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useState } from "react";
 import { useParams } from "next/navigation";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton } from "@/components/Skeleton";
-import { InboxView } from "@/components/inbox/InboxView";
+import { AccountInboxView } from "@/components/inbox/InboxView";
 
-// The Inbox on an account: team chat (the whole team, every account) and
-// this account's eBay messages (with Inbox access).
+// The Inbox on an account: its eBay messages, with Inbox access (team chat
+// is the Dashboard's Inbox). How fresh Liston's copy of eBay is sits in the
+// header beside the bell, so the conversations get the page's height.
 export default function AccountInboxPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
+  // The header's spot for the sync state, filled by the inbox below.
+  const [syncSlot, setSyncSlot] = useState<HTMLElement | null>(null);
 
   if (loading) {
     return <AccountPageSkeleton />;
@@ -26,6 +29,7 @@ export default function AccountInboxPage() {
     );
   }
 
+  const canSee = !connection.permissions || Boolean(connection.permissions.inbox);
   return (
     <AccountShell
       connectionId={connection.id}
@@ -40,13 +44,18 @@ export default function AccountInboxPage() {
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Inbox</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Your team, and {connection.label}&apos;s buyers</p>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">{connection.label}&apos;s buyers and eBay</p>
         </div>
       }
+      actions={canSee ? <span ref={setSyncSlot} className="flex items-center" /> : undefined}
     >
-      <Suspense fallback={null}>
-        <InboxView me={user.id} isOwner={user.role !== "member"} connectionId={connection.id} canSeeEbay={!connection.permissions || Boolean(connection.permissions.inbox)} />
-      </Suspense>
+      {canSee ? (
+        <Suspense fallback={null}>
+          <AccountInboxView connectionId={connection.id} isOwner={user.role !== "member"} syncSlot={syncSlot} />
+        </Suspense>
+      ) : (
+        <div className="card flex flex-1 items-center justify-center p-8 text-center text-[13px] text-[var(--color-muted)]">You don&apos;t have access to this account&apos;s messages. Ask the owner for Inbox access.</div>
+      )}
     </AccountShell>
   );
 }

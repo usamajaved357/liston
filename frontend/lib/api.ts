@@ -3301,6 +3301,20 @@ export interface EbayThread {
   stale: { message: string } | null;
 }
 
+// A quick reply: an account's ready-written message, its {buyer}, {item}, {order}… filled in by the reply box.
+export interface QuickReply {
+  id: string;
+  name: string;
+  body: string;
+  updatedAt: string;
+}
+export interface QuickReplyList {
+  replies: QuickReply[];
+  tokens: { key: string; label: string }[];
+  canEdit: boolean;
+  limits: { name: number; body: number; count: number };
+}
+
 export const ebayInboxApi = {
   list: (connectionId: string | null, params: { folder?: EbayFolder; show?: EbayShow; q?: string; before?: string; refresh?: boolean } = {}) => {
     const q = new URLSearchParams();
@@ -3318,6 +3332,13 @@ export const ebayInboxApi = {
   setStatus: (connectionId: string, conversationId: string, status: "ACTIVE" | "ARCHIVE") =>
     request<{ ok: true }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/status`, { method: "POST", body: JSON.stringify({ status }) }),
   refresh: (connectionId: string) => request<{ changed: number }>(`/api/connections/${connectionId}/inbox/refresh`, { method: "POST" }),
+  // Unread conversations (buyers' and eBay's) for the sidebar; never reads eBay.
+  unread: (connectionId: string) => request<{ unread: number }>(`/api/connections/${connectionId}/inbox/unread`),
+  quickReplies: (connectionId: string) => request<QuickReplyList>(`/api/connections/${connectionId}/inbox/quick-replies`),
+  addQuickReply: (connectionId: string, input: { name: string; body: string }) => request<QuickReply>(`/api/connections/${connectionId}/inbox/quick-replies`, { method: "POST", body: JSON.stringify(input) }),
+  saveQuickReply: (connectionId: string, id: string, input: { name: string; body: string }) =>
+    request<QuickReply>(`/api/connections/${connectionId}/inbox/quick-replies/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteQuickReply: (connectionId: string, id: string) => request<{ ok: true }>(`/api/connections/${connectionId}/inbox/quick-replies/${id}`, { method: "DELETE" }),
   // A reply to a buyer. Text eBay blocks comes back as `warnings` (sent: false) unless `confirm`.
   reply: (connectionId: string, conversationId: string, input: { text: string; fileIds?: string[]; confirm?: boolean }) =>
     request<{ sent: true; message: EbayMessage } | { sent: false; warnings: { kind: string; text: string }[] }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/messages`, {

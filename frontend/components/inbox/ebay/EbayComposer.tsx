@@ -1,19 +1,22 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ApiError, EbayMessage, EbayThread, SharedFile, ebayInboxApi, uploadFile } from "@/lib/api";
+import Link from "next/link";
+import { ApiError, EbayMessage, EbayThread, QuickReply, SharedFile, ebayInboxApi, uploadFile } from "@/lib/api";
 import { useIsPhone } from "@/lib/useIsPhone";
 import { fileSize } from "../inbox-format";
-import { SavedReply, matchReplies, replyFacts } from "./saved-replies";
+import { fillReply, matchReplies, replyFacts, unfilled } from "./quick-replies";
 
 // Replying to a buyer: text up to eBay's 2,000 characters (Enter sends and
 // Shift+Enter starts a new line, as in WhatsApp; on a phone Enter is a new
 // line and the arrow sends), up to 5 photos, PDFs, Word documents or text
 // files (attached, dropped or pasted), uploaded for eBay at once. "@" puts
 // the buyer's name where it's typed (Backspace straight after gives the
-// "@" back); "/" (or the saved-replies button) lists the saved replies by
-// name, and picking one loads it, filled in, into the box to read and
-// change. Anything eBay blocks or flags (contact details, links off eBay,
+// "@" back); "/" (or the quick-replies button) lists the account's quick
+// replies by name, and picking one loads it, filled in, into the box to
+// read and change; a fill-in the conversation can't complete ({tracking}
+// before there is any) stays in the text and the box won't send until it's
+// filled in. Anything eBay blocks or flags (contact details, links off eBay,
 // paying outside eBay) is shown before it goes, with "Send anyway". A real
 // message to a real buyer: it goes only when Enter or Send is pressed.
 
@@ -23,8 +26,10 @@ type Pending = { key: string; name: string; size: number; progress: number; file
 
 // What's being written to each buyer, kept while you move between conversations.
 const drafts = new Map<string, string>();
+// Each account's quick replies as last read, shown at once while they're read again.
+const replyCache = new Map<string, { replies: QuickReply[]; canEdit: boolean }>();
 
-// The saved replies open: from "/" typed at `start` (with what's typed after it), or from the button (start -1).
+// The quick replies open: from "/" typed at `start` (with what's typed after it), or from the button (start -1).
 type Slash = { start: number; query: string; index: number };
 
 export function EbayComposer({ connectionId, conversationId, buyer, thread, onSent }: { connectionId: string; conversationId: string; buyer: string | null; thread: EbayThread; onSent: (m: EbayMessage) => void }) {
@@ -44,8 +49,28 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
   const caret = useRef<number | null>(null);
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const facts = useMemo(() => replyFacts(thread), [thread]);
-  const options = slash ? matchReplies(slash.query) : [];
-  const menuOpen = Boolean(slash) && options.length > 0;
+  const name = facts.buyer || buyer || "there";
+  const [quick, setQuick] = useState(() => replyCache.get(connectionId) || null);
+  const replies = quick?.replies || [];
+  const options = slash ? matchReplies(replies, slash.query) : [];
+  // From the button it opens even with nothing to show (to say where replies are made).
+  const menuOpen = Boolean(slash) && (options.length > 0 || slash?.start === -1);
+  const missing = unfilled(text);
+
+  useEffect(() => {
+    let live = true;
+    ebayInboxApi
+      .quickReplies(connectionId)
+      .then((q) => {
+        const next = { replies: q.replies, canEdit: q.canEdit };
+        replyCache.set(connectionId, next);
+        if (live) setQuick(next);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [connectionId]);
 
   useEffect(() => {
     drafts.set(key, text);
@@ -71,7 +96,7 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
     const i = before.lastIndexOf("/");
     if (i < 0 || (i > 0 && !/\s/.test(before[i - 1]))) return null;
     const query = before.slice(i + 1);
-    if (query.length > 30 || /\n/.test(query) || !matchReplies(query).length) return null;
+    if (query.length > 30 || /\n/.test(query) || !matchReplies(replies, query).length) return null;
     return { start: i, query, index: slash && slash.start === i && slash.query === query ? slash.index : 0 };
   }
 
@@ -79,7 +104,6 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
     setNamed(null);
     // "@" typed where a word starts: the buyer's name in its place.
     if (value.length === text.length + 1 && value[at - 1] === "@" && (at === 1 || !/[\p{L}\p{N}]/u.test(value[at - 2]))) {
-      const name = facts.name;
       setText(`${value.slice(0, at - 1)}${name}${value.slice(at)}`.slice(0, MAX + 200));
       caret.current = at - 1 + name.length;
       setNamed({ start: at - 1, end: at - 1 + name.length });
@@ -91,8 +115,8 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
     setSlash(slashAt(value, at));
   }
 
-  function pick(reply: SavedReply) {
-    const body = reply.text(facts);
+  function pick(reply: QuickReply) {
+    const body = fillReply(reply.body, facts);
     const el = area.current;
     const from = slash && slash.start >= 0 ? slash.start : (el?.selectionStart ?? text.length);
     const to = slash && slash.start >= 0 ? slash.start + 1 + slash.query.length : (el?.selectionEnd ?? from);
@@ -123,8 +147,8 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
   }
 
   const uploading = pending.some((p) => !p.file && !p.error);
-  const placeholder = phone ? `Reply to ${buyer || "the buyer"}` : `Reply to ${buyer || "the buyer"}  ·  "/" for saved replies, "@" for their name`;
-  const canSend = text.trim().length > 0 && text.length <= MAX && !uploading && !sending;
+  const placeholder = phone ? `Reply to ${buyer || "the buyer"}` : `Reply to ${buyer || "the buyer"}  ·  "/" for quick replies, "@" for their name`;
+  const canSend = text.trim().length > 0 && text.length <= MAX && !uploading && !sending && missing.length === 0;
 
   async function send(confirm = false) {
     if (!canSend) return;
@@ -171,36 +195,45 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
       {menuOpen && slash && (
         <div className="absolute bottom-full left-3 right-3 z-20 mb-2 max-w-[480px] overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-[var(--shadow-pop)]">
           <div className="flex items-center justify-between gap-3 px-4 pb-1.5 pt-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Saved replies</p>
-            {!phone && <p className="text-[11px] text-[var(--color-muted)]">Enter to use · Esc to close</p>}
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Quick replies</p>
+            {!phone && options.length > 0 && <p className="text-[11px] text-[var(--color-muted)]">Enter to use · Esc to close</p>}
           </div>
-          <div className="max-h-[min(340px,50vh)] overflow-y-auto px-1.5 pb-1.5" role="listbox" aria-label="Saved replies">
-            {options.map((r, i) => {
-              const preview = r.text(facts).split("\n\n").slice(1).join(" ");
-              const active = i === slash.index;
-              return (
-                <button
-                  key={r.key}
-                  ref={(el) => {
-                    optionRefs.current[i] = el;
-                  }}
-                  type="button"
-                  role="option"
-                  aria-selected={active}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onMouseEnter={() => setSlash({ ...slash, index: i })}
-                  onClick={() => pick(r)}
-                  className={`block w-full rounded-xl px-2.5 py-2 text-left transition-colors ${active ? "bg-[var(--color-primary-soft)]" : ""}`}
-                >
-                  <span className="flex items-baseline gap-2">
-                    <span className={`text-[13px] font-semibold ${active ? "text-[var(--color-primary)]" : "text-[var(--color-ink)]"}`}>{r.name}</span>
-                    <span className="truncate text-[11.5px] text-[var(--color-muted)]">{r.hint}</span>
-                  </span>
-                  <span className="mt-0.5 line-clamp-2 text-[12px] leading-[17px] text-[var(--color-muted)]">{preview}</span>
-                </button>
-              );
-            })}
-          </div>
+          {options.length > 0 ? (
+            <div className="max-h-[min(340px,50vh)] overflow-y-auto px-1.5 pb-1.5" role="listbox" aria-label="Quick replies">
+              {options.map((r, i) => {
+                const preview = fillReply(r.body, facts).replace(/^Hi [^\n]*\n+/, "").replace(/\s+/g, " ");
+                const active = i === slash.index;
+                return (
+                  <button
+                    key={r.id}
+                    ref={(el) => {
+                      optionRefs.current[i] = el;
+                    }}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setSlash({ ...slash, index: i })}
+                    onClick={() => pick(r)}
+                    className={`block w-full rounded-xl px-2.5 py-2 text-left transition-colors ${active ? "bg-[var(--color-primary-soft)]" : ""}`}
+                  >
+                    <span className={`block truncate text-[13px] font-semibold ${active ? "text-[var(--color-primary)]" : "text-[var(--color-ink)]"}`}>{r.name}</span>
+                    <span className="mt-0.5 line-clamp-2 text-[12px] leading-[17px] text-[var(--color-muted)]">{preview}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="px-4 pb-3 text-[12.5px] leading-relaxed text-[var(--color-muted)]">{quick ? "No quick replies yet." : "Loading your quick replies…"}</p>
+          )}
+          {quick?.canEdit && (
+            <Link href={`/accounts/${connectionId}/settings?tab=messages`} target="_blank" rel="noopener" onMouseDown={(e) => e.preventDefault()} className="flex items-center justify-between border-t border-[var(--color-line)] px-4 py-2.5 text-[12.5px] font-medium text-[var(--color-primary)] hover:bg-[var(--color-paper)]">
+              {replies.length ? "Edit or add quick replies" : "Add quick replies in Settings"}
+              <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3" aria-hidden>
+                <path d="M8 5h7v7M15 5l-9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </Link>
+          )}
         </div>
       )}
       {warnings && (
@@ -267,8 +300,8 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
             area.current?.focus();
             setSlash(slash ? null : { start: -1, query: "", index: 0 });
           }}
-          title={'Saved replies (or type "/")'}
-          aria-label="Saved replies"
+          title={'Quick replies (or type "/")'}
+          aria-label="Quick replies"
           aria-expanded={menuOpen}
           className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-colors ${menuOpen ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"}`}
         >
@@ -313,7 +346,7 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
               }
             }
             const el = e.currentTarget;
-            if (e.key === "Backspace" && named && el.selectionStart === named.end && el.selectionEnd === named.end && text.slice(named.start, named.end) === facts.name) {
+            if (e.key === "Backspace" && named && el.selectionStart === named.end && el.selectionEnd === named.end && text.slice(named.start, named.end) === name) {
               e.preventDefault();
               setText(`${text.slice(0, named.start)}@${text.slice(named.end)}`);
               caret.current = named.start + 1;
@@ -342,6 +375,11 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
           )}
         </button>
       </div>
+      {missing.length > 0 && (
+        <p className="mt-1.5 px-3 text-[11.5px] text-amber-700">
+          Fill in {missing.join(", ")} before sending: this conversation doesn&apos;t have {missing.length === 1 ? "it" : "them"} yet.
+        </p>
+      )}
       {error && <p className="mt-1.5 px-3 text-[11.5px] text-rose-600">{error}</p>}
     </div>
   );

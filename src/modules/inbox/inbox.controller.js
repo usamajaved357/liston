@@ -1,5 +1,6 @@
 const { z } = require('zod');
 const inboxService = require('./inbox.service');
+const quickRepliesService = require('./quick-replies.service');
 
 // The eBay Inbox's requests: an account's (or every account's) folders, one
 // conversation, read or unread, archive, and reading eBay again now.
@@ -15,6 +16,7 @@ const listSchema = z.object({
 const readSchema = z.object({ read: z.boolean() });
 const statusSchema = z.object({ status: z.enum(['ACTIVE', 'ARCHIVE']) });
 const replySchema = z.object({ text: z.string().max(2100), fileIds: z.array(z.string().uuid()).max(5).optional(), confirm: z.boolean().optional() });
+const quickReplySchema = z.object({ name: z.string().max(200), body: z.string().max(4000) });
 
 const auth = (req) => ({ userId: req.userId, ownerId: req.ownerId, role: req.role });
 
@@ -30,6 +32,7 @@ function parse(schema, body, res) {
 const handle = (fn) => async (req, res, next) => {
   try {
     if (req.params.conversationId !== undefined && !/^[\w.:-]{1,120}$/.test(req.params.conversationId)) return res.status(404).json({ error: 'Conversation not found.' });
+    if (req.params.replyId !== undefined && !/^[0-9a-f-]{36}$/i.test(req.params.replyId)) return res.status(404).json({ error: 'That quick reply is gone.' });
     await fn(req, res);
   } catch (err) {
     next(err);
@@ -56,6 +59,17 @@ module.exports = {
     if (input) res.json(await inboxService.setStatus(auth(req), req.params.id, req.params.conversationId, input.status));
   }),
   refresh: handle(async (req, res) => res.json(await inboxService.refresh(auth(req), req.params.id))),
+  unread: handle(async (req, res) => res.json(await inboxService.unread(auth(req), req.params.id))),
+  quickReplies: handle(async (req, res) => res.json(await quickRepliesService.list(auth(req), req.params.id))),
+  addQuickReply: handle(async (req, res) => {
+    const input = parse(quickReplySchema, req.body, res);
+    if (input) res.status(201).json(await quickRepliesService.create(auth(req), req.params.id, input));
+  }),
+  saveQuickReply: handle(async (req, res) => {
+    const input = parse(quickReplySchema, req.body, res);
+    if (input) res.json(await quickRepliesService.update(auth(req), req.params.id, req.params.replyId, input));
+  }),
+  deleteQuickReply: handle(async (req, res) => res.json(await quickRepliesService.remove(auth(req), req.params.id, req.params.replyId))),
   reply: handle(async (req, res) => {
     const input = parse(replySchema, req.body, res);
     if (!input) return;

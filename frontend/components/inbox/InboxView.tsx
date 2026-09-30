@@ -7,22 +7,20 @@ import { useChatUnreadValue } from "@/lib/useMyEvents";
 import { TeamChat } from "./TeamChat";
 import { EbayInbox } from "./ebay/EbayInbox";
 
-// The Inbox, in two modes switched at the top: Team chat (the owner and
-// their team, across every account) and eBay messages (buyers and eBay,
-// for this account or all of them). The mode and the open conversation are
-// in the address (?mode=, ?c=), so a notification or a shared link opens
-// the right one.
+// The Dashboard's Inbox, in two modes switched at the top: Team chat (the
+// owner and their team, across every account) and eBay messages (buyers
+// and eBay on every account). An account's Inbox is only its eBay messages
+// (AccountInboxView). The mode and the open conversation are in the
+// address (?mode=, ?c=, ?e=), so a notification or a shared link opens the
+// right one.
 
 export type InboxMode = "team" | "ebay";
 
-export function InboxView({ me, isOwner, connectionId = null, canSeeEbay = true }: { me: string; isOwner: boolean; connectionId?: string | null; canSeeEbay?: boolean }) {
+// The address's inbox parts, and a way to change them without a new history entry.
+function useInboxAddress() {
   const router = useRouter();
   const pathname = usePathname();
   const search = useSearchParams();
-  const mode: InboxMode = search.get("mode") === "ebay" && canSeeEbay ? "ebay" : "team";
-  const activeId = search.get("c");
-  const unread = useChatUnreadValue();
-
   const go = useCallback(
     (next: Record<string, string | null>) => {
       const qs = new URLSearchParams(search.toString());
@@ -34,6 +32,20 @@ export function InboxView({ me, isOwner, connectionId = null, canSeeEbay = true 
     },
     [router, pathname, search]
   );
+  return { search, go };
+}
+
+/** An account's Inbox: its eBay messages, the sync state in the page's header (`syncSlot`). */
+export function AccountInboxView({ connectionId, isOwner, syncSlot }: { connectionId: string; isOwner: boolean; syncSlot: HTMLElement | null }) {
+  const { search, go } = useInboxAddress();
+  return <EbayInbox connectionId={connectionId} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} syncSlot={syncSlot} />;
+}
+
+export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOwner: boolean; canSeeEbay?: boolean }) {
+  const { search, go } = useInboxAddress();
+  const mode: InboxMode = search.get("mode") === "ebay" && canSeeEbay ? "ebay" : "team";
+  const activeId = search.get("c");
+  const unread = useChatUnreadValue();
 
   const modeSwitch = (
     <PillTabs
@@ -47,7 +59,7 @@ export function InboxView({ me, isOwner, connectionId = null, canSeeEbay = true 
     />
   );
 
-  if (mode === "ebay") return <EbayInbox connectionId={connectionId} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} modeSwitch={modeSwitch} />;
+  if (mode === "ebay") return <EbayInbox connectionId={null} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} modeSwitch={modeSwitch} />;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">{modeSwitch}</div>
