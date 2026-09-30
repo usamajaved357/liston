@@ -45,7 +45,8 @@ function createApp() {
   // A listing photo upload parses its own, larger body (a base64 photo runs
   // to ~16MB for eBay's 12MB cap). Parsed here first, anything over 2MB was
   // refused before it reached that route — every AI-made PNG, in practice.
-  const OWN_BODY = /^\/api\/listings\/[^/]+\/images\/upload(?:\?|$)/;
+  // A shared file (/api/files) arrives as raw bytes, up to 25MB, parsed by its own route.
+  const OWN_BODY = /^\/api\/(?:listings\/[^/]+\/images\/upload|files)(?:\?|$)/;
   app.use((req, res, next) => (OWN_BODY.test(req.originalUrl) ? next() : jsonBody(req, res, next)));
 
   // Lightweight request log — no bodies (may contain passwords/credentials)
@@ -76,6 +77,13 @@ function createApp() {
   app.use('/api/notifications', requireAuth, requireAccess, require('./modules/notifications/notifications.routes'));
   app.use('/api/source-accounts', requireAuth, requireAccess, require('./modules/orders/source-account.routes'));
   app.use('/api/overview', overviewRoutes);
+  // The Inbox's foundations: a person's live channel, shared files, and Liston cards.
+  app.use('/api/me', requireAuth, requireAccess, require('./modules/realtime/realtime.routes'));
+  app.use('/api/files', requireAuth, requireAccess, require('./modules/files/files.routes'));
+  app.use('/api/references', requireAuth, requireAccess, require('./modules/references/references.routes'));
+  app.use('/api/chat', requireAuth, requireAccess, require('./modules/chat/chat.routes'));
+  // The bytes of shared files, by signed or unguessable link (an <img> sends no sign-in).
+  app.use('/media', require('./modules/files/media.routes'));
 
   app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });

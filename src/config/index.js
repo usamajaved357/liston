@@ -148,6 +148,20 @@ const config = {
     privateKey: process.env.VAPID_PRIVATE_KEY || null,
     subject: process.env.VAPID_SUBJECT || null,
   },
+  // Files people share (Inbox: team chat files, attachments sent to eBay
+  // buyers), in lib/storage.js. Cloudflare R2 (S3-compatible) when its four
+  // settings are set; otherwise, and locally, a folder on this machine
+  // (STORAGE_DIR) — fine for development, lost on a Railway redeploy unless
+  // it's a mounted volume, so production sets R2.
+  storage: {
+    r2: {
+      accountId: process.env.R2_ACCOUNT_ID || null,
+      accessKeyId: process.env.R2_ACCESS_KEY_ID || null,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || null,
+      bucket: process.env.R2_BUCKET || null,
+    },
+    dir: process.env.STORAGE_DIR || require('path').join(__dirname, '..', '..', 'storage'),
+  },
   hunting: {
     dailyCalls: parseInt(process.env.HUNTING_DAILY_CALLS || '1000', 10),
     // The daily re-read of hunted products' competitors (their sales

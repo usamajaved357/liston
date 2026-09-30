@@ -24,6 +24,30 @@ async function notify({ userId, actorUserId = null, kind, title, body = null, ur
   return row;
 }
 
+/**
+ * A notification kept once per subject (a chat conversation, an eBay
+ * conversation): the bell shows one line counting up; `push` (when given)
+ * is sent to the person's browsers — tag, title, body, url, image — and
+ * left out when they shouldn't be disturbed. Never throws.
+ */
+async function notifyGrouped({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId, detail = {}, push: pushed = null }) {
+  if (!userId || !kind || !title || !subjectId) return null;
+  let row;
+  try {
+    row = await notificationsRepository.upsertGrouped({ userId, actorUserId, kind, title, body, url, subjectType, subjectId, detail });
+  } catch (err) {
+    logger.warn('Notification not kept', { kind, error: err.message });
+    return null;
+  }
+  if (pushed) pushTo(userId, { id: row.id, kind, url, ...pushed }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
+  return row;
+}
+
+/** The person opened what these notifications were about: they're read. */
+async function readSubject(userId, kind, subjectId) {
+  return notificationsRepository.markReadBySubject(userId, kind, subjectId).catch(() => 0);
+}
+
 /** Sends one notification to every browser the person turned push on in; forgets the ones that are gone. */
 async function pushTo(userId, payload) {
   if (!push.configured()) return;
@@ -96,4 +120,4 @@ async function unsubscribe(userId, endpoint) {
   await notificationsRepository.deleteSubscription(userId, endpoint);
 }
 
-module.exports = { notify, list, markRead, clear, subscribe, unsubscribe, sendTest };
+module.exports = { notify, notifyGrouped, readSubject, pushTo, list, markRead, clear, subscribe, unsubscribe, sendTest };

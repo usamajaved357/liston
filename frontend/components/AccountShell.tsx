@@ -13,6 +13,7 @@ import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
 import { NotificationBell } from "@/components/NotificationBell";
+import { useInboxBadge } from "@/lib/useInboxBadge";
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -29,6 +30,9 @@ interface AccountShellProps {
   // Keep the footer pinned on phones too (an action bar), where a footer
   // otherwise follows the content.
   pinFooter?: boolean;
+  // The page fills the space below the header and scrolls inside itself
+  // (the Inbox's panes), instead of the whole body scrolling.
+  fill?: boolean;
   connectionId: string;
   label: string;
   platformKey: string;
@@ -82,6 +86,7 @@ export function AccountShell({
   subheader,
   footer,
   pinFooter = false,
+  fill = false,
   connectionId,
   label,
   platformKey,
@@ -96,6 +101,7 @@ export function AccountShell({
   const base = `/accounts/${connectionId}`;
   const huntingAccess = canShow("hunting") || canShow("hunting_review") || canShow("listings");
   const huntBadge = useHuntBadge(connectionId, huntingAccess, permissions);
+  const inboxBadge = useInboxBadge();
 
 
   return (
@@ -182,11 +188,13 @@ export function AccountShell({
               }
             />
           )}
-          {canShow("inbox") && (
+          {/* Everyone has the Inbox: team chat for all, this account's eBay messages with Inbox access. */}
+          {(
             <NavItem
               href={`${base}/inbox`}
               active={pathname.startsWith(`${base}/inbox`)}
               label="Inbox"
+              badge={inboxBadge}
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                   <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
@@ -278,7 +286,11 @@ export function AccountShell({
           {subheader && <div className="mt-5">{subheader}</div>}
           </div>
         )}
-        <div data-scroller className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>
+        <div
+          data-scroller
+          data-fill={fill ? "" : undefined}
+          className={`relative flex-1 min-h-0 px-[var(--page-gutter)] ${fill ? "flex flex-col overflow-hidden pb-4" : `overflow-y-auto overscroll-contain ${header ? "pb-8" : "py-8"}`}`}
+        >
           {children}
         </div>
         {footer && (

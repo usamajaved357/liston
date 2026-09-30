@@ -56,3 +56,6 @@ AGENTS.md
 
 # TypeScript incremental cache (breaks Nixpacks cache mounts when committed)
 frontend/tsconfig.tsbuildinfo
+
+# Files kept on this machine when R2 isn't set (lib/storage.js)
+storage/

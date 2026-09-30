@@ -1,6 +1,7 @@
 // Liston's service worker: shows browser push notifications (a reviewer
-// approved, rejected or sent back a hunted product) and opens Liston at the
-// right page when one is clicked. It caches nothing.
+// approved, rejected or sent back a hunted product; a team chat or eBay
+// message) and opens Liston at the right page when one is clicked. It caches
+// nothing.
 //
 // While a Liston tab is open and in view, that tab shows the notification
 // itself (a card and a chime, whatever the computer's own notification
@@ -27,8 +28,10 @@ self.addEventListener("push", (event) => {
         body: data.body || "",
         icon: "/notification-icon.png",
         badge: "/notification-badge.png",
-        // One notification per product: a newer decision replaces the older one, and still alerts.
+        // One notification per product or conversation: a newer one replaces the older, and still alerts.
         tag: data.tag || data.id,
+        // An eBay buyer's message shows the item's photo.
+        image: data.image || undefined,
         renotify: true,
         silent: false,
         vibrate: [120, 60, 120],

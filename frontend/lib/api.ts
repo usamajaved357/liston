@@ -3040,3 +3040,186 @@ export const api = {
       body: JSON.stringify({ permissions }),
     }),
 };
+
+// ---- Inbox: shared files, Liston cards, team chat -----------------------------------
+
+// A file shared in the Inbox. `url` and `thumbUrl` are signed links that run
+// out (open them again from Liston); an eBay attachment's `url` is public.
+export interface SharedFile {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  image: boolean;
+  url: string;
+  thumbUrl: string | null;
+  createdAt: string;
+}
+
+export type ListonCardKind = "order" | "listing" | "draft" | "hunt";
+export type ListonCardFact = { kind: "money"; amount: number; currency: string; label?: string } | { kind: "text"; text: string } | { kind: "date"; at: string };
+// A preview of something in Liston, from any account: `url` opens it in that
+// account. `locked`: it's in an account (or area) the viewer can't open;
+// `gone`: it's no longer in Liston. Neither carries any details.
+export type ListonCard =
+  | {
+      kind: ListonCardKind;
+      id: string;
+      key: string;
+      account: { id: string; label: string | null };
+      title: string;
+      image: string | null;
+      status: { label: string; tone: "good" | "warn" | "bad" | "info" | "muted" } | null;
+      facts: ListonCardFact[];
+      url: string;
+      locked: false;
+      gone?: undefined;
+    }
+  | { kind: ListonCardKind; id: string; key: string; locked: true; gone?: undefined }
+  | { kind: ListonCardKind; id: string; key: string; gone: true; locked?: undefined };
+export type ListonRef = { kind: ListonCardKind; id: string; connectionId?: string };
+
+export interface ChatPerson {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: "owner" | "member";
+  removed: boolean;
+  online?: boolean;
+}
+export interface ChatMember extends ChatPerson {
+  memberRole: "admin" | "member";
+  lastReadAt: string | null;
+}
+export type ChatNotify = "all" | "mentions" | "none";
+export interface ChatConversation {
+  id: string;
+  kind: "dm" | "group" | "channel";
+  name: string | null;
+  title: string;
+  topic: string | null;
+  private: boolean;
+  account: { id: string; label: string } | null;
+  archived: boolean;
+  members: ChatMember[];
+  unread: number;
+  unreadMentions: number;
+  notify: ChatNotify;
+  myRole: "admin" | "member";
+  lastMessage: { id: string; at: string; kind: "text" | "system"; author: { id: string; name: string } | null; text: string | null } | null;
+  lastMessageAt: string | null;
+  createdAt: string;
+  permissions: { manage: boolean; addPeople: boolean; leave: boolean };
+}
+export interface ChatOpenChannel {
+  id: string;
+  name: string;
+  title: string;
+  topic: string | null;
+  memberCount: number;
+  account: { id: string; label: string } | null;
+}
+export interface ChatMessage {
+  id: string;
+  conversationId: string;
+  kind: "text" | "system";
+  body: string;
+  author: { id: string; name: string; avatarUrl: string | null } | null;
+  createdAt: string;
+  editedAt: string | null;
+  deleted: boolean;
+  replyTo: { id: string; author: { id: string; name: string } | null; text: string } | null;
+  cards: ListonCard[];
+  files: SharedFile[];
+  links: { url: string; title: string | null; description: string | null; image: string | null; site: string | null }[];
+  mentions: string[];
+  mentionAll: boolean;
+  // A system line: what happened ("added", "renamed"…), by whom, to whom.
+  detail: { action?: string; by?: string | null; userIds?: string[]; from?: string | null; to?: string | null };
+}
+export interface ChatList {
+  conversations: ChatConversation[];
+  openChannels: ChatOpenChannel[];
+  canManageChannels: boolean;
+  unread: { unread: number; mentions: number };
+}
+export interface NotificationSettings {
+  chat: ChatNotify;
+  ebay: "all" | "chosen" | "none";
+  ebayAccounts: string[];
+  quietFrom: number | null;
+  quietTo: number | null;
+  timeZone: string | null;
+  hideText: boolean;
+}
+
+/**
+ * Uploads a file for the Inbox (the raw bytes, its name in a header),
+ * reporting progress from 0 to 1. `purpose`: "chat" (private to the team) or
+ * "ebay" (an attachment for a buyer).
+ */
+export function uploadFile(file: File | Blob, { name, purpose = "chat", onProgress }: { name?: string; purpose?: "chat" | "ebay"; onProgress?: (share: number) => void } = {}): Promise<SharedFile> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}/api/files?purpose=${purpose}`);
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-File-Name", encodeURIComponent(name || (file as File).name || "file"));
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.onload = () => {
+      let data: { error?: string } & Partial<SharedFile> = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as SharedFile);
+      else reject(new ApiError(data.error || (xhr.status === 413 ? "Files can be up to 25 MB." : "Couldn't upload it."), xhr.status));
+    };
+    xhr.onerror = () => reject(new ApiError("Couldn't upload it. Check your connection.", 0));
+    xhr.send(file);
+  });
+}
+
+export const inboxApi = {
+  // Liston cards
+  resolveCards: (refs: ListonRef[]) => request<{ cards: (ListonCard | null)[] }>(`/api/references/resolve`, { method: "POST", body: JSON.stringify({ refs }) }),
+  detectCards: (text: string) => request<{ cards: ListonCard[] }>(`/api/references/detect`, { method: "POST", body: JSON.stringify({ text }) }),
+  searchCards: (q: string, kinds?: ListonCardKind[]) =>
+    request<{ cards: ListonCard[] }>(`/api/references/search?q=${encodeURIComponent(q)}${kinds?.length ? `&kinds=${kinds.join(",")}` : ""}`),
+  // Team chat
+  chatPeople: () => request<{ people: ChatPerson[] }>(`/api/chat/people`),
+  chatList: () => request<ChatList>(`/api/chat/conversations`),
+  chatUnread: () => request<{ unread: number; mentions: number }>(`/api/chat/unread`),
+  chatGet: (id: string) => request<ChatConversation>(`/api/chat/conversations/${id}`),
+  chatOpenDm: (userId: string) => request<ChatConversation>(`/api/chat/dm`, { method: "POST", body: JSON.stringify({ userId }) }),
+  chatCreateGroup: (userIds: string[], name?: string | null) => request<ChatConversation>(`/api/chat/groups`, { method: "POST", body: JSON.stringify({ userIds, name: name || null }) }),
+  chatCreateChannel: (input: { name: string; topic?: string | null; private?: boolean; connectionId?: string | null; userIds?: string[] }) =>
+    request<ChatConversation>(`/api/chat/channels`, { method: "POST", body: JSON.stringify(input) }),
+  chatUpdate: (id: string, input: { name?: string | null; topic?: string | null; private?: boolean; connectionId?: string | null; archived?: boolean }) =>
+    request<ChatConversation>(`/api/chat/conversations/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  chatDelete: (id: string) => request<void>(`/api/chat/conversations/${id}`, { method: "DELETE" }),
+  chatAddPeople: (id: string, userIds: string[]) => request<ChatConversation>(`/api/chat/conversations/${id}/people`, { method: "POST", body: JSON.stringify({ userIds }) }),
+  chatRemovePerson: (id: string, userId: string) => request<void>(`/api/chat/conversations/${id}/people/${userId}`, { method: "DELETE" }),
+  chatJoin: (id: string) => request<ChatConversation>(`/api/chat/conversations/${id}/join`, { method: "POST" }),
+  chatSetNotify: (id: string, notify: ChatNotify) => request<ChatConversation>(`/api/chat/conversations/${id}/notify`, { method: "PUT", body: JSON.stringify({ notify }) }),
+  chatMessages: (id: string, page: { before?: string; after?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (page.before) q.set("before", page.before);
+    if (page.after) q.set("after", page.after);
+    if (page.limit) q.set("limit", String(page.limit));
+    return request<{ messages: ChatMessage[]; hasMore: boolean }>(`/api/chat/conversations/${id}/messages${q.toString() ? `?${q}` : ""}`);
+  },
+  chatSend: (id: string, input: { body?: string; mentions?: string[]; fileIds?: string[]; refs?: ListonRef[]; replyToId?: string | null }) =>
+    request<ChatMessage>(`/api/chat/conversations/${id}/messages`, { method: "POST", body: JSON.stringify(input) }),
+  chatRead: (id: string, messageId?: string | null) =>
+    request<{ readAt: string; unread: { unread: number; mentions: number } }>(`/api/chat/conversations/${id}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
+  chatTyping: (id: string) => request<void>(`/api/chat/conversations/${id}/typing`, { method: "POST" }),
+  chatEdit: (messageId: string, body: string, mentions: string[] = []) => request<ChatMessage>(`/api/chat/messages/${messageId}`, { method: "PATCH", body: JSON.stringify({ body, mentions }) }),
+  chatDeleteMessage: (messageId: string) => request<void>(`/api/chat/messages/${messageId}`, { method: "DELETE" }),
+  chatSearch: (q: string) => request<{ results: { message: ChatMessage; conversation: { id: string; kind: string; title: string } }[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`),
+  notificationSettings: () => request<NotificationSettings>(`/api/chat/settings`),
+  saveNotificationSettings: (input: Partial<NotificationSettings>) => request<NotificationSettings>(`/api/chat/settings`, { method: "PUT", body: JSON.stringify(input) }),
+};

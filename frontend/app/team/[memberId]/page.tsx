@@ -12,7 +12,7 @@ import { dayRangeLabel } from "@/components/charts/chart-format";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { downloadCsv, toCsv } from "@/lib/csv";
-import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, timeAgo } from "@/components/team/team-shared";
+import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, Switch, timeAgo } from "@/components/team/team-shared";
 import { MemberPerformance } from "@/components/team/MemberPerformance";
 
 // One team member's page: what they did (figures for any range against the
@@ -595,6 +595,8 @@ function MemberPageBody() {
                 <div className="border-t border-[var(--color-line)]">
                   <AccessGrid member={memberForGrid} connections={connections.filter((c) => c.platform_key === "ebay")} knownFeatures={data.knownFeatures} onChange={changeAccess} />
                 </div>
+                {/* Team chat is everyone's; running its channels is the owner's unless given. */}
+                <ChatManageRow permissions={memberForGrid.permissions || []} name={member!.name || "they"} disabled={removed} onChange={changeAccess} />
               </div>
             )}
           </>
@@ -629,5 +631,31 @@ export default function MemberPage() {
     <Suspense fallback={null}>
       <MemberPageBody />
     </Suspense>
+  );
+}
+
+function ChatManageRow({ permissions, name, disabled, onChange }: { permissions: { connection_id: string | null; feature: string; allowed: boolean }[]; name: string; disabled: boolean; onChange: (updates: PermissionUpdate[]) => Promise<void> }) {
+  const on = permissions.some((p) => p.feature === "chat_manage" && p.connection_id === null && p.allowed);
+  const [busy, setBusy] = useState(false);
+  async function flip() {
+    setBusy(true);
+    try {
+      await onChange([{ connectionId: null, feature: "chat_manage", allowed: !on }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="flex items-center gap-3 border-t border-[var(--color-line)] px-5 py-3">
+      <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-[15px] font-bold ring-1 ring-inset ${on ? "bg-emerald-50 text-emerald-600 ring-emerald-200" : "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]"}`} aria-hidden>
+        #
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-semibold text-[var(--color-ink)]">Manage team chat channels</p>
+        <p className="text-[11.5px] text-[var(--color-muted)]">Everyone has team chat. With this, {name} can also make, rename, archive and delete channels and choose who&apos;s in them.</p>
+      </div>
+      <span className={`hidden text-[11.5px] font-medium sm:inline ${on ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{on ? "On" : "Off"}</span>
+      <Switch on={on} disabled={disabled || busy} onChange={flip} label="Manage team chat channels" />
+    </div>
   );
 }

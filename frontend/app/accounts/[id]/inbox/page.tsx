@@ -1,11 +1,15 @@
 "use client";
 
+import { Suspense } from "react";
 import { useParams } from "next/navigation";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton } from "@/components/Skeleton";
+import { InboxView } from "@/components/inbox/InboxView";
 
+// The Inbox on an account: team chat (the whole team, every account) and
+// this account's eBay messages (with Inbox access).
 export default function AccountInboxPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
@@ -32,28 +36,17 @@ export default function AccountInboxPage() {
       status={connection.status}
       permissions={connection.permissions}
       user={user}
+      fill
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Inbox</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            {connection.label} · {connection.marketplace?.name ?? connection.platform_name}
-          </p>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Your team, and {connection.label}&apos;s buyers</p>
         </div>
       }
     >
-      <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-base font-bold text-[var(--color-ink)]">Buyer messages</h2>
-          <span className="rounded-full bg-[var(--color-line)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-muted)]">
-            Coming soon
-          </span>
-        </div>
-        <div className="mt-4 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
-          <p className="text-sm text-[var(--color-muted)]">
-            Buyer messages for this account will show up here once messaging is built.
-          </p>
-        </div>
-      </div>
+      <Suspense fallback={null}>
+        <InboxView me={user.id} isOwner={user.role !== "member"} connectionId={connection.id} canSeeEbay={!connection.permissions || Boolean(connection.permissions.inbox)} />
+      </Suspense>
     </AccountShell>
   );
 }

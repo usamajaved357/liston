@@ -407,6 +407,15 @@ select:focus-visible {
     min-height: auto;
     overflow: visible;
   }
+  /* A page that fills the screen and scrolls inside itself (the Inbox's panes) keeps doing so. */
+  [data-page-column]:has(> [data-fill]) {
+    overflow: hidden;
+  }
+  [data-page-column] > [data-scroller][data-fill] {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow: hidden;
+  }
   /* An action bar (Add for review, say) stays at the foot of the screen. */
   [data-page-column] > [data-pinned-footer] {
     position: sticky;

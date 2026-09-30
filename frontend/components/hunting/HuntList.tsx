@@ -137,7 +137,14 @@ function Row({ hunt, you, onOpen, onEdit }: { hunt: HuntSummary; you: string; on
   const ink = profitInk(hunt.headline.profit, hunt.headline.roi, hunt.targetRoiPercent, unpriced);
   const returnText = `${roiText(hunt.headline.roi)} ${unpriced ? "at your price" : "return"}`;
   return (
-    <li>
+    <li
+      // Dragged into team chat, it's shared as the product's card.
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("application/x-liston-ref", JSON.stringify({ kind: "hunt", id: hunt.id, connectionId: hunt.connectionId }));
+        e.dataTransfer.effectAllowed = "copy";
+      }}
+    >
       {/* Phones */}
       <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === "Enter" && onOpen()} className="block cursor-pointer px-4 py-3 md:hidden">
         <div className="flex gap-2.5">

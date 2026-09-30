@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
+import { useInboxBadge } from "@/lib/useInboxBadge";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -21,12 +22,15 @@ interface AppShellProps {
   isAdmin?: boolean;
   // Pinned to the sidebar's foot (a member's name and Log out).
   sidebarFooter?: React.ReactNode;
+  // The page fills the space below the header and scrolls inside itself (the Inbox).
+  fill?: boolean;
 }
 
 // connectionsUsed / maxConnections / planName are accepted for compatibility
 // with existing pages; the sidebar no longer shows plan usage.
-export function AppShell({ children, header, subheader, role, isAdmin, sidebarFooter }: AppShellProps) {
+export function AppShell({ children, header, subheader, role, isAdmin, sidebarFooter, fill = false }: AppShellProps) {
   const pathname = usePathname();
+  const inboxBadge = useInboxBadge();
 
   return (
     <ShellFrame
@@ -78,6 +82,19 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
                   <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18M3 12h18" stroke="currentColor" strokeWidth="1.4" />
                 </svg>
               )
+            }
+          />
+          {/* The Inbox: team chat for everyone, and every account's eBay messages. */}
+          <NavItem
+            href="/inbox"
+            active={pathname === "/inbox"}
+            label="Inbox"
+            badge={inboxBadge}
+            icon={
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+                <path d="M4 6.5A1.5 1.5 0 015.5 5h13A1.5 1.5 0 0120 6.5v11a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5v-11z" stroke="currentColor" strokeWidth="1.8" />
+                <path d="M4.5 7l7.5 5.5L19.5 7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             }
           />
           {role === "member" && (
@@ -147,7 +164,13 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
             {subheader && <div className="mt-5">{subheader}</div>}
           </div>
         )}
-        <div data-scroller className={`relative flex-1 min-h-0 overflow-y-auto overscroll-contain px-[var(--page-gutter)] ${header ? "pb-8" : "py-8"}`}>{children}</div>
+        <div
+          data-scroller
+          data-fill={fill ? "" : undefined}
+          className={`relative flex-1 min-h-0 px-[var(--page-gutter)] ${fill ? "flex flex-col overflow-hidden pb-4" : `overflow-y-auto overscroll-contain ${header ? "pb-8" : "py-8"}`}`}
+        >
+          {children}
+        </div>
       </div>
     </ShellFrame>
   );
