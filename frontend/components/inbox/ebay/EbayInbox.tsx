@@ -260,6 +260,7 @@ export function EbayInbox({
           {activeKey ? (
             <EbayThreadView
               data={thread}
+              showAccount={!connectionId}
               loading={threadLoading}
               error={threadError}
               busy={busy}

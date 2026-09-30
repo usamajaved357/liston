@@ -38,6 +38,8 @@
   --shadow-bubble: 0 1px 0.5px rgba(15, 23, 42, 0.13);
   /* the same, crisper: a fine outline all round and a firmer line underneath */
   --shadow-bubble-sharp: 0 0 0 0.5px rgba(15, 23, 42, 0.1), 0 1px 1px rgba(15, 23, 42, 0.16);
+  /* a scrollbar that shows only while it's being scrolled (.scroll-quiet) */
+  --color-scroll-thumb: rgba(15, 23, 42, 0.3);
 
   --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px -8px rgba(15, 23, 42, 0.08);
   --shadow-pop: 0 12px 32px -12px rgba(15, 23, 42, 0.25);
@@ -437,6 +439,40 @@ select:focus-visible {
   select,
   textarea {
     font-size: 16px !important;
+  }
+}
+
+/* A scroll area whose bar shows only while someone is scrolling it, then
+   fades (useQuietScrollbar sets data-scrolling). Where scrollbar-color is
+   supported the ::-webkit-scrollbar styles are ignored, so each browser
+   gets one of the two. */
+@supports (scrollbar-color: auto) {
+  .scroll-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.4s ease;
+  }
+  .scroll-quiet[data-scrolling] {
+    scrollbar-color: var(--color-scroll-thumb) transparent;
+    transition: none;
+  }
+}
+@supports not (scrollbar-color: auto) {
+  .scroll-quiet::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-quiet::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scroll-quiet::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: transparent;
+  }
+  .scroll-quiet[data-scrolling]::-webkit-scrollbar-thumb {
+    background-color: var(--color-scroll-thumb);
   }
 }
 

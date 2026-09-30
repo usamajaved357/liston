@@ -6,10 +6,12 @@ import { FileRow, PhotoGrid } from "../MessageFiles";
 import { RichText } from "../MessageBubble";
 import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, LatestButton, MenuItem, Meta, PopMenu } from "../ChatBubble";
 import { colorFor, dayLabel, initialOf, timeLabel } from "../inbox-format";
+import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { EbayMark, IssueBadge } from "./EbayConversationList";
 
 // One eBay conversation, as WhatsApp shows a chat: a slim header (who,
-// and what it's about, with a mark for an open return, case or dispute or a
+// and what it's about: a tag for an order, a listing or neither, then the
+// item; with a mark for an open return, case or dispute or a
 // cancellation the buyer asked for that opens the order's page there; its name or the details button opens the order and
 // listing beside it; "…" holds mark unread and archive), then the messages
 // on the chat wallpaper, the day in a chip that stays at the top while its
@@ -34,6 +36,45 @@ function HeaderButton({ label, onClick, active = false, children }: { label: str
     >
       {children}
     </button>
+  );
+}
+
+// What a buyer's conversation is about, as a small tag before the header's
+// second line: an order (the buyer bought the item it's about), a listing (a
+// question about an item they haven't bought, or whose orders this member
+// can't see), or neither (General).
+type Topic = { kind: "order" | "listing" | "general"; label: string; hint: string };
+
+function topicOf(data: EbayThread): Topic {
+  const { item, order, ordersHidden } = data.context;
+  if (order) return { kind: "order", label: "Order", hint: `About order ${order.orderId} (${order.statusLabel})` };
+  if (item) return { kind: "listing", label: "Listing", hint: ordersHidden ? "About this listing" : "A question about this listing: no order from this buyer for it" };
+  return { kind: "general", label: "General", hint: "Not about a listing or an order" };
+}
+
+const TOPIC_STYLE: Record<Topic["kind"], string> = {
+  order: "bg-[var(--color-primary-soft)] text-[var(--color-primary)]",
+  listing: "bg-sky-50 text-sky-700",
+  general: "bg-slate-100 text-slate-600",
+};
+
+const TOPIC_ICON: Record<Topic["kind"], ReactNode> = {
+  // a parcel
+  order: <path d="M2.5 5 8 2.5 13.5 5v6L8 13.5 2.5 11zM2.5 5 8 7.5 13.5 5M8 7.5v6" />,
+  // a price tag
+  listing: <path d="M2.5 8.2V3.3a.8.8 0 0 1 .8-.8h4.9l5.3 5.3a.8.8 0 0 1 0 1.1l-4.8 4.8a.8.8 0 0 1-1.1 0zM5.4 5.4h.01" />,
+  // a speech bubble
+  general: <path d="M3 3.5h10a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H7l-3 2.5v-2.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z" />,
+};
+
+function TopicTag({ topic }: { topic: Topic }) {
+  return (
+    <span className={`inline-flex h-4 flex-shrink-0 items-center gap-1 rounded-[4px] pl-1 pr-1.5 text-[10.5px] font-semibold leading-none ${TOPIC_STYLE[topic.kind]}`} title={topic.hint}>
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-[11px] w-[11px]" aria-hidden>
+        {TOPIC_ICON[topic.kind]}
+      </svg>
+      {topic.label}
+    </span>
   );
 }
 
@@ -113,6 +154,7 @@ export function EbayThreadView({
   onToggleDetails,
   details,
   composer,
+  showAccount = true,
 }: {
   data: EbayThread | null;
   loading: boolean;
@@ -126,8 +168,12 @@ export function EbayThreadView({
   // The details panel, drawn beside the chat (or over it on a smaller screen).
   details?: ReactNode;
   composer?: ReactNode;
+  // Every account together: which account the conversation is with.
+  showAccount?: boolean;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  // Its scrollbar shows only while someone is scrolling.
+  const scrollerRef = useQuietScrollbar(scroller);
   // The "…" menu's button while it's open.
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
@@ -171,9 +217,10 @@ export function EbayThreadView({
 
   const messages = data.messages;
   const item = data.context.item;
-  const account = conv?.account.label;
-  // The header's second line: what it's about (the item), else who it's with.
-  const about = ebay ? "Messages from eBay" : item?.title ? `${account ? `${account} · ` : ""}${item.title}` : `Buyer${account ? ` · ${account}` : ""}`;
+  const account = showAccount ? conv?.account.label : null;
+  // The header's second line: a tag for what it's about (an order, a listing, neither), then the item.
+  const topic = ebay ? null : topicOf(data);
+  const about = ebay ? "Messages from eBay" : `${account ? `${account} · ` : ""}${item?.title || conv?.title || "Buyer"}`;
   const menu: MenuItem[] = [
     ...(!ebay ? [{ label: detailsOpen ? "Hide details" : "Details", onSelect: onToggleDetails }] : []),
     { label: "Mark as unread", onSelect: onMarkUnread },
@@ -210,7 +257,10 @@ export function EbayThreadView({
             )}
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[14.5px] font-semibold leading-5 text-[var(--color-ink)]">{ebay ? "eBay" : conv?.otherParty}</span>
-              <span className="block truncate text-[12px] leading-4 text-[var(--color-muted)]">{about}</span>
+              <span className="mt-px flex min-w-0 items-center gap-1.5 text-[12px] leading-4 text-[var(--color-muted)]">
+                {topic && <TopicTag topic={topic} />}
+                <span className="truncate">{about}</span>
+              </span>
             </span>
           </button>
           {conv?.issue && (
@@ -248,8 +298,8 @@ export function EbayThreadView({
 
         <div className="chat-wallpaper relative min-h-0 flex-1">
           <div
-            ref={scroller}
-            className="h-full overflow-y-auto pb-3"
+            ref={scrollerRef}
+            className="scroll-quiet h-full overflow-y-auto pb-3"
             onScroll={(e) => {
               const el = e.currentTarget;
               const away = el.scrollHeight - el.scrollTop - el.clientHeight > 160;

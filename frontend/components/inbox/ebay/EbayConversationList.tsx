@@ -3,6 +3,7 @@
 import { EbayConversationRow, EbayInboxList } from "@/lib/api";
 import { PillTabs } from "@/components/PillTabs";
 import { useNow } from "@/lib/useMyEvents";
+import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { colorFor, initialOf, listTime, shortAgo } from "../inbox-format";
 
 // The eBay Inbox's list, as WhatsApp's chat list: search at the top, tabs
@@ -139,6 +140,7 @@ export function EbayConversationList({
   onMore: () => void;
 }) {
   const now = useNow();
+  const quietScroll = useQuietScrollbar<HTMLDivElement>();
   const rows = data?.conversations || [];
   const counts = data?.counts;
   const unreadAll = (counts?.buyers || 0) + (counts?.ebay || 0);
@@ -182,7 +184,7 @@ export function EbayConversationList({
           />
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+      <div ref={quietScroll} className="scroll-quiet min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
         {showArchiveRow && (
           <button type="button" onClick={() => onView("archived")} className="flex w-full items-center gap-2.5 rounded-xl py-2 pl-2.5 pr-2.5 text-left transition-colors hover:bg-[var(--color-paper)]">
             <span className="flex w-10 flex-shrink-0 justify-center text-[var(--color-primary)]">{archiveIcon}</span>

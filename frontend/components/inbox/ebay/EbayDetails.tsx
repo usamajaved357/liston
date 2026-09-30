@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import { api, EbayOrderSummary, EbayThread, OrderCases } from "@/lib/api";
 import { colorFor, initialOf, listTime, money } from "../inbox-format";
+import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 
 // A buyer conversation's details, beside the chat when asked for (the
 // header's details button, or its name): who the buyer is, the order it's
@@ -11,8 +12,9 @@ import { colorFor, initialOf, listTime, money } from "../inbox-format";
 // and a cancellation they asked for, each opening the order's page at the
 // part that answers it), the listing, the buyer's other orders and their
 // other conversations.
-// Orders and listings open in Liston in a new tab (a small "Open" pill in
-// the section's heading), so the chat stays put.
+// Orders and listings open in Liston in a new tab ("Order details",
+// "Listing details": underlined links in the section's heading), so the
+// chat stays put.
 // On a wide screen it sits beside the chat; on a smaller one over it.
 
 const STATUS_TONE: Record<string, string> = {
@@ -60,23 +62,23 @@ function Section({ title, children, action }: { title: string; children: ReactNo
   );
 }
 
+// The buyer's other orders open in a new tab: a small arrow at each row's end.
 const arrow = (
   <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3" aria-hidden>
     <path d="M8 5h7v7M15 5l-9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
 
-// Opens a Liston page in a new tab: a small soft pill in its section's heading, as the app's other quiet actions.
+// Opens a Liston page in a new tab: an underlined link in its section's heading, the line firming up on hover.
 function OpenLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <a
       href={href}
       target="_blank"
       rel="noopener"
-      className="inline-flex h-7 items-center gap-1 rounded-full bg-[var(--color-primary-soft)] pl-2.5 pr-2 text-[12px] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)] hover:text-white"
+      className="text-[12.5px] font-medium text-[var(--color-primary)] underline decoration-[var(--color-primary)]/35 decoration-1 underline-offset-[3px] transition-colors hover:decoration-[var(--color-primary)]"
     >
       {children}
-      {arrow}
     </a>
   );
 }
@@ -203,6 +205,7 @@ function FragmentRow({ label, children }: { label: string; children: ReactNode }
 export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayThread; onClose: () => void; onOpenConversation: (conversationId: string) => void }) {
   const conv = data.conversation;
   const { item, listing, order, orders, ordersHidden, otherConversations } = data.context;
+  const quietScroll = useQuietScrollbar<HTMLDivElement>();
   const connectionId = conv.account.id;
   const others = orders.filter((o) => o.orderId !== order?.orderId);
   const listingFacts = listing && !listing.locked && !listing.gone ? listing.facts : [];
@@ -218,7 +221,7 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
         <h3 className="text-[14.5px] font-semibold text-[var(--color-ink)]">Details</h3>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto pb-6">
+      <div ref={quietScroll} className="scroll-quiet min-h-0 flex-1 overflow-y-auto pb-6">
         <div className="flex flex-col items-center px-5 pb-5 pt-2 text-center">
           <span className="flex h-16 w-16 items-center justify-center rounded-full text-[24px] font-semibold text-white" style={{ background: colorFor(conv.otherParty) }} aria-hidden>
             {initialOf(conv.otherParty)}
@@ -228,7 +231,7 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
         </div>
 
         {order ? (
-          <Section title="Order" action={<OpenLink href={order.url}>Open order</OpenLink>}>
+          <Section title="Order" action={<OpenLink href={order.url}>Order details</OpenLink>}>
             <OrderBlock order={order} connectionId={connectionId} />
           </Section>
         ) : ordersHidden ? (
@@ -238,7 +241,7 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
         ) : null}
 
         {item && (
-          <Section title={order ? "Listing" : "Asked about"} action={item.url ? <OpenLink href={item.url}>Open listing</OpenLink> : undefined}>
+          <Section title={order ? "Listing" : "Asked about"} action={item.url ? <OpenLink href={item.url}>Listing details</OpenLink> : undefined}>
             <div className="flex items-start gap-3">
               {item.image ? (
                 // eslint-disable-next-line @next/next/no-img-element
