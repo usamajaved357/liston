@@ -98,6 +98,14 @@ test('direct messages: one per pair, live to the other person, unread until read
   const seen = await request('GET', `/api/chat/conversations/${dm.data.id}`, undefined, t.o.token);
   assert.ok(new Date(seen.data.members.find((m) => m.id === t.sara.id).lastReadAt) >= new Date(sent.data.createdAt), 'seen by Sara');
 
+  // Read up to a message (what the thread sends): that message is read, even at a time finer than a millisecond.
+  const next = await request('POST', `/api/chat/conversations/${dm.data.id}/messages`, { body: 'And the refunds.' }, t.o.token);
+  await pool.query(`UPDATE chat_messages SET created_at = now() + interval '1 second' + interval '123 microseconds' WHERE id = $1`, [next.data.id]);
+  assert.strictEqual((await request('GET', '/api/chat/conversations', undefined, t.sara.token)).data.conversations.find((c) => c.id === dm.data.id).unread, 1);
+  const upTo = await request('POST', `/api/chat/conversations/${dm.data.id}/read`, { messageId: next.data.id }, t.sara.token);
+  assert.deepStrictEqual(upTo.data.unread, { unread: 0, mentions: 0 }, 'read up to that very message');
+  assert.strictEqual((await request('GET', '/api/chat/conversations', undefined, t.sara.token)).data.conversations.find((c) => c.id === dm.data.id).unread, 0);
+
   // Someone outside the conversation can't read or write in it.
   assert.strictEqual((await request('GET', `/api/chat/conversations/${dm.data.id}/messages`, undefined, t.tom.token)).status, 404);
   assert.strictEqual((await request('POST', `/api/chat/conversations/${dm.data.id}/messages`, { body: 'x' }, t.tom.token)).status, 404);
@@ -213,8 +221,12 @@ test('pushes: everyone in it but the sender, not while reading it, never when mu
     await new Promise((r) => setTimeout(r, 300));
     assert.deepStrictEqual(calls, [], 'nobody: Tom is reading, Ali muted it, Sara only wants mentions');
 
+    // Her open bell hears each change on her live stream: a line added, a line read.
+    const bellEvents = [];
+    const stopBell = userEvents.subscribe(t.sara.id, (e) => e.type === 'notifications.changed' && bellEvents.push(e));
     await request('POST', `/api/chat/conversations/${channel.id}/messages`, { body: '@Sara can you look?', mentions: [t.sara.id] }, t.o.token);
     assert.ok(await until(() => calls.length === 1));
+    assert.ok(await until(() => bellEvents.length === 1), 'the bell is told a line was added');
     assert.deepStrictEqual([calls[0].userId, calls[0].title, calls[0].body, calls[0].url, calls[0].push.tag], [t.sara.id, `Owen in #${channel.name}`, '@Sara can you look?', `/inbox?c=${channel.id}`, `chat-${channel.id}`]);
 
     // Her lock screen shows no text once she hides it; quiet hours keep the bell but send nothing.
@@ -227,8 +239,11 @@ test('pushes: everyone in it but the sender, not while reading it, never when mu
     // One bell line for the conversation, counting up; read when she opens it.
     const { rows } = await pool.query(`SELECT detail, read_at FROM notifications WHERE user_id = $1 AND kind = 'chat.message'`, [t.sara.id]);
     assert.deepStrictEqual([rows.length, rows[0].detail.count], [1, 2]);
+    const beforeRead = bellEvents.length;
     await request('POST', `/api/chat/conversations/${channel.id}/read`, {}, t.sara.token);
     assert.ok((await pool.query(`SELECT read_at FROM notifications WHERE user_id = $1 AND kind = 'chat.message'`, [t.sara.id])).rows[0].read_at);
+    assert.strictEqual(bellEvents.length, beforeRead + 1, 'and told when it was read');
+    stopBell();
     assert.strictEqual((await request('PUT', '/api/chat/settings', { quietFrom: 60, quietTo: null }, t.sara.token)).status, 400);
   } finally {
     mock.restoreAll();

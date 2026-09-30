@@ -110,10 +110,19 @@ export function ChatThread({
   useEffect(() => {
     if (atBottom) markRead();
   }, [atBottom, markRead]);
+  // Coming back to it: the window's focus, the tab shown again, or a click or key in the page (some embedded browsers send no focus event).
   useEffect(() => {
-    const onFocus = () => atBottom && markRead();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    const onBack = () => atBottom && markRead();
+    window.addEventListener("focus", onBack);
+    document.addEventListener("visibilitychange", onBack);
+    document.addEventListener("pointerdown", onBack);
+    document.addEventListener("keydown", onBack);
+    return () => {
+      window.removeEventListener("focus", onBack);
+      document.removeEventListener("visibilitychange", onBack);
+      document.removeEventListener("pointerdown", onBack);
+      document.removeEventListener("keydown", onBack);
+    };
   }, [atBottom, markRead]);
 
   // Live: new messages, edits, reads, typing (and, after the connection dropped, what was said meanwhile).

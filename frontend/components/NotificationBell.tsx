@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, NotificationList } from "@/lib/api";
 import { disablePush, enablePush, pushState, PushState, refreshPush } from "@/lib/push";
 import { ago } from "@/components/hunting/HuntBits";
+import { useMyEvents } from "@/lib/useMyEvents";
 
 // The bell in the page header: what Liston has told this person (a reviewer
 // approved, rejected, sent back or removed one of their hunted products),
@@ -240,6 +241,11 @@ export function NotificationBell() {
       // The bell stays as it was; the next poll tries again.
     }
   }, [show]);
+
+  // Live: the server says when a line is added or read, and the bell follows at once.
+  useMyEvents((e) => {
+    if (e.type === "notifications.changed") load(false);
+  });
 
   useEffect(() => {
     const first = setTimeout(() => load(false), 0);

@@ -160,12 +160,18 @@ async function setNotify(conversationId, userId, notify) {
   await query(`UPDATE chat_members SET notify = $3 WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId, notify]);
 }
 
-/** Marks everything up to `at` read (never moves backwards). */
-async function markRead(conversationId, userId, at) {
+/**
+ * Marks everything up to a message (`messageId`) or a time (`at`) read, never
+ * moving backwards. A message's time is taken in SQL: Postgres keeps
+ * microseconds, a JS Date only milliseconds, and a rounded-down time would
+ * leave that very message unread.
+ */
+async function markRead(conversationId, userId, { at = null, messageId = null } = {}) {
   const { rows } = await query(
-    `UPDATE chat_members SET last_read_at = GREATEST(coalesce(last_read_at, 'epoch'::timestamptz), $3)
+    `UPDATE chat_members SET last_read_at = GREATEST(coalesce(last_read_at, 'epoch'::timestamptz),
+        coalesce((SELECT created_at FROM chat_messages WHERE id = $4::uuid AND conversation_id = $1), $3::timestamptz, now()))
       WHERE conversation_id = $1 AND user_id = $2 RETURNING last_read_at`,
-    [conversationId, userId, at]
+    [conversationId, userId, at, messageId]
   );
   return rows[0]?.last_read_at || null;
 }
@@ -186,9 +192,10 @@ async function insertMessage(m) {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, created_at`,
       [m.conversationId, m.authorId, m.kind || 'text', m.body || '', m.replyToId || null, JSON.stringify(m.refs || []), m.fileIds || [], m.mentions || [], Boolean(m.mentionAll), JSON.stringify(m.detail || {})]
     );
-    await client.query(`UPDATE chat_conversations SET last_message_at = $2 WHERE id = $1`, [m.conversationId, rows[0].created_at]);
+    // Times copied in SQL, at full precision (see markRead).
+    await client.query(`UPDATE chat_conversations SET last_message_at = (SELECT created_at FROM chat_messages WHERE id = $2) WHERE id = $1`, [m.conversationId, rows[0].id]);
     // The author has read their own conversation up to what they just said.
-    if (m.authorId) await client.query(`UPDATE chat_members SET last_read_at = $3 WHERE conversation_id = $1 AND user_id = $2`, [m.conversationId, m.authorId, rows[0].created_at]);
+    if (m.authorId) await client.query(`UPDATE chat_members SET last_read_at = (SELECT created_at FROM chat_messages WHERE id = $3) WHERE conversation_id = $1 AND user_id = $2`, [m.conversationId, m.authorId, rows[0].id]);
     await client.query('COMMIT');
     return rows[0];
   } catch (err) {

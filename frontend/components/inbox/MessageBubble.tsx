@@ -100,17 +100,23 @@ export function MessageBubble({
   const mentionNames = message.mentions.map((id) => people.get(id)?.name).filter((n): n is string => Boolean(n));
   const side = mine ? "items-end" : "items-start";
   const hasText = Boolean(message.body) || message.deleted;
-  const radius = mine ? `rounded-2xl ${last ? "rounded-br-md" : ""}` : `rounded-2xl ${last ? "rounded-bl-md" : ""}`;
+  const radius = mine ? `rounded-[18px] ${last ? "rounded-br-md" : ""}` : `rounded-[18px] ${last ? "rounded-bl-md" : ""}`;
+  // The time sits in the bubble's corner ("edited" beside it); a message with no text shows it under its files.
+  const stamp = `${timeLabel(message.createdAt)}${message.editedAt && !message.deleted ? " · edited" : ""}`;
 
   return (
-    <div className={`group/msg relative flex gap-2 px-4 ${mine ? "flex-row-reverse" : ""} ${first ? "mt-3" : "mt-0.5"} ${highlight ? "animate-[pulse_1.2s_ease-in-out_2]" : ""}`} data-message-id={message.id}>
-      {!mine && <div className="w-8 flex-shrink-0 self-end">{last && <PersonAvatar id={author?.id} name={author?.name} avatarUrl={author?.avatarUrl} size={30} />}</div>}
-      <div className={`flex min-w-0 max-w-[min(560px,78%)] flex-col gap-1 ${side}`}>
-        {first && showAuthorName && !mine && <p className="px-1 text-[11.5px] font-semibold text-[var(--color-ink)]">{author?.name || "Someone"}</p>}
+    <div className={`group/msg relative flex items-end gap-2 px-5 ${mine ? "flex-row-reverse" : ""} ${first ? "mt-3" : "mt-0.5"} ${highlight ? "animate-[pulse_1.2s_ease-in-out_2]" : ""}`} data-message-id={message.id}>
+      {!mine && <div className="w-7 flex-shrink-0">{last && <PersonAvatar id={author?.id} name={author?.name} avatarUrl={author?.avatarUrl} size={28} />}</div>}
+      <div className={`flex min-w-0 max-w-[min(460px,68%)] flex-col gap-1 ${side}`}>
+        {first && showAuthorName && !mine && <p className="px-3 text-[11px] font-semibold text-[var(--color-muted)]">{author?.name || "Someone"}</p>}
         {hasText && (
           <div
-            className={`relative ${radius} px-3.5 py-2 text-[13.5px] leading-relaxed shadow-[0_1px_1px_rgba(15,23,42,0.04)] ${
-              message.deleted ? "border border-dashed border-[var(--color-line)] bg-transparent italic text-[var(--color-muted)]" : mine ? "bg-[var(--color-primary)] text-white" : "border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)]"
+            className={`relative ${radius} px-3 py-[7px] text-[13px] leading-[1.45] ${
+              message.deleted
+                ? "border border-dashed border-[var(--color-line)] bg-transparent italic text-[var(--color-muted)]"
+                : mine
+                  ? "bg-[var(--color-primary)] text-white"
+                  : "bg-[var(--color-panel)] text-[var(--color-ink)] shadow-[0_1px_1px_rgba(15,23,42,0.06),0_0_0_1px_rgba(15,23,42,0.04)]"
             }`}
           >
             {message.replyTo && !message.deleted && (
@@ -123,7 +129,10 @@ export function MessageBubble({
                 <span className="line-clamp-2">{message.replyTo.text}</span>
               </button>
             )}
-            {message.deleted ? "Message deleted" : <span className="whitespace-pre-wrap break-words"><RichText text={message.body} mentionNames={mentionNames} onBrand={mine} /></span>}
+            <span className="flex flex-wrap items-end justify-end gap-x-2">
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{message.deleted ? "Message deleted" : <RichText text={message.body} mentionNames={mentionNames} onBrand={mine} />}</span>
+              <span className={`flex-shrink-0 translate-y-[2px] text-[10px] not-italic tabular-nums leading-none ${mine && !message.deleted ? "text-white/70" : "text-[var(--color-muted)]"}`}>{stamp}</span>
+            </span>
           </div>
         )}
         {message.cards.length > 0 && (
@@ -134,11 +143,11 @@ export function MessageBubble({
           </div>
         )}
         <MessageFiles files={message.files} align={mine ? "right" : "left"} />
-        {(last || seen) && (
-          <p className="px-1 text-[10.5px] text-[var(--color-muted)]">
-            {timeLabel(message.createdAt)}
-            {message.editedAt && !message.deleted ? " · edited" : ""}
-            {seen ? ` · ${seen}` : ""}
+        {(!hasText || seen) && (
+          <p className="px-1 text-[10px] text-[var(--color-muted)]">
+            {!hasText ? stamp : ""}
+            {!hasText && seen ? " · " : ""}
+            {seen || ""}
           </p>
         )}
       </div>

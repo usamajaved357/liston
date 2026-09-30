@@ -117,7 +117,7 @@ export function ConversationList({
   }
 
   return (
-    <aside className="flex min-h-0 w-full flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)] lg:w-[300px] lg:flex-shrink-0">
+    <aside className="flex min-h-0 w-full flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)] lg:w-[340px] lg:flex-shrink-0">
       <div className="flex items-center gap-2 border-b border-[var(--color-line)] px-3 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-[var(--color-line)] bg-[var(--color-paper)] px-3 py-1.5 focus-within:border-[var(--color-primary)]">
           <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>

@@ -248,3 +248,21 @@ test('replying to a buyer: a warning first when eBay would block it, attachments
     mock.restoreAll();
   }
 });
+
+test("eBay refusing the archive never stops the inbox being read: the buyers' and eBay's conversations still come in", async () => {
+  const t = await setup();
+  stubEbay({ buyers: [conv('c1')], ebay: [conv('e1', { type: 'FROM_EBAY', text: 'Notice' })] });
+  const real = ebayMessage.getConversations;
+  mock.method(ebayMessage, 'getConversations', async (token, args, site) => {
+    if (args.status === 'ARCHIVE') throw Object.assign(new Error('Invalid conversationStatus value.'), { statusCode: 400 });
+    return real.call(ebayMessage, token, args, site);
+  });
+  try {
+    const out = await inboxService.sync(t.connection.id, t.owner.id);
+    assert.deepStrictEqual([out.changed, out.full], [2, true]);
+    const list = await request('GET', `/api/connections/${t.connection.id}/inbox?folder=ebay`, undefined, t.owner.token);
+    assert.deepStrictEqual([list.data.conversations.length, list.data.sync.error], [1, null]);
+  } finally {
+    mock.restoreAll();
+  }
+});

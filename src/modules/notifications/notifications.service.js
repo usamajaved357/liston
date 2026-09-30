@@ -1,9 +1,13 @@
 const notificationsRepository = require('./notifications.repository');
 const push = require('./push');
+const userEvents = require('../realtime/user-events');
 const logger = require('../../utils/logger');
 
 // What Liston tells a person: kept for the bell, and pushed to every browser
-// they turned push notifications on in.
+// they turned push notifications on in. Each change is also said on the
+// person's live stream (`notifications.changed`) so an open bell follows at once.
+
+const changed = (userId) => userEvents.emit(String(userId), { type: 'notifications.changed' });
 
 /**
  * Tells someone something: kept for the bell, then pushed in the background.
@@ -19,6 +23,7 @@ async function notify({ userId, actorUserId = null, kind, title, body = null, ur
     logger.warn('Notification not kept', { kind, error: err.message });
     return null;
   }
+  changed(userId);
   // Pushed in the background: the action that caused it doesn't wait on the push services.
   pushTo(userId, { id: row.id, kind, title, body, url, tag: subjectId ? `${kind.split('.')[0]}-${subjectId}` : row.id }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
   return row;
@@ -39,13 +44,16 @@ async function notifyGrouped({ userId, actorUserId = null, kind, title, body = n
     logger.warn('Notification not kept', { kind, error: err.message });
     return null;
   }
+  changed(userId);
   if (pushed) pushTo(userId, { id: row.id, kind, url, ...pushed }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
   return row;
 }
 
 /** The person opened what these notifications were about: they're read. */
 async function readSubject(userId, kind, subjectId) {
-  return notificationsRepository.markReadBySubject(userId, kind, subjectId).catch(() => 0);
+  const count = await notificationsRepository.markReadBySubject(userId, kind, subjectId).catch(() => 0);
+  if (count) changed(userId);
+  return count;
 }
 
 /** Sends one notification to every browser the person turned push on in; forgets the ones that are gone. */
@@ -85,6 +93,7 @@ async function list(userId) {
 
 async function markRead(userId, ids) {
   await notificationsRepository.markRead(userId, ids || null);
+  changed(userId);
   return list(userId);
 }
 
@@ -101,6 +110,7 @@ async function subscribe(userId, { endpoint, keys, userAgent }) {
 /** Clears some (or all) of a person's notifications. */
 async function clear(userId, ids) {
   await notificationsRepository.deleteFor(userId, ids || null);
+  changed(userId);
   return list(userId);
 }
 

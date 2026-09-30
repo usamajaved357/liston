@@ -35,13 +35,27 @@ export function PhotoViewer({ photos, index, onClose }: { photos: ViewablePhoto[
 }
 
 /** Photos: one shown as it is; several as a stack with their count. */
-export function PhotoStack({ photos, align = "left" }: { photos: ViewablePhoto[]; align?: "left" | "right" }) {
+export function PhotoStack({ photos, align = "left", size = 220 }: { photos: ViewablePhoto[]; align?: "left" | "right"; size?: number }) {
   const [open, setOpen] = useState<number | null>(null);
+  // A photo whose file is gone from the store shows as a quiet tile, not a broken image.
+  const [missing, setMissing] = useState(false);
   if (!photos.length) return null;
   const first = photos[0];
   const ratio = first.width && first.height ? first.width / first.height : 1;
-  const w = ratio >= 1 ? 240 : Math.max(140, Math.round(240 * ratio));
-  const h = ratio >= 1 ? Math.max(120, Math.round(240 / ratio)) : 240;
+  const w = ratio >= 1 ? size : Math.max(Math.round(size * 0.6), Math.round(size * ratio));
+  const h = ratio >= 1 ? Math.max(Math.round(size / 2), Math.round(size / ratio)) : size;
+  if (missing)
+    return (
+      <div className={`flex ${align === "right" ? "justify-end" : "justify-start"}`}>
+        <span className="flex items-center gap-2 rounded-xl border border-dashed border-[var(--color-line)] px-3 py-2 text-[11.5px] text-[var(--color-muted)]" title={first.name || undefined}>
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+            <rect x="3.5" y="5" width="17" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
+            <path d="M3.5 16l5-5 4 4 3-3 5 5M4 4l16 16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Photo unavailable
+        </span>
+      </div>
+    );
   return (
     <div className={`flex flex-col ${align === "right" ? "items-end" : "items-start"}`}>
       {photos.length > 1 && <p className="mb-1 px-1 text-[11px] font-medium text-[var(--color-muted)]">{photos.length} photos</p>}
@@ -52,7 +66,7 @@ export function PhotoStack({ photos, align = "left" }: { photos: ViewablePhoto[]
           <img src={photos[1].thumb || photos[1].src} alt="" className="absolute rounded-xl border-2 border-[var(--color-panel)] object-cover shadow-sm" style={{ width: w, height: h, left: 9, top: 4, transform: "rotate(3deg)" }} aria-hidden />
         )}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={first.thumb || first.src} alt={first.name || ""} loading="lazy" className="absolute left-0 top-0 rounded-xl border-2 border-[var(--color-panel)] object-cover shadow-md transition-transform group-hover:-translate-y-0.5" style={{ width: w, height: h }} />
+        <img src={first.thumb || first.src} alt={first.name || ""} loading="lazy" onError={() => setMissing(true)} className="absolute left-0 top-0 rounded-xl border-2 border-[var(--color-panel)] object-cover shadow-md transition-transform group-hover:-translate-y-0.5" style={{ width: w, height: h }} />
       </button>
       <PhotoViewer photos={photos} index={open} onClose={() => setOpen(null)} />
     </div>

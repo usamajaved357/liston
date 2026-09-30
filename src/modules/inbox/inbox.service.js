@@ -139,7 +139,16 @@ function sync(connectionId, ownerId, { full = false } = {}) {
           for (const status of whole ? ['ACTIVE', 'ARCHIVE'] : ['ACTIVE']) {
             let offset = 0;
             for (let page = 0; page < (whole ? FULL_PAGES : QUICK_PAGES); page += 1) {
-              const { conversations, total } = await ebayMessage.getConversations(accessToken, { type, status, limit: PAGE, offset }, marketplaceId);
+              let found;
+              try {
+                found = await ebayMessage.getConversations(accessToken, { type, status, limit: PAGE, offset }, marketplaceId);
+              } catch (err) {
+                // The archive is a nice-to-have: eBay refusing it never stops the inbox being read.
+                if (status !== 'ARCHIVE') throw err;
+                logger.warn('Inbox: archive not read from eBay', { connectionId, type, error: err.message });
+                break;
+              }
+              const { conversations, total } = found;
               if (!conversations.length) break;
               const known = await inboxRepository.latestIds(connectionId, conversations.map((c) => c.conversationId));
               const rows = conversations.map((c) => conversationRow(c, seller, status));
@@ -165,6 +174,8 @@ function sync(connectionId, ownerId, { full = false } = {}) {
       return { changed: changed.length, full: whole };
     } catch (err) {
       await inboxRepository.recordSync(connectionId, { error: err.message }).catch(() => {});
+      // Whatever was read before it failed is shown.
+      await announce(connectionId, ownerId, {}).catch(() => {});
       throw err;
     }
   })().finally(() => syncing.delete(connectionId));

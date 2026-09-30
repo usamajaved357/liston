@@ -577,12 +577,8 @@ async function deleteMessage(auth, messageId) {
 /** Reads a conversation up to a message (or now): unread counts drop, "Seen by" moves, its bell line clears. */
 async function markRead(auth, id, { messageId = null } = {}) {
   await requireMember(auth, id);
-  let at = new Date();
-  if (messageId) {
-    const m = await chatRepository.findMessage(messageId);
-    if (m && m.conversation_id === id) at = m.created_at;
-  }
-  const readAt = await chatRepository.markRead(id, auth.userId, at);
+  // Up to that message when it's in this conversation, else up to now.
+  const readAt = await chatRepository.markRead(id, auth.userId, { messageId });
   await notificationsService.readSubject(auth.userId, 'chat.message', id);
   const members = await chatRepository.membersOf([id]);
   userEvents.emitMany(members.map((m) => String(m.user_id)), { type: 'chat.read', conversationId: id, userId: String(auth.userId), at: readAt });

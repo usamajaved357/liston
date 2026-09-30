@@ -35,25 +35,24 @@ export function InboxView({ me, isOwner, connectionId = null, canSeeEbay = true 
     [router, pathname, search]
   );
 
+  const modeSwitch = (
+    <PillTabs
+      tabs={[
+        { key: "team" as const, label: "Team chat", count: unread.unread || undefined, countTone: unread.mentions ? "alert" : "default" },
+        ...(canSeeEbay ? [{ key: "ebay" as const, label: "eBay messages" }] : []),
+      ]}
+      value={mode}
+      onChange={(m) => go({ mode: m === "team" ? null : m, c: null, e: null })}
+      label="Inbox"
+    />
+  );
+
+  if (mode === "ebay") return <EbayInbox connectionId={connectionId} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} modeSwitch={modeSwitch} />;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <PillTabs
-          tabs={[
-            { key: "team" as const, label: "Team chat", count: unread.unread || undefined, countTone: unread.mentions ? "alert" : "default" },
-            ...(canSeeEbay ? [{ key: "ebay" as const, label: "eBay messages" }] : []),
-          ]}
-          value={mode}
-          onChange={(m) => go({ mode: m === "team" ? null : m, c: null, e: null })}
-          label="Inbox"
-        />
-      </div>
+      <div className="flex flex-wrap items-center gap-3">{modeSwitch}</div>
       <div className="card flex min-h-0 flex-1 overflow-hidden">
-        {mode === "team" ? (
-          <TeamChat me={me} isOwner={isOwner} activeId={activeId} onActiveChange={(id) => go({ c: id })} />
-        ) : (
-          <EbayInbox connectionId={connectionId} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} />
-        )}
+        <TeamChat me={me} isOwner={isOwner} activeId={activeId} onActiveChange={(id) => go({ c: id })} />
       </div>
     </div>
   );

@@ -37,11 +37,14 @@ function messageOf(m = {}) {
   };
 }
 
+// eBay names a folder ARCHIVED or DELETED when it lists them, ARCHIVE or DELETE when you move one: Liston keeps one name.
+const FOLDER = { ARCHIVED: 'ARCHIVE', DELETED: 'DELETE' };
+
 function conversationOf(c = {}, type) {
   return {
     conversationId: String(c.conversationId),
     type: c.conversationType || type,
-    status: c.conversationStatus || 'ACTIVE',
+    status: FOLDER[c.conversationStatus] || c.conversationStatus || 'ACTIVE',
     title: c.conversationTitle || null,
     referenceId: c.referenceId ? String(c.referenceId) : null,
     referenceType: c.referenceType || null,
@@ -51,15 +54,28 @@ function conversationOf(c = {}, type) {
   };
 }
 
+const badStatus = (err) => /conversationStatus|conversation_status/i.test(err?.message || '');
+
 /**
  * One page of the account's conversations of a type (FROM_MEMBERS: buyers
  * and other members; FROM_EBAY: eBay's own), newest first: { conversations,
- * total }. `status`: ACTIVE (the default), ARCHIVE or DELETE.
+ * total }. `status`: ACTIVE (the default), ARCHIVE or DELETE — asked of eBay
+ * as ARCHIVED / DELETED (its listing names; the other spelling if it refuses).
  */
 async function getConversations(accessToken, { type = 'FROM_MEMBERS', status = null, limit = 50, offset = 0, otherPartyUsername = null, referenceId = null } = {}, marketplaceId) {
-  const query = qs({ conversation_type: type, conversation_status: status, other_party_username: otherPartyUsername, reference_id: referenceId, reference_type: referenceId ? 'LISTING' : null, limit, offset });
-  const res = await request(accessToken, 'GET', `/commerce/message/v1/conversation?${query}`, null, marketplaceId, { baseUrl: baseUrl() });
-  return { conversations: (res?.conversations || []).map((c) => conversationOf(c, type)), total: Number(res?.total) || 0 };
+  const names = status === 'ARCHIVE' ? ['ARCHIVED', 'ARCHIVE'] : status === 'DELETE' ? ['DELETED', 'DELETE'] : [status];
+  let lastError;
+  for (const name of names) {
+    const query = qs({ conversation_type: type, conversation_status: name, other_party_username: otherPartyUsername, reference_id: referenceId, reference_type: referenceId ? 'LISTING' : null, limit, offset });
+    try {
+      const res = await request(accessToken, 'GET', `/commerce/message/v1/conversation?${query}`, null, marketplaceId, { baseUrl: baseUrl() });
+      return { conversations: (res?.conversations || []).map((c) => ({ ...conversationOf(c, type), status: status || conversationOf(c, type).status })), total: Number(res?.total) || 0 };
+    } catch (err) {
+      lastError = err;
+      if (!badStatus(err)) throw err;
+    }
+  }
+  throw lastError;
 }
 
 /** One page of a conversation's messages: { messages, total }. */
@@ -75,9 +91,20 @@ async function getConversation(accessToken, conversationId, { type = 'FROM_MEMBE
  */
 async function updateConversation(accessToken, { conversationId, type = 'FROM_MEMBERS', read, status }, marketplaceId) {
   const body = { conversationId: String(conversationId), conversationType: type };
-  if (status) body.conversationStatus = status;
-  else body.read = Boolean(read);
-  await request(accessToken, 'POST', '/commerce/message/v1/update_conversation', body, marketplaceId, { baseUrl: baseUrl() });
+  if (!status) {
+    body.read = Boolean(read);
+    await request(accessToken, 'POST', '/commerce/message/v1/update_conversation', body, marketplaceId, { baseUrl: baseUrl() });
+    return;
+  }
+  const names = status === 'ARCHIVE' ? ['ARCHIVE', 'ARCHIVED'] : status === 'DELETE' ? ['DELETE', 'DELETED'] : [status];
+  for (let i = 0; i < names.length; i += 1) {
+    try {
+      await request(accessToken, 'POST', '/commerce/message/v1/update_conversation', { ...body, conversationStatus: names[i] }, marketplaceId, { baseUrl: baseUrl() });
+      return;
+    } catch (err) {
+      if (!badStatus(err) || i === names.length - 1) throw err;
+    }
+  }
 }
 
 /**
