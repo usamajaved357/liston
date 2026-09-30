@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useState } from "react";
-import { api, EbayOrderSummary, EbayThread, OrderCases } from "@/lib/api";
+import { api, EbayOrderSummary, EbayThread, OrderCases, OrderMoney } from "@/lib/api";
 import { colorFor, initialOf, listTime, money } from "../inbox-format";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 
@@ -10,8 +10,9 @@ import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 // about (its state, what they paid, the way from ordered to delivered,
 // tracking, what they bought, any open return or case with its deadline
 // and a cancellation they asked for, each opening the order's page at the
-// part that answers it), the listing, the buyer's other orders and their
-// other conversations.
+// part that answers it), what it made (eBay's fees, the earnings and where
+// the funds are, the supplier cost, the profit), the listing, the buyer's
+// other orders and their other conversations.
 // Orders and listings open in Liston in a new tab ("Order details",
 // "Listing details": underlined links in the section's heading), so the
 // chat stays put.
@@ -193,6 +194,100 @@ function OrderBlock({ order, connectionId }: { order: EbayOrderSummary; connecti
   );
 }
 
+// What the order made: eBay's fees and earnings as Liston keeps them (read
+// from eBay once when it has none), the supplier cost and the profit. The
+// order page has every fee on its own line.
+function useOrderMoney(connectionId: string, order: EbayOrderSummary) {
+  const [state, setState] = useState<{ orderId: string; money: OrderMoney | null } | null>(null);
+  const unpaid = order.status === "awaiting_payment";
+  useEffect(() => {
+    if (unpaid) return;
+    let live = true;
+    api
+      .getOrderMoney(connectionId, order.orderId)
+      .then((m) => live && setState({ orderId: order.orderId, money: m }))
+      .catch(() => live && setState({ orderId: order.orderId, money: null }));
+    return () => {
+      live = false;
+    };
+  }, [connectionId, order.orderId, unpaid]);
+  const loaded = state?.orderId === order.orderId;
+  return { money: loaded ? state.money : null, loading: !unpaid && !loaded, unpaid };
+}
+
+const FUNDS_TONE: Record<string, string> = { "Paid out": "bg-emerald-500", Available: "bg-emerald-500", "On hold": "bg-amber-500" };
+const minus = (value: number, currency: string) => `\u2212${money(Math.abs(value), currency)}`;
+
+function MoneyLine({ label, value, strong = false, muted = false }: { label: ReactNode; value: ReactNode; strong?: boolean; muted?: boolean }) {
+  return (
+    <div className={`flex items-baseline justify-between gap-3 py-[3px] text-[12.5px] ${strong ? "font-semibold text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>
+      <span className="min-w-0">{label}</span>
+      <span className={`tabular-nums ${strong ? "" : muted ? "text-[var(--color-muted)]" : "text-[var(--color-ink)]"}`}>{value}</span>
+    </div>
+  );
+}
+
+function EarningsSection({ order, connectionId }: { order: EbayOrderSummary; connectionId: string }) {
+  const { money: m, loading, unpaid } = useOrderMoney(connectionId, order);
+  const currency = m?.currency || order.total?.currency || "GBP";
+  const gross = m?.gross ?? order.total?.amount ?? null;
+  const why = unpaid
+    ? "The buyer hasn't paid yet."
+    : m?.unavailable === "scope"
+      ? "Reconnect this account to see its fees and earnings."
+      : m?.unavailable === "error"
+        ? "Couldn't read the fees from eBay just now."
+        : m?.unavailable === "pending" || (!loading && !m)
+          ? "eBay hasn't posted this sale's fees yet. They show here once it does."
+          : null;
+  const status = m?.fundsStatus ? (
+    <span className="inline-flex items-center gap-1.5 text-[11.5px] font-medium text-[var(--color-muted)]" title="Where the money for this order is">
+      <span className={`h-1.5 w-1.5 rounded-full ${FUNDS_TONE[m.fundsStatus] || "bg-slate-400"}`} aria-hidden />
+      {m.fundsStatus}
+    </span>
+  ) : undefined;
+  return (
+    <Section title="Earnings" action={status}>
+      {loading ? (
+        <div className="space-y-2.5 rounded-xl bg-[var(--color-paper)] px-3.5 py-3" aria-label="Loading">
+          {[70, 55, 62].map((w) => (
+            <div key={w} className="flex justify-between">
+              <span className="h-3 animate-pulse rounded bg-[var(--color-line)]" style={{ width: `${w}px` }} />
+              <span className="h-3 w-12 animate-pulse rounded bg-[var(--color-line)]" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-xl bg-[var(--color-paper)] px-3.5 py-2.5">
+          {gross !== null && <MoneyLine label="Order total" value={money(gross, currency)} />}
+          {m && m.earnings !== null ? (
+            <>
+              <MoneyLine label="eBay fees" value={minus(m.fees || 0, currency)} />
+              {!!m.adFees && <MoneyLine label="Promoted listing fee" value={minus(m.adFees, currency)} />}
+              {!!m.refunds && <MoneyLine label="Refunds" value={minus(m.refunds, currency)} />}
+              <div className="mt-1 border-t border-[var(--color-line)] pt-1">
+                <MoneyLine label="You earned" value={money(m.earnings, currency)} strong />
+              </div>
+            </>
+          ) : (
+            why && <p className="py-1 text-[12px] leading-[17px] text-[var(--color-muted)]">{why}</p>
+          )}
+          <MoneyLine label="Supplier cost" value={m?.cost ? minus(m.cost.value, m.cost.currency || currency) : "Not entered"} muted={!m?.cost} />
+          {m && m.profit !== null && (
+            <div className="mt-1 flex items-baseline justify-between gap-3 border-t border-[var(--color-line)] pt-1.5 text-[13px] font-semibold">
+              <span className="text-[var(--color-ink)]">Profit</span>
+              <span className="flex items-baseline gap-2">
+                {m.margin !== null && <span className="text-[11px] font-medium text-[var(--color-muted)]">{m.margin}% margin</span>}
+                <span className={`tabular-nums ${m.profit >= 0 ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>{m.profit < 0 ? minus(m.profit, currency) : money(m.profit, currency)}</span>
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function FragmentRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
@@ -231,9 +326,12 @@ export function EbayDetails({ data, onClose, onOpenConversation }: { data: EbayT
         </div>
 
         {order ? (
-          <Section title="Order" action={<OpenLink href={order.url}>Order details</OpenLink>}>
-            <OrderBlock order={order} connectionId={connectionId} />
-          </Section>
+          <>
+            <Section title="Order" action={<OpenLink href={order.url}>Order details</OpenLink>}>
+              <OrderBlock order={order} connectionId={connectionId} />
+            </Section>
+            <EarningsSection key={order.orderId} order={order} connectionId={connectionId} />
+          </>
         ) : ordersHidden ? (
           <Section title="Order">
             <p className="text-[12.5px] leading-relaxed text-[var(--color-muted)]">You don&apos;t have access to this account&apos;s orders, so the buyer&apos;s orders aren&apos;t shown.</p>

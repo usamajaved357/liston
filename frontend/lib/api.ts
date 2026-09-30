@@ -913,6 +913,25 @@ export interface OrderDispute {
   closed: boolean;
 }
 
+// What one order made (the Inbox's details panel): eBay's figures as Liston
+// keeps them (null until eBay posts the sale), the supplier cost entered on
+// the order page, and the profit when both are known.
+export interface OrderMoney {
+  currency: string | null;
+  gross: number | null;
+  // eBay's fees other than ads; the promoted-listing fee apart.
+  fees: number | null;
+  adFees: number | null;
+  refunds: number | null;
+  earnings: number | null;
+  fundsStatus: string | null;
+  cost: { value: number; currency: string | null } | null;
+  profit: number | null;
+  margin: number | null;
+  // Why there are no figures: linked without the finances permission, not posted by eBay yet, or eBay couldn't be read.
+  unavailable: "scope" | "pending" | "error" | null;
+}
+
 export interface OrderCases {
   returns: OrderReturn[];
   inquiries: OrderInquiry[];
@@ -2655,6 +2674,8 @@ export const api = {
   // payment disputes) and the seller's answers to them.
   getOrderCases: (connectionId: string, orderId: string) =>
     request<OrderCases>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cases`),
+  // What an order made: fees, earnings, supplier cost, profit.
+  getOrderMoney: (connectionId: string, orderId: string) => request<OrderMoney>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/money`),
   declineCancellation: (connectionId: string, orderId: string) =>
     request<{ declined: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cancel/decline`, { method: "POST" }),
   respondToReturn: (connectionId: string, orderId: string, input: { returnId: string; action: "accept" | "decline" | "received" | "refund" | "message"; comment?: string; declineReason?: string; amount?: string | null }) =>

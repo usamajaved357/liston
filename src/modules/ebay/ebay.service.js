@@ -2585,6 +2585,35 @@ async function syncOrderFinancesNow(credentials, id, { force }) {
   return { orders: rows.length, charges: charges.length, credentialsChanged: changed, credentials: signed.credentialsChanged ? signed.credentials : refreshed };
 }
 
+// One order's money from eBay's Finances API (one read), in the shape the
+// finances sync keeps ({ orderId, currency, gross, fees, adFees, refunds,
+// earnings, fundsStatus, saleDate }) and kept with the rest, so the next look
+// needs no eBay call. `unavailable` says why there's none: 'scope' (linked
+// before the finances permission), 'pending' (eBay hasn't posted the sale
+// yet), 'error'.
+async function getOrderFinances(credentials, { connectionId, orderId }) {
+  if (!ebayOauth.hasScope(credentials, ebayOauth.SCOPE_FINANCES)) return { row: null, unavailable: 'scope', credentialsChanged: false, credentials };
+  const { accessToken, credentials: refreshed, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const marketplaceId = credentials.marketplaceId || marketplaces.DEFAULT_ID;
+  let signed;
+  let res;
+  try {
+    signed = await ensureSigningKey({ ...refreshed, marketplaceId }, accessToken);
+    res = await ebayFinances.getOrderTransactions(accessToken, orderId, marketplaceId, signed.key);
+  } catch (err) {
+    logger.warn('Could not read the order money from eBay', { orderId, error: err.message });
+    return { row: null, unavailable: 'error', credentialsChanged: credentialsChanged || Boolean(signed?.credentialsChanged), credentials: signed?.credentialsChanged ? signed.credentials : refreshed };
+  }
+  const row = ebayFinances.orderFinancesFrom(res?.transactions || []).find((r) => r.orderId === orderId) || null;
+  if (row) await mirror.upsertOrderFinances(connectionId, [row]);
+  return {
+    row,
+    unavailable: row ? null : 'pending',
+    credentialsChanged: credentialsChanged || signed.credentialsChanged,
+    credentials: signed.credentialsChanged ? signed.credentials : refreshed,
+  };
+}
+
 async function getEarningsSummary(credentials, { connectionId, range, from, to, timeZone = null, push = false }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
 
@@ -2719,6 +2748,7 @@ module.exports = {
   accountSites,
   ordersInRange,
   syncOrderFinances,
+  getOrderFinances,
   classifyOrderStatus,
   CANCEL_REQUESTED_STATUSES,
   getOpenCases,

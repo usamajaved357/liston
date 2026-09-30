@@ -75,7 +75,9 @@ test('order money rows are stored per order, updated in place, and read back wit
   await mirror.upsertOrderFinances(connectionId, [row, { ...row, orderId: 'O-2', earnings: 1 }]);
   await mirror.upsertOrderFinances(connectionId, [{ ...row, refunds: 3.36, earnings: 0, fundsStatus: 'Available' }]);
   const money = await mirror.loadOrderFinances(connectionId, ['O-1', 'O-2', 'O-3']);
-  assert.deepStrictEqual(money.get('O-1'), { currency: 'GBP', gross: 5.69, fees: 2.33, adFees: 1.28, refunds: 3.36, earnings: 0, fundsStatus: 'Available' });
+  const { syncedAt, ...o1 } = money.get('O-1');
+  assert.deepStrictEqual(o1, { currency: 'GBP', gross: 5.69, fees: 2.33, adFees: 1.28, refunds: 3.36, earnings: 0, fundsStatus: 'Available' });
+  assert.ok(Date.now() - syncedAt < 60 * 1000, 'when the row was last written');
   assert.strictEqual(money.get('O-2').earnings, 1);
   assert.strictEqual(money.has('O-3'), false);
 
