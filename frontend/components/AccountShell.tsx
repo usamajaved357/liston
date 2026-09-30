@@ -289,7 +289,7 @@ export function AccountShell({
         <div
           data-scroller
           data-fill={fill ? "" : undefined}
-          className={`relative flex-1 min-h-0 px-[var(--page-gutter)] ${fill ? "flex flex-col overflow-hidden pb-4" : `overflow-y-auto overscroll-contain ${header ? "pb-8" : "py-8"}`}`}
+          className={`relative flex-1 min-h-0 px-[var(--page-gutter)] ${fill ? "flex flex-col overflow-hidden pb-2" : `overflow-y-auto overscroll-contain ${header ? "pb-8" : "py-8"}`}`}
         >
           {children}
         </div>

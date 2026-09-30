@@ -3251,7 +3251,7 @@ export interface EbayConversationRow {
 }
 export interface EbayInboxList {
   conversations: EbayConversationRow[];
-  counts: { buyers: number; ebay: number; waiting: number };
+  counts: { buyers: number; ebay: number; waiting: number; archived: number };
   sync: { syncedAt: string | null; syncing: boolean; neverSynced: boolean; error: { message: string; scope: boolean } | null };
   hasMore: boolean;
   accounts: { id: string; label: string }[];

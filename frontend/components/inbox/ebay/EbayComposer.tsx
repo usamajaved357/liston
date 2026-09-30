@@ -83,7 +83,7 @@ export function EbayComposer({ connectionId, conversationId, buyer, onSent }: { 
 
   return (
     <div
-      className="border-t border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-3"
+      className="border-t border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2"
       onDragOver={(e) => e.dataTransfer.types.includes("Files") && e.preventDefault()}
       onDrop={(e) => {
         const files = Array.from(e.dataTransfer.files || []);

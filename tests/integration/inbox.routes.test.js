@@ -101,7 +101,9 @@ test('the account\'s conversations are read into Liston: folders for buyers and 
       ['c2', 'lotsofstuff1244', true, false],
     ]);
     assert.strictEqual(buyers.data.conversations[0].image, 'https://i.ebayimg.com/images/g/x/s-l225.jpg', "the listing's photo");
-    assert.deepStrictEqual(buyers.data.counts, { buyers: 1, ebay: 1, waiting: 1 });
+    assert.deepStrictEqual(buyers.data.counts, { buyers: 1, ebay: 1, waiting: 1, archived: 0 });
+    // The Unread view: the buyers' and eBay's unread together.
+    assert.deepStrictEqual((await request('GET', `${base}?folder=all&show=unread`, undefined, t.owner.token)).data.conversations.map((c) => c.conversationId).sort(), ['c1', 'e1']);
     const fromEbay = await request('GET', `${base}?folder=ebay`, undefined, t.owner.token);
     assert.deepStrictEqual([fromEbay.data.conversations[0].otherParty, fromEbay.data.conversations[0].latestPreview], ['eBay', 'Success! All seller privileges have been restored.'], "eBay's HTML made readable");
     assert.deepStrictEqual((await request('GET', `${base}?q=lotsofstuff`, undefined, t.owner.token)).data.conversations.map((c) => c.conversationId), ['c2'], 'found by buyer');
@@ -158,7 +160,9 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
     await request('POST', `${base}/c1/read`, { read: false }, t.owner.token);
     assert.strictEqual((await request('GET', base, undefined, t.owner.token)).data.conversations[0].unread, 1);
     await request('POST', `${base}/c1/status`, { status: 'ARCHIVE' }, t.owner.token);
-    assert.deepStrictEqual((await request('GET', base, undefined, t.owner.token)).data.conversations, []);
+    const afterArchive = await request('GET', base, undefined, t.owner.token);
+    assert.deepStrictEqual(afterArchive.data.conversations, []);
+    assert.strictEqual(afterArchive.data.counts.archived, 1, 'the archive counted, for its row in the list');
     assert.deepStrictEqual((await request('GET', `${base}?folder=archived`, undefined, t.owner.token)).data.conversations.map((c) => c.conversationId), ['c1']);
     assert.deepStrictEqual(calls.update.slice(1), [
       { conversationId: 'c1', type: 'FROM_MEMBERS', read: false },

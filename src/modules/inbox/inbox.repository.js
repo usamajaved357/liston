@@ -102,14 +102,15 @@ async function listConversations(connectionIds, { folder = 'buyers', show = 'all
   return rows;
 }
 
-/** Unread conversations per folder on these accounts: { buyers, ebay, waiting }. */
+/** Unread conversations per folder on these accounts, and how many are archived: { buyers, ebay, waiting, archived }. */
 async function counts(connectionIds) {
-  if (!connectionIds.length) return { buyers: 0, ebay: 0, waiting: 0 };
+  if (!connectionIds.length) return { buyers: 0, ebay: 0, waiting: 0, archived: 0 };
   const { rows } = await query(
     `SELECT
        count(*) FILTER (WHERE type = 'FROM_MEMBERS' AND status = 'ACTIVE' AND unread_count > 0)::int AS buyers,
        count(*) FILTER (WHERE type = 'FROM_EBAY' AND status = 'ACTIVE' AND unread_count > 0)::int AS ebay,
-       count(*) FILTER (WHERE type = 'FROM_MEMBERS' AND status = 'ACTIVE' AND NOT latest_from_seller AND work_status <> 'done')::int AS waiting
+       count(*) FILTER (WHERE type = 'FROM_MEMBERS' AND status = 'ACTIVE' AND NOT latest_from_seller AND work_status <> 'done')::int AS waiting,
+       count(*) FILTER (WHERE status = 'ARCHIVE')::int AS archived
      FROM ebay_conversations WHERE connection_id = ANY($1::uuid[])`,
     [connectionIds]
   );

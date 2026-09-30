@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { ReactNode, useState } from "react";
 import Lightbox from "yet-another-react-lightbox";
 import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
 import Download from "yet-another-react-lightbox/plugins/download";
@@ -11,10 +11,11 @@ import "yet-another-react-lightbox/plugins/counter.css";
 import { SharedFile } from "@/lib/api";
 import { fileSize } from "./inbox-format";
 
-// A message's files: photos sent together as one stack with its count, the
-// way eBay shows a buyer's photos ("5 photos"), opening a full-size viewer
-// with arrows, thumbnails and download; any other file as a row to open or
-// download.
+// A message's files as WhatsApp shows them inside a bubble: one photo as
+// it is (its shape kept within limits), several as an album (two side by
+// side, three as one wide and two below, four or more as a square of four
+// with "+3" on the last), opening a full-size viewer with arrows,
+// thumbnails and download; any other file as a row to open or download.
 
 export type ViewablePhoto = { src: string; thumb?: string | null; width?: number | null; height?: number | null; name?: string; download?: string };
 
@@ -34,40 +35,62 @@ export function PhotoViewer({ photos, index, onClose }: { photos: ViewablePhoto[
   );
 }
 
-/** Photos: one shown as it is; several as a stack with their count. */
-export function PhotoStack({ photos, align = "left", size = 220 }: { photos: ViewablePhoto[]; align?: "left" | "right"; size?: number }) {
+function Missing({ name }: { name?: string }) {
+  return (
+    <span className="flex h-full w-full flex-col items-center justify-center gap-1 bg-black/[0.04] text-[11px] text-[var(--color-muted)]" title={name || undefined}>
+      <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
+        <rect x="3.5" y="5" width="17" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M3.5 16l5-5 4 4 3-3 5 5M4 4l16 16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      Photo unavailable
+    </span>
+  );
+}
+
+/**
+ * Photos in a bubble: one as it is, several as an album. `overlay` (the
+ * time, when no text follows) sits in the bottom corner over a soft shade.
+ */
+export function PhotoGrid({ photos, width = 280, overlay }: { photos: ViewablePhoto[]; width?: number; overlay?: ReactNode }) {
   const [open, setOpen] = useState<number | null>(null);
   // A photo whose file is gone from the store shows as a quiet tile, not a broken image.
-  const [missing, setMissing] = useState(false);
+  const [missing, setMissing] = useState<Set<number>>(() => new Set());
   if (!photos.length) return null;
+  const shown = photos.slice(0, 4);
+  const extra = photos.length - shown.length;
+  const gap = 3;
+  const half = Math.floor((width - gap) / 2);
+  // One photo keeps its shape, from a little taller than square to a wide strip.
   const first = photos[0];
-  const ratio = first.width && first.height ? first.width / first.height : 1;
-  const w = ratio >= 1 ? size : Math.max(Math.round(size * 0.6), Math.round(size * ratio));
-  const h = ratio >= 1 ? Math.max(Math.round(size / 2), Math.round(size / ratio)) : size;
-  if (missing)
+  const ratio = first.width && first.height ? Math.min(1.8, Math.max(0.75, first.width / first.height)) : 4 / 3;
+  const box = (i: number): { w: number; h: number; span?: boolean } => {
+    if (shown.length === 1) return { w: width, h: Math.round(width / ratio) };
+    if (shown.length === 3 && i === 0) return { w: width, h: half, span: true };
+    return { w: half, h: half };
+  };
+  const cell = (p: ViewablePhoto, i: number) => {
+    const { w, h, span } = box(i);
     return (
-      <div className={`flex ${align === "right" ? "justify-end" : "justify-start"}`}>
-        <span className="flex items-center gap-2 rounded-xl border border-dashed border-[var(--color-line)] px-3 py-2 text-[11.5px] text-[var(--color-muted)]" title={first.name || undefined}>
-          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
-            <rect x="3.5" y="5" width="17" height="14" rx="2" stroke="currentColor" strokeWidth="1.6" />
-            <path d="M3.5 16l5-5 4 4 3-3 5 5M4 4l16 16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          Photo unavailable
-        </span>
-      </div>
-    );
-  return (
-    <div className={`flex flex-col ${align === "right" ? "items-end" : "items-start"}`}>
-      {photos.length > 1 && <p className="mb-1 px-1 text-[11px] font-medium text-[var(--color-muted)]">{photos.length} photos</p>}
-      <button type="button" onClick={() => setOpen(0)} className="group relative block" style={{ width: w + (photos.length > 1 ? 18 : 0), height: h + (photos.length > 1 ? 10 : 0) }} aria-label={photos.length > 1 ? `Open ${photos.length} photos` : "Open photo"}>
-        {photos.length > 2 && <span className="absolute rounded-xl border-2 border-[var(--color-panel)] bg-slate-300 shadow-sm" style={{ width: w, height: h, left: 16, top: 8, transform: "rotate(6deg)" }} aria-hidden />}
-        {photos.length > 1 && (
+      <button key={i} type="button" onClick={() => setOpen(i)} className={`relative block overflow-hidden rounded-md bg-black/[0.04] ${span ? "col-span-2" : ""}`} style={{ width: w, height: h }} aria-label={photos.length > 1 ? `Open photo ${i + 1} of ${photos.length}` : "Open photo"}>
+        {missing.has(i) ? (
+          <Missing name={p.name} />
+        ) : (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={photos[1].thumb || photos[1].src} alt="" className="absolute rounded-xl border-2 border-[var(--color-panel)] object-cover shadow-sm" style={{ width: w, height: h, left: 9, top: 4, transform: "rotate(3deg)" }} aria-hidden />
+          <img src={p.thumb || p.src} alt={p.name || ""} loading="lazy" onError={() => setMissing((m) => new Set(m).add(i))} className="h-full w-full object-cover transition-transform duration-300 hover:scale-[1.02]" />
         )}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={first.thumb || first.src} alt={first.name || ""} loading="lazy" onError={() => setMissing(true)} className="absolute left-0 top-0 rounded-xl border-2 border-[var(--color-panel)] object-cover shadow-md transition-transform group-hover:-translate-y-0.5" style={{ width: w, height: h }} />
+        {i === 3 && extra > 0 && <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[22px] font-semibold text-white">+{extra}</span>}
       </button>
+    );
+  };
+  return (
+    <div className="relative">
+      {shown.length === 1 ? cell(first, 0) : <div className="grid grid-cols-2" style={{ gap, width }}>{shown.map(cell)}</div>}
+      {overlay && (
+        <>
+          <span className="pointer-events-none absolute inset-x-0 bottom-0 h-10 rounded-b-md bg-gradient-to-t from-black/40 to-transparent" aria-hidden />
+          <span className="pointer-events-none absolute bottom-[5px] right-[7px]">{overlay}</span>
+        </>
+      )}
       <PhotoViewer photos={photos} index={open} onClose={() => setOpen(null)} />
     </div>
   );
@@ -85,32 +108,18 @@ function FileIcon({ mime }: { mime: string }) {
   );
 }
 
-export function FileRow({ file }: { file: SharedFile }) {
+/** A document in a bubble: its icon, name and size, opening (or downloading) it. */
+export function FileRow({ file }: { file: Pick<SharedFile, "url" | "name" | "mime"> & { size?: number | null } }) {
   return (
-    <a href={file.url} target="_blank" rel="noopener" className="flex w-full max-w-[320px] items-center gap-2.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-2 text-left transition-colors hover:border-[var(--color-primary)]/50">
+    <a href={file.url} target="_blank" rel="noopener" className="flex w-[260px] max-w-full items-center gap-2.5 rounded-md bg-black/[0.045] p-2 text-left transition-colors hover:bg-black/[0.07]">
       <FileIcon mime={file.mime} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[12.5px] font-medium text-[var(--color-ink)]">{file.name}</span>
-        <span className="block text-[11px] text-[var(--color-muted)]">{fileSize(file.size)}</span>
+        {file.size ? <span className="block text-[11px] text-[var(--color-muted)]">{fileSize(file.size)}</span> : null}
       </span>
       <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>
         <path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </a>
-  );
-}
-
-/** Everything attached to a message: the photos as a stack, the rest as rows. */
-export function MessageFiles({ files, align = "left" }: { files: SharedFile[]; align?: "left" | "right" }) {
-  const photos = files.filter((f) => f.image);
-  const others = files.filter((f) => !f.image);
-  if (!files.length) return null;
-  return (
-    <div className={`flex flex-col gap-1.5 ${align === "right" ? "items-end" : "items-start"}`}>
-      {photos.length > 0 && <PhotoStack align={align} photos={photos.map((f) => ({ src: f.url, thumb: f.thumbUrl, width: f.width, height: f.height, name: f.name, download: f.url }))} />}
-      {others.map((f) => (
-        <FileRow key={f.id} file={f} />
-      ))}
-    </div>
   );
 }

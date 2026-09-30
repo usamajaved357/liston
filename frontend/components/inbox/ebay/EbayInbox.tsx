@@ -3,22 +3,29 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, EbayConversationRow, EbayFolder, EbayInboxList, EbayShow, EbayThread, ebayInboxApi } from "@/lib/api";
 import { useMyEvents, useViewing } from "@/lib/useMyEvents";
-import { PillTabs } from "@/components/PillTabs";
-import { ViewMenu } from "@/components/ViewMenu";
-import { EbayConversationList } from "./EbayConversationList";
+import { EbayConversationList, EbayView } from "./EbayConversationList";
 import { EbayThreadView } from "./EbayThreadView";
 import { EbayComposer } from "./EbayComposer";
+import { EbayDetails } from "./EbayDetails";
 import { listTime } from "../inbox-format";
 
 // The Inbox's eBay messages for one account (or every account the person
-// may read). The page's toolbar holds the controls (the mode, the folders,
-// one Show menu, search, and how fresh the copy of eBay is), so the panes
-// below are just the conversations and the open one. The list comes from
+// may read), laid out like WhatsApp: the list (its own search and chips)
+// beside the open conversation, whose order and listing open in a details
+// panel when asked for. Above them only the mode and how fresh Liston's
+// copy of eBay is. The list comes from
 // what Liston keeps and is read again from eBay in the background (at once
 // when opened if it's over a minute old, every minute while in view, and
 // whenever Liston hears it changed); the open conversation follows.
 
 const POLL_MS = 60 * 1000;
+// Each view of the list, as the server's folder and filter.
+const VIEWS: Record<EbayView, { folder: EbayFolder; show: EbayShow }> = {
+  buyers: { folder: "buyers", show: "all" },
+  unread: { folder: "all", show: "unread" },
+  ebay: { folder: "ebay", show: "all" },
+  archived: { folder: "archived", show: "all" },
+};
 
 function SyncStatus({ data, onRefresh, refreshing, reconnectHref }: { data: EbayInboxList | null; onRefresh: () => void; refreshing: boolean; reconnectHref: string | null }) {
   const sync = data?.sync;
@@ -57,8 +64,7 @@ function SyncStatus({ data, onRefresh, refreshing, reconnectHref }: { data: Ebay
 }
 
 export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHref, modeSwitch }: { connectionId: string | null; activeKey: string | null; onActiveChange: (key: string | null) => void; reconnectHref: string | null; modeSwitch: ReactNode }) {
-  const [folder, setFolder] = useState<EbayFolder>("buyers");
-  const [show, setShow] = useState<EbayShow>("all");
+  const [view, setView] = useState<EbayView>("buyers");
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [data, setData] = useState<EbayInboxList | null>(null);
@@ -68,6 +74,9 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
   // The open conversation, kept with the key it's for (another one opening shows nothing stale).
   const [loaded, setLoaded] = useState<{ key: string; thread: EbayThread | null; error: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
+  // The details panel: hidden until asked for, closed again when another conversation opens.
+  const [detailsFor, setDetailsFor] = useState<string | null>(null);
+  const detailsOpen = Boolean(activeKey) && detailsFor === activeKey;
   const listTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [accountId, conversationId] = activeKey ? (activeKey.split("~") as [string, string]) : [null, null];
@@ -75,7 +84,7 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
   const thread = current?.thread || null;
   const threadError = current?.error || null;
   const threadLoading = Boolean(activeKey) && !current;
-  const effectiveShow: EbayShow = folder === "buyers" ? show : "all";
+  const { folder, show } = VIEWS[view];
 
   // Words typed settle before they're searched.
   useEffect(() => {
@@ -86,11 +95,11 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
   const loadList = useCallback(
     (opts: { refresh?: boolean } = {}) =>
       ebayInboxApi
-        .list(connectionId, { folder, show: effectiveShow, q: query, refresh: opts.refresh })
+        .list(connectionId, { folder, show, q: query, refresh: opts.refresh })
         .then((d) => setData(d))
         .catch(() => {})
         .finally(() => setLoading(false)),
-    [connectionId, folder, effectiveShow, query]
+    [connectionId, folder, show, query]
   );
   useEffect(() => {
     loadList();
@@ -172,7 +181,7 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
     if (!last?.latestAt) return;
     setLoadingMore(true);
     try {
-      const more = await ebayInboxApi.list(connectionId, { folder, show: effectiveShow, q: query, before: last.latestAt });
+      const more = await ebayInboxApi.list(connectionId, { folder, show, q: query, before: last.latestAt });
       setData((d) => d && { ...more, conversations: [...d.conversations, ...more.conversations.filter((c) => !d.conversations.some((x) => x.account.id === c.account.id && x.conversationId === c.conversationId))] });
     } finally {
       setLoadingMore(false);
@@ -185,74 +194,19 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
     setTimeout(() => setRefreshing(false), 1500);
   }
 
-  const counts = data?.counts;
   const emptyText = query
     ? "Nothing matches your search."
     : data?.sync.neverSynced && !data.sync.error
       ? "Reading your conversations from eBay…"
-      : folder === "archived"
-        ? "Nothing archived."
-        : folder === "ebay"
-          ? "No messages from eBay."
-          : effectiveShow === "waiting"
-            ? "Nobody's waiting for an answer."
-            : effectiveShow === "unread"
-              ? "You're all caught up."
-              : effectiveShow === "mine"
-                ? "Nothing assigned to you."
-                : "No buyer messages yet.";
+      : { archived: "Nothing archived.", ebay: "No messages from eBay.", unread: "You're all caught up.", buyers: "No buyer messages yet." }[view];
   const conv = thread?.conversation;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {/* On a phone an open conversation has the screen; its back arrow brings the toolbar back. */}
-      <div className={`${activeKey ? "hidden lg:flex" : "flex"} flex-wrap items-center gap-x-3 gap-y-2`}>
+      {/* On a phone an open conversation has the screen; its back arrow brings this row back. */}
+      <div className={`${activeKey ? "hidden lg:flex" : "flex"} flex-wrap items-center justify-between gap-x-3 gap-y-2`}>
         {modeSwitch}
-        <span className="hidden h-5 w-px bg-[var(--color-line)] sm:block" aria-hidden />
-        <PillTabs
-          tabs={[
-            { key: "buyers" as const, label: "Buyers", count: counts?.buyers || undefined, countTone: "alert" },
-            { key: "ebay" as const, label: "From eBay", count: counts?.ebay || undefined, countTone: "alert" },
-            { key: "archived" as const, label: "Archived" },
-          ]}
-          value={folder}
-          onChange={(f) => {
-            setFolder(f);
-            setLoading(true);
-          }}
-          label="Folders"
-        />
-        {folder === "buyers" && (
-          <ViewMenu
-            title="Show"
-            sections={[
-              {
-                label: "Show",
-                value: show,
-                onChange: (k) => {
-                  setShow(k as EbayShow);
-                  setLoading(true);
-                },
-                options: [
-                  { key: "all", label: "All conversations", short: "All conversations" },
-                  { key: "unread", label: "Unread", short: "Unread" },
-                  { key: "waiting", label: "Waiting for you", short: "Waiting for you", count: counts?.waiting || undefined },
-                  { key: "mine", label: "Assigned to me", short: "Assigned to me" },
-                ],
-              },
-            ]}
-          />
-        )}
-        <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 sm:ml-auto sm:w-auto sm:flex-nowrap">
-          <SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />
-          <label className="flex w-full items-center sm:w-[240px] gap-2 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-1.5 focus-within:border-[var(--color-primary)]/60">
-            <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>
-              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="2" />
-              <path d="M16 16l4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search buyer, item or words" className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-[var(--color-muted)]" aria-label="Search messages" />
-          </label>
-        </div>
+        <SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />
       </div>
 
       <div className="card relative flex min-h-0 flex-1 overflow-hidden">
@@ -264,6 +218,14 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
             activeKey={activeKey}
             showAccount={!connectionId}
             emptyText={emptyText}
+            view={view}
+            onView={(v) => {
+              if (v === view) return;
+              setView(v);
+              setLoading(true);
+            }}
+            q={q}
+            onQ={setQ}
             onOpen={(c: EbayConversationRow) => onActiveChange(`${c.account.id}~${c.conversationId}`)}
             onMore={loadMore}
           />
@@ -276,6 +238,13 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
               error={threadError}
               busy={busy}
               onBack={() => onActiveChange(null)}
+              detailsOpen={detailsOpen}
+              onToggleDetails={() => setDetailsFor(detailsOpen ? null : activeKey)}
+              details={
+                detailsOpen && thread && conv?.type === "FROM_MEMBERS" ? (
+                  <EbayDetails key={`details-${activeKey}`} data={thread} onClose={() => setDetailsFor(null)} onOpenConversation={(id) => onActiveChange(`${conv.account.id}~${id}`)} />
+                ) : null
+              }
               onMarkUnread={() =>
                 conv &&
                 act(async () => {
@@ -313,7 +282,7 @@ export function EbayInbox({ connectionId, activeKey, onActiveChange, reconnectHr
                 </svg>
               </span>
               <p className="mt-3 text-[14px] font-semibold text-[var(--color-ink)]">Pick a conversation</p>
-              <p className="mt-1 max-w-xs text-[12.5px] leading-relaxed text-[var(--color-muted)]">The order it&apos;s about sits at the top of the chat, with its tracking and any open return or case.</p>
+              <p className="mt-1 max-w-xs text-[12.5px] leading-relaxed text-[var(--color-muted)]">Its order, tracking and listing are a click away in its details.</p>
             </div>
           )}
         </div>

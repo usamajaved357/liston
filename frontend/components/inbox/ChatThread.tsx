@@ -5,22 +5,24 @@ import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
 import { ApiError, ChatConversation, ChatMessage, ChatPerson, inboxApi, ListonRef } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { MessageBubble, SystemLine } from "./MessageBubble";
+import { DayChip, LatestButton } from "./ChatBubble";
 import { Composer, ComposerHandle, LISTON_REF_TYPE } from "./Composer";
 import { PersonAvatar } from "./PersonAvatar";
 import { dayLabel } from "./inbox-format";
 import { MyEvent, useMyEvents } from "@/lib/useMyEvents";
 
-// One team chat conversation: its messages (a long thread stays at the
-// bottom as messages arrive and loads older ones above without jumping),
-// a "New messages" line where you left off, a jump-to-latest button once
-// you've scrolled up, "Sara is typing…", and the composer. Files and
+// One team chat conversation: its messages as WhatsApp bubbles on the chat
+// wallpaper (a long thread stays at the bottom as messages arrive and loads
+// older ones above without jumping), an "Unread messages" band where you
+// left off, a round jump-to-latest button once you've scrolled up, "Sara is
+// typing…" in the header, and the composer. Files and
 // Liston rows (orders, listings, hunted products) dropped anywhere on it are
 // shared. It's read once you're at the bottom with the tab in front.
 
 const START = 1_000_000;
 const RUN_MS = 5 * 60 * 1000;
 
-type Row = { type: "day"; key: string; label: string } | { type: "new"; key: string } | { type: "message"; key: string; message: ChatMessage; first: boolean; last: boolean };
+type Row = { type: "day"; key: string; label: string } | { type: "new"; key: string } | { type: "message"; key: string; message: ChatMessage; first: boolean };
 
 export function ChatThread({
   conversation,
@@ -192,19 +194,18 @@ export function ChatThread({
     }
   }, [hasMore, loadingOlder, messages, id]);
 
-  // Rows: day lines, "New messages", and each message knowing where its run starts and ends.
+  // Rows: day chips, "Unread messages", and each message knowing whether it starts a run.
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     const all = messages || [];
     all.forEach((m, i) => {
       const prev = all[i - 1];
-      const next = all[i + 1];
       const day = new Date(m.createdAt).toDateString();
       if (!prev || new Date(prev.createdAt).toDateString() !== day) out.push({ type: "day", key: `day-${day}-${m.id}`, label: dayLabel(m.createdAt) });
       if (m.id === newFrom) out.push({ type: "new", key: `new-${m.id}` });
       const joins = (a?: ChatMessage, b?: ChatMessage) =>
         Boolean(a && b && a.kind === "text" && b.kind === "text" && a.author?.id === b.author?.id && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) < RUN_MS && new Date(a.createdAt).toDateString() === new Date(b.createdAt).toDateString() && b.id !== newFrom);
-      out.push({ type: "message", key: m.id, message: m, first: !joins(prev, m), last: !joins(m, next) });
+      out.push({ type: "message", key: m.id, message: m, first: !joins(prev, m) });
     });
     return out;
   }, [messages, newFrom]);
@@ -215,14 +216,9 @@ export function ChatThread({
     return i < 0 ? START : START - (i - anchor.offset);
   }, [rows, anchor]);
 
-  // In a direct message, "Seen" under your latest message once the other person has read it.
-  const seenId = useMemo(() => {
-    if (conversation.kind !== "dm" || !messages?.length) return null;
-    const other = members.find((m) => m.id !== me);
-    if (!other?.lastReadAt) return null;
-    const mine = [...messages].reverse().find((m) => m.author?.id === me && m.kind === "text" && !m.deleted);
-    return mine && new Date(other.lastReadAt) >= new Date(mine.createdAt) ? mine.id : null;
-  }, [conversation.kind, messages, members, me]);
+  // Your messages' ticks: blue once everyone else in it (still in the team) has read that far.
+  const readers = useMemo(() => members.filter((m) => m.id !== me && !m.removed).map((m) => (m.lastReadAt ? new Date(m.lastReadAt).getTime() : 0)), [members, me]);
+  const readByAll = (m: ChatMessage) => (readers.length ? readers.every((at) => at >= new Date(m.createdAt).getTime()) : null);
 
   function jumpTo(messageId: string) {
     const index = rows.findIndex((r) => r.type === "message" && r.message.id === messageId);
@@ -291,10 +287,13 @@ export function ChatThread({
             : others[0]?.email || ""
         : `${members.length} people`;
   const typingNames = [...typing.values()].map((t) => t.name);
+  // Someone typing takes the header's second line, as WhatsApp has it.
+  const typingText =
+    typingNames.length === 0 ? null : conversation.kind === "dm" ? "typing…" : typingNames.length === 1 ? `${typingNames[0].split(" ")[0]} is typing…` : `${typingNames.slice(0, 2).map((n) => n.split(" ")[0]).join(" and ")}${typingNames.length > 2 ? " and others" : ""} are typing…`;
 
   return (
     <section
-      className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-paper)]"
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-panel)]"
       onDragOver={(e) => {
         const t = e.dataTransfer.types;
         if (t.includes("Files") || t.includes(LISTON_REF_TYPE) || t.includes("text/uri-list")) {
@@ -326,7 +325,9 @@ export function ChatThread({
             {conversation.account && <span className="chip flex-shrink-0 text-[10.5px]">{conversation.account.label}</span>}
             {conversation.archived && <span className="chip flex-shrink-0 text-[10.5px] text-[var(--color-muted)]">Archived</span>}
           </p>
-          <p className="truncate text-[12px] text-[var(--color-muted)]">{subtitle}</p>
+          <p className={`truncate text-[12px] ${typingText ? "font-medium text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`} aria-live="polite">
+            {typingText || subtitle}
+          </p>
         </button>
         {conversation.kind !== "dm" && (
           <button type="button" onClick={onOpenDetails} className="hidden items-center -space-x-2 sm:flex" aria-label="People in it">
@@ -346,7 +347,7 @@ export function ChatThread({
         </button>
       </header>
 
-      <div className="relative min-h-0 flex-1">
+      <div className="chat-wallpaper relative min-h-0 flex-1">
         {error ? (
           <div className="flex h-full items-center justify-center p-6 text-center text-[13px] text-[var(--color-muted)]">{error}</div>
         ) : !messages ? (
@@ -379,24 +380,15 @@ export function ChatThread({
             increaseViewportBy={{ top: 600, bottom: 300 }}
             computeItemKey={(_, row) => row.key}
             components={{
-              Header: () => (hasMore ? <div className="py-3 text-center text-[11.5px] text-[var(--color-muted)]">{loadingOlder ? "Loading earlier messages…" : ""}</div> : <div className="h-3" />),
+              Header: () => (hasMore ? <div className="py-3 text-center text-[11.5px] text-[var(--color-muted)]">{loadingOlder ? "Loading earlier messages…" : ""}</div> : <div className="h-2" />),
               Footer: () => <div className="h-3" />,
             }}
             itemContent={(_, row) => {
-              if (row.type === "day")
-                return (
-                  <div className="flex items-center gap-3 px-6 py-3">
-                    <span className="h-px flex-1 bg-[var(--color-line)]" />
-                    <span className="rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-0.5 text-[11px] font-medium text-[var(--color-muted)]">{row.label}</span>
-                    <span className="h-px flex-1 bg-[var(--color-line)]" />
-                  </div>
-                );
+              if (row.type === "day") return <DayChip label={row.label} />;
               if (row.type === "new")
                 return (
-                  <div className="flex items-center gap-3 px-6 py-2">
-                    <span className="h-px flex-1 bg-rose-300" />
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-rose-600">New messages</span>
-                    <span className="h-px flex-1 bg-rose-300" />
+                  <div className="my-2 flex justify-center bg-[var(--color-panel)]/45 py-1.5">
+                    <span className="rounded-full bg-[var(--color-panel)] px-3 py-1 text-[11.5px] font-medium text-[var(--color-primary)] shadow-[var(--shadow-bubble)]">Unread messages</span>
                   </div>
                 );
               const m = row.message;
@@ -407,10 +399,10 @@ export function ChatThread({
                   message={m}
                   mine={mine}
                   first={row.first}
-                  last={row.last}
                   people={people}
                   showAuthorName={conversation.kind !== "dm"}
-                  seen={m.id === seenId ? "Seen" : null}
+                  me={me}
+                  read={mine ? readByAll(m) : null}
                   canDelete={mine || isOwner}
                   highlight={highlight === m.id}
                   onReply={() => {
@@ -428,19 +420,7 @@ export function ChatThread({
             }}
           />
         )}
-        {showLatest && !atBottom && messages && messages.length > 0 && (
-          <button
-            type="button"
-            onClick={() => list.current?.scrollToIndex({ index: "LAST", behavior: "smooth" })}
-            className="absolute bottom-3 right-4 flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-1.5 text-[12px] font-medium text-[var(--color-ink)] shadow-[var(--shadow-pop)] hover:text-[var(--color-primary)]"
-          >
-            {unreadBelow > 0 && <span className="rounded-full bg-[var(--color-primary)] px-1.5 text-[10.5px] font-semibold leading-4 text-white">{unreadBelow}</span>}
-            Latest
-            <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
-              <path d="M12 5v14m0 0l-5-5m5 5l5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-        )}
+        {showLatest && !atBottom && messages && messages.length > 0 && <LatestButton count={unreadBelow} onClick={() => list.current?.scrollToIndex({ index: "LAST", behavior: "smooth" })} />}
         {dragging && (
           <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-[var(--color-primary)] bg-[var(--color-primary-soft)]/85">
             <p className="text-[14px] font-semibold text-[var(--color-primary)]">Drop to share in {conversation.title}</p>
@@ -448,9 +428,6 @@ export function ChatThread({
         )}
       </div>
 
-      <div className="h-5 px-5 text-[11.5px] text-[var(--color-muted)]" aria-live="polite">
-        {typingNames.length === 1 ? `${typingNames[0]} is typing…` : typingNames.length > 1 ? `${typingNames.slice(0, 2).join(" and ")}${typingNames.length > 2 ? " and others" : ""} are typing…` : ""}
-      </div>
       <Composer
         ref={composer}
         conversationId={id}

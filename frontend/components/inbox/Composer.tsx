@@ -258,7 +258,7 @@ export const Composer = forwardRef<ComposerHandle, {
 
   return (
     <div
-      className="relative border-t border-[var(--color-line)] bg-[var(--color-panel)] px-3 pb-3 pt-2"
+      className="relative border-t border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2"
       onPaste={(e) => {
         const files = Array.from(e.clipboardData?.files || []);
         if (files.length) {
