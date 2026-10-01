@@ -361,6 +361,28 @@ select:focus-visible {
   }
 }
 
+/* The voice note playing (its pop-up): the halo round the sender, the equalizer on their picture. */
+@keyframes voiceHalo {
+  0% {
+    box-shadow: 0 0 0 0 rgb(79 70 229 / 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 9px rgb(79 70 229 / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgb(79 70 229 / 0);
+  }
+}
+@keyframes eqBar {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;
