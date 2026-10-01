@@ -1,16 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ChatMessage } from "@/lib/api";
+import { PersonAvatar } from "./PersonAvatar";
 
 // Voice notes, as WhatsApp has them. Recording: the composer's mic starts
 // it (the browser asks for the microphone the first time), a bar shows the
 // time and the sound as it comes in, the bin throws it away and the arrow
 // sends it; ten minutes at most. What's kept is the audio (MP4 where the
 // browser records it, which plays everywhere; else WebM), its length and
-// the shape of its sound as 48 bars. Playing: a round play button, the
-// bars filling in as it plays (a click on them jumps there), the time, and
-// 1x / 1.5x / 2x. One plays at a time.
+// the shape of its sound as 48 bars. Playing: drawn as WhatsApp draws it
+// (the sender's picture, play, the bars filling in with a dot to drag, the
+// time; 1x / 1.5x / 2x in the picture's place while it plays). One plays
+// at a time.
 
 export const VOICE_MAX_MS = 10 * 60 * 1000;
 const BARS = 48;
@@ -184,21 +186,51 @@ export function RecordingBar({ elapsed, recent, sending, onCancel, onSend }: { e
 let playing: HTMLAudioElement | null = null;
 const SPEEDS = [1, 1.5, 2];
 
-/** A voice note in a bubble: play, its sound's shape filling in, the time, the speed. */
-export function VoicePlayer({ voice, mine }: { voice: NonNullable<ChatMessage["voice"]>; mine: boolean }) {
+/** How tall a bar is drawn (% of the wave): quiet sound still shows, loud doesn't swamp it. */
+const barHeight = (p: number) => Math.round(18 + 82 * Math.pow(Math.min(1, Math.max(0, p)), 0.75));
+
+// Bars are drawn this wide with this gap (px); as many as fit the room the wave has.
+const BAR_PX = 2.5;
+const GAP_PX = 2;
+
+/** The bars squeezed into `count` (each the loudest of those it covers); as they are when they already fit. */
+function fitBars(peaks: number[], count: number): number[] {
+  if (count >= peaks.length) return peaks;
+  return Array.from({ length: count }, (_, i) => {
+    const from = Math.floor((i * peaks.length) / count);
+    const to = Math.max(from + 1, Math.floor(((i + 1) * peaks.length) / count));
+    return Math.max(...peaks.slice(from, to));
+  });
+}
+
+/**
+ * A voice note in a bubble, as WhatsApp draws one: the sender's picture with
+ * a mic (while it plays, the speed instead: 1x, 1.5x, 2x), then play and the
+ * sound's shape on one line, a dot marking where it's got to (click or drag
+ * to move it), and under them its length (where it's at while playing) with
+ * the bubble's time and ticks (`meta`) on the right.
+ */
+export function VoicePlayer({ voice, mine, author, meta }: { voice: NonNullable<ChatMessage["voice"]>; mine: boolean; author?: ChatMessage["author"]; meta?: ReactNode }) {
   const audio = useRef<HTMLAudioElement>(null);
+  const wave = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+  const [room, setRoom] = useState(BARS);
   const [on, setOn] = useState(false);
   const [at, setAt] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [failed, setFailed] = useState(false);
   const duration = voice.durationMs / 1000;
-  const peaks = voice.peaks.length ? voice.peaks : Array(BARS).fill(0.3);
+  const peaks = fitBars(voice.peaks.length ? voice.peaks : Array(BARS).fill(0.3), room);
   const share = duration ? Math.min(1, at / duration) : 0;
+  const started = on || at > 0;
+  const bubble = mine ? "var(--color-bubble-out)" : "var(--color-panel)";
 
   useEffect(() => {
     const el = audio.current;
     if (!el) return;
-    const tick = () => setAt(el.currentTime);
+    const tick = () => {
+      if (!dragging.current) setAt(el.currentTime);
+    };
     const ended = () => {
       setOn(false);
       setAt(0);
@@ -219,6 +251,15 @@ export function VoicePlayer({ voice, mine }: { voice: NonNullable<ChatMessage["v
     };
   }, []);
 
+  // As many bars as the wave has room for (a phone's narrower bubble gets fewer).
+  useEffect(() => {
+    const el = wave.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(([entry]) => setRoom(Math.max(12, Math.floor((entry.contentRect.width + GAP_PX) / (BAR_PX + GAP_PX)))));
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [failed]);
+
   function toggle() {
     const el = audio.current;
     if (!el) return;
@@ -232,7 +273,7 @@ export function VoicePlayer({ voice, mine }: { voice: NonNullable<ChatMessage["v
     el.play().catch(() => setFailed(true));
   }
 
-  function seek(e: React.MouseEvent<HTMLDivElement>) {
+  function seekAt(e: React.PointerEvent<HTMLDivElement>) {
     const el = audio.current;
     if (!el || !duration) return;
     const box = e.currentTarget.getBoundingClientRect();
@@ -247,64 +288,96 @@ export function VoicePlayer({ voice, mine }: { voice: NonNullable<ChatMessage["v
     if (audio.current) audio.current.playbackRate = next;
   }
 
-  if (failed) {
-    return (
-      <a href={voice.url} download className="flex w-[240px] max-w-full items-center gap-2 px-[9px] pt-[7px] text-[12.5px] text-[var(--color-primary)] underline underline-offset-2">
-        Voice message ({clockOf(voice.durationMs)}): this browser can&apos;t play it. Download it
-      </a>
-    );
-  }
-
   return (
-    <div className="flex w-[264px] max-w-full items-center gap-2.5 px-[9px] pt-[7px]">
+    <div className="flex w-[300px] max-w-full items-center gap-2 py-[6px] pl-[7px] pr-[9px]">
       <audio ref={audio} src={voice.url} preload="metadata" onError={() => setFailed(true)} />
-      <button
-        type="button"
-        onClick={toggle}
-        aria-label={on ? "Pause voice message" : "Play voice message"}
-        className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors ${mine ? "bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)]" : "bg-[var(--color-primary-soft)] text-[var(--color-primary)] hover:bg-[var(--color-primary)] hover:text-white"}`}
-      >
-        {on ? (
-          <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden>
-            <rect x="5" y="4" width="3.4" height="12" rx="1" fill="currentColor" />
-            <rect x="11.6" y="4" width="3.4" height="12" rx="1" fill="currentColor" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 20 20" className="ml-0.5 h-4 w-4" aria-hidden>
-            <path d="M6 4.2v11.6a.8.8 0 001.2.7l9.3-5.8a.8.8 0 000-1.4L7.2 3.5A.8.8 0 006 4.2z" fill="currentColor" />
-          </svg>
-        )}
-      </button>
-      <div className="min-w-0 flex-1">
-        <div
-          role="slider"
-          tabIndex={0}
-          aria-label="Position"
-          aria-valuemin={0}
-          aria-valuemax={Math.round(duration)}
-          aria-valuenow={Math.round(at)}
-          onClick={seek}
-          onKeyDown={(e) => {
-            const el = audio.current;
-            if (!el || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
-            e.preventDefault();
-            el.currentTime = Math.min(duration, Math.max(0, el.currentTime + (e.key === "ArrowRight" ? 5 : -5)));
-          }}
-          className="flex h-7 cursor-pointer items-center gap-[2px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
-        >
-          {peaks.map((p, i) => (
-            <span
-              key={i}
-              className={`min-w-[2px] flex-1 rounded-full transition-colors ${(i + 0.5) / peaks.length <= share ? "bg-[var(--color-primary)]" : mine ? "bg-[var(--color-primary)]/30" : "bg-[var(--color-muted)]/35"}`}
-              style={{ height: `${Math.max(14, Math.round(p * 100))}%` }}
-            />
-          ))}
-        </div>
-        <div className="mt-0.5 flex items-center justify-between text-[10.5px] tabular-nums text-[var(--color-bubble-meta)]">
-          <span>{on || at > 0 ? clockOf(at * 1000) : clockOf(voice.durationMs)}</span>
-          <button type="button" onClick={nextSpeed} className="rounded-full bg-black/[0.06] px-1.5 font-semibold leading-4 text-[var(--color-ink)]/70 hover:bg-black/[0.1]" aria-label={`Playback speed ${speed}x`}>
+      <span className="relative flex h-11 w-11 flex-shrink-0 items-center justify-center">
+        {started && !failed ? (
+          <button type="button" onClick={nextSpeed} aria-label={`Playback speed ${speed}x, change it`} title="Playback speed" className="h-7 min-w-[42px] rounded-full bg-black/[0.07] px-2 text-[12px] font-semibold tabular-nums text-[var(--color-ink)]/80 transition-colors hover:bg-black/[0.12]">
             {speed}x
           </button>
+        ) : (
+          <>
+            <PersonAvatar id={author?.id} name={author?.name} avatarUrl={author?.avatarUrl} size={44} />
+            <span className="absolute -bottom-0.5 -right-1 flex h-[18px] w-[18px] items-center justify-center rounded-full text-[var(--color-primary)]" style={{ background: bubble }} aria-hidden>
+              <svg viewBox="0 0 16 16" fill="none" className="h-3 w-3">
+                <rect x="5.25" y="1.5" width="5.5" height="8.5" rx="2.75" fill="currentColor" />
+                <path d="M3 7.5a5 5 0 0010 0M8 12.5v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </span>
+          </>
+        )}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex h-8 items-center gap-1">
+          <button
+            type="button"
+            onClick={toggle}
+            disabled={failed}
+            aria-label={on ? "Pause voice message" : "Play voice message"}
+            className="-ml-1 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-ink)]/70 transition-colors hover:bg-black/[0.05] hover:text-[var(--color-primary)] disabled:opacity-40"
+          >
+            {on ? (
+              <svg viewBox="0 0 20 20" className="h-[22px] w-[22px]" aria-hidden>
+                <rect x="4.5" y="3.5" width="3.8" height="13" rx="1.2" fill="currentColor" />
+                <rect x="11.7" y="3.5" width="3.8" height="13" rx="1.2" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 20 20" className="ml-0.5 h-[22px] w-[22px]" aria-hidden>
+                <path d="M5.5 3.6v12.8a1 1 0 001.5.86l10.2-6.4a1 1 0 000-1.72L7 2.74a1 1 0 00-1.5.86z" fill="currentColor" />
+              </svg>
+            )}
+          </button>
+          {failed ? (
+            <a href={voice.url} download className="min-w-0 truncate text-[12.5px] text-[var(--color-primary)] underline underline-offset-2">
+              Can&apos;t play here. Download it
+            </a>
+          ) : (
+            <div
+              ref={wave}
+              role="slider"
+              tabIndex={0}
+              aria-label="Position"
+              aria-valuemin={0}
+              aria-valuemax={Math.round(duration)}
+              aria-valuenow={Math.round(at)}
+              onPointerDown={(e) => {
+                dragging.current = true;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                seekAt(e);
+              }}
+              onPointerMove={(e) => dragging.current && seekAt(e)}
+              onPointerUp={() => {
+                dragging.current = false;
+              }}
+              onPointerCancel={() => {
+                dragging.current = false;
+              }}
+              onKeyDown={(e) => {
+                const el = audio.current;
+                if (!el || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
+                e.preventDefault();
+                el.currentTime = Math.min(duration, Math.max(0, el.currentTime + (e.key === "ArrowRight" ? 5 : -5)));
+                setAt(el.currentTime);
+              }}
+              className="relative mx-1.5 h-7 min-w-0 flex-1 cursor-pointer touch-none rounded outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+            >
+              <span className="absolute inset-0 flex items-center justify-between overflow-hidden" aria-hidden>
+                {peaks.map((p, i) => (
+                  <span
+                    key={i}
+                    className={`w-[2.5px] flex-shrink-0 rounded-full ${(i + 0.5) / peaks.length <= share ? "bg-[var(--color-primary)]" : mine ? "bg-[var(--color-primary)]/35" : "bg-[var(--color-muted)]/40"}`}
+                    style={{ height: `${barHeight(p)}%` }}
+                  />
+                ))}
+              </span>
+              <span className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--color-primary)]" style={{ left: `${share * 100}%`, boxShadow: `0 0 0 2px ${bubble}` }} aria-hidden />
+            </div>
+          )}
+        </div>
+        <div className="flex h-4 items-center justify-between gap-2 pl-[38px]">
+          <span className="text-[10.5px] leading-none tabular-nums text-[var(--color-bubble-meta)]">{started ? clockOf(at * 1000) : clockOf(voice.durationMs)}</span>
+          {meta}
         </div>
       </div>
     </div>

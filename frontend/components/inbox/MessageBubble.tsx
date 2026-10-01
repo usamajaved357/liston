@@ -231,6 +231,8 @@ export function MessageBubble({
         ...(canDelete ? [{ label: "Delete", onSelect: onDelete, icon: icons.delete, danger: true }] : []),
       ];
   const onlyPhotos = photos.length > 0 && !docs.length && !text && !message.voice && !message.links.length;
+  // A voice note with nothing under it carries the time and ticks itself, under its wave.
+  const voiceMeta = Boolean(message.voice) && !text;
 
   // The round "reply in thread" button beside the bubble, on hover.
   const threadButton = canThread && !message.threadId && (
@@ -306,12 +308,12 @@ export function MessageBubble({
                   ))}
                 </div>
               )}
-              {message.voice && <VoicePlayer voice={message.voice} mine={mine} />}
+              {message.voice && <VoicePlayer voice={message.voice} mine={mine} author={author} meta={voiceMeta ? <Meta>{meta}</Meta> : undefined} />}
               {text ? (
                 <BubbleText meta={meta}>
                   <RichText text={text} mentionNames={mentionNames} />
                 </BubbleText>
-              ) : onlyPhotos ? null : (
+              ) : onlyPhotos || voiceMeta ? null : (
                 <div className="flex justify-end px-[8px] pb-[5px] pt-0.5">
                   <Meta>{meta}</Meta>
                 </div>
