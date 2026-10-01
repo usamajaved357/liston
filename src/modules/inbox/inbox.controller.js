@@ -8,7 +8,7 @@ const quickRepliesService = require('./quick-replies.service');
 
 const listSchema = z.object({
   folder: z.enum(['buyers', 'ebay', 'archived', 'all']).optional(),
-  show: z.enum(['all', 'unread', 'waiting', 'mine']).optional(),
+  show: z.enum(['all', 'unread', 'waiting', 'mine', 'cases']).optional(),
   q: z.string().max(120).optional(),
   before: z.string().datetime({ offset: true }).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),

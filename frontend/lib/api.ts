@@ -3155,7 +3155,8 @@ export const inboxApi = {
 // ---- Inbox: eBay messages -----------------------------------------------------------
 
 export type EbayFolder = "buyers" | "ebay" | "archived" | "all";
-export type EbayShow = "all" | "unread" | "waiting" | "mine";
+// "cases": every buyer conversation with an open return, item-not-received request, payment dispute or cancellation request.
+export type EbayShow = "all" | "unread" | "waiting" | "mine" | "cases";
 // One conversation in a list: a buyer's (FROM_MEMBERS) or eBay's own (FROM_EBAY).
 export interface EbayConversationRow {
   conversationId: string;
@@ -3181,7 +3182,8 @@ export interface EbayConversationRow {
 }
 export interface EbayInboxList {
   conversations: EbayConversationRow[];
-  counts: { buyers: number; ebay: number; waiting: number; archived: number };
+  // `cases`: conversations with an open case (null without Orders access on any of these accounts).
+  counts: { buyers: number; ebay: number; waiting: number; archived: number; cases: number | null };
   sync: { syncedAt: string | null; syncing: boolean; neverSynced: boolean; error: { message: string; scope: boolean } | null };
   hasMore: boolean;
   accounts: { id: string; label: string }[];

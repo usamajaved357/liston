@@ -60,3 +60,15 @@ test("a buyer's new word is news for the team's devices: theirs, in the inbox, n
   assert.strictEqual(rules.wantsEbayPush({ ebay: 'chosen', ebay_accounts: ['a'] }, 'a'), true);
   assert.strictEqual(rules.wantsEbayPush({ ebay: 'chosen', ebay_accounts: ['b'] }, 'a'), false);
 });
+
+test("the Cases view's order: the soonest eBay deadline first, then money held before the buyer's claims, then the newest", () => {
+  const item = (id, kind, respondBy, latest) => ({ row: { conversation_id: id, latest_at: latest }, issue: { kind, respondBy } });
+  const list = [
+    item('cancel', 'cancel', null, '2026-10-01T10:00:00Z'),
+    item('late-return', 'return', '2026-10-05T10:00:00Z', '2026-10-01T09:00:00Z'),
+    item('dispute', 'dispute', null, '2026-09-30T10:00:00Z'),
+    item('soon-inr', 'inquiry', '2026-10-02T10:00:00Z', '2026-09-29T10:00:00Z'),
+    item('cancel-newer', 'cancel', null, '2026-10-01T11:00:00Z'),
+  ];
+  assert.deepStrictEqual(list.sort(rules.byDeadline).map((x) => x.row.conversation_id), ['soon-inr', 'late-return', 'dispute', 'cancel-newer', 'cancel']);
+});

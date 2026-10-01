@@ -105,7 +105,7 @@ test('the account\'s conversations are read into Liston: folders for buyers and 
       ['c2', 'lotsofstuff1244', true, false],
     ]);
     assert.strictEqual(buyers.data.conversations[0].image, 'https://i.ebayimg.com/images/g/x/s-l225.jpg', "the listing's photo");
-    assert.deepStrictEqual(buyers.data.counts, { buyers: 1, ebay: 1, waiting: 1, archived: 0 });
+    assert.deepStrictEqual(buyers.data.counts, { buyers: 1, ebay: 1, waiting: 1, archived: 0, cases: 0 }, 'and no open cases (the owner sees orders)');
     // The Unread view: the buyers' and eBay's unread together.
     assert.deepStrictEqual((await request('GET', `${base}?folder=all&show=unread`, undefined, t.owner.token)).data.conversations.map((c) => c.conversationId).sort(), ['c1', 'e1']);
     const fromEbay = await request('GET', `${base}?folder=ebay`, undefined, t.owner.token);
@@ -332,9 +332,9 @@ test("a conversation read in Liston stays read when eBay's list still says unrea
   }
 });
 
-test("a buyer's conversation is marked with an open return (eBay's for the whole account) or the cancellation they asked for, for those who may see orders", async () => {
+test("a buyer's conversation is marked with an open return (eBay's for the whole account) or the cancellation they asked for, and the Cases view lists them all, for those who may see orders", async () => {
   const t = await setup({ scopes: [inboxService.SCOPE, ebayOauth.SCOPE_FULFILLMENT] });
-  stubEbay({ buyers: [conv('c1', { buyer: 'and_630713', item: '358376442432' }), conv('c2', { buyer: 'lotsofstuff1244', item: '111222333', at: ago(40) })] });
+  stubEbay({ buyers: [conv('c1', { buyer: 'and_630713', item: '358376442432' }), conv('c2', { buyer: 'lotsofstuff1244', item: '111222333', at: ago(40) }), conv('c3', { buyer: 'happy_buyer', item: '999888777', at: ago(50) })] });
   const order = (orderId, buyerUserId, itemId, extra = {}) =>
     pool.query(`INSERT INTO ebay_orders (connection_id, order_id, created_at, data) VALUES ($1, $2, now(), $3)`, [
       t.connection.id,
@@ -366,6 +366,17 @@ test("a buyer's conversation is marked with an open return (eBay's for the whole
     assert.deepStrictEqual(byId.c1, { kind: 'return', label: 'Return open', respondBy: '2026-10-03T10:00:00.000Z', orderId: '20-00001-00001' }, 'the open return, not the closed one');
     assert.deepStrictEqual(byId.c2, { kind: 'cancel', label: 'Cancel requested', respondBy: null, orderId: '20-00002-00002' });
 
+    // The Cases view: every conversation with one, the nearest deadline first, counted for its tab; searchable.
+    const cases = (await request('GET', `${base}?show=cases`, undefined, t.owner.token)).data;
+    assert.deepStrictEqual(cases.conversations.map((r) => [r.conversationId, r.issue.kind]), [['c1', 'return'], ['c2', 'cancel']]);
+    assert.deepStrictEqual([cases.counts.cases, cases.hasMore], [2, false]);
+    assert.strictEqual((await request('GET', base, undefined, t.owner.token)).data.counts.cases, 2, 'the count on every view');
+    assert.deepStrictEqual((await request('GET', `${base}?show=cases&q=lotsof`, undefined, t.owner.token)).data.conversations.map((r) => r.conversationId), ['c2']);
+    // Archived, it's still a case to handle.
+    await pool.query(`UPDATE ebay_conversations SET status = 'ARCHIVE' WHERE connection_id = $1 AND conversation_id = 'c2'`, [t.connection.id]);
+    orderIssues.forgetCases(t.connection.id);
+    assert.deepStrictEqual((await request('GET', `${base}?show=cases`, undefined, t.owner.token)).data.conversations.map((r) => r.conversationId), ['c1', 'c2']);
+
     // Opened: the header's mark, and the order as it stands (a request waiting isn't a cancelled order).
     const opened = (await request('GET', `${base}/c2`, undefined, t.owner.token)).data;
     assert.strictEqual(opened.conversation.issue.kind, 'cancel');
@@ -374,13 +385,16 @@ test("a buyer's conversation is marked with an open return (eBay's for the whole
     // The order page reads the return closed: the mark goes at once.
     await orderIssues.noteOrder(t.connection.id, { orderIds: ['20-00001-00001'], buyer: 'and_630713', itemIds: ['358376442432'], cases: { returns: [{ id: 'R1', closed: true }], inquiries: [], disputes: [] } });
     assert.strictEqual((await request('GET', base, undefined, t.owner.token)).data.conversations.find((r) => r.conversationId === 'c1').issue, null);
+    assert.deepStrictEqual((await request('GET', `${base}?show=cases`, undefined, t.owner.token)).data.conversations.map((r) => r.conversationId), ['c2'], 'gone from Cases at once too');
 
     // A member with the Inbox but not Orders sees no marks.
     const email = `inbox-issues-${crypto.randomUUID()}@example.com`;
     const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, t.owner.token);
     await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'inbox', allowed: true }] }, t.owner.token);
     const sara = (await request('POST', '/api/auth/login', { email, password: 'memberpassword123' })).data.token;
-    assert.deepStrictEqual((await request('GET', base, undefined, sara)).data.conversations.map((r) => r.issue), [null, null]);
+    const saras = (await request('GET', base, undefined, sara)).data;
+    assert.deepStrictEqual([saras.conversations.map((r) => r.issue), saras.counts.cases], [[null, null], null], 'no marks, no Cases tab');
+    assert.deepStrictEqual((await request('GET', `${base}?show=cases`, undefined, sara)).data.conversations, []);
   } finally {
     mock.restoreAll();
   }

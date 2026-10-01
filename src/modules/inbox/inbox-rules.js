@@ -168,5 +168,21 @@ function wantsEbayPush(settings, connectionId) {
   return true;
 }
 
+const CASE_RANK = { dispute: 0, inquiry: 1, return: 2, cancel: 3 };
+/**
+ * The Cases view's order for { row, issue } pairs: the soonest eBay
+ * deadline first, those without one after (money held, then the buyer's
+ * claims), then the newest message.
+ */
+function byDeadline(a, b) {
+  const da = a.issue?.respondBy ? new Date(a.issue.respondBy).getTime() : Infinity;
+  const db = b.issue?.respondBy ? new Date(b.issue.respondBy).getTime() : Infinity;
+  if (da !== db) return da - db;
+  const ra = CASE_RANK[a.issue?.kind] ?? 9;
+  const rb = CASE_RANK[b.issue?.kind] ?? 9;
+  if (ra !== rb) return ra - rb;
+  return new Date(b.row?.latest_at || 0).getTime() - new Date(a.row?.latest_at || 0).getTime();
+}
+
 module.exports = {
-  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, noticeHtml, previewOf, waitingSince, looksHtml, same, unreadAfterRead, isNewBuyerWord, wantsEbayPush };
+  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, noticeHtml, previewOf, waitingSince, looksHtml, same, unreadAfterRead, isNewBuyerWord, wantsEbayPush, byDeadline };

@@ -361,6 +361,33 @@ async function deleteNote(noteId) {
   await query(`UPDATE ebay_conversation_notes SET deleted_at = now() WHERE id = $1`, [noteId]);
 }
 
+/** The buyers (lower case) of these orders on this account. */
+async function buyersOfOrders(connectionId, orderIds) {
+  const ids = [...new Set(orderIds.filter(Boolean).map(String))];
+  if (!ids.length) return [];
+  const { rows } = await query(`SELECT DISTINCT lower(data->>'buyerUserId') AS buyer FROM ebay_orders WHERE connection_id = $1 AND order_id = ANY($2) AND data->>'buyerUserId' IS NOT NULL`, [connectionId, ids]);
+  return rows.map((r) => r.buyer);
+}
+
+/** The buyers (lower case) with an order on this account whose cancellation they asked for (`statuses`: eBay's cancel states for that). */
+async function cancelRequestBuyers(connectionId, statuses) {
+  const { rows } = await query(`SELECT DISTINCT lower(data->>'buyerUserId') AS buyer FROM ebay_orders WHERE connection_id = $1 AND data->>'cancelStatus' = ANY($2) AND data->>'buyerUserId' IS NOT NULL`, [connectionId, statuses]);
+  return rows.map((r) => r.buyer);
+}
+
+/** These buyers' conversations about an item on this account, in the inbox or the archive, with who has each. */
+async function buyerConversations(connectionId, buyers) {
+  const names = [...new Set(buyers.filter(Boolean).map((b) => String(b).toLowerCase()))];
+  if (!names.length) return [];
+  const { rows } = await query(
+    `SELECT c.*, u.name AS assignee_name, u.email AS assignee_email
+       FROM ebay_conversations c LEFT JOIN users u ON u.id = c.assigned_to
+      WHERE c.connection_id = $1 AND c.type = 'FROM_MEMBERS' AND c.status IN ('ACTIVE', 'ARCHIVE') AND c.reference_id IS NOT NULL AND lower(c.other_party) = ANY($2)`,
+    [connectionId, names]
+  );
+  return rows;
+}
+
 /** People by id: { id, name, email } (for names beside their work). */
 async function peopleByIds(ids) {
   if (!ids.length) return [];
@@ -423,6 +450,9 @@ module.exports = {
   findNote,
   deleteNote,
   peopleByIds,
+  buyersOfOrders,
+  cancelRequestBuyers,
+  buyerConversations,
   orderById,
   latestWith,
   FOLDERS,

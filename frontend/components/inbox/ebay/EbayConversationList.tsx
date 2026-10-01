@@ -7,16 +7,17 @@ import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { colorFor, initialOf, listTime, shortAgo } from "../inbox-format";
 import { PersonDot } from "./EbayWork";
 
-// The eBay Inbox's list, as WhatsApp's chat list: search at the top, tabs
-// under it for the view (Unread with its count, Customers, From eBay), the
-// archive as a row at the top of the list (a view of its own with a way
-// back), then the conversations newest first: the item's photo with the
+// The eBay Inbox's list, as WhatsApp's chat list: search at the top (the
+// views' tabs, EbayViewTabs, are in the page's header; under the search on a
+// phone), the archive as a row at the top of the list (a view of its own
+// with a way back), then the conversations newest first (Cases: the nearest
+// eBay deadline first, under a line saying what's open): the item's photo with the
 // buyer's initial on it, who, when, the item (with a mark for an open
 // return, case or dispute, or a cancellation the buyer asked for), the last
 // line (after a reply arrow, as eBay has it, when you had the last word),
 // and what needs you: unread, or how long the buyer has been waiting.
 
-export type EbayView = "buyers" | "unread" | "ebay" | "archived";
+export type EbayView = "buyers" | "unread" | "ebay" | "cases" | "archived";
 
 /** eBay's wordmark in its own colours (its 2023 logo). */
 export function EbayLogo({ width, className = "" }: { width: number; className?: string }) {
@@ -39,8 +40,8 @@ export function EbayMark({ size = 36, rounded = "rounded-full" }: { size?: numbe
   );
 }
 
-/** An open return, case or dispute on the buyer's order (rose), or a cancellation they asked for (amber). */
-export function IssueBadge({ issue, className = "" }: { issue: NonNullable<EbayConversationRow["issue"]>; className?: string }) {
+/** An open return, case or dispute on the buyer's order (rose), or a cancellation they asked for (amber); `showDue` adds eBay's deadline. */
+export function IssueBadge({ issue, className = "", showDue = false }: { issue: NonNullable<EbayConversationRow["issue"]>; className?: string; showDue?: boolean }) {
   const due = issue.respondBy ? new Date(issue.respondBy).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : null;
   return (
     <span
@@ -49,11 +50,56 @@ export function IssueBadge({ issue, className = "" }: { issue: NonNullable<EbayC
     >
       <span className={`h-1.5 w-1.5 rounded-full ${issue.kind === "cancel" ? "bg-amber-500" : "bg-rose-500"}`} aria-hidden />
       {issue.label}
+      {showDue && due && <span className="font-medium opacity-80">· by {due}</span>}
     </span>
   );
 }
 
-function Row({ c, active, showAccount, onOpen, now }: { c: EbayConversationRow; active: boolean; showAccount: boolean; onOpen: () => void; now: number }) {
+/**
+ * The list's views, as tabs: Unread (buyers' and eBay's, with the count),
+ * Customers, From eBay (its unread), and Cases (every buyer conversation
+ * with an open return, item-not-received request, payment dispute or
+ * cancellation request; for people who may see the orders). Shown in the
+ * page's header (above the list on a phone).
+ */
+export function EbayViewTabs({ view, counts, onView }: { view: EbayView; counts: EbayInboxList["counts"] | undefined; onView: (v: EbayView) => void }) {
+  const unreadAll = (counts?.buyers || 0) + (counts?.ebay || 0);
+  return (
+    <PillTabs
+      tabs={[
+        { key: "unread" as const, label: "Unread", count: unreadAll || undefined, countTone: "alert" },
+        { key: "buyers" as const, label: "Customers" },
+        { key: "ebay" as const, label: "From eBay", count: counts?.ebay || undefined, countTone: "alert" },
+        ...(counts && counts.cases !== null && counts.cases !== undefined
+          ? [{ key: "cases" as const, label: "Cases", count: counts.cases || undefined, countTone: "alert" as const, title: "Open returns, item-not-received requests, payment disputes and cancellation requests" }]
+          : []),
+      ]}
+      // The archive is part of Customers.
+      value={view === "archived" ? "buyers" : view}
+      onChange={onView}
+      label="Show"
+    />
+  );
+}
+
+const CASE_WORDS: Record<string, [string, string]> = {
+  return: ["return", "returns"],
+  inquiry: ["not received", "not received"],
+  dispute: ["payment dispute", "payment disputes"],
+  cancel: ["cancellation request", "cancellation requests"],
+};
+
+/** What the Cases view holds, in a line: "2 returns · 1 not received · 1 cancellation request". */
+function caseSummary(rows: EbayConversationRow[]): string {
+  const by = new Map<string, number>();
+  for (const r of rows) if (r.issue) by.set(r.issue.kind, (by.get(r.issue.kind) || 0) + 1);
+  return (["dispute", "inquiry", "return", "cancel"] as const)
+    .filter((k) => by.get(k))
+    .map((k) => `${by.get(k)} ${by.get(k) === 1 ? CASE_WORDS[k][0] : CASE_WORDS[k][1]}`)
+    .join(" · ");
+}
+
+function Row({ c, active, showAccount, onOpen, now, showDue = false }: { c: EbayConversationRow; active: boolean; showAccount: boolean; onOpen: () => void; now: number; showDue?: boolean }) {
   const ebay = c.type === "FROM_EBAY";
   const unread = c.unread > 0;
   // How long the buyer has waited for an answer (not for what's archived).
@@ -95,9 +141,11 @@ function Row({ c, active, showAccount, onOpen, now }: { c: EbayConversationRow; 
             {showAccount && c.account.label ? <span className="font-medium text-[var(--color-ink)]/70">{c.account.label} · </span> : null}
             {subtitle}
           </span>
-          {c.issue && <IssueBadge issue={c.issue} />}
+          {c.issue && !showDue && <IssueBadge issue={c.issue} />}
         </span>
         <span className="flex items-center gap-2">
+          {/* Cases: what's open and eBay's deadline lead the last line, the item keeps its room above. */}
+          {c.issue && showDue && <IssueBadge issue={c.issue} showDue />}
           <span className={`min-w-0 flex-1 truncate text-[12px] leading-[18px] ${unread ? "font-medium text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>
             {c.latestFromSeller && !ebay && (
               // Your last word, as eBay marks it: a reply arrow before it.
@@ -178,7 +226,6 @@ export function EbayConversationList({
   const quietScroll = useQuietScrollbar<HTMLDivElement>();
   const rows = data?.conversations || [];
   const counts = data?.counts;
-  const unreadAll = (counts?.buyers || 0) + (counts?.ebay || 0);
   const showArchiveRow = view === "buyers" && !q.trim() && (counts?.archived || 0) > 0;
   return (
     <aside className="flex min-h-0 w-full flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)] lg:w-[300px] lg:flex-shrink-0">
@@ -207,16 +254,10 @@ export function EbayConversationList({
               </button>
             )}
           </label>
-          <PillTabs
-            tabs={[
-              { key: "unread" as const, label: "Unread", count: unreadAll || undefined, countTone: "alert" },
-              { key: "buyers" as const, label: "Customers" },
-              { key: "ebay" as const, label: "From eBay", count: counts?.ebay || undefined, countTone: "alert" },
-            ]}
-            value={view}
-            onChange={onView}
-            label="Show"
-          />
+          {/* On a phone the header has no room for the views: they sit here. */}
+          <div className="sm:hidden">
+            <EbayViewTabs view={view} counts={counts} onView={onView} />
+          </div>
         </div>
       )}
       <div ref={quietScroll} className="scroll-quiet min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
@@ -243,8 +284,14 @@ export function EbayConversationList({
           <div className="flex h-full min-h-[200px] items-center justify-center p-8 text-center text-[12.5px] leading-relaxed text-[var(--color-muted)]">{emptyText}</div>
         ) : (
           <div className="flex flex-col">
+            {view === "cases" && (
+              <p className="px-2.5 pb-1.5 pt-1 text-[11.5px] leading-4 text-[var(--color-muted)]">
+                <span className="font-semibold text-[var(--color-ink)]">Open now:</span> {caseSummary(rows)}
+                <span className="block">Nearest eBay deadline first.</span>
+              </p>
+            )}
             {rows.map((c) => (
-              <Row key={`${c.account.id}:${c.conversationId}`} c={c} active={activeKey === `${c.account.id}~${c.conversationId}`} showAccount={showAccount} onOpen={() => onOpen(c)} now={now} />
+              <Row key={`${c.account.id}:${c.conversationId}`} c={c} active={activeKey === `${c.account.id}~${c.conversationId}`} showAccount={showAccount} onOpen={() => onOpen(c)} now={now} showDue={view === "cases"} />
             ))}
             {data?.hasMore && (
               <button type="button" onClick={onMore} disabled={loadingMore} className="mt-1 w-full rounded-xl px-4 py-3 text-[12.5px] font-medium text-[var(--color-primary)] hover:bg-[var(--color-paper)]">

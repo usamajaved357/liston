@@ -4,18 +4,20 @@ import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, EbayConversationRow, EbayFolder, EbayInboxList, EbayShow, EbayThread, ebayInboxApi } from "@/lib/api";
 import { useMyEvents, useViewing } from "@/lib/useMyEvents";
-import { EbayConversationList, EbayView } from "./EbayConversationList";
+import { EbayConversationList, EbayView, EbayViewTabs } from "./EbayConversationList";
 import { EbayThreadView } from "./EbayThreadView";
 import { EbayComposer } from "./EbayComposer";
 import { EbayDetails } from "./EbayDetails";
 import { listTime } from "../inbox-format";
 
 // The Inbox's eBay messages for one account (or every account the person
-// may read), laid out like WhatsApp: the list (its own search and chips)
-// beside the open conversation, whose order and listing open in a details
-// panel when asked for. How fresh Liston's copy of eBay is sits in the
-// page's header beside the bell (`syncSlot`) on an account's Inbox, or in a
-// row above the panes with the mode switch on the Dashboard's. The list comes from
+// may read), laid out like WhatsApp: the list (its own search) beside the
+// open conversation, whose order and listing open in a details panel when
+// asked for. The views' tabs (Unread, Customers, From eBay, Cases) and how
+// fresh Liston's copy of eBay is sit in the page's header beside the bell
+// (`syncSlot`) on an account's Inbox, or in a row above the panes with the
+// mode switch on the Dashboard's, so the panes keep their height; on a
+// phone the tabs sit above the list. The list comes from
 // what Liston keeps and is read again from eBay in the background (at once
 // when opened if it's over a minute old, every minute while in view, and
 // whenever Liston hears it changed); the open conversation follows. A
@@ -28,6 +30,7 @@ const VIEWS: Record<EbayView, { folder: EbayFolder; show: EbayShow }> = {
   buyers: { folder: "buyers", show: "all" },
   unread: { folder: "all", show: "unread" },
   ebay: { folder: "ebay", show: "all" },
+  cases: { folder: "all", show: "cases" },
   archived: { folder: "archived", show: "all" },
 };
 
@@ -223,16 +226,39 @@ export function EbayInbox({
     ? "Nothing matches your search."
     : data?.sync.neverSynced && !data.sync.error
       ? "Reading your conversations from eBay…"
-      : { archived: "Nothing archived.", ebay: "No messages from eBay.", unread: "You're all caught up.", buyers: "No messages from customers yet." }[view];
+      : {
+          archived: "Nothing archived.",
+          ebay: "No messages from eBay.",
+          unread: "You're all caught up.",
+          buyers: "No messages from customers yet.",
+          cases: "No open returns, item-not-received requests, payment disputes or cancellation requests.",
+        }[view];
+  const changeView = (v: EbayView) => {
+    if (v === view) return;
+    setView(v);
+    setLoading(true);
+  };
+  const viewTabs = <EbayViewTabs view={view} counts={data?.counts} onView={changeView} />;
   const conv = thread?.conversation;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {syncSlot && createPortal(<SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />, syncSlot)}
+      {syncSlot &&
+        createPortal(
+          <span className="flex items-center gap-3">
+            <span className="hidden sm:block">{viewTabs}</span>
+            <SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />
+          </span>,
+          syncSlot
+        )}
       {!syncSlot && (
         // On a phone an open conversation has the screen; its back arrow brings this row back.
         <div className={`${activeKey ? "hidden lg:flex" : "flex"} flex-wrap items-center justify-between gap-x-3 gap-y-2`}>
-          {modeSwitch}
+          <div className="flex flex-wrap items-center gap-3">
+            {modeSwitch}
+            <span className="hidden h-5 w-px bg-[var(--color-line)] sm:block" aria-hidden />
+            <span className="hidden sm:block">{viewTabs}</span>
+          </div>
           <SyncStatus data={data} onRefresh={refresh} refreshing={refreshing} reconnectHref={reconnectHref} />
         </div>
       )}
@@ -247,11 +273,7 @@ export function EbayInbox({
             showAccount={!connectionId}
             emptyText={emptyText}
             view={view}
-            onView={(v) => {
-              if (v === view) return;
-              setView(v);
-              setLoading(true);
-            }}
+            onView={changeView}
             q={q}
             onQ={setQ}
             onOpen={(c: EbayConversationRow) => onActiveChange(`${c.account.id}~${c.conversationId}`)}

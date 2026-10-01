@@ -304,7 +304,6 @@ async function tellTeam(connectionId, ownerId, arrived) {
   return told;
 }
 
-/** Reads the accounts again in the background when their copy is older than a minute. */
 // Accounts connected before eBay pushed messages: subscribed once (per server start) when their Inbox is read.
 const pushChecked = new Set();
 function ensurePush(connectionId, ownerId) {
@@ -320,6 +319,7 @@ function ensurePush(connectionId, ownerId) {
     .catch(() => {});
 }
 
+/** Reads the accounts again in the background when their copy is older than a minute. */
 async function refreshStale(connectionIds, ownerId, { force = false } = {}) {
   const states = new Map((await inboxRepository.syncStates(connectionIds)).map((s) => [s.connection_id, s]));
   for (const id of connectionIds) {
@@ -402,21 +402,36 @@ async function list(auth, { connectionId = null, folder = 'buyers', show = 'all'
   const accounts = connectionId ? [await requireAccount(auth, connectionId)] : await accountsFor(auth);
   const ids = accounts.map((a) => a.id);
   const states = await refreshStale(ids, auth.ownerId, { force: refresh });
-  const rows = await inboxRepository.listConversations(ids, { folder, show, q, userId: auth.userId, before, limit });
-  const items = await imagesFor(ids, rows.map((r) => r.reference_id));
   const byId = new Map(accounts.map((a) => [a.id, a]));
   // Open returns, cases and disputes, and buyers' cancellation requests, for whoever may see the orders.
   const withOrders = await ordersAccess(auth, ids);
   orderIssues.refreshStale([...withOrders], auth.ownerId).catch(() => {});
+  const withCases = (await Promise.all([...withOrders].map((id) => orderIssues.openCaseConversations(id).catch(() => [])))).flat();
   const issues = new Map();
-  for (const id of withOrders) {
-    for (const [conv, issue] of await orderIssues.issuesFor(id, rows.filter((r) => r.connection_id === id))) issues.set(`${id}:${conv}`, issue);
+  let rows;
+  if (show === 'cases') {
+    // Every buyer conversation with an open case (any folder), the nearest deadline first; searched here.
+    const words = String(q || '').trim().toLowerCase();
+    rows = withCases
+      .filter(({ row: r }) => !words || [r.other_party, r.title, r.latest_preview, r.reference_id].some((v) => String(v || '').toLowerCase().includes(words)))
+      .sort((a, b) => rules.byDeadline(a, b))
+      .map(({ row, issue }) => {
+        issues.set(`${row.connection_id}:${row.conversation_id}`, issue);
+        return row;
+      });
+  } else {
+    rows = await inboxRepository.listConversations(ids, { folder, show, q, userId: auth.userId, before, limit });
+    for (const id of withOrders) {
+      for (const [conv, issue] of await orderIssues.issuesFor(id, rows.filter((r) => r.connection_id === id))) issues.set(`${id}:${conv}`, issue);
+    }
   }
+  const items = await imagesFor(ids, rows.map((r) => r.reference_id));
   return {
     conversations: rows.map((r) => rowShape(r, byId, items, issues)),
-    counts: await inboxRepository.counts(ids),
+    // `cases`: conversations with an open case, for whoever may see the orders (null for no one here).
+    counts: { ...(await inboxRepository.counts(ids)), cases: withOrders.size ? withCases.length : null },
     sync: syncShape(states, ids),
-    hasMore: rows.length >= limit,
+    hasMore: show !== 'cases' && rows.length >= limit,
     accounts: accounts.map(({ id, label }) => ({ id, label })),
   };
 }

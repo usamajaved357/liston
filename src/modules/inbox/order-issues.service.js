@@ -11,11 +11,17 @@ const logger = require('../../utils/logger');
 // calls) at most every ten minutes while someone has the Inbox open, and
 // kept as a snapshot; an order whose cases are read on its own (its page,
 // a conversation's details) updates it at once. Cancellation requests come
-// from the orders Liston keeps.
+// from the orders Liston keeps. The Inbox's Cases view lists every buyer
+// conversation with one (openCaseConversations), counted for its tab.
 
 const KIND = 'inbox:cases';
 const FRESH_MS = 10 * 60 * 1000;
 const running = new Map(); // connectionId -> the read running now
+// Each account's conversations with an open case, for the Cases view and its count (the list asks every minute).
+const CASES_MS = 20 * 1000;
+const casesCache = new Map(); // connectionId -> { at, found }
+const forgetCases = (connectionId) => casesCache.delete(String(connectionId));
+const lower = (v) => String(v || '').trim().toLowerCase();
 
 async function refresh(connectionId, ownerId) {
   if (running.has(connectionId)) return running.get(connectionId);
@@ -27,6 +33,7 @@ async function refresh(connectionId, ownerId) {
       // None readable just now: what was known stays, tried again in ten minutes.
       if (out.unavailable === 'error') await mirrorRepository.saveSnapshot(connectionId, KIND, { cases: kept }, { error: 'unreadable' });
       else await mirrorRepository.saveSnapshot(connectionId, KIND, { cases: out.cases }, out.unavailable ? { unavailable: out.unavailable } : {});
+      forgetCases(connectionId);
     } catch (err) {
       logger.warn('Inbox: open cases not read from eBay', { connectionId, error: err.message });
       await mirrorRepository.saveSnapshot(connectionId, KIND, { cases: kept }, { error: err.message }).catch(() => {});
@@ -64,6 +71,30 @@ async function issuesFor(connectionId, conversations) {
   return out;
 }
 
+/**
+ * Every buyer conversation on the account with an open return,
+ * item-not-received request or payment dispute, or a cancellation the buyer
+ * asked for: [{ row, issue }], from the kept cases and orders (never eBay).
+ * The buyers named by a case (or by its order) are looked up, then each of
+ * their conversations is judged as the list marks rows (issuesFor).
+ */
+async function openCaseConversations(connectionId) {
+  const hit = casesCache.get(String(connectionId));
+  if (hit && Date.now() - hit.at < CASES_MS) return hit.found;
+  const snap = await mirrorRepository.loadSnapshot(connectionId, KIND).catch(() => null);
+  const cases = snap?.value?.cases || [];
+  const [fromOrders, cancelling] = await Promise.all([
+    inboxRepository.buyersOfOrders(connectionId, cases.map((c) => c.orderId)),
+    inboxRepository.cancelRequestBuyers(connectionId, [...ebayService.CANCEL_REQUESTED_STATUSES]),
+  ]);
+  const buyers = [...new Set([...cases.map((c) => lower(c.buyer)).filter(Boolean), ...fromOrders, ...cancelling])];
+  const rows = buyers.length ? await inboxRepository.buyerConversations(connectionId, buyers) : [];
+  const issues = rows.length ? await issuesFor(connectionId, rows) : new Map();
+  const found = rows.filter((r) => issues.has(r.conversation_id)).map((r) => ({ row: r, issue: issues.get(r.conversation_id) }));
+  casesCache.set(String(connectionId), { at: Date.now(), found });
+  return found;
+}
+
 /** One order's cases as just read from eBay (`cases`: returns, inquiries, disputes as the order page has them): the snapshot follows. */
 async function noteOrder(connectionId, { orderIds, buyer, itemIds, cases }) {
   const snap = await mirrorRepository.loadSnapshot(connectionId, KIND);
@@ -74,6 +105,7 @@ async function noteOrder(connectionId, { orderIds, buyer, itemIds, cases }) {
     ...(cases.disputes || []).map((c) => ({ ...c, kind: 'dispute' })),
   ];
   await mirrorRepository.saveSnapshot(connectionId, KIND, { cases: rules.withOrderCases(snap.value?.cases, { orderIds, buyer, itemIds, cases: all }) }, snap.meta || {});
+  forgetCases(connectionId);
 }
 
-module.exports = { refresh, refreshStale, issuesFor, noteOrder, KIND };
+module.exports = { refresh, refreshStale, issuesFor, noteOrder, openCaseConversations, forgetCases, KIND };
