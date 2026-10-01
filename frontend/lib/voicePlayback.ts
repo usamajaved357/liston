@@ -204,6 +204,15 @@ function mediaSession(track: VoiceTrack | null) {
   } catch {}
 }
 
+/** Whether the pop-up is up (a note playing, its bubble out of view): a notification popping up goes under it. */
+export function useVoicePopupOpen(): boolean {
+  return useSyncExternalStore(
+    subscribe,
+    () => Boolean(state.track) && !state.shown,
+    () => false
+  );
+}
+
 /** Everything: for the pop-up. */
 export function useVoicePlayback(): VoicePlayback {
   return useSyncExternalStore(

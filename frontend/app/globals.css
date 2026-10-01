@@ -361,18 +361,6 @@ select:focus-visible {
   }
 }
 
-/* Something small popping up in place (the voice note playing). */
-@keyframes popUp {
-  from {
-    transform: translateY(8px);
-    opacity: 0;
-  }
-  to {
-    transform: none;
-    opacity: 1;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;
