@@ -9,8 +9,9 @@ import { createPortal } from "react-dom";
 // apart. The time sits inside the bubble's bottom corner; the text keeps
 // room for it on its last line (an invisible copy of the time at the end
 // of the text), so a short message stays one line and a long one wraps
-// around it. Also the day chip, the round "to the latest" button and the
-// small menu a bubble's chevron opens.
+// around it. Also the day chip, the round "to the latest" button, a
+// conversation header's round buttons and the small menu a bubble's
+// chevron opens.
 
 // A bubble's widest: most of a phone's width, about two thirds of a chat pane, never a wall of text.
 export const BUBBLE_MAX = "max-w-[85%] sm:max-w-[min(65%,440px)]";
@@ -126,6 +127,22 @@ export function LatestButton({ onClick, count = 0 }: { onClick: () => void; coun
       <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
         <path d="M6 9.5l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
+    </button>
+  );
+}
+
+/** A round button in a conversation's header (details, "…"), tinted while what it opens is open. */
+export function HeaderButton({ label, onClick, active = false, children }: { label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; active?: boolean; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-pressed={active || undefined}
+      className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors ${active ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"}`}
+    >
+      {children}
     </button>
   );
 }

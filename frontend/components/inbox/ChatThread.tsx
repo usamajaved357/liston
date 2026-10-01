@@ -2,22 +2,28 @@
 
 import { DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
-import { ApiError, ChatConversation, ChatMessage, ChatPerson, inboxApi, ListonRef } from "@/lib/api";
+import { ApiError, ChatConversation, ChatMessage, ChatPerson, inboxApi } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { MessageBubble, SystemLine } from "./MessageBubble";
-import { DayChip, LatestButton } from "./ChatBubble";
-import { Composer, ComposerHandle, LISTON_REF_TYPE } from "./Composer";
+import { DayChip, HeaderButton, LatestButton, MenuItem, PopMenu } from "./ChatBubble";
+import { Composer, ComposerHandle, ComposerSend, LISTON_REF_TYPE } from "./Composer";
 import { PersonAvatar } from "./PersonAvatar";
 import { dayLabel } from "./inbox-format";
 import { MyEvent, useMyEvents } from "@/lib/useMyEvents";
+import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 
-// One team chat conversation: its messages as WhatsApp bubbles on the chat
-// wallpaper (a long thread stays at the bottom as messages arrive and loads
-// older ones above without jumping), an "Unread messages" band where you
-// left off, a round jump-to-latest button once you've scrolled up, "Sara is
-// typing…" in the header, and the composer. Files and
-// Liston rows (orders, listings, hunted products) dropped anywhere on it are
-// shared. It's read once you're at the bottom with the tab in front.
+// One team chat conversation, laid out as the eBay Inbox's: a slim header
+// (who or which channel, the account it's about, "typing…" in its second
+// line, the people in it, details and "…"), then the messages on the chat
+// wallpaper (a long conversation stays at the bottom as messages arrive and
+// loads older ones above without jumping; the day of what's on screen
+// floats at the top while scrolling), an "Unread messages" band where you
+// left off, a round jump-to-latest button once you've scrolled up, and the
+// composer. Any message can start a thread (onOpenThread): its replies
+// stay in the thread, the message showing how many there are; a reply also
+// sent to the conversation shows here too. Files and Liston rows dropped
+// anywhere on it are shared. It's read once you're at the bottom with the
+// tab in front.
 
 const START = 1_000_000;
 const RUN_MS = 5 * 60 * 1000;
@@ -29,15 +35,22 @@ export function ChatThread({
   me,
   people,
   isOwner,
+  detailsOpen = false,
   onOpenDetails,
   onBack,
+  onOpenThread,
+  onNotify,
 }: {
   conversation: ChatConversation;
   me: string;
   people: Map<string, ChatPerson>;
   isOwner: boolean;
+  detailsOpen?: boolean;
   onOpenDetails: () => void;
   onBack?: () => void;
+  onOpenThread: (rootId: string) => void;
+  // Mutes the conversation or turns its notifications back on.
+  onNotify: (notify: ChatConversation["notify"]) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -58,9 +71,15 @@ export function ChatThread({
   const [dragging, setDragging] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [members, setMembers] = useState(conversation.members);
+  // The "…" menu's button while it's open; the day floating at the top while scrolling.
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [floatingDay, setFloatingDay] = useState<string | null>(null);
+  const [scrolling, setScrolling] = useState(false);
   // Where "New messages" goes: the first message after where you'd read to when you opened it.
   const [newFrom, setNewFrom] = useState<string | null>(null);
   const list = useRef<VirtuosoHandle>(null);
+  // Its scrollbar shows only while someone is scrolling, as the eBay Inbox's does.
+  const quietScroll = useQuietScrollbar<HTMLElement>();
   const composer = useRef<ComposerHandle>(null);
   const readTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRead = useRef<string | null>(null);
@@ -139,6 +158,8 @@ export function ChatThread({
       if (e.conversationId !== id) return;
       if (e.type === "chat.message") {
         const message = e.message as ChatMessage;
+        // A thread reply stays in its thread (the message it started from says how many there are now).
+        if (message.threadId && !message.alsoInConversation) return;
         setMessages((cur) => (cur && !cur.some((m) => m.id === message.id) ? [...cur, message] : cur));
         setTyping((t) => {
           if (!message.author || !t.has(message.author.id)) return t;
@@ -152,7 +173,7 @@ export function ChatThread({
         setMessages((cur) => cur && cur.map((m) => (m.id === message.id ? message : m)));
       } else if (e.type === "chat.read") {
         setMembers((ms) => ms.map((m) => (m.id === e.userId ? { ...m, lastReadAt: String(e.at) } : m)));
-      } else if (e.type === "chat.typing") {
+      } else if (e.type === "chat.typing" && !e.threadId) {
         const user = e.user as { id: string; name: string };
         if (user.id !== me) setTyping((t) => new Map(t).set(user.id, { name: user.name, until: Date.now() + 5000 }));
       }
@@ -228,7 +249,7 @@ export function ChatThread({
     setTimeout(() => setHighlight(null), 2500);
   }
 
-  async function send(input: { body: string; mentions: string[]; fileIds: string[]; refs: ListonRef[]; replyToId: string | null }) {
+  async function send(input: ComposerSend) {
     const sent = await inboxApi.chatSend(id, input);
     setMessages((cur) => (cur && !cur.some((m) => m.id === sent.id) ? [...cur, sent] : cur));
     setNewFrom(null);
@@ -291,6 +312,11 @@ export function ChatThread({
   const typingText =
     typingNames.length === 0 ? null : conversation.kind === "dm" ? "typing…" : typingNames.length === 1 ? `${typingNames[0].split(" ")[0]} is typing…` : `${typingNames.slice(0, 2).map((n) => n.split(" ")[0]).join(" and ")}${typingNames.length > 2 ? " and others" : ""} are typing…`;
 
+  const menu: MenuItem[] = [
+    { label: detailsOpen ? "Hide details" : "Details", onSelect: onOpenDetails },
+    conversation.notify === "none" ? { label: "Turn notifications back on", onSelect: () => onNotify("all") } : { label: "Mute this conversation", onSelect: () => onNotify("none") },
+  ];
+
   return (
     <section
       className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-panel)]"
@@ -306,31 +332,40 @@ export function ChatThread({
       }}
       onDrop={onDrop}
     >
-      <header className="flex items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-2.5">
+      <header className="flex h-[60px] flex-shrink-0 items-center gap-1 border-b border-[var(--color-line)] bg-[var(--color-panel)] pl-2 pr-2 sm:pl-4">
         {onBack && (
-          <button type="button" onClick={onBack} aria-label="Back to conversations" className="-ml-1 flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] lg:hidden">
+          <button type="button" onClick={onBack} aria-label="Back to conversations" className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] lg:hidden">
             <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
               <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
         )}
-        {conversation.kind === "dm" ? (
-          <PersonAvatar id={others[0]?.id} name={others[0]?.name} avatarUrl={others[0]?.avatarUrl} size={36} online={others[0]?.online} />
-        ) : (
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[15px] font-bold text-[var(--color-primary)]">{conversation.kind === "channel" ? (conversation.private ? <LockIcon /> : "#") : members.length}</span>
-        )}
-        <button type="button" onClick={onOpenDetails} className="min-w-0 flex-1 text-left">
-          <p className="flex items-center gap-2 truncate text-[14.5px] font-semibold text-[var(--color-ink)]">
-            <span className="truncate">{conversation.title}</span>
-            {conversation.account && <span className="chip flex-shrink-0 text-[10.5px]">{conversation.account.label}</span>}
-            {conversation.archived && <span className="chip flex-shrink-0 text-[10.5px] text-[var(--color-muted)]">Archived</span>}
-          </p>
-          <p className={`truncate text-[12px] ${typingText ? "font-medium text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`} aria-live="polite">
-            {typingText || subtitle}
-          </p>
+        <button type="button" onClick={onOpenDetails} className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-1 pr-2 text-left" title="Details">
+          {conversation.kind === "dm" ? (
+            <PersonAvatar id={others[0]?.id} name={others[0]?.name} avatarUrl={others[0]?.avatarUrl} size={38} online={others[0]?.online} />
+          ) : (
+            <span className="flex h-[38px] w-[38px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-soft)] text-[15px] font-bold text-[var(--color-primary)]">
+              {conversation.kind === "channel" ? conversation.private ? <LockIcon /> : "#" : members.length}
+            </span>
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <span className="truncate text-[14.5px] font-semibold leading-5 text-[var(--color-ink)]">{conversation.kind === "channel" ? conversation.title.slice(1) : conversation.title}</span>
+              {conversation.account && <span className="hidden flex-shrink-0 rounded-[4px] bg-[var(--color-primary-soft)] px-1.5 text-[10.5px] font-semibold leading-4 text-[var(--color-primary)] sm:inline">{conversation.account.label}</span>}
+              {conversation.archived && <span className="flex-shrink-0 rounded-[4px] bg-[var(--color-paper)] px-1.5 text-[10.5px] font-semibold leading-4 text-[var(--color-muted)]">Archived</span>}
+              {conversation.notify === "none" && (
+                <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-muted)]" aria-label="Muted">
+                  <path d="M6 9h3l4-4v14l-4-4H6V9zM17 9l4 6M21 9l-4 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+            </span>
+            <span className={`mt-px block truncate text-[12px] leading-4 ${typingText ? "font-medium text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`} aria-live="polite">
+              {typingText || subtitle}
+            </span>
+          </span>
         </button>
         {conversation.kind !== "dm" && (
-          <button type="button" onClick={onOpenDetails} className="hidden items-center -space-x-2 sm:flex" aria-label="People in it">
+          <button type="button" onClick={onOpenDetails} className="mr-1 hidden items-center -space-x-2 md:flex" aria-label="People in it">
             {members.slice(0, 4).map((m) => (
               <span key={m.id} className="rounded-full ring-2 ring-[var(--color-panel)]">
                 <PersonAvatar id={m.id} name={m.name} avatarUrl={m.avatarUrl} size={26} />
@@ -339,12 +374,20 @@ export function ChatThread({
             {members.length > 4 && <span className="flex h-[26px] w-[26px] items-center justify-center rounded-full bg-[var(--color-paper)] text-[10.5px] font-semibold text-[var(--color-muted)] ring-2 ring-[var(--color-panel)]">+{members.length - 4}</span>}
           </button>
         )}
-        <button type="button" onClick={onOpenDetails} title="Details" aria-label="Details" className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
-          <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
-            <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
-            <path d="M12 11v5M12 8h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <HeaderButton label={detailsOpen ? "Hide details" : "Details"} onClick={onOpenDetails} active={detailsOpen}>
+          <svg viewBox="0 0 24 24" fill="none" className="h-[19px] w-[19px]" aria-hidden>
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M14.5 4.5v15" stroke="currentColor" strokeWidth="1.7" />
           </svg>
-        </button>
+        </HeaderButton>
+        <HeaderButton label="More" onClick={(e) => setMenuAnchor(menuAnchor ? null : e.currentTarget)} active={Boolean(menuAnchor)}>
+          <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
+            <circle cx="5.5" cy="12" r="1.7" fill="currentColor" />
+            <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+            <circle cx="18.5" cy="12" r="1.7" fill="currentColor" />
+          </svg>
+        </HeaderButton>
+        {menuAnchor && <PopMenu anchor={menuAnchor} items={menu} onClose={() => setMenuAnchor(null)} />}
       </header>
 
       <div className="chat-wallpaper relative min-h-0 flex-1">
@@ -362,7 +405,8 @@ export function ChatThread({
         ) : (
           <Virtuoso
             ref={list}
-            className="h-full"
+            className="scroll-quiet h-full"
+            scrollerRef={(el) => quietScroll(el instanceof HTMLElement ? el : null)}
             data={rows}
             firstItemIndex={firstIndex}
             initialTopMostItemIndex={Math.max(0, rows.findIndex((r) => r.type === "new") >= 0 ? rows.findIndex((r) => r.type === "new") : rows.length - 1)}
@@ -377,6 +421,23 @@ export function ChatThread({
               } else latestTimer.current = setTimeout(() => setShowLatest(true), 600);
             }}
             atBottomThreshold={80}
+            isScrolling={(on) => setScrolling(on)}
+            rangeChanged={({ startIndex }) => {
+              // The day of the top message on screen, for the chip floating there while scrolling.
+              const at = startIndex - firstIndex;
+              for (let i = Math.min(at, rows.length - 1); i >= 0; i--) {
+                const r = rows[i];
+                if (r?.type === "day") {
+                  setFloatingDay(r.label);
+                  return;
+                }
+                if (r?.type === "message") {
+                  const day = dayLabel(r.message.createdAt);
+                  setFloatingDay(day);
+                  return;
+                }
+              }
+            }}
             increaseViewportBy={{ top: 600, bottom: 300 }}
             computeItemKey={(_, row) => row.key}
             components={{
@@ -415,10 +476,16 @@ export function ChatThread({
                   }}
                   onDelete={() => setDeleting(m)}
                   onJumpTo={jumpTo}
+                  onOpenThread={onOpenThread}
                 />
               );
             }}
           />
+        )}
+        {floatingDay && rows.length > 0 && (
+          <div className={`pointer-events-none absolute inset-x-0 top-0 z-10 transition-opacity duration-300 ${scrolling ? "opacity-100" : "opacity-0"}`} aria-hidden>
+            <DayChip label={floatingDay} />
+          </div>
         )}
         {showLatest && !atBottom && messages && messages.length > 0 && <LatestButton count={unreadBelow} onClick={() => list.current?.scrollToIndex({ index: "LAST", behavior: "smooth" })} />}
         {dragging && (

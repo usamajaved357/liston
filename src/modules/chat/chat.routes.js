@@ -24,6 +24,11 @@ router.get('/conversations/:id/messages', c.messages);
 router.post('/conversations/:id/messages', c.send);
 router.post('/conversations/:id/read', c.read);
 router.post('/conversations/:id/typing', c.typing);
+// Threads: the ones this person follows, one thread, reading it, following it.
+router.get('/threads', c.threads);
+router.get('/threads/:rootId', c.thread);
+router.post('/threads/:rootId/read', c.threadRead);
+router.put('/threads/:rootId/follow', c.follow);
 router.patch('/messages/:id', c.edit);
 router.delete('/messages/:id', c.deleteMessage);
 router.get('/settings', c.getSettings);

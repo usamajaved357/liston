@@ -53,3 +53,31 @@ test('previews: the text, else what was shared', () => {
   assert.strictEqual(rules.previewOf({ fileCount: 2, imageCount: 1 }), 'Sent 2 files');
   assert.strictEqual(rules.previewOf({ body: 'secret', deleted: true }), 'Message deleted');
 });
+
+test('a voice note: audio only, its length kept (up to ten minutes) and its shape as bars from 0 to 1; its preview says how long', () => {
+  const file = { id: 'f1', mime: 'audio/mp4' };
+  assert.deepStrictEqual(rules.voiceOf({ fileId: 'f1', durationMs: 2499.6, peaks: [0.333, 1.7, -1, 'x'] }, file), { fileId: 'f1', durationMs: 2500, peaks: [0.33, 1, 0, 0] });
+  assert.strictEqual(rules.voiceOf({ fileId: 'f1', durationMs: 99 * 60 * 1000, peaks: [] }, file).durationMs, rules.VOICE_MAX_MS);
+  assert.strictEqual(rules.voiceOf({ fileId: 'f1', durationMs: 1000 }, { id: 'f1', mime: 'image/png' }), null, 'not audio');
+  assert.strictEqual(rules.voiceOf({ fileId: 'f2', durationMs: 1000 }, file), null, 'another file');
+  assert.strictEqual(rules.voiceOf({ fileId: 'f1', durationMs: 0 }, file), null, 'no length');
+  assert.strictEqual(rules.voiceOf({ fileId: 'f1', durationMs: 1000, peaks: Array(200).fill(0.5) }, file).peaks.length, rules.VOICE_BARS);
+  assert.strictEqual(rules.previewOf({ body: '', fileCount: 1, voiceMs: 65000 }), 'Voice message (1:05)');
+  assert.strictEqual(rules.previewOf({ body: 'hi', voiceMs: 65000 }), 'hi', 'text first');
+});
+
+test('a thread reply pushes its followers and whoever it mentions, never the author, a muted conversation or "none"', () => {
+  const message = { author_user_id: 'a', mentions: ['m'], mention_all: false };
+  const member = (id, notify = 'all') => ({ user_id: id, notify });
+  assert.strictEqual(rules.wantsThreadPush({ member: member('f'), follower: true, settings: null, message }), true);
+  assert.strictEqual(rules.wantsThreadPush({ member: member('f'), follower: true, settings: { chat: 'mentions' }, message }), true, 'following counts as being spoken to');
+  assert.strictEqual(rules.wantsThreadPush({ member: member('x'), follower: false, settings: null, message }), false, 'not following, not mentioned');
+  assert.strictEqual(rules.wantsThreadPush({ member: member('m'), follower: false, settings: null, message }), true, 'mentioned');
+  assert.strictEqual(rules.wantsThreadPush({ member: member('a'), follower: true, settings: null, message }), false, 'their own');
+  assert.strictEqual(rules.wantsThreadPush({ member: member('f', 'none'), follower: true, settings: null, message }), false, 'muted');
+  assert.strictEqual(rules.wantsThreadPush({ member: member('f'), follower: true, settings: { chat: 'none' }, message }), false);
+});
+
+test("a preview drops the formatting marks but keeps words with underscores", () => {
+  assert.strictEqual(rules.previewOf({ body: 'Who has the **refund** on _FlipX_? ~old~ `SKU-1` snake_case_name' }), 'Who has the refund on FlipX? old SKU-1 snake_case_name');
+});

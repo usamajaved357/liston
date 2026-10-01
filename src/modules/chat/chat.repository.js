@@ -1,7 +1,14 @@
 const { query, pool } = require('../../db/client');
 
 // Team chat's tables (migration 042): conversations, who's in each, their
-// messages, and each person's notification settings.
+// messages, and each person's notification settings; and (migration 047)
+// threads: a reply names its thread's first message (thread_id) and stays
+// out of the conversation's timeline, unread counts and last line unless
+// it was also sent to the conversation; who follows each thread, and how
+// far they've read it, in chat_thread_members.
+
+// A message the conversation itself shows: not a thread reply, or one also sent to it.
+const IN_TIMELINE = `(x.thread_id IS NULL OR x.also_in_conversation)`;
 
 /** The owner and their team as chat sees them (removed members included, marked). */
 async function people(ownerId) {
@@ -17,17 +24,18 @@ async function people(ownerId) {
 const CONVERSATION_SUMMARY = `
   c.*, m.last_read_at, m.notify, m.role AS my_role,
   (SELECT count(*) FROM chat_messages x
-     WHERE x.conversation_id = c.id AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM m.user_id
+     WHERE x.conversation_id = c.id AND ${IN_TIMELINE} AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM m.user_id
        AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at))::int AS unread,
   (SELECT count(*) FROM chat_messages x
-     WHERE x.conversation_id = c.id AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM m.user_id
+     WHERE x.conversation_id = c.id AND ${IN_TIMELINE} AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM m.user_id
        AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at) AND (m.user_id = ANY(x.mentions) OR x.mention_all))::int AS unread_mentions,
   lm.id AS last_id, lm.body AS last_body, lm.kind AS last_kind, lm.author_user_id AS last_author, lm.created_at AS last_at,
-  lm.deleted_at AS last_deleted, cardinality(lm.file_ids) AS last_files, jsonb_array_length(lm.refs) AS last_refs, lm.refs AS last_ref_list`;
+  lm.deleted_at AS last_deleted, cardinality(lm.file_ids) AS last_files, jsonb_array_length(lm.refs) AS last_refs, lm.refs AS last_ref_list,
+  lm.detail->'voice'->>'durationMs' AS last_voice_ms`;
 
 const LAST_MESSAGE = `LEFT JOIN LATERAL (
-    SELECT id, body, kind, author_user_id, created_at, deleted_at, file_ids, refs FROM chat_messages
-     WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) lm ON true`;
+    SELECT id, body, kind, author_user_id, created_at, deleted_at, file_ids, refs, detail FROM chat_messages x
+     WHERE x.conversation_id = c.id AND ${IN_TIMELINE} ORDER BY x.created_at DESC LIMIT 1) lm ON true`;
 
 /** The conversations a person is in, newest first, each with its unread counts and last message. */
 async function conversationsFor(userId, ownerId) {
@@ -177,25 +185,57 @@ async function markRead(conversationId, userId, { at = null, messageId = null } 
 }
 
 const MESSAGE_COLUMNS = `x.*, u.name AS author_name, u.email AS author_email, u.avatar_url AS author_avatar,
-  r.body AS reply_body, r.author_user_id AS reply_author, r.deleted_at AS reply_deleted, cardinality(r.file_ids) AS reply_files,
+  r.body AS reply_body, r.author_user_id AS reply_author, r.deleted_at AS reply_deleted, cardinality(r.file_ids) AS reply_files, r.detail->'voice'->>'durationMs' AS reply_voice_ms,
   ru.name AS reply_author_name, ru.email AS reply_author_email`;
 const MESSAGE_JOINS = `LEFT JOIN users u ON u.id = x.author_user_id
   LEFT JOIN chat_messages r ON r.id = x.reply_to_id
   LEFT JOIN users ru ON ru.id = r.author_user_id`;
 
+/**
+ * Saves a message. A thread reply (`threadId`) moves its thread's count and
+ * last reply time, and its author reads the thread up to it; the
+ * conversation's last message and its author's read mark move only for
+ * what the conversation shows (not a thread reply, unless also sent to it).
+ */
 async function insertMessage(m) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const inTimeline = !m.threadId || Boolean(m.alsoInConversation);
     const { rows } = await client.query(
-      `INSERT INTO chat_messages (conversation_id, author_user_id, kind, body, reply_to_id, refs, file_ids, mentions, mention_all, detail)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, created_at`,
-      [m.conversationId, m.authorId, m.kind || 'text', m.body || '', m.replyToId || null, JSON.stringify(m.refs || []), m.fileIds || [], m.mentions || [], Boolean(m.mentionAll), JSON.stringify(m.detail || {})]
+      `INSERT INTO chat_messages (conversation_id, author_user_id, kind, body, reply_to_id, refs, file_ids, mentions, mention_all, detail, thread_id, also_in_conversation)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, created_at`,
+      [
+        m.conversationId,
+        m.authorId,
+        m.kind || 'text',
+        m.body || '',
+        m.replyToId || null,
+        JSON.stringify(m.refs || []),
+        m.fileIds || [],
+        m.mentions || [],
+        Boolean(m.mentionAll),
+        JSON.stringify(m.detail || {}),
+        m.threadId || null,
+        Boolean(m.threadId && m.alsoInConversation),
+      ]
     );
     // Times copied in SQL, at full precision (see markRead).
-    await client.query(`UPDATE chat_conversations SET last_message_at = (SELECT created_at FROM chat_messages WHERE id = $2) WHERE id = $1`, [m.conversationId, rows[0].id]);
-    // The author has read their own conversation up to what they just said.
-    if (m.authorId) await client.query(`UPDATE chat_members SET last_read_at = (SELECT created_at FROM chat_messages WHERE id = $3) WHERE conversation_id = $1 AND user_id = $2`, [m.conversationId, m.authorId, rows[0].id]);
+    if (m.threadId) {
+      await client.query(`UPDATE chat_messages SET reply_count = reply_count + 1, last_reply_at = (SELECT created_at FROM chat_messages WHERE id = $2) WHERE id = $1`, [m.threadId, rows[0].id]);
+      if (m.authorId) {
+        await client.query(
+          `INSERT INTO chat_thread_members (root_id, user_id, last_read_at, following) VALUES ($1, $2, (SELECT created_at FROM chat_messages WHERE id = $3), true)
+           ON CONFLICT (root_id, user_id) DO UPDATE SET last_read_at = GREATEST(coalesce(chat_thread_members.last_read_at, 'epoch'::timestamptz), EXCLUDED.last_read_at), following = true`,
+          [m.threadId, m.authorId, rows[0].id]
+        );
+      }
+    }
+    if (inTimeline) {
+      await client.query(`UPDATE chat_conversations SET last_message_at = (SELECT created_at FROM chat_messages WHERE id = $2) WHERE id = $1`, [m.conversationId, rows[0].id]);
+      // The author has read their own conversation up to what they just said.
+      if (m.authorId) await client.query(`UPDATE chat_members SET last_read_at = (SELECT created_at FROM chat_messages WHERE id = $3) WHERE conversation_id = $1 AND user_id = $2`, [m.conversationId, m.authorId, rows[0].id]);
+    }
     await client.query('COMMIT');
     return rows[0];
   } catch (err) {
@@ -211,7 +251,7 @@ async function findMessage(id) {
   return rows[0] || null;
 }
 
-/** A page of a conversation's messages, oldest first: before a message (older), after one (newer), or the latest. */
+/** A page of what a conversation shows (thread replies only when also sent to it), oldest first: before a message (older), after one (newer), or the latest. */
 async function messages(conversationId, { before = null, after = null, limit = 50 } = {}) {
   const params = [conversationId, limit];
   let where = '';
@@ -226,7 +266,7 @@ async function messages(conversationId, { before = null, after = null, limit = 5
   }
   const { rows } = await query(
     `SELECT ${MESSAGE_COLUMNS} FROM chat_messages x ${MESSAGE_JOINS}
-      WHERE x.conversation_id = $1 ${where}
+      WHERE x.conversation_id = $1 AND ${IN_TIMELINE} ${where}
       ORDER BY x.created_at ${order}, x.id ${order} LIMIT $2`,
     params
   );
@@ -260,18 +300,155 @@ async function searchMessages(userId, ownerId, q, limit = 30) {
   return rows;
 }
 
-/** Everything unread for a person across their conversations: { unread, mentions }. */
+/** Everything unread for a person: { unread, mentions } across their conversations, and `threads`: new replies in the threads they follow. */
 async function unreadTotals(userId, ownerId) {
+  const [{ rows }, threads] = await Promise.all([
+    query(
+      `SELECT count(*)::int AS unread, count(*) FILTER (WHERE $1 = ANY(x.mentions) OR x.mention_all OR c.kind = 'dm')::int AS mentions
+         FROM chat_members m
+         JOIN chat_conversations c ON c.id = m.conversation_id AND c.owner_user_id = $2
+         JOIN chat_messages x ON x.conversation_id = c.id
+        WHERE m.user_id = $1 AND m.notify <> 'none' AND ${IN_TIMELINE} AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM $1
+          AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at)`,
+      [userId, ownerId]
+    ),
+    threadUnreadTotal(userId, ownerId),
+  ]);
+  return { ...(rows[0] || { unread: 0, mentions: 0 }), threads };
+}
+
+// ---- threads ------------------------------------------------------------------------
+
+/** A thread: its first message then every reply, oldest first. */
+async function threadMessages(rootId, limit = 500) {
   const { rows } = await query(
-    `SELECT count(*)::int AS unread, count(*) FILTER (WHERE $1 = ANY(x.mentions) OR x.mention_all OR c.kind = 'dm')::int AS mentions
-       FROM chat_members m
-       JOIN chat_conversations c ON c.id = m.conversation_id AND c.owner_user_id = $2
-       JOIN chat_messages x ON x.conversation_id = c.id
-      WHERE m.user_id = $1 AND m.notify <> 'none' AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM $1
-        AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at)`,
+    `SELECT ${MESSAGE_COLUMNS} FROM chat_messages x ${MESSAGE_JOINS}
+      WHERE x.id = $1 OR x.thread_id = $1
+      ORDER BY (x.id = $1) DESC, x.created_at, x.id LIMIT $2`,
+    [rootId, limit]
+  );
+  return rows;
+}
+
+/** The latest repliers of each thread (who's in it), newest first: Map(rootId -> [{ id, name, email, avatar_url }]). */
+async function threadPeople(rootIds, perThread = 3) {
+  if (!rootIds.length) return new Map();
+  const { rows } = await query(
+    `SELECT t.thread_id, t.author_user_id, t.at, u.name, u.email, u.avatar_url FROM (
+       SELECT thread_id, author_user_id, max(created_at) AS at FROM chat_messages
+        WHERE thread_id = ANY($1::uuid[]) AND author_user_id IS NOT NULL AND deleted_at IS NULL
+        GROUP BY thread_id, author_user_id) t
+       JOIN users u ON u.id = t.author_user_id
+      ORDER BY t.thread_id, t.at DESC`,
+    [rootIds]
+  );
+  const out = new Map();
+  for (const r of rows) {
+    const list = out.get(r.thread_id) || [];
+    if (list.length < perThread) list.push({ id: r.author_user_id, name: r.name, email: r.email, avatar_url: r.avatar_url });
+    out.set(r.thread_id, list);
+  }
+  return out;
+}
+
+/** The last few replies of each thread, oldest first: Map(rootId -> rows). */
+async function latestReplies(rootIds, perThread = 2) {
+  if (!rootIds.length) return new Map();
+  const { rows } = await query(
+    `SELECT * FROM (
+       SELECT ${MESSAGE_COLUMNS}, row_number() OVER (PARTITION BY x.thread_id ORDER BY x.created_at DESC, x.id DESC) AS n
+         FROM chat_messages x ${MESSAGE_JOINS}
+        WHERE x.thread_id = ANY($1::uuid[])) r
+      WHERE r.n <= $2 ORDER BY r.created_at, r.id`,
+    [rootIds, perThread]
+  );
+  const out = new Map();
+  for (const r of rows) out.set(r.thread_id, [...(out.get(r.thread_id) || []), r]);
+  return out;
+}
+
+/** Makes these people followers of a thread (those already in it keep where they are). */
+async function addThreadFollowers(rootId, userIds) {
+  for (const userId of [...new Set(userIds.map(String))]) {
+    await query(`INSERT INTO chat_thread_members (root_id, user_id, following) VALUES ($1, $2, true) ON CONFLICT (root_id, user_id) DO NOTHING`, [rootId, userId]);
+  }
+}
+
+/** Follows or stops following a thread. */
+async function setFollowing(rootId, userId, following) {
+  await query(
+    `INSERT INTO chat_thread_members (root_id, user_id, following) VALUES ($1, $2, $3)
+     ON CONFLICT (root_id, user_id) DO UPDATE SET following = EXCLUDED.following`,
+    [rootId, userId, Boolean(following)]
+  );
+}
+
+/**
+ * Reads a thread up to a reply (or now), never backwards (the time taken in
+ * SQL, as markRead does). Someone reading a thread they had no place in
+ * isn't made a follower by it, unless it's their own message's.
+ */
+async function markThreadRead(rootId, userId, { messageId = null } = {}) {
+  const { rows } = await query(
+    `INSERT INTO chat_thread_members (root_id, user_id, last_read_at, following)
+     VALUES ($1, $2, coalesce((SELECT created_at FROM chat_messages WHERE id = $3::uuid AND thread_id = $1), now()),
+             coalesce((SELECT author_user_id = $2 FROM chat_messages WHERE id = $1), false))
+     ON CONFLICT (root_id, user_id) DO UPDATE SET last_read_at = GREATEST(coalesce(chat_thread_members.last_read_at, 'epoch'::timestamptz), EXCLUDED.last_read_at)
+     RETURNING last_read_at`,
+    [rootId, userId, messageId]
+  );
+  return rows[0]?.last_read_at || null;
+}
+
+/** One person's place in a thread ({ following, last_read_at }), or null. */
+async function threadMembership(rootId, userId) {
+  const { rows } = await query(`SELECT * FROM chat_thread_members WHERE root_id = $1 AND user_id = $2`, [rootId, userId]);
+  return rows[0] || null;
+}
+
+/** Who follows a thread: [{ user_id, last_read_at }]. */
+async function threadFollowers(rootId) {
+  const { rows } = await query(`SELECT user_id, last_read_at FROM chat_thread_members WHERE root_id = $1 AND following`, [rootId]);
+  return rows;
+}
+
+/**
+ * The threads a person follows in conversations they're still in, the
+ * latest reply first: each first message (as messages come) with
+ * `thread_read_at`, `thread_unread` and the conversation's kind and name.
+ */
+async function threadsFor(userId, ownerId, limit = 50) {
+  const { rows } = await query(
+    `SELECT ${MESSAGE_COLUMNS}, t.last_read_at AS thread_read_at, c.kind AS conversation_kind, c.name AS conversation_name,
+            (SELECT count(*) FROM chat_messages y
+              WHERE y.thread_id = x.id AND y.deleted_at IS NULL AND y.author_user_id IS DISTINCT FROM $1
+                AND (t.last_read_at IS NULL OR y.created_at > t.last_read_at))::int AS thread_unread
+       FROM chat_thread_members t
+       JOIN chat_messages x ON x.id = t.root_id
+       JOIN chat_conversations c ON c.id = x.conversation_id AND c.owner_user_id = $2
+       JOIN chat_members cm ON cm.conversation_id = c.id AND cm.user_id = $1
+       ${MESSAGE_JOINS}
+      WHERE t.user_id = $1 AND t.following AND x.reply_count > 0
+      ORDER BY x.last_reply_at DESC NULLS LAST LIMIT $3`,
+    [userId, ownerId, limit]
+  );
+  return rows;
+}
+
+/** New replies, not theirs, in the threads a person follows (in conversations they're in and haven't muted). */
+async function threadUnreadTotal(userId, ownerId) {
+  const { rows } = await query(
+    `SELECT count(*)::int AS n
+       FROM chat_thread_members t
+       JOIN chat_messages r ON r.id = t.root_id
+       JOIN chat_conversations c ON c.id = r.conversation_id AND c.owner_user_id = $2
+       JOIN chat_members cm ON cm.conversation_id = c.id AND cm.user_id = $1 AND cm.notify <> 'none'
+       JOIN chat_messages y ON y.thread_id = r.id
+      WHERE t.user_id = $1 AND t.following AND y.deleted_at IS NULL AND y.author_user_id IS DISTINCT FROM $1
+        AND (t.last_read_at IS NULL OR y.created_at > t.last_read_at)`,
     [userId, ownerId]
   );
-  return rows[0] || { unread: 0, mentions: 0 };
+  return rows[0]?.n || 0;
 }
 
 async function settingsFor(userId) {
@@ -319,6 +496,16 @@ module.exports = {
   updateMessage,
   searchMessages,
   unreadTotals,
+  threadMessages,
+  threadPeople,
+  latestReplies,
+  addThreadFollowers,
+  setFollowing,
+  markThreadRead,
+  threadMembership,
+  threadFollowers,
+  threadsFor,
+  threadUnreadTotal,
   settingsFor,
   settingsForMany,
   saveSettings,

@@ -5,7 +5,8 @@ const referencesRepository = require('./references.repository');
 const { detect } = require('./reference-detect');
 
 // Liston cards: a reference (an order, a live listing, a draft, a hunted
-// product) turned into a preview anyone in the team can click, whichever
+// product, a buyer's eBay conversation: "Discuss with team") turned into a
+// preview anyone in the team can click, whichever
 // account it's in: the card names the account and links to that page there,
 // so the click opens it in that account whatever account the viewer was
 // working in. Only what the viewer may open is shown: something in an
@@ -18,6 +19,7 @@ const FEATURES = {
   listing: ['listings'],
   draft: ['listings'],
   hunt: ['hunting', 'hunting_review', 'listings'],
+  conversation: ['inbox'],
 };
 const KINDS = Object.keys(FEATURES);
 
@@ -136,6 +138,22 @@ function huntCard(accounts, row) {
   };
 }
 
+function conversationCard(accounts, row, images) {
+  const buyer = row.type === 'FROM_EBAY' ? 'eBay' : row.other_party || 'a buyer';
+  return {
+    kind: 'conversation',
+    id: String(row.conversation_id),
+    key: `conversation:${row.connection_id}:${row.conversation_id}`,
+    account: account(accounts, row.connection_id),
+    title: `Conversation with ${buyer}`,
+    image: (row.reference_id && images.get(String(row.reference_id))) || null,
+    status: null,
+    facts: [text(row.title), text(row.latest_preview ? `${row.latest_from_seller ? 'You: ' : ''}${row.latest_preview}` : null), row.latest_at ? { kind: 'date', at: row.latest_at } : null].filter(Boolean),
+    url: `/accounts/${row.connection_id}/inbox?e=${row.connection_id}~${encodeURIComponent(row.conversation_id)}`,
+    locked: false,
+  };
+}
+
 const locked = (ref) => ({ kind: ref.kind, id: String(ref.id), key: `${ref.kind}:locked:${ref.id}`, locked: true });
 
 /** Cards for references ([{ kind, id, connectionId? }]), in the same order; null where nothing matches. */
@@ -145,13 +163,16 @@ async function resolve(auth, refs, accounts = null) {
   accounts = accounts || (await accountsFor(auth));
   const ids = (kind) => [...new Set(wanted.filter((r) => r.kind === kind).map((r) => String(r.id)))];
   const uuid = (id) => /^[0-9a-f-]{36}$/i.test(id);
-  const [orders, listings, drafts, hunts] = await Promise.all([
+  const [orders, listings, drafts, hunts, conversations] = await Promise.all([
     referencesRepository.ordersByIds(accounts.allowed.order, ids('order')),
     referencesRepository.listingsByItemIds(accounts.allowed.listing, ids('listing')),
     referencesRepository.draftsByIds(accounts.allowed.draft, ids('draft').filter(uuid)),
     referencesRepository.huntsByIds(accounts.allowed.hunt, ids('hunt').filter(uuid)),
+    referencesRepository.conversationsByIds(accounts.allowed.conversation, ids('conversation')),
   ]);
-  const images = await referencesRepository.itemImages([...new Set(orders.flatMap((o) => (o.data.lineItems || []).map((l) => String(l.itemId || ''))).filter(Boolean))]);
+  const images = await referencesRepository.itemImages([
+    ...new Set([...orders.flatMap((o) => (o.data.lineItems || []).map((l) => String(l.itemId || ''))), ...conversations.map((c) => String(c.reference_id || ''))].filter(Boolean)),
+  ]);
   // A listing's own photo stands in for an order's when Liston hasn't read the item's picture.
   const orderItems = [...new Set(orders.map((o) => String(o.data.lineItems?.[0]?.itemId || '')).filter((id) => id && !images.has(id)))];
   if (orderItems.length) {
@@ -176,6 +197,9 @@ async function resolve(auth, refs, accounts = null) {
     } else if (ref.kind === 'draft') {
       const row = pick(drafts, ref, (r) => r.id, (r) => r.connectionId);
       card = row ? draftCard(accounts, row) : null;
+    } else if (ref.kind === 'conversation') {
+      const row = pick(conversations, ref, (r) => r.conversation_id, (r) => r.connection_id);
+      card = row ? conversationCard(accounts, row, images) : null;
     } else {
       const row = pick(hunts, ref, (r) => r.id, (r) => r.connection_id);
       card = row ? huntCard(accounts, row) : null;
@@ -198,27 +222,31 @@ async function fromText(auth, text) {
 }
 
 /**
- * The "/" picker: orders, live listings, drafts and hunted products whose
- * words, number, buyer or SKU match, across the accounts the viewer can
- * open: [card].
+ * The "/" picker: orders, live listings, drafts, hunted products and buyer
+ * conversations whose words, number, buyer or SKU match, across the
+ * accounts the viewer can open: [card].
  */
 async function search(auth, q, { kinds = KINDS, limit = 5 } = {}) {
   const words = String(q || '').trim();
   if (words.length < 2) return [];
   const accounts = await accountsFor(auth);
   const want = (k) => kinds.includes(k);
-  const [orders, listings, drafts, hunts] = await Promise.all([
+  const [orders, listings, drafts, hunts, conversations] = await Promise.all([
     want('order') ? referencesRepository.searchOrders(accounts.allowed.order, words, limit) : [],
     want('listing') ? referencesRepository.searchListings(accounts.allowed.listing, words, limit) : [],
     want('draft') ? referencesRepository.searchDrafts(accounts.allowed.draft, words, limit) : [],
     want('hunt') ? referencesRepository.searchHunts(accounts.allowed.hunt, words, limit) : [],
+    want('conversation') ? referencesRepository.searchConversations(accounts.allowed.conversation, words, limit) : [],
   ]);
-  const images = await referencesRepository.itemImages([...new Set(orders.map((o) => String(o.data.lineItems?.[0]?.itemId || '')).filter(Boolean))]);
+  const images = await referencesRepository.itemImages([
+    ...new Set([...orders.map((o) => String(o.data.lineItems?.[0]?.itemId || '')), ...conversations.map((c) => String(c.reference_id || ''))].filter(Boolean)),
+  ]);
   return [
     ...orders.map((r) => orderCard(accounts, r, images)),
     ...listings.map((r) => listingCard(accounts, r)),
     ...drafts.map((r) => draftCard(accounts, r)),
     ...hunts.map((r) => huntCard(accounts, r)),
+    ...conversations.map((r) => conversationCard(accounts, r, images)),
   ];
 }
 

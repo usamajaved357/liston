@@ -31,6 +31,15 @@ export function fileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
+/** Text with its formatting marks taken off (**bold**, _italic_, ~struck~, `code`), for a one-line preview. */
+export function plainOf(text: string): string {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/(^|[^\w*])_([^_\n]+)_(?!\w)/g, "$1$2")
+    .replace(/(^|[^\w~])~([^~\n]+)~(?!\w)/g, "$1$2");
+}
+
 export const initialOf = (name: string | null | undefined) => (String(name || "?").trim()[0] || "?").toUpperCase();
 
 // Muted, readable circles; one per person by their id, never by rank.

@@ -19,6 +19,8 @@ export default function InboxPage() {
   const [liveUser, setUser] = useState<User | null>(null);
   const user = liveUser ?? cachedUser;
   const [confirmLogout, setConfirmLogout] = useState(false);
+  // Where in the header Team chat's views go (All, Unread, Threads…).
+  const [tabsSlot, setTabsSlot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem("token")) {
@@ -62,12 +64,15 @@ export default function InboxPage() {
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">Inbox</h1>
             <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Talk to your team.</p>
           </div>
-          <NotificationBell />
+          <div className="flex items-center gap-3">
+            <span ref={setTabsSlot} className="flex items-center" />
+            <NotificationBell />
+          </div>
         </div>
       }
     >
       <Suspense fallback={null}>
-        <InboxView me={user.id} isOwner={isOwner} />
+        <InboxView me={user.id} isOwner={isOwner} tabsSlot={tabsSlot} />
       </Suspense>
       <ConfirmDialog
         open={confirmLogout}

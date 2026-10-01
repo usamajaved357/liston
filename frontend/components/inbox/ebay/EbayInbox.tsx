@@ -8,6 +8,8 @@ import { EbayConversationList, EbayView, EbayViewTabs } from "./EbayConversation
 import { EbayThreadView } from "./EbayThreadView";
 import { EbayComposer } from "./EbayComposer";
 import { EbayDetails } from "./EbayDetails";
+import { DiscussDialog } from "./DiscussDialog";
+import { useCachedUser } from "@/lib/session";
 import { listTime } from "../inbox-format";
 
 // The Inbox's eBay messages for one account (or every account the person
@@ -96,6 +98,9 @@ export function EbayInbox({
   // The open conversation, kept with the key it's for (another one opening shows nothing stale).
   const [loaded, setLoaded] = useState<{ key: string; thread: EbayThread | null; error: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
+  // "Discuss with team" open for the conversation on screen.
+  const [discussing, setDiscussing] = useState(false);
+  const me = useCachedUser()?.id || null;
   // The details panel: hidden until asked for, closed again when another conversation opens.
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
   const detailsOpen = Boolean(activeKey) && detailsFor === activeKey;
@@ -310,6 +315,7 @@ export function EbayInbox({
                   await loadThread(true);
                 })
               }
+              onDiscuss={() => setDiscussing(true)}
               onArchive={() =>
                 conv &&
                 act(async () => {
@@ -347,6 +353,7 @@ export function EbayInbox({
           )}
         </div>
       </div>
+      {discussing && conv && conv.type === "FROM_MEMBERS" && <DiscussDialog connectionId={conv.account.id} conversationId={conv.conversationId} buyer={conv.otherParty || "the buyer"} me={me} onClose={() => setDiscussing(false)} />}
     </div>
   );
 }

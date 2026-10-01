@@ -4,7 +4,7 @@ import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { EbayMessage, EbayNote, EbayThread } from "@/lib/api";
 import { FileRow, PhotoGrid } from "../MessageFiles";
 import { RichText } from "../MessageBubble";
-import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, LatestButton, MenuItem, Meta, PopMenu } from "../ChatBubble";
+import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, HeaderButton, LatestButton, MenuItem, Meta, PopMenu } from "../ChatBubble";
 import { colorFor, dayLabel, initialOf, timeLabel } from "../inbox-format";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { EbayMark, IssueBadge } from "./EbayConversationList";
@@ -38,21 +38,6 @@ function toLatest(el: HTMLElement, ebay: boolean) {
     return;
   }
   el.scrollTop = Math.max(0, notice.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 48);
-}
-
-function HeaderButton({ label, onClick, active = false, children }: { label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; active?: boolean; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={label}
-      aria-label={label}
-      aria-pressed={active || undefined}
-      className={`flex h-9 w-9 items-center justify-center rounded-full transition-colors ${active ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"}`}
-    >
-      {children}
-    </button>
-  );
 }
 
 // What a buyer's conversation is about, as a small tag before the header's
@@ -172,6 +157,7 @@ export function EbayThreadView({
   composer,
   showAccount = true,
   onDeleteNote,
+  onDiscuss,
 }: {
   data: EbayThread | null;
   loading: boolean;
@@ -180,6 +166,8 @@ export function EbayThreadView({
   onBack?: () => void;
   onMarkUnread: () => void;
   onArchive: () => void;
+  // "Discuss with team": shares a buyer's conversation into team chat as a card.
+  onDiscuss?: () => void;
   detailsOpen: boolean;
   onToggleDetails: () => void;
   // The details panel, drawn beside the chat (or over it on a smaller screen).
@@ -244,6 +232,7 @@ export function EbayThreadView({
   const about = ebay ? "Messages from eBay" : `${account ? `${account} · ` : ""}${item?.title || conv?.title || "Buyer"}`;
   const menu: MenuItem[] = [
     ...(!ebay ? [{ label: detailsOpen ? "Hide details" : "Details", onSelect: onToggleDetails }] : []),
+    ...(!ebay && onDiscuss ? [{ label: "Discuss with team", onSelect: onDiscuss }] : []),
     { label: "Mark as unread", onSelect: onMarkUnread },
     { label: conv?.status === "ARCHIVE" ? "Move back to the inbox" : "Archive", onSelect: onArchive },
   ];

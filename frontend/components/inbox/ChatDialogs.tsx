@@ -11,7 +11,7 @@ import { LockIcon } from "./ChatThread";
 // channel, the public channels to join, and a conversation's details (its
 // people, your notifications for it, and its settings for whoever runs it).
 
-function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);

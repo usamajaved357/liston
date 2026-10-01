@@ -10,9 +10,9 @@ import { EbayInbox } from "./ebay/EbayInbox";
 // The Dashboard's Inbox, in two modes switched at the top: Team chat (the
 // owner and their team, across every account) and eBay messages (buyers
 // and eBay on every account). An account's Inbox is only its eBay messages
-// (AccountInboxView). The mode and the open conversation are in the
-// address (?mode=, ?c=, ?e=), so a notification or a shared link opens the
-// right one.
+// (AccountInboxView). The mode, the open conversation and its open thread
+// are in the address (?mode=, ?c=, ?t=, ?e=), so a notification or a
+// shared link opens the right one.
 
 export type InboxMode = "team" | "ebay";
 
@@ -44,10 +44,12 @@ export function AccountInboxView({ connectionId, isOwner, syncSlot }: { connecti
 // The Dashboard's Inbox shows team chat only until the all-accounts eBay view is picked up again.
 const SHOW_EBAY_MODE = false;
 
-export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOwner: boolean; canSeeEbay?: boolean }) {
+export function InboxView({ me, isOwner, canSeeEbay = true, tabsSlot = null }: { me: string; isOwner: boolean; canSeeEbay?: boolean; tabsSlot?: HTMLElement | null }) {
   const { search, go } = useInboxAddress();
   const mode: InboxMode = search.get("mode") === "ebay" && canSeeEbay ? "ebay" : "team";
   const activeId = search.get("c");
+  const threadId = activeId ? search.get("t") : null;
+  const openChat = useCallback((c: string | null, t: string | null = null) => go({ c, t: c ? t : null }), [go]);
   const unread = useChatUnreadValue();
 
   const modeSwitch = (
@@ -57,7 +59,7 @@ export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOw
         ...(canSeeEbay ? [{ key: "ebay" as const, label: "eBay messages" }] : []),
       ]}
       value={mode}
-      onChange={(m) => go({ mode: m === "team" ? null : m, c: null, e: null })}
+      onChange={(m) => go({ mode: m === "team" ? null : m, c: null, t: null, e: null })}
       label="Inbox"
     />
   );
@@ -68,7 +70,7 @@ export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOw
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       {SHOW_EBAY_MODE && <div className="flex flex-wrap items-center gap-3">{modeSwitch}</div>}
       <div className="card flex min-h-0 flex-1 overflow-hidden">
-        <TeamChat me={me} isOwner={isOwner} activeId={activeId} onActiveChange={(id) => go({ c: id })} />
+        <TeamChat me={me} isOwner={isOwner} activeId={activeId} threadId={threadId} onOpen={openChat} tabsSlot={tabsSlot} />
       </div>
     </div>
   );

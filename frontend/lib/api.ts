@@ -3004,7 +3004,7 @@ export interface SharedFile {
   createdAt: string;
 }
 
-export type ListonCardKind = "order" | "listing" | "draft" | "hunt";
+export type ListonCardKind = "order" | "listing" | "draft" | "hunt" | "conversation";
 export type ListonCardFact = { kind: "money"; amount: number; currency: string; label?: string } | { kind: "text"; text: string } | { kind: "date"; at: string };
 // A preview of something in Liston, from any account: `url` opens it in that
 // account. `locked`: it's in an account (or area) the viewer can't open;
@@ -3080,17 +3080,40 @@ export interface ChatMessage {
   replyTo: { id: string; author: { id: string; name: string } | null; text: string } | null;
   cards: ListonCard[];
   files: SharedFile[];
+  // Previews of links to other sites, read after it was sent.
   links: { url: string; title: string | null; description: string | null; image: string | null; site: string | null }[];
   mentions: string[];
   mentionAll: boolean;
+  // A voice note: its audio, length and the shape of its sound (bars from 0 to 1).
+  voice: { fileId: string; url: string; mime: string; size: number; durationMs: number; peaks: number[] } | null;
+  // A reply in a thread names its thread's first message; one also sent to the conversation shows there too.
+  threadId: string | null;
+  alsoInConversation: boolean;
+  // A first message with replies: how many, when the last came, who replied (latest first).
+  thread: { replyCount: number; lastReplyAt: string | null; people: { id: string; name: string; avatarUrl: string | null }[] } | null;
   // A system line: what happened ("added", "renamed"…), by whom, to whom.
   detail: { action?: string; by?: string | null; userIds?: string[]; from?: string | null; to?: string | null };
 }
+export type ChatUnread = { unread: number; mentions: number; threads: number };
 export interface ChatList {
   conversations: ChatConversation[];
   openChannels: ChatOpenChannel[];
   canManageChannels: boolean;
-  unread: { unread: number; mentions: number };
+  unread: ChatUnread;
+}
+// A thread as Threads lists it: its conversation, first message, new replies and the last two.
+export interface ChatThreadSummary {
+  conversation: { id: string; kind: "dm" | "group" | "channel"; title: string };
+  root: ChatMessage;
+  unread: number;
+  lastReplyAt: string | null;
+  latest: ChatMessage[];
+}
+export interface ChatThreadDetail {
+  root: ChatMessage;
+  replies: ChatMessage[];
+  following: boolean;
+  readAt: string | null;
 }
 export interface NotificationSettings {
   chat: ChatNotify;
@@ -3138,7 +3161,7 @@ export const inboxApi = {
   // Team chat
   chatPeople: () => request<{ people: ChatPerson[] }>(`/api/chat/people`),
   chatList: () => request<ChatList>(`/api/chat/conversations`),
-  chatUnread: () => request<{ unread: number; mentions: number }>(`/api/chat/unread`),
+  chatUnread: () => request<ChatUnread>(`/api/chat/unread`),
   chatGet: (id: string) => request<ChatConversation>(`/api/chat/conversations/${id}`),
   chatOpenDm: (userId: string) => request<ChatConversation>(`/api/chat/dm`, { method: "POST", body: JSON.stringify({ userId }) }),
   chatCreateGroup: (userIds: string[], name?: string | null) => request<ChatConversation>(`/api/chat/groups`, { method: "POST", body: JSON.stringify({ userIds, name: name || null }) }),
@@ -3158,11 +3181,19 @@ export const inboxApi = {
     if (page.limit) q.set("limit", String(page.limit));
     return request<{ messages: ChatMessage[]; hasMore: boolean }>(`/api/chat/conversations/${id}/messages${q.toString() ? `?${q}` : ""}`);
   },
-  chatSend: (id: string, input: { body?: string; mentions?: string[]; fileIds?: string[]; refs?: ListonRef[]; replyToId?: string | null }) =>
-    request<ChatMessage>(`/api/chat/conversations/${id}/messages`, { method: "POST", body: JSON.stringify(input) }),
+  chatSend: (
+    id: string,
+    input: { body?: string; mentions?: string[]; fileIds?: string[]; refs?: ListonRef[]; replyToId?: string | null; threadId?: string | null; alsoInConversation?: boolean; voice?: { fileId: string; durationMs: number; peaks: number[] } | null }
+  ) => request<ChatMessage>(`/api/chat/conversations/${id}/messages`, { method: "POST", body: JSON.stringify(input) }),
   chatRead: (id: string, messageId?: string | null) =>
-    request<{ readAt: string; unread: { unread: number; mentions: number } }>(`/api/chat/conversations/${id}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
-  chatTyping: (id: string) => request<void>(`/api/chat/conversations/${id}/typing`, { method: "POST" }),
+    request<{ readAt: string; unread: ChatUnread }>(`/api/chat/conversations/${id}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
+  chatTyping: (id: string, threadId?: string | null) => request<void>(`/api/chat/conversations/${id}/typing`, { method: "POST", body: JSON.stringify({ threadId: threadId || null }) }),
+  // Threads: the ones this person follows, one thread, reading it, following it.
+  chatThreads: () => request<{ threads: ChatThreadSummary[]; unread: ChatUnread }>(`/api/chat/threads`),
+  chatThread: (rootId: string) => request<ChatThreadDetail>(`/api/chat/threads/${rootId}`),
+  chatThreadRead: (rootId: string, messageId?: string | null) =>
+    request<{ readAt: string; unread: ChatUnread }>(`/api/chat/threads/${rootId}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
+  chatFollow: (rootId: string, following: boolean) => request<{ following: boolean }>(`/api/chat/threads/${rootId}/follow`, { method: "PUT", body: JSON.stringify({ following }) }),
   chatEdit: (messageId: string, body: string, mentions: string[] = []) => request<ChatMessage>(`/api/chat/messages/${messageId}`, { method: "PATCH", body: JSON.stringify({ body, mentions }) }),
   chatDeleteMessage: (messageId: string) => request<void>(`/api/chat/messages/${messageId}`, { method: "DELETE" }),
   chatSearch: (q: string) => request<{ results: { message: ChatMessage; conversation: { id: string; kind: string; title: string } }[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`),

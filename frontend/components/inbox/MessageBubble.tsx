@@ -6,24 +6,30 @@ import { PersonAvatar } from "./PersonAvatar";
 import { ListonCardView } from "./ListonCardView";
 import { FileRow, PhotoGrid } from "./MessageFiles";
 import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, MenuItem, Meta, NoteChip, PopMenu, Ticks } from "./ChatBubble";
-import { colorFor, timeLabel } from "./inbox-format";
+import { VoicePlayer } from "./VoiceNote";
+import { colorFor, listTime, timeLabel } from "./inbox-format";
 
-// One message in team chat, as a WhatsApp bubble: the other side's on the
-// left (in a group their picture and name on the first of a run), yours on
-// the right, tinted, with ticks that turn blue once everyone it went to has
-// read it. Inside it, top to bottom: the message it replies to, its Liston
-// cards, its photos as an album, its files, then its text with the time in
-// the corner. The text keeps its line breaks, links open in a new tab,
-// @mentions of people stand out. A chevron in the corner opens its actions.
+// One message in team chat, as a bubble drawn like the eBay Inbox's (a
+// crisp edge, the same spacing): the other side's on the left (in a group
+// their picture and name on the first of a run), yours on the right,
+// tinted, with ticks that turn blue once everyone it went to has read it.
+// Inside it, top to bottom: the message it quotes, its Liston cards, its
+// photos as an album, its files, a voice note's player, its text with the
+// time in the corner, then previews of links to other sites. The text
+// keeps its line breaks; links open in a new tab; @mentions stand out;
+// **bold**, _italic_, ~struck~ and `code` are drawn so. Under a message
+// with a thread: who replied, how many, when the last came, opening it.
+// On hover a round button beside the bubble replies in its thread; a
+// chevron in its corner opens the rest (quote, copy, edit, delete).
 
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g;
 
-/** The text with links, @mentions, `code` and **bold** made so. */
+/** The text with links, @mentions, `code`, **bold**, _italic_ and ~struck~ made so. */
 export function RichText({ text, mentionNames = [] }: { text: string; mentionNames?: string[] }) {
   const names = [...new Set(mentionNames.filter(Boolean))].sort((a, b) => b.length - a.length);
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const tokens = new RegExp(
-    `${URL_RE.source}|(@(?:channel|everyone|here)\\b${names.length ? `|@(?:${names.map(escape).join("|")})` : ""})|(\`[^\`\\n]+\`)|(\\*\\*[^*\\n]+\\*\\*)`,
+    `${URL_RE.source}|(@(?:channel|everyone|here)\\b${names.length ? `|@(?:${names.map(escape).join("|")})` : ""})|(\`[^\`\\n]+\`)|(\\*\\*[^*\\n]+\\*\\*)|((?<![\\w*])_[^_\\n]+_(?![\\w]))|((?<![\\w~])~[^~\\n]+~(?![\\w]))`,
     "gi"
   );
   const out: ReactNode[] = [];
@@ -31,7 +37,7 @@ export function RichText({ text, mentionNames = [] }: { text: string; mentionNam
   let key = 0;
   for (const m of text.matchAll(tokens)) {
     if (m.index! > last) out.push(text.slice(last, m.index));
-    const [whole, url, mention, code, bold] = m;
+    const [whole, url, mention, code, bold, italic, strike] = m;
     if (url)
       out.push(
         <a key={key++} href={url} target="_blank" rel="noopener noreferrer nofollow" className="break-all text-[var(--color-primary)] underline underline-offset-2">
@@ -51,6 +57,8 @@ export function RichText({ text, mentionNames = [] }: { text: string; mentionNam
         </code>
       );
     else if (bold) out.push(<strong key={key++}>{bold.slice(2, -2)}</strong>);
+    else if (italic) out.push(<em key={key++}>{italic.slice(1, -1)}</em>);
+    else if (strike) out.push(<s key={key++}>{strike.slice(1, -1)}</s>);
     else out.push(whole);
     last = m.index! + whole.length;
   }
@@ -59,7 +67,13 @@ export function RichText({ text, mentionNames = [] }: { text: string; mentionNam
 }
 
 const icons = {
-  reply: (
+  thread: (
+    <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+      <path d="M4.5 6.5A2.5 2.5 0 017 4h10a2.5 2.5 0 012.5 2.5v6A2.5 2.5 0 0117 15h-5.5l-4 3.5V15H7a2.5 2.5 0 01-2.5-2.5v-6z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M8.5 8.5h7M8.5 11.5h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  ),
+  quote: (
     <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
       <path d="M10 8L5 12l5 4M5 12h9a5 5 0 015 5v1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
@@ -109,6 +123,52 @@ function BubbleActions({ mine, items }: { mine: boolean; items: MenuItem[] }) {
   );
 }
 
+/** Previews of links to other sites, inside the bubble under its text. */
+function LinkPreviews({ links }: { links: ChatMessage["links"] }) {
+  if (!links.length) return null;
+  return (
+    <div className="flex flex-col gap-[3px] px-[3px] pb-[3px]">
+      {links.map((l) => (
+        <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer nofollow" className="flex w-[300px] max-w-full overflow-hidden rounded-md border-l-[3px] border-[var(--color-primary)]/50 bg-black/[0.04] transition-colors hover:bg-black/[0.07]">
+          <span className="min-w-0 flex-1 px-2.5 py-2">
+            {l.site && <span className="block truncate text-[11px] font-semibold text-[var(--color-muted)]">{l.site}</span>}
+            {l.title && <span className="line-clamp-2 block text-[12.5px] font-semibold leading-[17px] text-[var(--color-primary)]">{l.title}</span>}
+            {l.description && <span className="mt-0.5 line-clamp-2 block text-[11.5px] leading-4 text-[var(--color-muted)]">{l.description}</span>}
+          </span>
+          {l.image && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={l.image} alt="" loading="lazy" referrerPolicy="no-referrer" className="h-auto w-[72px] flex-shrink-0 object-cover" onError={(e) => (e.currentTarget.style.display = "none")} />
+          )}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/** Under a message with a thread: who replied, how many replies, when the last came; opens it. */
+export function ThreadLine({ thread, mine, onOpen, unread = 0 }: { thread: NonNullable<ChatMessage["thread"]>; mine: boolean; onOpen: () => void; unread?: number }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`mt-1 flex max-w-full items-center gap-1.5 rounded-lg border border-transparent bg-[var(--color-panel)]/80 py-1 pl-1 pr-2.5 text-left shadow-[var(--shadow-bubble)] transition-colors hover:border-[var(--color-line)] hover:bg-[var(--color-panel)] ${mine ? "self-end" : "self-start"}`}
+    >
+      <span className="flex -space-x-1.5">
+        {thread.people.slice(0, 3).map((p) => (
+          <span key={p.id} className="rounded-full ring-2 ring-[var(--color-panel)]">
+            <PersonAvatar id={p.id} name={p.name} avatarUrl={p.avatarUrl} size={20} />
+          </span>
+        ))}
+      </span>
+      <span className="text-[12px] font-semibold text-[var(--color-primary)]">
+        {thread.replyCount} {thread.replyCount === 1 ? "reply" : "replies"}
+      </span>
+      {unread > 0 && <span className="rounded-full bg-[var(--color-primary)] px-1.5 text-[10px] font-semibold leading-4 text-white">{unread} new</span>}
+      {thread.lastReplyAt && <span className="truncate text-[11.5px] text-[var(--color-muted)]">Last reply {listTime(thread.lastReplyAt).toLowerCase()}</span>}
+    </button>
+  );
+}
+
 export function MessageBubble({
   message,
   me,
@@ -122,6 +182,8 @@ export function MessageBubble({
   onEdit,
   onDelete,
   onJumpTo,
+  onOpenThread,
+  inThread = false,
   highlight = false,
 }: {
   message: ChatMessage;
@@ -138,6 +200,10 @@ export function MessageBubble({
   onEdit: () => void;
   onDelete: () => void;
   onJumpTo: (id: string) => void;
+  // Opens this message's thread (or, for a reply also sent to the conversation, the thread it's in).
+  onOpenThread?: (rootId: string) => void;
+  // Drawn in the thread panel: no thread line under it, no "Reply in thread".
+  inThread?: boolean;
   highlight?: boolean;
 }) {
   const author = message.author;
@@ -146,6 +212,8 @@ export function MessageBubble({
   const docs = message.files.filter((f) => !f.image);
   const text = message.body.trimEnd();
   const inGroup = showAuthorName && !mine;
+  const threadRoot = message.threadId || message.id;
+  const canThread = Boolean(onOpenThread) && !inThread && !message.deleted && message.kind === "text";
   const meta = (
     <>
       {message.editedAt && !message.deleted && <span>Edited</span>}
@@ -156,17 +224,38 @@ export function MessageBubble({
   const actions: MenuItem[] = message.deleted
     ? []
     : [
-        { label: "Reply", onSelect: onReply, icon: icons.reply },
+        ...(canThread ? [{ label: message.threadId ? "Open its thread" : "Reply in thread", onSelect: () => onOpenThread!(threadRoot), icon: icons.thread }] : []),
+        ...(!inThread ? [{ label: "Quote", onSelect: onReply, icon: icons.quote }] : []),
         ...(message.body ? [{ label: "Copy text", onSelect: () => navigator.clipboard?.writeText(message.body).catch(() => {}), icon: icons.copy }] : []),
         ...(mine && message.body ? [{ label: "Edit", onSelect: onEdit, icon: icons.edit }] : []),
         ...(canDelete ? [{ label: "Delete", onSelect: onDelete, icon: icons.delete, danger: true }] : []),
       ];
+  const onlyPhotos = photos.length > 0 && !docs.length && !text && !message.voice && !message.links.length;
+
+  // The round "reply in thread" button beside the bubble, on hover.
+  const threadButton = canThread && !message.threadId && (
+    <button
+      type="button"
+      onClick={() => onOpenThread!(message.id)}
+      aria-label="Reply in thread"
+      title="Reply in thread"
+      className="mx-1.5 flex h-7 w-7 flex-shrink-0 items-center justify-center self-center rounded-full bg-[var(--color-panel)] text-[var(--color-muted)] opacity-0 shadow-[var(--shadow-bubble)] transition-opacity hover:text-[var(--color-primary)] focus-visible:opacity-100 group-hover/msg:opacity-100 [@media(hover:none)]:hidden"
+    >
+      {icons.thread}
+    </button>
+  );
 
   return (
-    <BubbleRow mine={mine} first={first} className={`group/msg ${highlight ? "animate-[pulse_1.2s_ease-in-out_2]" : ""}`} data-message-id={message.id}>
+    <BubbleRow mine={mine} first={first} roomy className={`group/msg ${highlight ? "animate-[pulse_1.2s_ease-in-out_2]" : ""}`} data-message-id={message.id}>
       {inGroup && <div className="mr-1.5 w-7 flex-shrink-0">{first && <PersonAvatar id={author?.id} name={author?.name} avatarUrl={author?.avatarUrl} size={28} />}</div>}
+      {mine && threadButton}
       <div className={`flex min-w-0 flex-col ${BUBBLE_MAX} ${mine ? "items-end" : "items-start"}`}>
-        <Bubble mine={mine} tail={first}>
+        {message.threadId && message.alsoInConversation && !inThread && (
+          <button type="button" onClick={() => onOpenThread?.(message.threadId!)} className="mb-0.5 px-1 text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-primary)]">
+            Replied in a thread
+          </button>
+        )}
+        <Bubble mine={mine} tail={first} sharp>
           <BubbleActions mine={mine} items={actions} />
           {first && inGroup && (
             <p className="truncate px-[9px] pt-[5px] text-[12.5px] font-semibold leading-4" style={{ color: colorFor(author?.id) }}>
@@ -207,10 +296,7 @@ export function MessageBubble({
               )}
               {photos.length > 0 && (
                 <div className="p-[3px]">
-                  <PhotoGrid
-                    photos={photos.map((f) => ({ src: f.url, thumb: f.thumbUrl, width: f.width, height: f.height, name: f.name, download: f.url }))}
-                    overlay={!text && !docs.length ? <Meta onPhoto>{meta}</Meta> : undefined}
-                  />
+                  <PhotoGrid photos={photos.map((f) => ({ src: f.url, thumb: f.thumbUrl, width: f.width, height: f.height, name: f.name, download: f.url }))} overlay={onlyPhotos ? <Meta onPhoto>{meta}</Meta> : undefined} />
                 </div>
               )}
               {docs.length > 0 && (
@@ -220,19 +306,23 @@ export function MessageBubble({
                   ))}
                 </div>
               )}
+              {message.voice && <VoicePlayer voice={message.voice} mine={mine} />}
               {text ? (
                 <BubbleText meta={meta}>
                   <RichText text={text} mentionNames={mentionNames} />
                 </BubbleText>
-              ) : photos.length && !docs.length ? null : (
+              ) : onlyPhotos ? null : (
                 <div className="flex justify-end px-[8px] pb-[5px] pt-0.5">
                   <Meta>{meta}</Meta>
                 </div>
               )}
+              <LinkPreviews links={message.links} />
             </>
           )}
         </Bubble>
+        {!inThread && message.thread && !message.threadId && <ThreadLine thread={message.thread} mine={mine} onOpen={() => onOpenThread?.(message.id)} />}
       </div>
+      {!mine && threadButton}
     </BubbleRow>
   );
 }
