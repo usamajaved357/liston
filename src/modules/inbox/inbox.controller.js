@@ -3,7 +3,8 @@ const inboxService = require('./inbox.service');
 const quickRepliesService = require('./quick-replies.service');
 
 // The eBay Inbox's requests: an account's (or every account's) folders, one
-// conversation, read or unread, archive, and reading eBay again now.
+// conversation, read or unread, archive, reading eBay again now; the
+// team's working (assign, Open / Waiting / Done, notes) and "Message buyer".
 
 const listSchema = z.object({
   folder: z.enum(['buyers', 'ebay', 'archived', 'all']).optional(),
@@ -17,6 +18,10 @@ const readSchema = z.object({ read: z.boolean() });
 const statusSchema = z.object({ status: z.enum(['ACTIVE', 'ARCHIVE']) });
 const replySchema = z.object({ text: z.string().max(2100), fileIds: z.array(z.string().uuid()).max(5).optional(), confirm: z.boolean().optional() });
 const quickReplySchema = z.object({ name: z.string().max(200), body: z.string().max(4000) });
+const assignSchema = z.object({ userId: z.string().uuid().nullable() });
+const workSchema = z.object({ status: z.enum(['open', 'waiting', 'done']) });
+const noteSchema = z.object({ body: z.string().max(2100) });
+const messageBuyerSchema = z.object({ orderId: z.string().regex(/^[\w-]{3,40}$/, 'That order number isn’t one eBay uses.'), text: z.string().max(2100), confirm: z.boolean().optional() });
 
 const auth = (req) => ({ userId: req.userId, ownerId: req.ownerId, role: req.role });
 
@@ -33,6 +38,7 @@ const handle = (fn) => async (req, res, next) => {
   try {
     if (req.params.conversationId !== undefined && !/^[\w.:-]{1,120}$/.test(req.params.conversationId)) return res.status(404).json({ error: 'Conversation not found.' });
     if (req.params.replyId !== undefined && !/^[0-9a-f-]{36}$/i.test(req.params.replyId)) return res.status(404).json({ error: 'That quick reply is gone.' });
+    if (req.params.noteId !== undefined && !/^\d{1,18}$/.test(req.params.noteId)) return res.status(404).json({ error: 'Note not found.' });
     await fn(req, res);
   } catch (err) {
     next(err);
@@ -70,6 +76,25 @@ module.exports = {
     if (input) res.json(await quickRepliesService.update(auth(req), req.params.id, req.params.replyId, input));
   }),
   deleteQuickReply: handle(async (req, res) => res.json(await quickRepliesService.remove(auth(req), req.params.id, req.params.replyId))),
+  assign: handle(async (req, res) => {
+    const input = parse(assignSchema, req.body, res);
+    if (input) res.json(await inboxService.assign(auth(req), req.params.id, req.params.conversationId, input.userId));
+  }),
+  setWork: handle(async (req, res) => {
+    const input = parse(workSchema, req.body, res);
+    if (input) res.json(await inboxService.setWork(auth(req), req.params.id, req.params.conversationId, input.status));
+  }),
+  addNote: handle(async (req, res) => {
+    const input = parse(noteSchema, req.body, res);
+    if (input) res.status(201).json(await inboxService.addNote(auth(req), req.params.id, req.params.conversationId, input.body));
+  }),
+  deleteNote: handle(async (req, res) => res.json(await inboxService.deleteNote(auth(req), req.params.id, req.params.conversationId, req.params.noteId))),
+  messageBuyer: handle(async (req, res) => {
+    const input = parse(messageBuyerSchema, req.body, res);
+    if (!input) return;
+    const out = await inboxService.messageBuyer(auth(req), req.params.id, input);
+    res.status(out.sent ? 201 : 200).json(out);
+  }),
   reply: handle(async (req, res) => {
     const input = parse(replySchema, req.body, res);
     if (!input) return;

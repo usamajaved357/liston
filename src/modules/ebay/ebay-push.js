@@ -11,6 +11,11 @@
 //                       was already applied (no call); any other is read on
 //                       its own (1 Trading GetItem), or, for a burst, the
 //                       account's listings are read once
+//   NEW_MESSAGE         a buyer (or eBay) wrote to the seller → the Inbox
+//                       reads the account's latest conversations (1 Message
+//                       API call, not Trading), keeps the pushed message so
+//                       opening it reads nothing, and tells the team's
+//                       devices about a buyer's (inbox.service)
 //
 // Setup, once per app and once per account:
 //   - one destination: our /api/ebay/commerce-notifications URL + token
@@ -38,6 +43,7 @@ const SCOPE = (s) => `https://api.ebay.com/oauth/api_scope/${s}`;
 const TOPICS = {
   ORDER_CONFIRMATION: { setting: 'orderPush', scopes: [SCOPE('sell.fulfillment'), SCOPE('sell.fulfillment.readonly')] },
   LISTING: { setting: 'listingPush', scopes: [SCOPE('sell.listing'), SCOPE('sell.listing.read')] },
+  NEW_MESSAGE: { setting: 'messagePush', scopes: [SCOPE('commerce.message')] },
 };
 const DESTINATION_KEY = 'ebay-commerce-destination';
 const SUBSCRIPTION_SCOPE = SCOPE('commerce.notification.subscription');
@@ -187,10 +193,13 @@ async function handle(payload) {
         .catch((err) => logger.warn('New order from eBay push not read', { connectionId: row.id, orderId: n.orderId, error: err.message }));
     } else if (n.topic === 'LISTING' && n.listingId && n.reason) {
       queueListingChange(row, n.listingId, n.reason);
+    } else if (n.topic === 'NEW_MESSAGE' && n.message) {
+      // Required here, not at the top: the Inbox needs ebay.service too.
+      require('../inbox/inbox.service').onPushedMessage(row.id, row.user_id, n.message);
     }
     // Anything else (eBay's test notification): a receipt, nothing to read.
   }
-  return { handled: true, topic: n.topic, seller: n.seller.username || n.seller.userId, orderId: n.orderId || undefined, listingId: n.listingId || undefined, reason: n.reason || undefined, accounts: rows.length, attempt: n.attempt };
+  return { handled: true, topic: n.topic, seller: n.seller.username || n.seller.userId, orderId: n.orderId || undefined, listingId: n.listingId || undefined, conversationId: n.message?.conversationId || undefined, reason: n.reason || undefined, accounts: rows.length, attempt: n.attempt };
 }
 
 module.exports = { TOPICS, configured, ensureDestination, subscribeAccount, subscribeConnection, subscribeInBackground, handle, _flushAll, _pendingCount, LISTING_BATCH_MS };

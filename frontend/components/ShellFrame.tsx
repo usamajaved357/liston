@@ -2,14 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { Logo } from "@/components/Logo";
+import { useWorkClock } from "@/lib/useWorkClock";
 
 // The frame both shells share: the sidebar beside the page on a laptop; on a
 // phone or a portrait tablet (below lg) a slim bar with the logo and a menu
 // button instead, the same sidebar sliding in over the page when it's
-// opened. Following a link in it closes it.
+// opened. Following a link in it closes it. Every signed-in page is in it,
+// so it also keeps a team member's time in Liston (useWorkClock; `member`
+// from the shell, which knows who's signed in).
 
-export function ShellFrame({ sidebar, sidebarClassName = "gap-7", children }: { sidebar: React.ReactNode; sidebarClassName?: string; children: React.ReactNode }) {
+export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false, children }: { sidebar: React.ReactNode; sidebarClassName?: string; member?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  useWorkClock(member);
 
   useEffect(() => {
     if (!open) return;

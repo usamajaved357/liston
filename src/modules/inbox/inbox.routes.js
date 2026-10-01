@@ -14,9 +14,16 @@ router.get('/quick-replies', requireAuth, requireFeature('inbox'), c.quickReplie
 router.post('/quick-replies', requireAuth, requireFeature('inbox'), c.addQuickReply);
 router.put('/quick-replies/:replyId', requireAuth, requireFeature('inbox'), c.saveQuickReply);
 router.delete('/quick-replies/:replyId', requireAuth, requireFeature('inbox'), c.deleteQuickReply);
+// "Message buyer" from an order page: a real message, sent when someone presses Send.
+router.post('/message-buyer', requireAuth, requireFeature('inbox'), c.messageBuyer);
 router.get('/:conversationId', requireAuth, requireFeature('inbox'), c.thread);
 router.post('/:conversationId/read', requireAuth, requireFeature('inbox'), c.setRead);
 router.post('/:conversationId/status', requireAuth, requireFeature('inbox'), c.setStatus);
+// The team's working: who has it, where it stands, notes only the team sees.
+router.post('/:conversationId/assign', requireAuth, requireFeature('inbox'), c.assign);
+router.post('/:conversationId/work', requireAuth, requireFeature('inbox'), c.setWork);
+router.post('/:conversationId/notes', requireAuth, requireFeature('inbox'), c.addNote);
+router.delete('/:conversationId/notes/:noteId', requireAuth, requireFeature('inbox'), c.deleteNote);
 // A reply to a buyer: a real message, sent when someone presses Send.
 router.post('/:conversationId/messages', requireAuth, requireFeature('inbox'), c.reply);
 

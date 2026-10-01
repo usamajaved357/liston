@@ -35,6 +35,10 @@ const KINDS = {
   'hunt.withdrawn': 'Withdrew a hunted product',
   'hunt.removed': 'Removed a hunted product',
   'inbox.replied': 'Answered a buyer',
+  'inbox.messaged': 'Messaged a buyer',
+  'inbox.resolved': 'Resolved a buyer query',
+  'inbox.assigned': 'Gave a conversation to someone',
+  'inbox.noted': 'Added a note to a conversation',
   'account.store_category_added': 'Added a Shop category',
   'account.source_account_saved': 'Saved a supplier account',
   'session.login': 'Logged in',
@@ -79,7 +83,28 @@ const METRICS = [
   { key: 'draft_work', label: 'Drafts worked on', kinds: ['listing.draft_edited'], distinct: true },
   { key: 'hunted', label: 'Products hunted', kinds: ['hunt.added'], distinct: true },
   { key: 'hunts_reviewed', label: 'Hunted products reviewed', kinds: ['hunt.approved', 'hunt.rejected', 'hunt.sent_back'], distinct: true },
+  // The eBay Inbox: buyers answered (a conversation once however many
+  // messages went), queries marked done, and every message sent.
+  { key: 'inbox_answered', label: 'Buyers answered', kinds: ['inbox.replied', 'inbox.messaged'], distinct: true },
+  { key: 'inbox_resolved', label: 'Buyer queries resolved', kinds: ['inbox.resolved'], distinct: true },
+  { key: 'inbox_sent', label: 'Messages sent to buyers', kinds: ['inbox.replied', 'inbox.messaged'], distinct: false },
 ];
+
+/**
+ * How quickly someone answers buyers: the minutes each of their replies
+ * came after the buyer's last message (recorded with the reply), as the
+ * median and how many replies it's over. { median, count }, median null
+ * without any.
+ */
+function replyTime(rows) {
+  const waits = rows
+    .filter((r) => r.kind === 'inbox.replied' && r.detail && Number.isFinite(Number(r.detail.waitedMinutes)) && r.detail.waitedMinutes !== null)
+    .map((r) => Number(r.detail.waitedMinutes))
+    .sort((a, b) => a - b);
+  if (!waits.length) return { median: null, count: 0 };
+  const mid = Math.floor(waits.length / 2);
+  return { median: waits.length % 2 ? waits[mid] : Math.round((waits[mid - 1] + waits[mid]) / 2), count: waits.length };
+}
 
 /**
  * The figures for a set of activity rows ({ kind, subject_id, subject_part,
@@ -180,4 +205,4 @@ function rangeWindow(range, { from, to, timeZone, now = new Date() } = {}) {
   };
 }
 
-module.exports = { KINDS, METRICS, RANGES, isWork, kindForOrderEvent, metricsFrom, rangeWindow };
+module.exports = { KINDS, METRICS, RANGES, isWork, kindForOrderEvent, metricsFrom, rangeWindow, replyTime };

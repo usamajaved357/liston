@@ -16,6 +16,10 @@ const marketplaces = require('../ebay/marketplaces');
 const mirror = require('../ebay/ebay-mirror.repository');
 const orderRepository = require('../orders/order.repository');
 const threadFacts = require('./thread-facts');
+const activityRepository = require('../team/activity.repository');
+const notificationsService = require('../notifications/notifications.service');
+const chatRepository = require('../chat/chat.repository');
+const chatRules = require('../chat/chat-rules');
 const logger = require('../../utils/logger');
 
 // The Inbox's eBay messages: every conversation an account has with buyers
@@ -28,7 +32,18 @@ const logger = require('../../utils/logger');
 // marks it read on eBay, as eBay's own Messages does. Beside each thread:
 // the buyer's orders on the account (from the orders mirror), the listing
 // it's about, and their other conversations. Reading is safe on a live
-// account; nothing here sends anything to a buyer.
+// account; nothing here sends anything to a buyer on its own.
+//
+// eBay pushes each new message (NEW_MESSAGE, ebay-push.js): the account's
+// latest conversations are read at once and the pushed message kept, and a
+// buyer's new message reaches the team's devices (everyone with the Inbox
+// on that account, or once it's given to someone, them and the owner; each
+// person's eBay setting, quiet hours and "hide the text" respected; never
+// while they're reading it). Team working: a conversation is given to
+// someone, marked Open, Waiting or Done (a buyer writing again opens it),
+// and carries notes only the team sees; each is the person's work on
+// record (member_activity), as replies are, with how long the buyer had
+// waited. "Message buyer" starts a conversation from an order.
 
 class InboxError extends Error {
   constructor(message, statusCode = 400, code = null) {
@@ -47,6 +62,12 @@ const FULL_PAGES = 40; // 2,000 conversations per type and folder at most
 const QUICK_PAGES = 4;
 const THREAD_PAGES = 10;
 const syncing = new Map(); // connectionId -> the read running now
+// A buyer's message newer than this when Liston first sees it isn't pushed to devices (an old one found late).
+const TELL_WITHIN_MS = 24 * 60 * 60 * 1000;
+// Pushed messages are gathered for a moment per account: a burst costs one read.
+const PUSH_BATCH_MS = 1500;
+const WORK = ['open', 'waiting', 'done'];
+const MAX_NOTE = 2000;
 
 // ---- who may see what ---------------------------------------------------------------
 
@@ -137,6 +158,8 @@ function sync(connectionId, ownerId, { full = false } = {}) {
   const run = (async () => {
     const state = await inboxRepository.syncState(connectionId);
     const whole = full || !state?.last_full_sync_at || Date.now() - new Date(state.last_full_sync_at).getTime() > FULL_EVERY_MS;
+    // A buyer's new word since the last read (none on the first: that's the history, not news).
+    const arrived = [];
     try {
       const changed = await withEbay(connectionId, ownerId, async ({ accessToken, marketplaceId, seller }) => {
         const ids = [];
@@ -165,6 +188,7 @@ function sync(connectionId, ownerId, { full = false } = {}) {
               if (fresh.length) {
                 await inboxRepository.upsertConversations(connectionId, fresh);
                 ids.push(...fresh.map((r) => r.conversationId));
+                if (state?.last_sync_at) arrived.push(...fresh.filter((r) => rules.isNewBuyerWord(r, known.get(r.conversationId), { within: TELL_WITHIN_MS })));
               }
               offset += conversations.length;
               if (offset >= total) break;
@@ -176,8 +200,13 @@ function sync(connectionId, ownerId, { full = false } = {}) {
         return ids;
       });
       await inboxRepository.recordSync(connectionId, { full: whole });
+      if (arrived.length) {
+        // The buyer wrote again: whatever it was marked, it's open.
+        await inboxRepository.reopen(connectionId, arrived.map((r) => r.conversationId));
+        tellTeam(connectionId, ownerId, arrived).catch((err) => logger.warn('Inbox: new messages not pushed', { connectionId, error: err.message }));
+      }
       if (changed.length) await announce(connectionId, ownerId, { changed: changed.length });
-      return { changed: changed.length, full: whole };
+      return { changed: changed.length, full: whole, arrived: arrived.length };
     } catch (err) {
       await inboxRepository.recordSync(connectionId, { error: err.message }).catch(() => {});
       // Whatever was read before it failed is shown.
@@ -189,10 +218,112 @@ function sync(connectionId, ownerId, { full = false } = {}) {
   return run;
 }
 
+// ---- eBay's push and the team's devices -------------------------------------------
+
+const pushed = new Map(); // connectionId -> { ownerId, messages, timer }
+
+/**
+ * eBay pushed a new message to an account (NEW_MESSAGE): its latest
+ * conversations are read (a read already running is waited for, then run
+ * again, so the message is in it) and the message kept. Never throws.
+ */
+function onPushedMessage(connectionId, ownerId, message) {
+  const key = String(connectionId);
+  let batch = pushed.get(key);
+  if (!batch) {
+    batch = { ownerId, messages: [], timer: null };
+    pushed.set(key, batch);
+    batch.timer = setTimeout(() => flushPushed(key).catch(() => {}), PUSH_BATCH_MS);
+    batch.timer.unref?.();
+  }
+  batch.messages.push(message);
+}
+
+async function flushPushed(key) {
+  const batch = pushed.get(key);
+  if (!batch) return null;
+  pushed.delete(key);
+  clearTimeout(batch.timer);
+  try {
+    if (syncing.has(key)) await syncing.get(key).catch(() => {});
+    const out = await sync(key, batch.ownerId);
+    const seller = (await connectionRepository.findByIdForUser(key, batch.ownerId))?.settings?.ebay?.username || null;
+    for (const m of batch.messages) {
+      await inboxRepository.keepPushed(key, m.conversationId, { ...m, fromSeller: rules.fromSeller(m, seller) }).catch(() => false);
+    }
+    return out;
+  } catch (err) {
+    logger.warn('Inbox: pushed message not read', { connectionId: key, error: err.message });
+    return null;
+  }
+}
+
+/** Test hook: read every gathered push now. */
+async function _flushPushed() {
+  return Promise.all([...pushed.keys()].map(flushPushed));
+}
+
+/**
+ * A buyer's new messages, to the devices of the people who'd answer: each
+ * one's eBay setting (every account, chosen ones, none), never while
+ * they're reading that conversation, kept for the bell but not pushed in
+ * their quiet hours, the text hidden when they asked. A conversation given
+ * to someone goes to them and the owner.
+ */
+async function tellTeam(connectionId, ownerId, arrived) {
+  const [viewers, connection] = await Promise.all([viewersOf(connectionId, ownerId), connectionRepository.findByIdForUser(connectionId, ownerId)]);
+  if (!viewers.length) return 0;
+  const settings = new Map((await chatRepository.settingsForMany(viewers)).map((x) => [String(x.user_id), x]));
+  const label = connection?.label || 'eBay';
+  let told = 0;
+  for (const r of arrived) {
+    const conv = await inboxRepository.findConversation(connectionId, r.conversationId);
+    const assignee = conv?.assigned_to ? String(conv.assigned_to) : null;
+    const to = assignee && viewers.includes(assignee) ? [...new Set([assignee, String(ownerId)])] : viewers;
+    const buyer = r.otherParty || 'A buyer';
+    for (const userId of to) {
+      const s = settings.get(userId);
+      if (!rules.wantsEbayPush(s, connectionId)) continue;
+      if (userEvents.isViewing(userId, `ebay:${connectionId}:${r.conversationId}`)) continue;
+      const title = `${label} · ${buyer}`;
+      const body = s?.hide_text ? `New message from ${buyer}` : r.latestPreview || 'New message';
+      await notificationsService.notifyGrouped({
+        userId,
+        kind: 'inbox.message',
+        title,
+        body,
+        url: `/accounts/${connectionId}/inbox?e=${connectionId}~${encodeURIComponent(r.conversationId)}`,
+        subjectType: 'conversation',
+        subjectId: `${connectionId}:${r.conversationId}`,
+        detail: { connectionId, conversationId: r.conversationId, buyer: r.otherParty, account: label },
+        push: chatRules.inQuietHours(s) ? null : { title, body, tag: `inbox-${connectionId}-${r.conversationId}` },
+      });
+      told += 1;
+    }
+  }
+  return told;
+}
+
 /** Reads the accounts again in the background when their copy is older than a minute. */
+// Accounts connected before eBay pushed messages: subscribed once (per server start) when their Inbox is read.
+const pushChecked = new Set();
+function ensurePush(connectionId, ownerId) {
+  if (pushChecked.has(connectionId)) return;
+  pushChecked.add(connectionId);
+  const ebayPush = require('../ebay/ebay-push');
+  if (!ebayPush.configured()) return;
+  connectionRepository
+    .findByIdForUser(connectionId, ownerId)
+    .then((c) => {
+      if (c && !c.settings?.ebay?.messagePush?.subscriptionId) ebayPush.subscribeInBackground(connectionId, ownerId);
+    })
+    .catch(() => {});
+}
+
 async function refreshStale(connectionIds, ownerId, { force = false } = {}) {
   const states = new Map((await inboxRepository.syncStates(connectionIds)).map((s) => [s.connection_id, s]));
   for (const id of connectionIds) {
+    ensurePush(id, ownerId);
     const s = states.get(id);
     const last = s?.last_sync_at ? new Date(s.last_sync_at).getTime() : 0;
     const failedLately = s?.last_error_at && Date.now() - new Date(s.last_error_at).getTime() < FRESH_MS;
@@ -453,7 +584,14 @@ async function thread(auth, connectionId, conversationId, { markRead = true } = 
       .catch((err) => logger.warn('Inbox: not marked read on eBay', { connectionId, conversationId, error: err.message }));
     conv = { ...conv, unread_count: 0 };
   }
-  const [messages, context] = await Promise.all([inboxRepository.messagesOf(connectionId, conversationId), contextOf(auth, account, conv)]);
+  // The bell's line about it (and the lock screen's) is read too.
+  if (markRead) notificationsService.readSubject(auth.userId, 'inbox.message', `${connectionId}:${conversationId}`).catch(() => {});
+  const [messages, context, notes, team] = await Promise.all([
+    inboxRepository.messagesOf(connectionId, conversationId),
+    contextOf(auth, account, conv),
+    conv.type === 'FROM_MEMBERS' ? inboxRepository.notesOf(connectionId, conversationId) : [],
+    conv.type === 'FROM_MEMBERS' ? teamOf(connectionId, auth.ownerId) : [],
+  ]);
   const items = await imagesFor([connectionId], [conv.reference_id]);
   const issues = new Map();
   if ((await ordersAccess(auth, [connectionId])).size) {
@@ -462,6 +600,10 @@ async function thread(auth, connectionId, conversationId, { markRead = true } = 
   return {
     conversation: conversationShape(conv, account, items, issues),
     messages: messages.map((m) => messageShape(m, conv.type)),
+    notes: notes.map((n) => noteShape(n, auth)),
+    // Who it can be given to: the owner and the members with the Inbox on this account.
+    team,
+    work: { status: conv.work_status, at: conv.work_status_at || null, by: personOf(conv.work_status_by, conv.work_status_by_name, conv.work_status_by_email) },
     context,
     stale,
   };
@@ -544,12 +686,156 @@ async function reply(auth, connectionId, conversationId, { text, fileIds = [], c
     preview: rules.previewOf(body),
   };
   await inboxRepository.addSent(connectionId, conversationId, sent);
-  await require('../team/activity.repository')
-    .record({ actorUserId: auth.userId, connectionId, kind: 'inbox.replied', subjectType: 'conversation', subjectId: conversationId, title: conv.other_party, detail: { itemId: conv.reference_id || null, files: media.length } })
+  // How long the buyer had waited for this answer (when the last word was theirs): the member's reply time.
+  const waitedMinutes = !conv.latest_from_seller && conv.latest_at ? Math.max(0, Math.round((Date.now() - new Date(conv.latest_at).getTime()) / 60000)) : null;
+  await activityRepository
+    .record({ actorUserId: auth.userId, connectionId, kind: 'inbox.replied', subjectType: 'conversation', subjectId: conversationId, title: conv.other_party, detail: { itemId: conv.reference_id || null, files: media.length, waitedMinutes } })
     .catch(() => {});
   await announce(connectionId, auth.ownerId, { conversationId });
   const [saved] = (await inboxRepository.messagesOf(connectionId, conversationId)).filter((m) => m.message_id === sent.messageId);
   return { sent: true, message: messageShape(saved, conv.type), account: { id: account.id, label: account.label } };
+}
+
+// ---- team working ---------------------------------------------------------------------
+
+const teamCache = new Map();
+/** The people a conversation on this account can be given to: the owner, then the members with the Inbox there, by name. */
+async function teamOf(connectionId, ownerId) {
+  const hit = teamCache.get(connectionId);
+  if (hit && Date.now() - hit.at < 60 * 1000) return hit.people;
+  const viewers = await viewersOf(connectionId, ownerId);
+  const byId = new Map((await inboxRepository.peopleByIds(viewers)).map((u) => [String(u.id), u]));
+  const people = viewers.map((id) => personOf(id, byId.get(id)?.name, byId.get(id)?.email));
+  teamCache.set(connectionId, { at: Date.now(), people });
+  return people;
+}
+
+async function buyerConversation(auth, connectionId, conversationId) {
+  await requireAccount(auth, connectionId);
+  const conv = await inboxRepository.findConversation(connectionId, conversationId);
+  if (!conv) throw new InboxError('Conversation not found.', 404);
+  if (conv.type !== 'FROM_MEMBERS') throw new InboxError("eBay's own messages aren't team work.", 400);
+  return conv;
+}
+
+function noteShape(n, auth) {
+  const mine = String(n.author_user_id) === String(auth.userId);
+  return { id: String(n.id), body: n.body, author: personOf(n.author_user_id, n.author_name, n.author_email), createdAt: n.created_at, mine, canDelete: mine || auth.role === 'owner' };
+}
+
+/** Gives a buyer's conversation to someone with the Inbox on its account (null: to no one); they're told. */
+async function assign(auth, connectionId, conversationId, userId) {
+  const conv = await buyerConversation(auth, connectionId, conversationId);
+  const to = userId ? String(userId) : null;
+  const team = await teamOf(connectionId, auth.ownerId);
+  const person = to ? team.find((p) => p.id === to) : null;
+  if (to && !person) throw new InboxError("They don't have the Inbox on this account.", 400);
+  if (String(conv.assigned_to || '') === String(to || '')) return { assignee: person };
+  await inboxRepository.assign(connectionId, conversationId, to);
+  if (to) {
+    await activityRepository
+      .record({ actorUserId: auth.userId, connectionId, kind: 'inbox.assigned', subjectType: 'conversation', subjectId: conversationId, title: conv.other_party, detail: { to, toName: person.name, itemId: conv.reference_id || null } })
+      .catch(() => {});
+    if (to !== String(auth.userId)) {
+      const by = team.find((p) => p.id === String(auth.userId))?.name || 'Someone';
+      notificationsService
+        .notify({
+          userId: to,
+          actorUserId: auth.userId,
+          kind: 'inbox.assigned',
+          title: `${by} gave you ${conv.other_party || 'a buyer'}'s conversation`,
+          body: conv.latest_preview || null,
+          url: `/accounts/${connectionId}/inbox?e=${connectionId}~${encodeURIComponent(conversationId)}`,
+          subjectType: 'conversation',
+          subjectId: `${connectionId}:${conversationId}`,
+          detail: { connectionId, conversationId, buyer: conv.other_party },
+        })
+        .catch(() => {});
+    }
+  }
+  await announce(connectionId, auth.ownerId, { conversationId });
+  return { assignee: person };
+}
+
+/** Marks where a buyer's conversation stands: open, waiting (on the buyer, a supplier…) or done (resolved, on their record). */
+async function setWork(auth, connectionId, conversationId, status) {
+  if (!WORK.includes(status)) throw new InboxError('Open, Waiting or Done.', 400);
+  const conv = await buyerConversation(auth, connectionId, conversationId);
+  if (conv.work_status === status) return { status };
+  await inboxRepository.setWorkStatus(connectionId, conversationId, status, auth.userId);
+  if (status === 'done') {
+    await activityRepository
+      .record({ actorUserId: auth.userId, connectionId, kind: 'inbox.resolved', subjectType: 'conversation', subjectId: conversationId, title: conv.other_party, detail: { itemId: conv.reference_id || null } })
+      .catch(() => {});
+  }
+  await announce(connectionId, auth.ownerId, { conversationId });
+  return { status };
+}
+
+/** A note on a buyer's conversation that only the team sees. */
+async function addNote(auth, connectionId, conversationId, text) {
+  const conv = await buyerConversation(auth, connectionId, conversationId);
+  const body = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!body) throw new InboxError('Write the note first.', 400);
+  if (body.length > MAX_NOTE) throw new InboxError(`Keep a note under ${MAX_NOTE.toLocaleString('en-GB')} characters.`, 400);
+  const note = await inboxRepository.addNote(connectionId, conversationId, auth.userId, body);
+  await activityRepository
+    .record({ actorUserId: auth.userId, connectionId, kind: 'inbox.noted', subjectType: 'conversation', subjectId: conversationId, title: conv.other_party, detail: { itemId: conv.reference_id || null } })
+    .catch(() => {});
+  await announce(connectionId, auth.ownerId, { conversationId });
+  return { note: noteShape(note, auth) };
+}
+
+/** Deletes a note: its writer, or the owner. */
+async function deleteNote(auth, connectionId, conversationId, noteId) {
+  await buyerConversation(auth, connectionId, conversationId);
+  const note = /^\d+$/.test(String(noteId)) ? await inboxRepository.findNote(connectionId, conversationId, noteId) : null;
+  if (!note) throw new InboxError('Note not found.', 404);
+  if (auth.role !== 'owner' && String(note.author_user_id) !== String(auth.userId)) throw new InboxError('Only who wrote a note, or the owner, can delete it.', 403);
+  await inboxRepository.deleteNote(note.id);
+  await announce(connectionId, auth.ownerId, { conversationId });
+  return { ok: true };
+}
+
+/**
+ * "Message buyer" from an order: a message to the order's buyer about its
+ * first item, threaded by eBay with anything already said; then the
+ * account's conversations are read so it's in the Inbox. Warnings first as
+ * for a reply. A real message to a real buyer, sent only when someone
+ * presses Send. { sent, conversationId }.
+ */
+async function messageBuyer(auth, connectionId, { orderId, text, confirm = false }) {
+  const account = await requireAccount(auth, connectionId);
+  const order = orderId ? await inboxRepository.orderById(connectionId, String(orderId)) : null;
+  if (!order) throw new InboxError('Order not found.', 404);
+  const buyer = order.buyerUserId;
+  const itemId = order.lineItems?.[0]?.itemId;
+  if (!buyer || !itemId) throw new InboxError("eBay hasn't given this order's buyer and item.", 400);
+  const body = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!body) throw new InboxError('Write your message first.', 400);
+  if (body.length > ebayMessage.MAX_TEXT) throw new InboxError(`eBay takes up to ${ebayMessage.MAX_TEXT.toLocaleString('en-GB')} characters in a message.`, 400);
+  const warnings = rules.warningsFor(body);
+  if (warnings.length && !confirm) return { sent: false, warnings };
+  const out = await withEbay(connectionId, auth.ownerId, ({ accessToken, marketplaceId }) => ebayMessage.sendMessage(accessToken, { buyerUsername: buyer, itemId: String(itemId), text: body }, marketplaceId));
+  // The conversation it's in (eBay's id, or found by reading the account's latest).
+  await sync(connectionId, auth.ownerId).catch(() => null);
+  const conversationId = out.conversationId || (await inboxRepository.latestWith(connectionId, buyer, String(itemId)))?.conversation_id || null;
+  if (conversationId && (await inboxRepository.findConversation(connectionId, conversationId))) {
+    await inboxRepository.addSent(connectionId, conversationId, { messageId: out.messageId || `sent-${Date.now()}`, sender: null, recipient: buyer, subject: null, body, media: [], createdAt: new Date().toISOString(), preview: rules.previewOf(body) });
+  }
+  await activityRepository
+    .record({
+      actorUserId: auth.userId,
+      connectionId,
+      kind: 'inbox.messaged',
+      subjectType: conversationId ? 'conversation' : 'order',
+      subjectId: conversationId || String(orderId),
+      title: buyer,
+      detail: { orderId: String(orderId), itemId: String(itemId) },
+    })
+    .catch(() => {});
+  await announce(connectionId, auth.ownerId, conversationId ? { conversationId } : {});
+  return { sent: true, conversationId, buyer, account: { id: account.id, label: account.label } };
 }
 
 /** Reads an account's messages from eBay now (the Refresh button). */
@@ -563,4 +849,25 @@ async function forgetMember(username) {
   return inboxRepository.forgetMember(username);
 }
 
-module.exports = { list, thread, unread, setRead, setStatus, reply, refresh, sync, accountsFor, forgetMember, InboxError, SCOPE };
+module.exports = {
+  list,
+  thread,
+  unread,
+  setRead,
+  setStatus,
+  reply,
+  refresh,
+  sync,
+  accountsFor,
+  forgetMember,
+  onPushedMessage,
+  tellTeam,
+  assign,
+  setWork,
+  addNote,
+  deleteNote,
+  messageBuyer,
+  _flushPushed,
+  InboxError,
+  SCOPE,
+};

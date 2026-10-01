@@ -5,6 +5,7 @@ import { PillTabs } from "@/components/PillTabs";
 import { useNow } from "@/lib/useMyEvents";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { colorFor, initialOf, listTime, shortAgo } from "../inbox-format";
+import { PersonDot } from "./EbayWork";
 
 // The eBay Inbox's list, as WhatsApp's chat list: search at the top, tabs
 // under it for the view (Unread with its count, Customers, From eBay), the
@@ -56,7 +57,7 @@ function Row({ c, active, showAccount, onOpen, now }: { c: EbayConversationRow; 
   const ebay = c.type === "FROM_EBAY";
   const unread = c.unread > 0;
   // How long the buyer has waited for an answer (not for what's archived).
-  const waitingMs = c.waitingSince && !ebay && c.status === "ACTIVE" ? now - new Date(c.waitingSince).getTime() : null;
+  const waitingMs = c.waitingSince && !ebay && c.status === "ACTIVE" && c.workStatus !== "done" ? now - new Date(c.waitingSince).getTime() : null;
   const subtitle = ebay ? c.latestSubject || c.title || "Message from eBay" : c.title || (c.referenceId ? `Item ${c.referenceId}` : "");
   return (
     <button
@@ -106,6 +107,27 @@ function Row({ c, active, showAccount, onOpen, now }: { c: EbayConversationRow; 
             )}
             {c.latestPreview || ""}
           </span>
+          {!ebay && c.workStatus === "done" && (
+            <span className="flex-shrink-0 text-emerald-600" title="Done">
+              <svg viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5" role="img" aria-label="Done">
+                <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M5.3 8.2l1.8 1.8 3.6-3.9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          )}
+          {!ebay && c.workStatus === "waiting" && (
+            <span className="flex-shrink-0 text-amber-600" title="Waiting on the buyer, a supplier or eBay">
+              <svg viewBox="0 0 16 16" fill="none" className="h-3.5 w-3.5" role="img" aria-label="Waiting">
+                <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M8 4.8V8l2.2 1.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </span>
+          )}
+          {!ebay && c.assignee && (
+            <span title={`${c.assignee.name} has this conversation`}>
+              <PersonDot person={c.assignee} size={16} />
+            </span>
+          )}
           {waitingMs !== null && !unread && (
             <span className={`flex-shrink-0 rounded-full px-1.5 text-[10px] font-semibold leading-4 tabular-nums ${waitingMs > 12 * 3600e3 ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`} title="Waiting for your answer">
               {shortAgo(c.waitingSince!, now)}

@@ -13,6 +13,10 @@ const crypto = require('crypto');
 //     ORDER_CONFIRMATION's data: { user: { userId, username }, order:
 //     { orderId, orderLineItems: [{ orderLineItemId, listingId, quantity }] } };
 //     LISTING's: { listingId, reason: CREATED | UPDATED | ENDED, user }.
+//     NEW_MESSAGE's: { conversationId, conversationType: FROM_MEMBERS |
+//     FROM_EBAY, messageId, messageBody, senderUserName, recipientUserName
+//     (the seller it reached; for some US sellers an immutable user id
+//     instead), subject, readStatus, createdDate, messageMedia }.
 
 function challengeResponse(challengeCode, verificationToken, endpoint) {
   return crypto.createHash('sha256').update(String(challengeCode)).update(verificationToken).update(endpoint).digest('hex');
@@ -70,7 +74,9 @@ function parseNotification(payload) {
   const n = payload?.notification;
   if (!topic || !n) return null;
   const data = n.data || {};
-  const user = data.user || {};
+  // A new message names the seller it reached as its recipient (a username, or for some US sellers an immutable id).
+  const recipient = String(topic) === 'NEW_MESSAGE' && data.recipientUserName ? String(data.recipientUserName) : null;
+  const user = recipient ? { userId: recipient, username: recipient } : data.user || {};
   const order = data.order || {};
   return {
     topic: String(topic),
@@ -82,6 +88,20 @@ function parseNotification(payload) {
     listingId: data.listingId ? String(data.listingId) : null,
     reason: data.reason ? String(data.reason).toUpperCase() : null,
     lineItems: (order.orderLineItems || []).map((li) => ({ lineItemId: li.orderLineItemId ? String(li.orderLineItemId) : null, listingId: li.listingId ? String(li.listingId) : null, quantity: Number(li.quantity || 1) })),
+    message: recipient && data.conversationId
+      ? {
+          conversationId: String(data.conversationId),
+          type: data.conversationType === 'FROM_EBAY' ? 'FROM_EBAY' : 'FROM_MEMBERS',
+          messageId: data.messageId ? String(data.messageId) : null,
+          body: data.messageBody == null ? '' : String(data.messageBody),
+          sender: data.senderUserName ? String(data.senderUserName) : null,
+          recipient,
+          subject: data.subject ? String(data.subject) : null,
+          read: data.readStatus === undefined ? null : Boolean(data.readStatus),
+          createdAt: data.createdDate || n.eventDate || null,
+          media: (data.messageMedia || []).map((x) => ({ name: x.mediaName || null, type: x.mediaType || null, url: x.mediaUrl || null })).filter((x) => x.url),
+        }
+      : null,
   };
 }
 

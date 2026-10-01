@@ -147,5 +147,26 @@ function unreadAfterRead(unread, { latestAt, latestFromSeller }, readAt) {
   return unread;
 }
 
+/**
+ * Whether a conversation row just read from eBay carries a buyer's new
+ * word worth telling the team about: a buyer's conversation in the inbox,
+ * its last message theirs and not the one Liston had (`known`, the stored
+ * row, or nothing for a new conversation), written within `within` ms.
+ */
+function isNewBuyerWord(row, known, { within, now = Date.now() } = {}) {
+  if (row.type !== 'FROM_MEMBERS' || row.status !== 'ACTIVE' || row.latestFromSeller || !row.latestMessageId) return false;
+  if (known && known.latest_message_id === row.latestMessageId) return false;
+  const at = row.latestAt ? new Date(row.latestAt).getTime() : NaN;
+  return Number.isFinite(at) && now - at <= within;
+}
+
+/** Whether someone's notification settings (null: the defaults) want eBay messages from this account pushed. */
+function wantsEbayPush(settings, connectionId) {
+  const mode = settings?.ebay || 'all';
+  if (mode === 'none') return false;
+  if (mode === 'chosen') return (settings.ebay_accounts || []).map(String).includes(String(connectionId));
+  return true;
+}
+
 module.exports = {
-  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, noticeHtml, previewOf, waitingSince, looksHtml, same, unreadAfterRead };
+  warningsFor, fromSeller, otherPartyOf, htmlToText, linksIn, noticeHtml, previewOf, waitingSince, looksHtml, same, unreadAfterRead, isNewBuyerWord, wantsEbayPush };

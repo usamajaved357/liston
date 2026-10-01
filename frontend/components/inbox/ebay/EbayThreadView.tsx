@@ -1,7 +1,8 @@
 "use client";
 
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { EbayMessage, EbayThread } from "@/lib/api";
+import { EbayMessage, EbayNote, EbayThread, EbayWorkStatus } from "@/lib/api";
+import { useCachedUser } from "@/lib/session";
 import { FileRow, PhotoGrid } from "../MessageFiles";
 import { RichText } from "../MessageBubble";
 import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, LatestButton, MenuItem, Meta, PopMenu } from "../ChatBubble";
@@ -9,13 +10,15 @@ import { colorFor, dayLabel, initialOf, timeLabel } from "../inbox-format";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { EbayMark, IssueBadge } from "./EbayConversationList";
 import { NoticeCard } from "./EbayNotice";
+import { AssignButton, NoteBubble, WorkButton } from "./EbayWork";
 
 // One eBay conversation, as WhatsApp shows a chat: a slim header (who,
 // and what it's about: a tag for an order, a listing or neither, then the
 // item; with a mark for an open return, case or dispute or a
 // cancellation the buyer asked for that opens the order's page there; its name or the details button opens the order and
-// listing beside it; "…" holds mark unread and archive), then the messages
-// on the chat wallpaper, the day in a chip that stays at the top while its
+// listing beside it; who has it and where it stands (Open · Waiting · Done)
+// beside the details button; "…" holds mark unread and archive), then the messages
+// on the chat wallpaper (with the team's notes among them, in amber), the day in a chip that stays at the top while its
 // messages scroll by: the buyer's white on the left, yours tinted on the
 // right, each run of one person's messages with a tail on its first, the
 // time in each bubble's corner (8px between them, 16px before the other
@@ -169,6 +172,9 @@ export function EbayThreadView({
   details,
   composer,
   showAccount = true,
+  onAssign,
+  onWork,
+  onDeleteNote,
 }: {
   data: EbayThread | null;
   loading: boolean;
@@ -184,7 +190,12 @@ export function EbayThreadView({
   composer?: ReactNode;
   // Every account together: which account the conversation is with.
   showAccount?: boolean;
+  // The team's working (a buyer's conversation): give it to someone, mark where it stands, delete a note.
+  onAssign?: (userId: string | null) => void;
+  onWork?: (status: EbayWorkStatus) => void;
+  onDeleteNote?: (note: EbayNote) => void;
 }) {
+  const me = useCachedUser()?.id || null;
   const scroller = useRef<HTMLDivElement>(null);
   // Its scrollbar shows only while someone is scrolling.
   const scrollerRef = useQuietScrollbar(scroller);
@@ -195,7 +206,7 @@ export function EbayThreadView({
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   const conv = data?.conversation;
   const ebay = conv?.type === "FROM_EBAY";
-  const count = data?.messages.length || 0;
+  const count = (data?.messages.length || 0) + (data?.notes?.length || 0);
 
   // Opened at the latest message (eBay's: at the top of its latest notice, to read down from its headline); kept there as new ones arrive and photos load.
   useLayoutEffect(() => {
@@ -243,12 +254,16 @@ export function EbayThreadView({
     { label: conv?.status === "ARCHIVE" ? "Move back to the inbox" : "Archive", onSelect: onArchive },
   ];
 
-  // Messages by day: each day's chip stays at the top while its messages scroll under it.
-  const days: { key: string; label: string; items: EbayMessage[] }[] = [];
-  for (const m of messages) {
-    const key = new Date(m.createdAt).toDateString();
-    if (days[days.length - 1]?.key !== key) days.push({ key, label: dayLabel(m.createdAt), items: [] });
-    days[days.length - 1].items.push(m);
+  // Messages (and the team's notes among them) by day: each day's chip stays at the top while its messages scroll under it.
+  type Entry = { message: EbayMessage; note?: undefined; at: string } | { note: EbayNote; message?: undefined; at: string };
+  const entries: Entry[] = [...messages.map((m) => ({ message: m, at: m.createdAt })), ...(data.notes || []).map((n) => ({ note: n, at: n.createdAt }))].sort(
+    (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime()
+  );
+  const days: { key: string; label: string; items: Entry[] }[] = [];
+  for (const e of entries) {
+    const key = new Date(e.at).toDateString();
+    if (days[days.length - 1]?.key !== key) days.push({ key, label: dayLabel(e.at), items: [] });
+    days[days.length - 1].items.push(e);
   }
   const latestId = messages[messages.length - 1]?.id;
   const joins = (a: EbayMessage | undefined, b: EbayMessage) => Boolean(a && a.fromSeller === b.fromSeller && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) < RUN_MS);
@@ -292,6 +307,8 @@ export function EbayThreadView({
               <IssueBadge issue={conv.issue} className="!px-2 !py-0.5 !text-[11px]" />
             </a>
           )}
+          {!ebay && onWork && <WorkButton status={data.work?.status || "open"} by={data.work?.by || null} disabled={busy} onChange={onWork} />}
+          {!ebay && onAssign && <AssignButton team={data.team || []} assignee={conv?.assignee || null} me={me} disabled={busy} onAssign={onAssign} />}
           {!ebay && (
             <HeaderButton label={detailsOpen ? "Hide details" : "Order and listing details"} onClick={onToggleDetails} active={detailsOpen}>
               <svg viewBox="0 0 24 24" fill="none" className="h-[19px] w-[19px]" aria-hidden>
@@ -327,8 +344,10 @@ export function EbayThreadView({
             {days.map((day) => (
               <div key={day.key} className="pb-1">
                 <DayChip label={day.label} sticky />
-                {day.items.map((m, i) => {
-                  const first = !joins(day.items[i - 1], m);
+                {day.items.map((e, i) => {
+                  if (e.note) return <NoteBubble key={`note-${e.note.id}`} note={e.note} onDelete={onDeleteNote ? () => onDeleteNote(e.note) : undefined} />;
+                  const m = e.message;
+                  const first = !joins(day.items[i - 1]?.message, m);
                   if (!ebay) return <Message key={m.id} m={m} first={first} />;
                   const latest = m.id === latestId;
                   if (!m.html) return <Notice key={m.id} m={m} first={first} latest={latest} />;

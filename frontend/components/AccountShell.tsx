@@ -94,6 +94,7 @@ export function AccountShell({
   marketplace,
   permissions,
   sync,
+  user,
 }: AccountShellProps) {
   const timeZone = marketplace?.timeZone || (marketplace?.id ? SITE_TIMEZONES[marketplace.id] : undefined);
   const canShow = (feature: string) => permissions === undefined || permissions[feature];
@@ -108,6 +109,7 @@ export function AccountShell({
   return (
     <AccountTimeZoneProvider value={timeZone}>
     <ShellFrame
+      member={user.role === "member"}
       sidebarClassName="gap-6"
       sidebar={
       <>

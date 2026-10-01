@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ApiError, EbayMessage, EbayThread, QuickReply, SharedFile, ebayInboxApi, uploadFile } from "@/lib/api";
+import { ApiError, EbayMessage, EbayNote, EbayThread, QuickReply, SharedFile, ebayInboxApi, uploadFile } from "@/lib/api";
 import { useIsPhone } from "@/lib/useIsPhone";
 import { fileSize } from "../inbox-format";
 import { fillReply, matchReplies, replyFacts, unfilled } from "./quick-replies";
@@ -19,21 +19,43 @@ import { fillReply, matchReplies, replyFacts, unfilled } from "./quick-replies";
 // filled in. Anything eBay blocks or flags (contact details, links off eBay,
 // paying outside eBay) is shown before it goes, with "Send anyway". A real
 // message to a real buyer: it goes only when Enter or Send is pressed.
+// The note button switches the box to a note for the team (amber, its own
+// text so a note can't go to the buyer by mistake): it's kept in Liston
+// and shown among the messages, never sent to eBay.
 
 const MAX = 2000;
 const ACCEPT = "image/jpeg,image/png,image/gif,image/webp,application/pdf,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain";
 type Pending = { key: string; name: string; size: number; progress: number; file?: SharedFile; error?: string; preview?: string };
 
-// What's being written to each buyer, kept while you move between conversations.
+// What's being written to each buyer (and each note), kept while you move between conversations.
 const drafts = new Map<string, string>();
+const noteDrafts = new Map<string, string>();
 // Each account's quick replies as last read, shown at once while they're read again.
 const replyCache = new Map<string, { replies: QuickReply[]; canEdit: boolean }>();
 
 // The quick replies open: from "/" typed at `start` (with what's typed after it), or from the button (start -1).
 type Slash = { start: number; query: string; index: number };
 
-export function EbayComposer({ connectionId, conversationId, buyer, thread, onSent }: { connectionId: string; conversationId: string; buyer: string | null; thread: EbayThread; onSent: (m: EbayMessage) => void }) {
+export function EbayComposer({
+  connectionId,
+  conversationId,
+  buyer,
+  thread,
+  onSent,
+  onNoted,
+}: {
+  connectionId: string;
+  conversationId: string;
+  buyer: string | null;
+  thread: EbayThread;
+  onSent: (m: EbayMessage) => void;
+  onNoted?: (n: EbayNote) => void;
+}) {
   const key = `${connectionId}~${conversationId}`;
+  // Writing a note for the team instead of a reply.
+  const [noting, setNoting] = useState(false);
+  const [note, setNote] = useState(() => noteDrafts.get(key) || "");
+  const noteArea = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState(() => drafts.get(key) || "");
   const [pending, setPending] = useState<Pending[]>([]);
   const [sending, setSending] = useState(false);
@@ -173,6 +195,77 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
     }
   }
 
+  async function saveNote() {
+    if (!note.trim() || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const out = await ebayInboxApi.addNote(connectionId, conversationId, note);
+      setNote("");
+      noteDrafts.delete(key);
+      onNoted?.(out.note);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't add the note.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  if (noting) {
+    return (
+      <div className="relative border-t border-amber-200 bg-amber-50/60 px-3 py-2">
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
+          <p className="text-[11.5px] font-semibold text-amber-800">Note for the team · the buyer won&apos;t see it</p>
+          <button
+            type="button"
+            onClick={() => {
+              setNoting(false);
+              setError(null);
+              setTimeout(() => area.current?.focus(), 0);
+            }}
+            className="text-[11.5px] font-medium text-[var(--color-primary)] hover:underline"
+          >
+            Back to replying
+          </button>
+        </div>
+        <div className="flex items-end gap-1 rounded-[22px] border border-amber-300 bg-white py-1 pl-3 pr-1 focus-within:shadow-[0_0_0_3px_rgb(251_191_36/0.25)]">
+          <textarea
+            ref={noteArea}
+            rows={1}
+            autoFocus
+            value={note}
+            onChange={(e) => {
+              setNote(e.target.value);
+              noteDrafts.set(key, e.target.value);
+              e.target.style.height = "auto";
+              e.target.style.height = `${Math.min(200, e.target.scrollHeight)}px`;
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setNoting(false);
+              if (e.key === "Enter" && !e.nativeEvent.isComposing && (e.metaKey || e.ctrlKey || (!e.shiftKey && !phone))) {
+                e.preventDefault();
+                saveNote();
+              }
+            }}
+            placeholder="What the team should know: a supplier's answer, what was agreed…"
+            className="max-h-[200px] min-h-[32px] flex-1 resize-none bg-transparent px-1 py-[6px] text-[13px] leading-[1.45] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
+            aria-label="Note for the team"
+          />
+          <button
+            type="button"
+            onClick={saveNote}
+            disabled={!note.trim() || sending || note.length > 2000}
+            title="Add the note (Enter)"
+            className="flex h-8 flex-shrink-0 items-center justify-center rounded-full bg-amber-500 px-3.5 text-[12px] font-semibold text-white transition-colors hover:bg-amber-600 disabled:bg-[var(--color-line)] disabled:text-[var(--color-muted)]"
+          >
+            {sending ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden /> : "Add note"}
+          </button>
+        </div>
+        {error && <p className="mt-1.5 px-3 text-[11.5px] text-rose-600">{error}</p>}
+      </div>
+    );
+  }
+
   return (
     <div
       className="relative border-t border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2"
@@ -310,6 +403,23 @@ export function EbayComposer({ connectionId, conversationId, buyer, thread, onSe
             <path d="M8.5 8.5h7M8.5 11.5h4.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
           </svg>
         </button>
+        {onNoted && (
+          <button
+            type="button"
+            onClick={() => {
+              setSlash(null);
+              setNoting(true);
+            }}
+            title="Write a note for the team (the buyer won't see it)"
+            aria-label="Note for the team"
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-amber-50 hover:text-amber-700"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
+              <rect x="5" y="3.5" width="14" height="17" rx="2" stroke="currentColor" strokeWidth="1.7" />
+              <path d="M8.5 8.5h7M8.5 12h7M8.5 15.5h4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
         <input
           ref={input}
           type="file"

@@ -42,3 +42,21 @@ test("unread as Liston keeps it: read here up to the latest message stays read w
   // The buyer wrote after it was read: eBay's count again.
   assert.strictEqual(rules.unreadAfterRead(2, { latestAt: '2026-09-30T19:00:00Z', latestFromSeller: false }, readAt), 2);
 });
+
+test("a buyer's new word is news for the team's devices: theirs, in the inbox, not the message Liston had, and recent", () => {
+  const now = Date.parse('2026-10-01T12:00:00Z');
+  const row = { type: 'FROM_MEMBERS', status: 'ACTIVE', latestFromSeller: false, latestMessageId: 'm2', latestAt: '2026-10-01T11:58:00Z' };
+  const within = 24 * 3600e3;
+  assert.strictEqual(rules.isNewBuyerWord(row, { latest_message_id: 'm1' }, { within, now }), true);
+  assert.strictEqual(rules.isNewBuyerWord(row, null, { within, now }), true, 'a new conversation');
+  assert.strictEqual(rules.isNewBuyerWord(row, { latest_message_id: 'm2' }, { within, now }), false, 'already had it');
+  assert.strictEqual(rules.isNewBuyerWord({ ...row, latestFromSeller: true }, null, { within, now }), false, 'your own reply');
+  assert.strictEqual(rules.isNewBuyerWord({ ...row, type: 'FROM_EBAY' }, null, { within, now }), false, "eBay's notices");
+  assert.strictEqual(rules.isNewBuyerWord({ ...row, status: 'ARCHIVE' }, null, { within, now }), false);
+  assert.strictEqual(rules.isNewBuyerWord({ ...row, latestAt: '2026-09-29T11:00:00Z' }, null, { within, now }), false, 'old, found late');
+
+  assert.strictEqual(rules.wantsEbayPush(null, 'a'), true, 'everything by default');
+  assert.strictEqual(rules.wantsEbayPush({ ebay: 'none' }, 'a'), false);
+  assert.strictEqual(rules.wantsEbayPush({ ebay: 'chosen', ebay_accounts: ['a'] }, 'a'), true);
+  assert.strictEqual(rules.wantsEbayPush({ ebay: 'chosen', ebay_accounts: ['b'] }, 'a'), false);
+});

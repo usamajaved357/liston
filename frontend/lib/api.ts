@@ -608,12 +608,29 @@ export interface TeamMember {
   deactivated_at?: string | null; // removed: no login, history kept
   lastActiveAt?: string | null; // their last recorded action
   today?: TeamMetrics; // what they've done today (Team page cards)
+  // Their time in Liston today (minutes), and whether a tab of theirs is open now.
+  time?: { working: number; idle: number; lastSeenAt: string | null; inListon: boolean };
   permissions: TeamMemberPermission[];
 }
 
 // A member's figures (backend team/activity.js METRICS). An order line or
 // listing counts once per range, however often it was touched.
-export type TeamMetricKey = "active_days" | "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted" | "draft_work" | "hunted" | "hunts_reviewed";
+export type TeamMetricKey =
+  | "active_days"
+  | "supplier_orders"
+  | "dispatched"
+  | "cases"
+  | "published"
+  | "edited"
+  | "relisted"
+  | "ended"
+  | "drafted"
+  | "draft_work"
+  | "hunted"
+  | "hunts_reviewed"
+  | "inbox_answered"
+  | "inbox_resolved"
+  | "inbox_sent";
 export type TeamMetrics = Record<TeamMetricKey, number>;
 export type TeamRange = "today" | "yesterday" | "7d" | "30d" | "this_month" | "last_month" | "custom";
 
@@ -640,6 +657,24 @@ export interface MemberOverview {
   };
   connections: { id: string; label: string }[];
   knownFeatures: string[];
+  // How quickly they answer buyers: the median minutes a buyer had waited before each reply.
+  replyTime?: { median: number | null; count: number };
+  previousReplyTime?: { median: number | null; count: number };
+  // Their time in Liston in the period (minutes), and before.
+  time?: { working: number; idle: number };
+  previousTime?: { working: number; idle: number };
+}
+
+// A member's time in Liston for a range (minutes): working and idle, each
+// day's stretches (minutes after that day's midnight), and where it went.
+export type WorkArea = "dashboard" | "overview" | "inbox" | "orders" | "listings" | "hunting" | "research" | "analytics" | "campaigns" | "settings" | "other";
+export interface MemberTime {
+  range: { key: TeamRange; from: string; to: string; days: number; timeZone: string; previous: { from: string; to: string } };
+  trackedSince: string | null;
+  totals: { working: number; idle: number; actions: number; actionsPerHour: number | null; daysInListon: number };
+  previous: { working: number; idle: number; actions: number };
+  days: { day: string; working: number; idle: number; first: string | null; last: string | null; actions: number; spans: { from: number; to: number; working: boolean; area: WorkArea }[] }[];
+  areas: { area: WorkArea; label: string; working: number; idle: number; actions: number }[];
 }
 
 // A team member's own work on one account (their Overview there): the same
@@ -654,7 +689,7 @@ export interface MemberActivityItem {
   id: string;
   kind: string;
   label: string;
-  subjectType: "order" | "listing" | "draft" | "account" | "session" | "hunt";
+  subjectType: "order" | "listing" | "draft" | "account" | "session" | "hunt" | "conversation";
   subjectId: string;
   subjectPart: string | null;
   title: string | null;
@@ -2915,6 +2950,15 @@ export const api = {
       `/api/team/members/${id}/activity?${q.toString()}`
     );
   },
+  // Their time in Liston for a range.
+  getMemberTime: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
+    const q = new URLSearchParams({ range, tz: viewerTimeZone() });
+    if (range === "custom" && custom) {
+      q.set("from", custom.from);
+      q.set("to", custom.to);
+    }
+    return request<MemberTime>(`/api/team/members/${id}/time?${q.toString()}`);
+  },
   setTeamMemberPassword: (id: string, password: string) =>
     request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
@@ -3194,9 +3238,30 @@ export interface EbayListingInsights {
   supplierUrl: string | null;
   specifics: { name: string; value: string }[];
 }
+// Someone on the team, by name.
+export interface TeamPerson {
+  id: string;
+  name: string;
+}
+export type EbayWorkStatus = "open" | "waiting" | "done";
+// A note on a buyer's conversation that only the team sees.
+export interface EbayNote {
+  id: string;
+  body: string;
+  author: TeamPerson | null;
+  createdAt: string;
+  mine: boolean;
+  // Its writer, or the owner.
+  canDelete: boolean;
+}
 export interface EbayThread {
   conversation: EbayConversationRow;
   messages: EbayMessage[];
+  notes: EbayNote[];
+  // Who it can be given to: the owner and the members with the Inbox on this account.
+  team: TeamPerson[];
+  // Where it stands for the team, and who said so.
+  work: { status: EbayWorkStatus; at: string | null; by: TeamPerson | null };
   context: {
     item: { itemId: string; title: string | null; image: string | null; price: { amount: number; currency: string } | null; url: string | null; ebayUrl: string; insights: EbayListingInsights | null } | null;
     listing: ListonCard | null;
@@ -3252,6 +3317,21 @@ export const ebayInboxApi = {
   // A reply to a buyer. Text eBay blocks comes back as `warnings` (sent: false) unless `confirm`.
   reply: (connectionId: string, conversationId: string, input: { text: string; fileIds?: string[]; confirm?: boolean }) =>
     request<{ sent: true; message: EbayMessage } | { sent: false; warnings: { kind: string; text: string }[] }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  // The team's working: who has it (null: no one), where it stands, notes only the team sees.
+  assign: (connectionId: string, conversationId: string, userId: string | null) =>
+    request<{ assignee: TeamPerson | null }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/assign`, { method: "POST", body: JSON.stringify({ userId }) }),
+  setWork: (connectionId: string, conversationId: string, status: EbayWorkStatus) =>
+    request<{ status: EbayWorkStatus }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/work`, { method: "POST", body: JSON.stringify({ status }) }),
+  addNote: (connectionId: string, conversationId: string, body: string) =>
+    request<{ note: EbayNote }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/notes`, { method: "POST", body: JSON.stringify({ body }) }),
+  deleteNote: (connectionId: string, conversationId: string, noteId: string) =>
+    request<{ ok: true }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/notes/${noteId}`, { method: "DELETE" }),
+  // "Message buyer" from an order: warnings first (sent: false) unless `confirm`.
+  messageBuyer: (connectionId: string, input: { orderId: string; text: string; confirm?: boolean }) =>
+    request<{ sent: true; conversationId: string | null; buyer: string } | { sent: false; warnings: { kind: string; text: string }[] }>(`/api/connections/${connectionId}/inbox/message-buyer`, {
       method: "POST",
       body: JSON.stringify(input),
     }),

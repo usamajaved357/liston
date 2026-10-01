@@ -18,7 +18,9 @@ import { listTime } from "../inbox-format";
 // row above the panes with the mode switch on the Dashboard's. The list comes from
 // what Liston keeps and is read again from eBay in the background (at once
 // when opened if it's over a minute old, every minute while in view, and
-// whenever Liston hears it changed); the open conversation follows.
+// whenever Liston hears it changed); the open conversation follows. A
+// buyer's conversation is given to someone, marked Open · Waiting · Done
+// and noted from its header and composer.
 
 const POLL_MS = 60 * 1000;
 // Each view of the list, as the server's folder and filter.
@@ -279,6 +281,27 @@ export function EbayInbox({
                   onActiveChange(null);
                 })
               }
+              onAssign={(userId) =>
+                conv &&
+                act(async () => {
+                  await ebayInboxApi.assign(conv.account.id, conv.conversationId, userId);
+                  await loadThread(true);
+                })
+              }
+              onWork={(status) =>
+                conv &&
+                act(async () => {
+                  await ebayInboxApi.setWork(conv.account.id, conv.conversationId, status);
+                  await loadThread(true);
+                })
+              }
+              onDeleteNote={(n) =>
+                conv &&
+                act(async () => {
+                  await ebayInboxApi.deleteNote(conv.account.id, conv.conversationId, n.id);
+                  await loadThread(true);
+                })
+              }
               onArchive={() =>
                 conv &&
                 act(async () => {
@@ -298,6 +321,7 @@ export function EbayInbox({
                       setLoaded((l) => (l && l.thread ? { ...l, thread: { ...l.thread, messages: [...l.thread.messages.filter((x) => x.id !== m.id), m] } } : l));
                       reloadList();
                     }}
+                    onNoted={(n) => setLoaded((l) => (l && l.thread ? { ...l, thread: { ...l.thread, notes: [...(l.thread.notes || []).filter((x) => x.id !== n.id), n] } } : l))}
                   />
                 ) : null
               }

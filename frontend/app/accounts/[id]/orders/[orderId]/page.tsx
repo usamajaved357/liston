@@ -34,6 +34,7 @@ import {
 import { SourcingCard } from "@/components/orders/SourcingCard";
 import { ActionDialog, type ActionKind } from "@/components/orders/ActionDialog";
 import { CaseDialog, CasesPanel, type CaseAction } from "@/components/orders/CaseDialogs";
+import { MessageBuyerDialog } from "@/components/orders/MessageBuyerDialog";
 import { AccountPageSkeleton, OrderDetailSkeleton } from "@/components/Skeleton";
 
 // One eBay order, laid out the way Seller Hub's order page is — the
@@ -84,6 +85,8 @@ export default function OrderDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [saveNotes, setSaveNotes] = useState<Record<string, { tone: "ok" | "bad"; text: string } | null>>({});
   const [moreOpen, setMoreOpen] = useState(false);
+  // "Message buyer" from Liston (people with the Inbox here; the rest go to eBay's contact page).
+  const [messaging, setMessaging] = useState(false);
   const [action, setAction] = useState<ActionKind | null>(null);
   const [actionNote, setActionNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
@@ -451,7 +454,8 @@ export default function OrderDetailPage() {
                               { label: "Send refund", run: guarded(() => setAction("refund")), disabled: order.paymentStatus === "FULLY_REFUNDED" },
                               { label: "View payment details", run: () => scrollTo("payment") },
                               { label: order.cancelRequests.some((r) => r.state === "REQUESTED") ? "Approve cancellation" : "Cancel order", run: guarded(() => setAction("cancel")), disabled: dispatched || cancelled },
-                              { label: "Message buyer", href: messageUrl },
+                              // Through Liston, into the Inbox, for whoever has it here (an owner always); else eBay's own contact page.
+                              !connection.permissions || connection.permissions.inbox ? { label: "Message buyer", run: () => setMessaging(true), disabled: !order.buyer.username } : { label: "Message buyer", href: messageUrl },
                               { label: "Report buyer", href: reportBuyerUrl },
                               { label: "Relist", href: relistUrl },
                               { label: "Sell similar", href: sellSimilarUrl },
@@ -904,6 +908,9 @@ export default function OrderDetailPage() {
             </button>
           </div>
         </Modal>
+      )}
+      {messaging && order?.buyer.username && (
+        <MessageBuyerDialog connectionId={connection.id} orderId={order.orderId} buyer={order.buyer.username} item={firstItem ? cleanTitle(firstItem.title) : null} onClose={() => setMessaging(false)} />
       )}
       {caseAction && order && cases && (
         <CaseDialog

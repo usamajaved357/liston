@@ -8,12 +8,15 @@ import { TrendChart } from "@/components/charts/TrendChart";
 import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
 import { money } from "@/components/research/format";
 import { hoursText } from "@/components/hunting/HuntBits";
+import { minutesText, waitText } from "./time-format";
 
 // A team member's Performance tab, laid out like the Overview: one card per
 // area they work in (what they have access to, or did work in, in this
 // period), each with its headline against the period before and the
-// details behind it; then one chart of any measure, day by day against the
-// period before; then the same by eBay account.
+// details behind it (the eBay Inbox: buyers answered, queries resolved,
+// messages sent, how quickly they answer, cases handled; and their time in
+// Liston, working and idle); then one chart of any measure, day by day
+// against the period before; then the same by eBay account.
 //
 // `self`: the member's own Overview on one account — "you" and "your",
 // no log links (the log is the owner's), no by-account table, and never any
@@ -44,6 +47,7 @@ function AreaCard({
   rows,
   onOpenLog,
   headlineMetric,
+  action,
 }: {
   title: string;
   accent: string;
@@ -55,6 +59,8 @@ function AreaCard({
   rows: Row[];
   onOpenLog?: (kind: TeamMetricKey) => void;
   headlineMetric?: TeamMetricKey;
+  // A link in the corner instead of the log's (the Time tab).
+  action?: { label: string; onClick: () => void };
 }) {
   return (
     <section className="card flex min-w-0 flex-col px-4 pb-2 pt-3.5">
@@ -63,10 +69,17 @@ function AreaCard({
           <span className={`h-2 w-2 rounded-full ${accent}`} aria-hidden />
           {title}
         </span>
-        {headlineMetric && onOpenLog && (
-          <button type="button" onClick={() => onOpenLog(headlineMetric)} className="text-[11.5px] font-medium text-[var(--color-primary)] hover:underline">
-            Log
+        {action ? (
+          <button type="button" onClick={action.onClick} className="text-[11.5px] font-medium text-[var(--color-primary)] hover:underline">
+            {action.label}
           </button>
+        ) : (
+          headlineMetric &&
+          onOpenLog && (
+            <button type="button" onClick={() => onOpenLog(headlineMetric)} className="text-[11.5px] font-medium text-[var(--color-primary)] hover:underline">
+              Log
+            </button>
+          )
         )}
       </div>
       <div className="mt-2 flex items-baseline gap-2">
@@ -108,7 +121,7 @@ function AreaCard({
   );
 }
 
-export function MemberPerformance({ data, onOpenLog, self = false }: { data: WorkOverview; onOpenLog?: (kind: TeamMetricKey) => void; self?: boolean }) {
+export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }: { data: WorkOverview; onOpenLog?: (kind: TeamMetricKey) => void; onOpenTime?: () => void; self?: boolean }) {
   // Their words, or yours.
   const they = self ? "you" : "they";
   const Their = self ? "Your" : "Their";
@@ -125,17 +138,26 @@ export function MemberPerformance({ data, onOpenLog, self = false }: { data: Wor
   const showListings = has("listings") || any(LISTING_KEYS);
   const showHunting = has("hunting") || has("hunting_review") || Boolean(h && (h.hunter.hunted || h.previousHunter.hunted)) || any(["hunted"]);
   const showReviews = has("hunting_review") || Boolean(h && (h.reviewer.reviewed || h.previousReviewer.reviewed));
+  const INBOX_KEYS: TeamMetricKey[] = ["inbox_answered", "inbox_resolved", "inbox_sent"];
+  const showInbox = has("inbox") || any(INBOX_KEYS);
+  const time = data.time;
+  const prevTime = data.previousTime;
+  const showTime = Boolean(time && prevTime && (time.working + time.idle > 0 || prevTime.working + prevTime.idle > 0));
+  const reply = data.replyTime;
 
   // The chart's measures, a few that matter, for the areas shown: orders
   // placed and shipped, listings drafted and published, products hunted and
   // (decided by a reviewer, on the day decided) approved and rejected, and
   // converting (their finds with a sale that day).
-  type ChartKey = "supplier_orders" | "dispatched" | "drafted" | "published" | "hunted" | "approved" | "rejected" | "converting";
+  type ChartKey = "supplier_orders" | "dispatched" | "cases" | "inbox_answered" | "inbox_resolved" | "drafted" | "published" | "hunted" | "approved" | "rejected" | "converting";
   type OutcomeKey = "approved" | "rejected" | "converting";
   const isOutcome = (k: ChartKey): k is OutcomeKey => k === "approved" || k === "rejected" || k === "converting";
-  const CHART: { key: ChartKey; label: string; area: "orders" | "listings" | "hunting"; log?: TeamMetricKey }[] = [
+  const CHART: { key: ChartKey; label: string; area: "orders" | "listings" | "hunting" | "inbox" | "cases"; log?: TeamMetricKey }[] = [
     { key: "supplier_orders", label: "Orders placed", area: "orders", log: "supplier_orders" },
     { key: "dispatched", label: "Orders shipped", area: "orders", log: "dispatched" },
+    { key: "inbox_answered", label: "Buyers answered", area: "inbox", log: "inbox_answered" },
+    { key: "inbox_resolved", label: "Buyer queries resolved", area: "inbox", log: "inbox_resolved" },
+    { key: "cases", label: "Cases handled", area: "cases", log: "cases" },
     { key: "drafted", label: "Listings drafted", area: "listings", log: "drafted" },
     { key: "published", label: "Listings published", area: "listings", log: "published" },
     { key: "hunted", label: "Products hunted", area: "hunting", log: "hunted" },
@@ -145,7 +167,8 @@ export function MemberPerformance({ data, onOpenLog, self = false }: { data: Wor
     { key: "converting", label: "Converting products", area: "hunting" },
   ];
   const o = data.huntOutcomes;
-  const chartOptions = CHART.filter((c) => (c.area === "orders" ? showOrders : c.area === "listings" ? showListings : showHunting));
+  const areaShown = { orders: showOrders, listings: showListings, hunting: showHunting, inbox: showInbox, cases: showOrders || showInbox };
+  const chartOptions = CHART.filter((c) => areaShown[c.area]);
   const options = chartOptions.length ? chartOptions : CHART.slice(0, 1);
   const valueAt = (k: ChartKey, i: number, before = false): number | null => {
     if (isOutcome(k)) return (before ? o?.previousSeries : o?.series)?.[i]?.[k] ?? null;
@@ -161,7 +184,7 @@ export function MemberPerformance({ data, onOpenLog, self = false }: { data: Wor
 
   const sales = h?.sales[0];
   const prevSales = h?.previousSales[0];
-  const accountKeys: TeamMetricKey[] = [...(showOrders ? ORDER_KEYS : []), ...(showListings ? LISTING_KEYS : []), ...(showHunting ? (["hunted"] as TeamMetricKey[]) : []), ...(showReviews ? (["hunts_reviewed"] as TeamMetricKey[]) : [])];
+  const accountKeys: TeamMetricKey[] = [...(showOrders ? ORDER_KEYS : []), ...(showInbox ? INBOX_KEYS : []), ...(showListings ? LISTING_KEYS : []), ...(showHunting ? (["hunted"] as TeamMetricKey[]) : []), ...(showReviews ? (["hunts_reviewed"] as TeamMetricKey[]) : [])];
   const accountColumns = accountKeys.filter((k) => data.accounts.some((a) => a[k] > 0));
 
   return (
@@ -196,6 +219,30 @@ export function MemberPerformance({ data, onOpenLog, self = false }: { data: Wor
             rows={[
               { label: "Orders dispatched", value: fullNumber(t.dispatched), metric: "dispatched" },
               { label: "Refunds, cancellations & cases", value: fullNumber(t.cases), metric: "cases", tone: t.cases ? "warn" : "plain" },
+            ]}
+          />
+        )}
+        {showInbox && (
+          <AreaCard
+            title="Inbox"
+            accent="bg-teal-500"
+            value={fullNumber(t.inbox_answered)}
+            unit="buyers answered"
+            delta={change(t.inbox_answered, p.inbox_answered)}
+            compared={compared}
+            note={self ? "Buyer conversations you answered" : "Buyer conversations answered from the Inbox"}
+            headlineMetric="inbox_answered"
+            onOpenLog={onOpenLog}
+            rows={[
+              { label: "Queries resolved", value: fullNumber(t.inbox_resolved), metric: "inbox_resolved", tone: t.inbox_resolved ? "good" : "plain", hint: "Conversations marked Done" },
+              { label: "Messages sent", value: fullNumber(t.inbox_sent), metric: "inbox_sent" },
+              {
+                label: "Typical reply time",
+                value: waitText(reply?.median),
+                tone: reply?.median != null ? (reply.median <= 120 ? "good" : reply.median > 720 ? "bad" : "warn") : "plain",
+                hint: reply?.count ? `How long a buyer had waited before ${self ? "your" : "their"} answer (the middle of ${reply.count} repl${reply.count === 1 ? "y" : "ies"})` : "No replies to a waiting buyer in this period",
+              },
+              { label: "Cases handled", value: fullNumber(t.cases), metric: "cases", hint: "Returns, item-not-received cases, payment disputes, refunds and cancellations handled from an order" },
             ]}
           />
         )}
@@ -269,6 +316,23 @@ export function MemberPerformance({ data, onOpenLog, self = false }: { data: Wor
             ]}
           />
         )}
+        {showTime && time && prevTime && (
+          <AreaCard
+            title="Time in Liston"
+            accent="bg-slate-500"
+            value={minutesText(time.working)}
+            unit="working"
+            delta={change(time.working, prevTime.working)}
+            compared={compared}
+            note={`${minutesText(time.working + time.idle)} with Liston open, ${minutesText(time.idle)} of it idle`}
+            action={onOpenTime ? { label: "Day by day", onClick: onOpenTime } : undefined}
+            rows={[
+              { label: "Working", value: minutesText(time.working), tone: "good", hint: "A click, key press or scroll in Liston within a couple of minutes" },
+              { label: "Idle", value: minutesText(time.idle), tone: time.idle > time.working ? "warn" : "plain", hint: "Liston open with nothing done (counted for up to half an hour at a time)" },
+              { label: "Actions per working hour", value: time.working >= 15 ? String(Math.round((data.actions / (time.working / 60)) * 10) / 10) : "—" },
+            ]}
+          />
+        )}
       </div>
 
       {h && h.reasons.length > 0 && (
@@ -281,8 +345,8 @@ export function MemberPerformance({ data, onOpenLog, self = false }: { data: Wor
         <div className="card px-6 py-10 text-center">
           <p className="text-[13px] font-semibold text-[var(--color-ink)]">No recorded work in this period</p>
           <p className="mx-auto mt-1 max-w-xl text-[12px] leading-relaxed text-[var(--color-muted)]">
-            Work counts when it&apos;s done in Liston: supplier orders, dispatches, refunds and cases from an order, listings drafted, published, edited, relisted or ended, and
-            products hunted or reviewed. Work done straight on eBay or AliExpress can&apos;t be seen.
+            Work counts when it&apos;s done in Liston: supplier orders, dispatches, refunds and cases from an order, buyers answered and queries resolved in the Inbox, listings
+            drafted, published, edited, relisted or ended, and products hunted or reviewed. Work done straight on eBay or AliExpress can&apos;t be seen.
           </p>
         </div>
       ) : (
@@ -382,7 +446,9 @@ export function MemberPerformance({ data, onOpenLog, self = false }: { data: Wor
 
       <p className="text-[11px] leading-relaxed text-[var(--color-muted)]">
         Days run midnight to midnight in {data.range.timeZone.replace("_", " ")}. An order line or listing counts once per period however many times it was touched; edits, drafts
-        and cases count each time. Hunting figures count products by when they were hunted, and decisions by when they were made.
+        and cases count each time. A buyer counts once as answered however many messages went; messages sent count each one. Hunting figures count products by when they
+        were hunted, and decisions by when they were made. Time in Liston: working is a click, key press or scroll within a couple of minutes, idle is Liston open with
+        nothing done, for up to half an hour at a time.
       </p>
     </div>
   );

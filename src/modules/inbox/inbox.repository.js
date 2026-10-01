@@ -1,7 +1,8 @@
 const { query, pool } = require('../../db/client');
 
 // The eBay Inbox's tables (migration 043): each account's conversations and
-// messages as read from eBay, and how far each account is read.
+// messages as read from eBay, and how far each account is read; and the
+// team's own (046): who has a conversation, where it stands, its notes.
 
 /** Keeps conversations as eBay gave them (Liston's own columns left as they are): the ids that were new or changed. */
 async function upsertConversations(connectionId, rows) {
@@ -122,7 +123,8 @@ async function counts(connectionIds) {
 
 async function findConversation(connectionId, conversationId) {
   const { rows } = await query(
-    `SELECT c.*, u.name AS assignee_name, u.email AS assignee_email FROM ebay_conversations c LEFT JOIN users u ON u.id = c.assigned_to
+    `SELECT c.*, u.name AS assignee_name, u.email AS assignee_email, w.name AS work_status_by_name, w.email AS work_status_by_email
+       FROM ebay_conversations c LEFT JOIN users u ON u.id = c.assigned_to LEFT JOIN users w ON w.id = c.work_status_by
       WHERE c.connection_id = $1 AND c.conversation_id = $2`,
     [connectionId, conversationId]
   );
@@ -288,6 +290,99 @@ async function addSent(connectionId, conversationId, m) {
   );
 }
 
+/**
+ * A message eBay pushed (NEW_MESSAGE), kept so opening the conversation
+ * reads nothing more: only into a conversation whose messages were read
+ * before (one never opened is read whole the first time). Its time of
+ * reading is left alone. Whether it was kept.
+ */
+async function keepPushed(connectionId, conversationId, m) {
+  if (!m.messageId || !m.createdAt) return false;
+  const { rowCount } = await query(
+    `INSERT INTO ebay_messages (connection_id, conversation_id, message_id, sender, recipient, from_seller, subject, body, media, read, created_at)
+     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+      WHERE EXISTS (SELECT 1 FROM ebay_conversations c WHERE c.connection_id = $1 AND c.conversation_id = $2 AND c.messages_synced_at IS NOT NULL)
+     ON CONFLICT (connection_id, message_id) DO NOTHING`,
+    [connectionId, conversationId, m.messageId, m.sender, m.recipient, Boolean(m.fromSeller), m.subject, m.body || '', JSON.stringify(m.media || []), m.read, m.createdAt]
+  );
+  return rowCount > 0;
+}
+
+/** Gives a conversation to someone (null: no one). */
+async function assign(connectionId, conversationId, userId) {
+  await query(`UPDATE ebay_conversations SET assigned_to = $3, assigned_at = CASE WHEN $3::uuid IS NULL THEN NULL ELSE now() END WHERE connection_id = $1 AND conversation_id = $2`, [
+    connectionId,
+    conversationId,
+    userId || null,
+  ]);
+}
+
+/** Where a conversation stands for the team (open, waiting, done), and who said so. */
+async function setWorkStatus(connectionId, conversationId, status, userId) {
+  await query(`UPDATE ebay_conversations SET work_status = $3, work_status_at = now(), work_status_by = $4 WHERE connection_id = $1 AND conversation_id = $2`, [connectionId, conversationId, status, userId || null]);
+}
+
+/** The buyer wrote again: waiting or done conversations are open again (by no one). The ids reopened. */
+async function reopen(connectionId, conversationIds) {
+  if (!conversationIds.length) return [];
+  const { rows } = await query(
+    `UPDATE ebay_conversations SET work_status = 'open', work_status_at = now(), work_status_by = NULL
+      WHERE connection_id = $1 AND conversation_id = ANY($2) AND work_status <> 'open' RETURNING conversation_id`,
+    [connectionId, conversationIds]
+  );
+  return rows.map((r) => r.conversation_id);
+}
+
+/** A conversation's notes (deleted ones left out), oldest first, with who wrote each. */
+async function notesOf(connectionId, conversationId) {
+  const { rows } = await query(
+    `SELECT n.id, n.body, n.author_user_id, n.created_at, u.name AS author_name, u.email AS author_email
+       FROM ebay_conversation_notes n LEFT JOIN users u ON u.id = n.author_user_id
+      WHERE n.connection_id = $1 AND n.conversation_id = $2 AND n.deleted_at IS NULL ORDER BY n.created_at, n.id`,
+    [connectionId, conversationId]
+  );
+  return rows;
+}
+
+async function addNote(connectionId, conversationId, authorId, body) {
+  const { rows } = await query(
+    `INSERT INTO ebay_conversation_notes (connection_id, conversation_id, author_user_id, body) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [connectionId, conversationId, authorId, body]
+  );
+  return (await notesOf(connectionId, conversationId)).find((n) => String(n.id) === String(rows[0].id)) || null;
+}
+
+async function findNote(connectionId, conversationId, noteId) {
+  const { rows } = await query(`SELECT * FROM ebay_conversation_notes WHERE id = $3 AND connection_id = $1 AND conversation_id = $2 AND deleted_at IS NULL`, [connectionId, conversationId, noteId]);
+  return rows[0] || null;
+}
+
+async function deleteNote(noteId) {
+  await query(`UPDATE ebay_conversation_notes SET deleted_at = now() WHERE id = $1`, [noteId]);
+}
+
+/** People by id: { id, name, email } (for names beside their work). */
+async function peopleByIds(ids) {
+  if (!ids.length) return [];
+  const { rows } = await query(`SELECT id, name, email FROM users WHERE id = ANY($1::uuid[])`, [ids]);
+  return rows;
+}
+
+/** One order from the account's orders mirror (its data), or null. */
+async function orderById(connectionId, orderId) {
+  const { rows } = await query(`SELECT data FROM ebay_orders WHERE connection_id = $1 AND order_id = $2`, [connectionId, orderId]);
+  return rows[0]?.data || null;
+}
+
+/** The newest conversation with this buyer about this item, or null. */
+async function latestWith(connectionId, buyer, itemId) {
+  const { rows } = await query(
+    `SELECT conversation_id FROM ebay_conversations WHERE connection_id = $1 AND type = 'FROM_MEMBERS' AND lower(other_party) = lower($2) AND reference_id = $3 ORDER BY latest_at DESC NULLS LAST LIMIT 1`,
+    [connectionId, buyer, itemId]
+  );
+  return rows[0] || null;
+}
+
 /** A buyer's conversations and messages on every account, when eBay says they closed their eBay account. */
 async function forgetMember(username) {
   if (!username) return 0;
@@ -319,5 +414,16 @@ module.exports = {
   recordSync,
   forgetMember,
   addSent,
+  keepPushed,
+  assign,
+  setWorkStatus,
+  reopen,
+  notesOf,
+  addNote,
+  findNote,
+  deleteNote,
+  peopleByIds,
+  orderById,
+  latestWith,
   FOLDERS,
 };

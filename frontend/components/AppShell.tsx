@@ -34,6 +34,7 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
 
   return (
     <ShellFrame
+      member={role === "member"}
       sidebarClassName="gap-7"
       sidebar={
       <>

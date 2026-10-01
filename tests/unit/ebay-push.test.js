@@ -55,8 +55,45 @@ test('an order push names the seller, the order and its lines', () => {
     listingId: null,
     reason: null,
     lineItems: [{ lineItemId: 'li-1', listingId: '4071', quantity: 2 }],
+    message: null,
   });
   assert.strictEqual(commerce.parseNotification({ nothing: true }), null);
+});
+
+test('a new-message push names the seller it reached (its recipient) and carries the message', () => {
+  const n = commerce.parseNotification({
+    metadata: { topic: 'NEW_MESSAGE', schemaVersion: '1.0' },
+    notification: {
+      notificationId: 'n-3',
+      eventDate: '2026-10-01T09:00:01.000Z',
+      publishAttemptCount: 1,
+      data: {
+        messageId: '5498562796019',
+        conversationType: 'FROM_MEMBERS',
+        conversationId: 'conv-9',
+        messageBody: 'Where is my parcel?',
+        senderUserName: 'buyer_uk',
+        recipientUserName: 'seller1',
+        subject: 'About your item',
+        readStatus: false,
+        createdDate: '2026-10-01T09:00:00.000Z',
+        messageMedia: [{ mediaName: 'p.jpg', mediaType: 'IMAGE', mediaUrl: 'https://i.ebayimg.com/p.jpg' }],
+      },
+    },
+  });
+  assert.deepStrictEqual(n.seller, { userId: 'seller1', username: 'seller1' }, 'a username, or for some US sellers an immutable id: either matches');
+  assert.deepStrictEqual(n.message, {
+    conversationId: 'conv-9',
+    type: 'FROM_MEMBERS',
+    messageId: '5498562796019',
+    body: 'Where is my parcel?',
+    sender: 'buyer_uk',
+    recipient: 'seller1',
+    subject: 'About your item',
+    read: false,
+    createdAt: '2026-10-01T09:00:00.000Z',
+    media: [{ name: 'p.jpg', type: 'IMAGE', url: 'https://i.ebayimg.com/p.jpg' }],
+  });
 });
 
 test('a listing push names the seller, the listing and what happened to it', () => {
