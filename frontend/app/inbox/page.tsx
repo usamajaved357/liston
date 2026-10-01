@@ -60,7 +60,7 @@ export default function InboxPage() {
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">Inbox</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Your team, and your buyers on every account.</p>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Talk to your team.</p>
           </div>
           <NotificationBell />
         </div>

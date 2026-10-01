@@ -41,6 +41,9 @@ export function AccountInboxView({ connectionId, isOwner, syncSlot }: { connecti
   return <EbayInbox connectionId={connectionId} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} syncSlot={syncSlot} />;
 }
 
+// The Dashboard's Inbox shows team chat only until the all-accounts eBay view is picked up again.
+const SHOW_EBAY_MODE = false;
+
 export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOwner: boolean; canSeeEbay?: boolean }) {
   const { search, go } = useInboxAddress();
   const mode: InboxMode = search.get("mode") === "ebay" && canSeeEbay ? "ebay" : "team";
@@ -59,10 +62,11 @@ export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOw
     />
   );
 
-  if (mode === "ebay") return <EbayInbox connectionId={null} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} modeSwitch={modeSwitch} />;
+  // Team chat only for now: every account's eBay messages here (the mode switch) come back later; each account's Inbox has its own.
+  if (SHOW_EBAY_MODE && mode === "ebay") return <EbayInbox connectionId={null} activeKey={search.get("e")} onActiveChange={(key) => go({ e: key })} reconnectHref={isOwner ? "/connections" : null} modeSwitch={modeSwitch} />;
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-3">{modeSwitch}</div>
+      {SHOW_EBAY_MODE && <div className="flex flex-wrap items-center gap-3">{modeSwitch}</div>}
       <div className="card flex min-h-0 flex-1 overflow-hidden">
         <TeamChat me={me} isOwner={isOwner} activeId={activeId} onActiveChange={(id) => go({ c: id })} />
       </div>
