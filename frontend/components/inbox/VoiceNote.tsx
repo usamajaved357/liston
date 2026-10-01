@@ -1,7 +1,7 @@
 "use client";
 
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { ChatMessage } from "@/lib/api";
+import { nextVoiceSpeed, seekVoice, seeVoice, toggleVoice, useVoice, VoiceTrack } from "@/lib/voicePlayback";
 import { PersonAvatar } from "./PersonAvatar";
 
 // Voice notes, as WhatsApp has them. Recording: the composer's mic starts
@@ -11,7 +11,9 @@ import { PersonAvatar } from "./PersonAvatar";
 // browser records it, which plays everywhere; else WebM), its length and
 // the shape of its sound as 48 bars. Playing: drawn as WhatsApp draws it
 // (the sender's picture, play, the bars filling in with a dot to drag, the
-// time; 1x / 1.5x / 2x in the picture's place while it plays). One plays
+// time; 1x / 1.5x / 2x in the picture's place while it plays), through
+// Liston's one player, so it keeps going while you scroll or change page
+// (lib/voicePlayback; the pop-up controlling it is NowPlaying). One plays
 // at a time.
 
 export const VOICE_MAX_MS = 10 * 60 * 1000;
@@ -182,10 +184,6 @@ export function RecordingBar({ elapsed, recent, sending, onCancel, onSend }: { e
   );
 }
 
-// The note playing now, so starting another pauses it.
-let playing: HTMLAudioElement | null = null;
-const SPEEDS = [1, 1.5, 2];
-
 /** How tall a bar is drawn (% of the wave): quiet sound still shows, loud doesn't swamp it. */
 const barHeight = (p: number) => Math.round(18 + 82 * Math.pow(Math.min(1, Math.max(0, p)), 0.75));
 
@@ -204,179 +202,166 @@ function fitBars(peaks: number[], count: number): number[] {
 }
 
 /**
- * A voice note in a bubble, as WhatsApp draws one: the sender's picture with
- * a mic (while it plays, the speed instead: 1x, 1.5x, 2x), then play and the
- * sound's shape on one line, a dot marking where it's got to (click or drag
- * to move it), and under them its length (where it's at while playing) with
- * the bubble's time and ticks (`meta`) on the right.
+ * A note's sound as bars, filled in up to `share` (0–1) with a dot there;
+ * a click or a drag moves it (`onSeek` with the share), the arrow keys five
+ * seconds (`onStep`). `tone` is the bubble it sits on, `ring` its colour
+ * (round the dot).
  */
-export function VoicePlayer({ voice, mine, author, meta }: { voice: NonNullable<ChatMessage["voice"]>; mine: boolean; author?: ChatMessage["author"]; meta?: ReactNode }) {
-  const audio = useRef<HTMLAudioElement>(null);
-  const wave = useRef<HTMLDivElement>(null);
+export function Waveform({ peaks, share, durationS, tone, ring, onSeek, onStep, className = "h-7" }: { peaks: number[]; share: number; durationS: number; tone: "mine" | "theirs"; ring: string; onSeek: (share: number) => void; onStep: (seconds: number) => void; className?: string }) {
+  const box = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const [room, setRoom] = useState(BARS);
-  const [on, setOn] = useState(false);
-  const [at, setAt] = useState(0);
-  const [speed, setSpeed] = useState(1);
-  const [failed, setFailed] = useState(false);
-  const duration = voice.durationMs / 1000;
-  const peaks = fitBars(voice.peaks.length ? voice.peaks : Array(BARS).fill(0.3), room);
-  const share = duration ? Math.min(1, at / duration) : 0;
-  const started = on || at > 0;
-  const bubble = mine ? "var(--color-bubble-out)" : "var(--color-panel)";
+  const bars = fitBars(peaks.length ? peaks : Array(BARS).fill(0.3), room);
 
+  // As many bars as there's room for (a phone's narrower bubble gets fewer).
   useEffect(() => {
-    const el = audio.current;
-    if (!el) return;
-    const tick = () => {
-      if (!dragging.current) setAt(el.currentTime);
-    };
-    const ended = () => {
-      setOn(false);
-      setAt(0);
-      el.currentTime = 0;
-    };
-    const paused = () => setOn(false);
-    const played = () => setOn(true);
-    el.addEventListener("timeupdate", tick);
-    el.addEventListener("ended", ended);
-    el.addEventListener("pause", paused);
-    el.addEventListener("play", played);
-    return () => {
-      el.removeEventListener("timeupdate", tick);
-      el.removeEventListener("ended", ended);
-      el.removeEventListener("pause", paused);
-      el.removeEventListener("play", played);
-      if (playing === el) playing = null;
-    };
-  }, []);
-
-  // As many bars as the wave has room for (a phone's narrower bubble gets fewer).
-  useEffect(() => {
-    const el = wave.current;
+    const el = box.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const watch = new ResizeObserver(([entry]) => setRoom(Math.max(12, Math.floor((entry.contentRect.width + GAP_PX) / (BAR_PX + GAP_PX)))));
     watch.observe(el);
     return () => watch.disconnect();
-  }, [failed]);
+  }, []);
 
-  function toggle() {
-    const el = audio.current;
-    if (!el) return;
-    if (!el.paused) {
-      el.pause();
-      return;
-    }
-    if (playing && playing !== el) playing.pause();
-    playing = el;
-    el.playbackRate = speed;
-    el.play().catch(() => setFailed(true));
-  }
-
-  function seekAt(e: React.PointerEvent<HTMLDivElement>) {
-    const el = audio.current;
-    if (!el || !duration) return;
-    const box = e.currentTarget.getBoundingClientRect();
-    const to = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width)) * duration;
-    el.currentTime = to;
-    setAt(to);
-  }
-
-  function nextSpeed() {
-    const next = SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length];
-    setSpeed(next);
-    if (audio.current) audio.current.playbackRate = next;
-  }
+  const shareAt = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+  };
 
   return (
-    <div className="flex w-[300px] max-w-full items-center gap-2 py-[6px] pl-[7px] pr-[9px]">
-      <audio ref={audio} src={voice.url} preload="metadata" onError={() => setFailed(true)} />
+    <div
+      ref={box}
+      role="slider"
+      tabIndex={0}
+      aria-label="Position"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(durationS)}
+      aria-valuenow={Math.round(share * durationS)}
+      onPointerDown={(e) => {
+        dragging.current = true;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        onSeek(shareAt(e));
+      }}
+      onPointerMove={(e) => {
+        if (dragging.current) onSeek(shareAt(e));
+      }}
+      onPointerUp={() => {
+        dragging.current = false;
+      }}
+      onPointerCancel={() => {
+        dragging.current = false;
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+        e.preventDefault();
+        onStep(e.key === "ArrowRight" ? 5 : -5);
+      }}
+      className={`relative mx-1.5 min-w-0 flex-1 cursor-pointer touch-none rounded outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40 ${className}`}
+    >
+      <span className="absolute inset-0 flex items-center justify-between overflow-hidden" aria-hidden>
+        {bars.map((p, i) => (
+          <span
+            key={i}
+            className={`w-[2.5px] flex-shrink-0 rounded-full ${(i + 0.5) / bars.length <= share ? "bg-[var(--color-primary)]" : tone === "mine" ? "bg-[var(--color-primary)]/35" : "bg-[var(--color-muted)]/40"}`}
+            style={{ height: `${barHeight(p)}%` }}
+          />
+        ))}
+      </span>
+      <span className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--color-primary)]" style={{ left: `${share * 100}%`, boxShadow: `0 0 0 2px ${ring}` }} aria-hidden />
+    </div>
+  );
+}
+
+/** The play / pause icon (no button round it). */
+export function PlayIcon({ playing, className = "h-[22px] w-[22px]" }: { playing: boolean; className?: string }) {
+  return playing ? (
+    <svg viewBox="0 0 20 20" className={className} aria-hidden>
+      <rect x="4.5" y="3.5" width="3.8" height="13" rx="1.2" fill="currentColor" />
+      <rect x="11.7" y="3.5" width="3.8" height="13" rx="1.2" fill="currentColor" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 20 20" className={`ml-0.5 ${className}`} aria-hidden>
+      <path d="M5.5 3.6v12.8a1 1 0 001.5.86l10.2-6.4a1 1 0 000-1.72L7 2.74a1 1 0 00-1.5.86z" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** A person's picture with the small mic of a voice note on its corner (`ring`: what's behind it). */
+export function VoiceAvatar({ author, size, ring }: { author: VoiceTrack["author"]; size: number; ring: string }) {
+  return (
+    <span className="relative flex flex-shrink-0" style={{ width: size, height: size }}>
+      <PersonAvatar id={author?.id} name={author?.name} avatarUrl={author?.avatarUrl} size={size} />
+      <span className="absolute -bottom-0.5 -right-1 flex h-[18px] w-[18px] items-center justify-center rounded-full text-[var(--color-primary)]" style={{ background: ring }} aria-hidden>
+        <svg viewBox="0 0 16 16" fill="none" className="h-3 w-3">
+          <rect x="5.25" y="1.5" width="5.5" height="8.5" rx="2.75" fill="currentColor" />
+          <path d="M3 7.5a5 5 0 0010 0M8 12.5v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A voice note in a bubble, as WhatsApp draws one: the sender's picture with
+ * a mic (while it plays, the speed instead: 1x, 1.5x, 2x), then play and the
+ * sound's shape on one line, a dot marking where it's got to (click or drag
+ * to move it), and under them its length (where it's at while playing) with
+ * the bubble's time and ticks (`meta`) on the right. The sound itself plays
+ * through Liston's one player (lib/voicePlayback), so it goes on when this
+ * bubble scrolls away or you change page; the bubble tells it whether it's
+ * on screen, for the pop-up that shows when it isn't.
+ */
+export function VoicePlayer({ track, meta }: { track: VoiceTrack; meta?: ReactNode }) {
+  const root = useRef<HTMLDivElement>(null);
+  const v = useVoice(track.id);
+  const durationS = track.durationMs / 1000;
+  const share = durationS ? Math.min(1, v.at / durationS) : 0;
+  const started = v.current && (v.playing || v.at > 0);
+  const bubble = track.mine ? "var(--color-bubble-out)" : "var(--color-panel)";
+
+  // Whether this bubble is on screen (and not, once it's gone).
+  useEffect(() => {
+    const el = root.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const watch = new IntersectionObserver(([entry]) => seeVoice(el, track.id, entry.isIntersecting), { threshold: 0.5 });
+    watch.observe(el);
+    return () => {
+      watch.disconnect();
+      seeVoice(el, track.id, false);
+    };
+  }, [track.id]);
+
+  return (
+    <div ref={root} className="flex w-[300px] max-w-full items-center gap-2 py-[6px] pl-[7px] pr-[9px]">
       <span className="relative flex h-11 w-11 flex-shrink-0 items-center justify-center">
-        {started && !failed ? (
-          <button type="button" onClick={nextSpeed} aria-label={`Playback speed ${speed}x, change it`} title="Playback speed" className="h-7 min-w-[42px] rounded-full bg-black/[0.07] px-2 text-[12px] font-semibold tabular-nums text-[var(--color-ink)]/80 transition-colors hover:bg-black/[0.12]">
-            {speed}x
+        {started ? (
+          <button type="button" onClick={nextVoiceSpeed} aria-label={`Playback speed ${v.speed}x, change it`} title="Playback speed" className="h-7 min-w-[42px] rounded-full bg-black/[0.07] px-2 text-[12px] font-semibold tabular-nums text-[var(--color-ink)]/80 transition-colors hover:bg-black/[0.12]">
+            {v.speed}x
           </button>
         ) : (
-          <>
-            <PersonAvatar id={author?.id} name={author?.name} avatarUrl={author?.avatarUrl} size={44} />
-            <span className="absolute -bottom-0.5 -right-1 flex h-[18px] w-[18px] items-center justify-center rounded-full text-[var(--color-primary)]" style={{ background: bubble }} aria-hidden>
-              <svg viewBox="0 0 16 16" fill="none" className="h-3 w-3">
-                <rect x="5.25" y="1.5" width="5.5" height="8.5" rx="2.75" fill="currentColor" />
-                <path d="M3 7.5a5 5 0 0010 0M8 12.5v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </span>
-          </>
+          <VoiceAvatar author={track.author} size={44} ring={bubble} />
         )}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex h-8 items-center gap-1">
           <button
             type="button"
-            onClick={toggle}
-            disabled={failed}
-            aria-label={on ? "Pause voice message" : "Play voice message"}
+            onClick={() => toggleVoice(track)}
+            disabled={v.failed}
+            aria-label={v.playing ? "Pause voice message" : "Play voice message"}
             className="-ml-1 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-ink)]/70 transition-colors hover:bg-black/[0.05] hover:text-[var(--color-primary)] disabled:opacity-40"
           >
-            {on ? (
-              <svg viewBox="0 0 20 20" className="h-[22px] w-[22px]" aria-hidden>
-                <rect x="4.5" y="3.5" width="3.8" height="13" rx="1.2" fill="currentColor" />
-                <rect x="11.7" y="3.5" width="3.8" height="13" rx="1.2" fill="currentColor" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 20 20" className="ml-0.5 h-[22px] w-[22px]" aria-hidden>
-                <path d="M5.5 3.6v12.8a1 1 0 001.5.86l10.2-6.4a1 1 0 000-1.72L7 2.74a1 1 0 00-1.5.86z" fill="currentColor" />
-              </svg>
-            )}
+            <PlayIcon playing={v.playing} />
           </button>
-          {failed ? (
-            <a href={voice.url} download className="min-w-0 truncate text-[12.5px] text-[var(--color-primary)] underline underline-offset-2">
+          {v.failed ? (
+            <a href={track.url} download className="min-w-0 truncate text-[12.5px] text-[var(--color-primary)] underline underline-offset-2">
               Can&apos;t play here. Download it
             </a>
           ) : (
-            <div
-              ref={wave}
-              role="slider"
-              tabIndex={0}
-              aria-label="Position"
-              aria-valuemin={0}
-              aria-valuemax={Math.round(duration)}
-              aria-valuenow={Math.round(at)}
-              onPointerDown={(e) => {
-                dragging.current = true;
-                e.currentTarget.setPointerCapture(e.pointerId);
-                seekAt(e);
-              }}
-              onPointerMove={(e) => dragging.current && seekAt(e)}
-              onPointerUp={() => {
-                dragging.current = false;
-              }}
-              onPointerCancel={() => {
-                dragging.current = false;
-              }}
-              onKeyDown={(e) => {
-                const el = audio.current;
-                if (!el || (e.key !== "ArrowRight" && e.key !== "ArrowLeft")) return;
-                e.preventDefault();
-                el.currentTime = Math.min(duration, Math.max(0, el.currentTime + (e.key === "ArrowRight" ? 5 : -5)));
-                setAt(el.currentTime);
-              }}
-              className="relative mx-1.5 h-7 min-w-0 flex-1 cursor-pointer touch-none rounded outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
-            >
-              <span className="absolute inset-0 flex items-center justify-between overflow-hidden" aria-hidden>
-                {peaks.map((p, i) => (
-                  <span
-                    key={i}
-                    className={`w-[2.5px] flex-shrink-0 rounded-full ${(i + 0.5) / peaks.length <= share ? "bg-[var(--color-primary)]" : mine ? "bg-[var(--color-primary)]/35" : "bg-[var(--color-muted)]/40"}`}
-                    style={{ height: `${barHeight(p)}%` }}
-                  />
-                ))}
-              </span>
-              <span className="pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--color-primary)]" style={{ left: `${share * 100}%`, boxShadow: `0 0 0 2px ${bubble}` }} aria-hidden />
-            </div>
+            <Waveform peaks={track.peaks} share={share} durationS={durationS} tone={track.mine ? "mine" : "theirs"} ring={bubble} onSeek={(s) => seekVoice(track, s * durationS)} onStep={(d) => seekVoice(track, v.at + d)} />
           )}
         </div>
         <div className="flex h-4 items-center justify-between gap-2 pl-[38px]">
-          <span className="text-[10.5px] leading-none tabular-nums text-[var(--color-bubble-meta)]">{started ? clockOf(at * 1000) : clockOf(voice.durationMs)}</span>
+          <span className="text-[10.5px] leading-none tabular-nums text-[var(--color-bubble-meta)]">{started ? clockOf(v.at * 1000) : clockOf(track.durationMs)}</span>
           {meta}
         </div>
       </div>

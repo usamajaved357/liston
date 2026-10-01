@@ -185,6 +185,7 @@ export function MessageBubble({
   onOpenThread,
   inThread = false,
   highlight = false,
+  place = null,
 }: {
   message: ChatMessage;
   me: string;
@@ -205,6 +206,8 @@ export function MessageBubble({
   // Drawn in the thread panel: no thread line under it, no "Reply in thread".
   inThread?: boolean;
   highlight?: boolean;
+  // The conversation it's in, for the pop-up playing a voice note elsewhere ("In #orders").
+  place?: { kind: "dm" | "group" | "channel"; title: string } | null;
 }) {
   const author = message.author;
   const mentionNames = message.mentions.map((id) => people.get(id)?.name).filter((n): n is string => Boolean(n));
@@ -308,7 +311,12 @@ export function MessageBubble({
                   ))}
                 </div>
               )}
-              {message.voice && <VoicePlayer voice={message.voice} mine={mine} author={author} meta={voiceMeta ? <Meta>{meta}</Meta> : undefined} />}
+              {message.voice && (
+                <VoicePlayer
+                  track={{ id: message.id, url: message.voice.url, durationMs: message.voice.durationMs, peaks: message.voice.peaks, author, mine, conversationId: message.conversationId, threadId: message.threadId, place: place && { kind: place.kind, title: place.title } }}
+                  meta={voiceMeta ? <Meta>{meta}</Meta> : undefined}
+                />
+              )}
               {text ? (
                 <BubbleText meta={meta}>
                   <RichText text={text} mentionNames={mentionNames} />

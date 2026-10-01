@@ -24,7 +24,8 @@ export const BUBBLE_MAX = "max-w-[85%] sm:max-w-[min(65%,440px)]";
  * 10px and wider margins.
  */
 export function BubbleRow({ mine, first, roomy = false, children, className = "", ...rest }: { mine: boolean; first: boolean; roomy?: boolean; children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
-  const gap = roomy ? (first ? "mt-4" : "mt-2") : first ? "mt-2.5" : "mt-0.5";
+  // Space above as padding, not margin: team chat's list measures each row's box, and a margin falls outside it.
+  const gap = roomy ? (first ? "pt-4" : "pt-2") : first ? "pt-2.5" : "pt-0.5";
   const sides = roomy ? "px-[clamp(12px,1.5%,20px)]" : "px-[clamp(14px,4%,48px)]";
   return (
     <div className={`flex ${sides} ${mine ? "justify-end" : "justify-start"} ${gap} ${className}`} {...rest}>

@@ -180,6 +180,7 @@ export function ThreadPanel({
         showAuthorName={conversation.kind !== "dm"}
         canDelete={mine || isOwner}
         inThread
+        place={conversation}
         onReply={() => {}}
         onEdit={() => setEditing(m)}
         onDelete={() => setDeleting(m)}

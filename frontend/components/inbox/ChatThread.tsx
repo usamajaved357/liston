@@ -78,6 +78,10 @@ export function ChatThread({
   // Where "New messages" goes: the first message after where you'd read to when you opened it.
   const [newFrom, setNewFrom] = useState<string | null>(null);
   const list = useRef<VirtuosoHandle>(null);
+  // Until when the list keeps going to the end: just after you send, so your
+  // message ends up fully in view once it's been drawn and measured (a voice
+  // note or photos are taller than the list guesses before then).
+  const toEndUntil = useRef(0);
   // Its scrollbar shows only while someone is scrolling, as the eBay Inbox's does.
   const quietScroll = useQuietScrollbar<HTMLElement>();
   const composer = useRef<ComposerHandle>(null);
@@ -253,7 +257,12 @@ export function ChatThread({
     const sent = await inboxApi.chatSend(id, input);
     setMessages((cur) => (cur && !cur.some((m) => m.id === sent.id) ? [...cur, sent] : cur));
     setNewFrom(null);
-    requestAnimationFrame(() => list.current?.scrollToIndex({ index: "LAST", behavior: "smooth" }));
+    toEndUntil.current = Date.now() + 1500;
+    requestAnimationFrame(toEnd);
+  }
+
+  function toEnd() {
+    list.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
   }
 
   async function saveEdit(messageId: string, body: string, mentions: string[]) {
@@ -409,7 +418,8 @@ export function ChatThread({
             scrollerRef={(el) => quietScroll(el instanceof HTMLElement ? el : null)}
             data={rows}
             firstItemIndex={firstIndex}
-            initialTopMostItemIndex={Math.max(0, rows.findIndex((r) => r.type === "new") >= 0 ? rows.findIndex((r) => r.type === "new") : rows.length - 1)}
+            // Opened at "Unread messages" (at the top), else with the latest message at the bottom.
+            initialTopMostItemIndex={rows.some((r) => r.type === "new") ? { index: rows.findIndex((r) => r.type === "new"), align: "start" } : { index: Math.max(0, rows.length - 1), align: "end" }}
             startReached={loadOlder}
             followOutput={(bottom) => (bottom ? "smooth" : false)}
             atBottomStateChange={(bottom) => {
@@ -421,6 +431,10 @@ export function ChatThread({
               } else latestTimer.current = setTimeout(() => setShowLatest(true), 600);
             }}
             atBottomThreshold={80}
+            // Measured now (the message you sent among them): aim at the end again with its real height.
+            totalListHeightChanged={() => {
+              if (Date.now() < toEndUntil.current) toEnd();
+            }}
             isScrolling={(on) => setScrolling(on)}
             rangeChanged={({ startIndex }) => {
               // The day of the top message on screen, for the chip floating there while scrolling.
@@ -448,8 +462,10 @@ export function ChatThread({
               if (row.type === "day") return <DayChip label={row.label} />;
               if (row.type === "new")
                 return (
-                  <div className="my-2 flex justify-center bg-[var(--color-panel)]/45 py-1.5">
-                    <span className="rounded-full bg-[var(--color-panel)] px-3 py-1 text-[11.5px] font-medium text-[var(--color-primary)] shadow-[var(--shadow-bubble)]">Unread messages</span>
+                  <div className="py-2">
+                    <div className="flex justify-center bg-[var(--color-panel)]/45 py-1.5">
+                      <span className="rounded-full bg-[var(--color-panel)] px-3 py-1 text-[11.5px] font-medium text-[var(--color-primary)] shadow-[var(--shadow-bubble)]">Unread messages</span>
+                    </div>
                   </div>
                 );
               const m = row.message;
@@ -477,6 +493,7 @@ export function ChatThread({
                   onDelete={() => setDeleting(m)}
                   onJumpTo={jumpTo}
                   onOpenThread={onOpenThread}
+                  place={conversation}
                 />
               );
             }}
