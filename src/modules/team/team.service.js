@@ -6,6 +6,8 @@ const activity = require('./activity');
 const analyticsDays = require('../analytics/analytics-days');
 const huntingService = require('../hunting/hunting.service');
 const huntingRepository = require('../hunting/hunting.repository');
+const workTime = require('./work-time');
+const workTimeRepository = require('./work-time.repository');
 
 const SALT_ROUNDS = 12;
 
@@ -39,15 +41,21 @@ async function ownerTimeZone(ownerId, connections = null) {
 async function listMembers(ownerId, { timeZone = null } = {}) {
   const [members, connections] = await Promise.all([teamRepository.listMembers(ownerId), connectionRepository.findAllByUser(ownerId)]);
   const today = activity.rangeWindow('today', { timeZone: await zoneFor(ownerId, timeZone, connections) });
-  const { last, recent } = await activityRepository.teamSince(ownerId, today.startsAt);
+  const [{ last, recent }, minutes] = await Promise.all([activityRepository.teamSince(ownerId, today.startsAt), workTimeRepository.teamSince(ownerId, today.startsAt)]);
   const lastBy = new Map(last.map((r) => [r.actor_user_id, r.last_active_at]));
+  const timeBy = new Map(minutes.map((r) => [String(r.user_id), r]));
   return Promise.all(
-    members.map(async (member) => ({
-      ...member,
-      lastActiveAt: lastBy.get(member.id) || null,
-      today: activity.metricsFrom(recent.filter((r) => r.actor_user_id === member.id), today.timeZone),
-      permissions: await teamRepository.getPermissions(member.id),
-    }))
+    members.map(async (member) => {
+      const t = timeBy.get(String(member.id));
+      return {
+        ...member,
+        lastActiveAt: lastBy.get(member.id) || null,
+        today: activity.metricsFrom(recent.filter((r) => r.actor_user_id === member.id), today.timeZone),
+        // Their time in Liston today, and whether a tab of theirs is open now (a minute kept in the last two).
+        time: { working: t?.working || 0, idle: t?.idle || 0, lastSeenAt: t?.last_minute || null, inListon: Boolean(t?.last_minute && Date.now() - new Date(t.last_minute).getTime() < 2.5 * 60 * 1000) },
+        permissions: await teamRepository.getPermissions(member.id),
+      };
+    })
   );
 }
 
@@ -120,9 +128,17 @@ async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone 
     .map((a) => ({ connectionId: a.connectionId, label: a.label, actions: a.rows.filter((r) => activity.isWork(r.kind)).length, ...activity.metricsFrom(a.rows, win.timeZone) }))
     .sort((a, b) => b.actions - a.actions);
 
+  // Their time in Liston (the whole period; one account's when scoped) against the period before.
+  const [minutes, prevMinutes] = await Promise.all([workTimeRepository.minutesFor(ownerId, memberId, win.startsAt, win.endsAt), workTimeRepository.minutesFor(ownerId, memberId, win.previous.startsAt, win.previous.endsAt)]);
+  const onAccountMinutes = (list) => (connectionId ? list.filter((m) => m.connection_id === connectionId) : list);
   return {
     member: { ...member, lastActiveAt: lastActive },
     recordingSince,
+    // How quickly they answer buyers: the median wait before their replies.
+    replyTime: activity.replyTime(rows),
+    previousReplyTime: activity.replyTime(prevRows),
+    time: workTime.totalsOf(onAccountMinutes(minutes)),
+    previousTime: workTime.totalsOf(onAccountMinutes(prevMinutes)),
     range: { key: win.key, from: win.from, to: win.to, days: win.days, timeZone: win.timeZone, previous: { from: win.previous.from, to: win.previous.to } },
     metrics: activity.METRICS.map(({ key, label }) => ({ key, label })),
     totals: activity.metricsFrom(rows, win.timeZone),
@@ -164,6 +180,75 @@ async function getOwnWork(viewer, connectionId, { range, from, to, timeZone = nu
     permissions: Object.entries(resolved).map(([feature, allowed]) => ({ feature, connectionId, allowed })),
     hunting: data.hunting && { ...data.hunting, sales: counts(data.hunting.sales), previousSales: counts(data.hunting.previousSales) },
     huntOutcomes: data.huntOutcomes,
+    replyTime: data.replyTime,
+    previousReplyTime: data.previousReplyTime,
+    time: data.time,
+    previousTime: data.previousTime,
+  };
+}
+
+// ---- time in Liston ------------------------------------------------------------
+
+const ownedCache = new Map();
+async function ownedAccountIds(ownerId) {
+  const hit = ownedCache.get(ownerId);
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.ids;
+  const ids = new Set((await connectionRepository.findAllByUser(ownerId)).map((c) => String(c.id)));
+  ownedCache.set(ownerId, { at: Date.now(), ids });
+  return ids;
+}
+
+/**
+ * A minute of a team member's time in Liston, from one of their tabs:
+ * working or idle, the area and the eBay account they were in. Members
+ * only (the owner's time isn't kept). { kept }.
+ */
+async function clock(auth, { working, area, connectionId = null }) {
+  if (auth.role !== 'member') return { kept: false };
+  const account = connectionId && (await ownedAccountIds(auth.ownerId)).has(String(connectionId)) ? connectionId : null;
+  await workTimeRepository.recordMinute({ userId: auth.userId, ownerId: auth.ownerId, working: Boolean(working), area: workTime.areaKey(area), connectionId: account });
+  return { kept: true };
+}
+
+/**
+ * A member's time in Liston for a range: working and idle against the
+ * period before, each day's stretches, where the working time went and
+ * what they did there (their recorded actions in each area), and actions
+ * per working hour.
+ */
+async function getMemberTime(ownerId, memberId, { range, from, to, timeZone = null } = {}) {
+  const member = await teamRepository.findMemberForOwner(memberId, ownerId);
+  if (!member) throw new TeamError('Team member not found', 404);
+  const win = activity.rangeWindow(range, { from, to, timeZone: await zoneFor(ownerId, timeZone) });
+  const [minutes, prevMinutes, rows, prevRows, since] = await Promise.all([
+    workTimeRepository.minutesFor(ownerId, memberId, win.startsAt, win.endsAt),
+    workTimeRepository.minutesFor(ownerId, memberId, win.previous.startsAt, win.previous.endsAt),
+    activityRepository.rowsFor(ownerId, memberId, win.startsAt, win.endsAt),
+    activityRepository.rowsFor(ownerId, memberId, win.previous.startsAt, win.previous.endsAt),
+    workTimeRepository.firstMinute(ownerId, memberId),
+  ]);
+  const summary = workTime.summarize(minutes, { from: win.from, to: win.to, timeZone: win.timeZone });
+  const work = rows.filter((r) => activity.isWork(r.kind));
+  const actionsIn = new Map();
+  const actionsOn = new Map();
+  for (const r of work) {
+    const area = workTime.areaOfKind(r.kind);
+    if (area) actionsIn.set(area, (actionsIn.get(area) || 0) + 1);
+    const day = analyticsDays.dayOf(r.created_at, win.timeZone);
+    actionsOn.set(day, (actionsOn.get(day) || 0) + 1);
+  }
+  // Areas with time or with work, each with its actions.
+  const areas = summary.areas.map((a) => ({ ...a, actions: actionsIn.get(a.area) || 0 }));
+  for (const [area, actions] of actionsIn) if (!areas.some((a) => a.area === area)) areas.push({ area, label: workTime.AREAS[area], working: 0, idle: 0, actions });
+  const prev = workTime.totalsOf(prevMinutes);
+  const perHour = (actions, mins) => (mins >= 15 ? Math.round((actions / (mins / 60)) * 10) / 10 : null);
+  return {
+    range: { key: win.key, from: win.from, to: win.to, days: win.days, timeZone: win.timeZone, previous: { from: win.previous.from, to: win.previous.to } },
+    trackedSince: since,
+    totals: { ...summary.totals, actions: work.length, actionsPerHour: perHour(work.length, summary.totals.working), daysInListon: summary.days.filter((d) => d.working + d.idle > 0).length },
+    previous: { ...prev, actions: prevRows.filter((r) => activity.isWork(r.kind)).length },
+    days: summary.days.map((d) => ({ ...d, actions: actionsOn.get(d.day) || 0 })),
+    areas,
   };
 }
 
@@ -297,6 +382,8 @@ module.exports = {
   getMemberOverview,
   getOwnWork,
   getMemberActivity,
+  getMemberTime,
+  clock,
   setMemberPassword,
   getMemberPermissions,
   updateMemberPermissions,

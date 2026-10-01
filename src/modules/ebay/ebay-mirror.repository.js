@@ -93,18 +93,27 @@ async function upsertOrderFinances(connectionId, rows) {
   }
 }
 
-/** orderId -> { currency, gross, fees, adFees, refunds, earnings, fundsStatus } */
+/** orderId -> { currency, gross, fees, adFees, refunds, earnings, fundsStatus, syncedAt (ms) } */
 async function loadOrderFinances(connectionId, orderIds) {
   if (!orderIds.length) return new Map();
   const result = await query(
-    `SELECT order_id, currency, gross, fees, ad_fees, refunds, earnings, funds_status FROM ebay_order_finances
+    `SELECT order_id, currency, gross, fees, ad_fees, refunds, earnings, funds_status, synced_at FROM ebay_order_finances
      WHERE connection_id = $1 AND order_id = ANY($2)`,
     [connectionId, orderIds]
   );
   return new Map(
     result.rows.map((r) => [
       r.order_id,
-      { currency: r.currency, gross: Number(r.gross), fees: Number(r.fees), adFees: Number(r.ad_fees), refunds: Number(r.refunds), earnings: Number(r.earnings), fundsStatus: r.funds_status },
+      {
+        currency: r.currency,
+        gross: Number(r.gross),
+        fees: Number(r.fees),
+        adFees: Number(r.ad_fees),
+        refunds: Number(r.refunds),
+        earnings: Number(r.earnings),
+        fundsStatus: r.funds_status,
+        syncedAt: new Date(r.synced_at).getTime(),
+      },
     ])
   );
 }

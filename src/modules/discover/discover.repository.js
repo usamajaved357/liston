@@ -169,58 +169,7 @@ async function ownCategories(connectionId, limit = 12) {
   return rows;
 }
 
-// ---- what the owner already has, and who else hunts it (discover-personal) ----------
-
-/** The competitor listings the owner hunted, on any account, with where each got to. */
-async function ownerHunts(ownerId) {
-  const { rows } = await query(
-    `SELECT h.competitor_item_id AS item_id, c.label AS account,
-       CASE WHEN cardinality(h.item_ids) > 0 THEN 'listed' WHEN h.listing_id IS NOT NULL THEN 'drafted' ELSE h.status END AS stage
-       FROM hunted_products h JOIN connections c ON c.id = h.connection_id
-      WHERE h.owner_user_id = $1 AND h.competitor_item_id IS NOT NULL`,
-    [ownerId]
-  );
-  return rows.map((r) => ({ itemId: r.item_id, stage: r.stage, account: r.account }));
-}
-
-/** The competitor listing each of the owner's Liston drafts and listings was made from. */
-async function ownerListonCompetitors(ownerId) {
-  const { rows } = await query(
-    `SELECT substring(l.source_data->'competitor'->>'sourceUrl' from '/itm/(?:[^/?#]*/)?([0-9]{9,15})') AS item_id, l.status, c.label AS account
-       FROM listings l JOIN connections c ON c.id = l.connection_id
-      WHERE c.user_id = $1 AND l.edit_of_item_id IS NULL AND l.status IN ('pending_review', 'published')
-        AND l.source_data->'competitor'->>'sourceUrl' IS NOT NULL`,
-    [ownerId]
-  );
-  return rows.filter((r) => r.item_id).map((r) => ({ itemId: r.item_id, status: r.status, account: r.account }));
-}
-
-/** An account's live prices, from its mirrored active listings. */
-async function livePrices(connectionId) {
-  const { rows } = await query(
-    `SELECT (item->'price'->>'amount')::numeric AS price
-       FROM ebay_snapshots s CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.data->'items', '[]'::jsonb)) item
-      WHERE s.connection_id = $1 AND s.kind = 'listings:active' AND item->'price'->>'amount' ~ '^[0-9.]+$'`,
-    [connectionId]
-  );
-  return rows.map((r) => Number(r.price));
-}
-
-/** Who else (other owners) hunted these listings since `since`: Map listing id -> Set of owner ids. Only ever counted, never shown. */
-async function othersHunting(ownerId, itemIds, since) {
-  const out = new Map();
-  if (!itemIds.length) return out;
-  const { rows } = await query(
-    `SELECT DISTINCT competitor_item_id AS item_id, owner_user_id AS owner FROM hunted_products
-      WHERE owner_user_id <> $1 AND competitor_item_id = ANY($2::text[]) AND created_at >= $3`,
-    [ownerId, itemIds.map(String), since]
-  );
-  for (const r of rows) {
-    if (!out.has(r.item_id)) out.set(r.item_id, new Set());
-    out.get(r.item_id).add(r.owner);
-  }
-  return out;
-}
+// ---- the owner's takedown history (product research's marks) ------------------------
 
 /** The owner's hunted products a reviewer rejected for brand or VeRO risk: { itemId, title }. */
 async function ownerBrandRejections(ownerId) {
@@ -234,10 +183,6 @@ async function ownerBrandRejections(ownerId) {
 
 module.exports = {
   ownerBrandRejections,
-  ownerHunts,
-  ownerListonCompetitors,
-  livePrices,
-  othersHunting,
   getScan,
   touchScan,
   forgetOpened,

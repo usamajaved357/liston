@@ -1,0 +1,325 @@
+const { query, pool } = require('../../db/client');
+
+// Team chat's tables (migration 042): conversations, who's in each, their
+// messages, and each person's notification settings.
+
+/** The owner and their team as chat sees them (removed members included, marked). */
+async function people(ownerId) {
+  const { rows } = await query(
+    `SELECT id, name, email, avatar_url, role, deactivated_at FROM users
+      WHERE id = $1 OR (parent_user_id = $1 AND role = 'member')
+      ORDER BY (id = $1) DESC, lower(coalesce(name, email))`,
+    [ownerId]
+  );
+  return rows;
+}
+
+const CONVERSATION_SUMMARY = `
+  c.*, m.last_read_at, m.notify, m.role AS my_role,
+  (SELECT count(*) FROM chat_messages x
+     WHERE x.conversation_id = c.id AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM m.user_id
+       AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at))::int AS unread,
+  (SELECT count(*) FROM chat_messages x
+     WHERE x.conversation_id = c.id AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM m.user_id
+       AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at) AND (m.user_id = ANY(x.mentions) OR x.mention_all))::int AS unread_mentions,
+  lm.id AS last_id, lm.body AS last_body, lm.kind AS last_kind, lm.author_user_id AS last_author, lm.created_at AS last_at,
+  lm.deleted_at AS last_deleted, cardinality(lm.file_ids) AS last_files, jsonb_array_length(lm.refs) AS last_refs, lm.refs AS last_ref_list`;
+
+const LAST_MESSAGE = `LEFT JOIN LATERAL (
+    SELECT id, body, kind, author_user_id, created_at, deleted_at, file_ids, refs FROM chat_messages
+     WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) lm ON true`;
+
+/** The conversations a person is in, newest first, each with its unread counts and last message. */
+async function conversationsFor(userId, ownerId) {
+  const { rows } = await query(
+    `SELECT ${CONVERSATION_SUMMARY}
+       FROM chat_conversations c
+       JOIN chat_members m ON m.conversation_id = c.id AND m.user_id = $1
+       ${LAST_MESSAGE}
+      WHERE c.owner_user_id = $2
+      ORDER BY coalesce(c.last_message_at, c.created_at) DESC`,
+    [userId, ownerId]
+  );
+  return rows;
+}
+
+/** One conversation as its member sees it, or null. */
+async function conversationFor(id, userId) {
+  const { rows } = await query(
+    `SELECT ${CONVERSATION_SUMMARY}
+       FROM chat_conversations c
+       JOIN chat_members m ON m.conversation_id = c.id AND m.user_id = $2
+       ${LAST_MESSAGE}
+      WHERE c.id = $1`,
+    [id, userId]
+  );
+  return rows[0] || null;
+}
+
+/** The team's public channels this person isn't in (to join). */
+async function openChannels(ownerId, userId) {
+  const { rows } = await query(
+    `SELECT c.*, (SELECT count(*) FROM chat_members x WHERE x.conversation_id = c.id)::int AS member_count
+       FROM chat_conversations c
+      WHERE c.owner_user_id = $1 AND c.kind = 'channel' AND NOT c.private AND c.archived_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM chat_members m WHERE m.conversation_id = c.id AND m.user_id = $2)
+      ORDER BY lower(c.name)`,
+    [ownerId, userId]
+  );
+  return rows;
+}
+
+async function findConversation(id, ownerId) {
+  const { rows } = await query(`SELECT * FROM chat_conversations WHERE id = $1 AND owner_user_id = $2`, [id, ownerId]);
+  return rows[0] || null;
+}
+
+async function findDm(ownerId, dmKey) {
+  const { rows } = await query(`SELECT * FROM chat_conversations WHERE owner_user_id = $1 AND dm_key = $2`, [ownerId, dmKey]);
+  return rows[0] || null;
+}
+
+async function findChannelByName(ownerId, name) {
+  const { rows } = await query(`SELECT id FROM chat_conversations WHERE owner_user_id = $1 AND kind = 'channel' AND lower(name) = lower($2)`, [ownerId, name]);
+  return rows[0] || null;
+}
+
+/** Makes a conversation with its first members (everyone's reading starts now). */
+async function createConversation({ ownerId, kind, name = null, topic = null, isPrivate = false, connectionId = null, dmKey = null, createdBy, members }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO chat_conversations (owner_user_id, kind, name, topic, private, connection_id, dm_key, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [ownerId, kind, name, topic, isPrivate, connectionId, dmKey, createdBy]
+    );
+    const conversation = rows[0];
+    for (const m of members) {
+      await client.query(`INSERT INTO chat_members (conversation_id, user_id, role, last_read_at) VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`, [conversation.id, m.userId, m.role || 'member']);
+    }
+    await client.query('COMMIT');
+    return conversation;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateConversation(id, fields) {
+  const sets = [];
+  const params = [id];
+  for (const [column, value] of Object.entries(fields)) {
+    params.push(value);
+    sets.push(`${column} = $${params.length}`);
+  }
+  if (!sets.length) return null;
+  const { rows } = await query(`UPDATE chat_conversations SET ${sets.join(', ')}, updated_at = now() WHERE id = $1 RETURNING *`, params);
+  return rows[0] || null;
+}
+
+async function deleteConversation(id) {
+  await query(`DELETE FROM chat_conversations WHERE id = $1`, [id]);
+}
+
+/** Who's in the conversations: [{ conversation_id, user_id, role, last_read_at, name, email, avatar_url, deactivated_at }]. */
+async function membersOf(conversationIds) {
+  if (!conversationIds.length) return [];
+  const { rows } = await query(
+    `SELECT m.conversation_id, m.user_id, m.role, m.last_read_at, m.notify, u.name, u.email, u.avatar_url, u.deactivated_at
+       FROM chat_members m JOIN users u ON u.id = m.user_id
+      WHERE m.conversation_id = ANY($1::uuid[])
+      ORDER BY m.joined_at`,
+    [conversationIds]
+  );
+  return rows;
+}
+
+async function membership(conversationId, userId) {
+  const { rows } = await query(`SELECT * FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId]);
+  return rows[0] || null;
+}
+
+async function addMembers(conversationId, userIds, role = 'member') {
+  const added = [];
+  for (const userId of userIds) {
+    const { rowCount } = await query(`INSERT INTO chat_members (conversation_id, user_id, role, last_read_at) VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`, [conversationId, userId, role]);
+    if (rowCount) added.push(userId);
+  }
+  return added;
+}
+
+async function removeMember(conversationId, userId) {
+  const { rowCount } = await query(`DELETE FROM chat_members WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId]);
+  return rowCount > 0;
+}
+
+async function setNotify(conversationId, userId, notify) {
+  await query(`UPDATE chat_members SET notify = $3 WHERE conversation_id = $1 AND user_id = $2`, [conversationId, userId, notify]);
+}
+
+/**
+ * Marks everything up to a message (`messageId`) or a time (`at`) read, never
+ * moving backwards. A message's time is taken in SQL: Postgres keeps
+ * microseconds, a JS Date only milliseconds, and a rounded-down time would
+ * leave that very message unread.
+ */
+async function markRead(conversationId, userId, { at = null, messageId = null } = {}) {
+  const { rows } = await query(
+    `UPDATE chat_members SET last_read_at = GREATEST(coalesce(last_read_at, 'epoch'::timestamptz),
+        coalesce((SELECT created_at FROM chat_messages WHERE id = $4::uuid AND conversation_id = $1), $3::timestamptz, now()))
+      WHERE conversation_id = $1 AND user_id = $2 RETURNING last_read_at`,
+    [conversationId, userId, at, messageId]
+  );
+  return rows[0]?.last_read_at || null;
+}
+
+const MESSAGE_COLUMNS = `x.*, u.name AS author_name, u.email AS author_email, u.avatar_url AS author_avatar,
+  r.body AS reply_body, r.author_user_id AS reply_author, r.deleted_at AS reply_deleted, cardinality(r.file_ids) AS reply_files,
+  ru.name AS reply_author_name, ru.email AS reply_author_email`;
+const MESSAGE_JOINS = `LEFT JOIN users u ON u.id = x.author_user_id
+  LEFT JOIN chat_messages r ON r.id = x.reply_to_id
+  LEFT JOIN users ru ON ru.id = r.author_user_id`;
+
+async function insertMessage(m) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `INSERT INTO chat_messages (conversation_id, author_user_id, kind, body, reply_to_id, refs, file_ids, mentions, mention_all, detail)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, created_at`,
+      [m.conversationId, m.authorId, m.kind || 'text', m.body || '', m.replyToId || null, JSON.stringify(m.refs || []), m.fileIds || [], m.mentions || [], Boolean(m.mentionAll), JSON.stringify(m.detail || {})]
+    );
+    // Times copied in SQL, at full precision (see markRead).
+    await client.query(`UPDATE chat_conversations SET last_message_at = (SELECT created_at FROM chat_messages WHERE id = $2) WHERE id = $1`, [m.conversationId, rows[0].id]);
+    // The author has read their own conversation up to what they just said.
+    if (m.authorId) await client.query(`UPDATE chat_members SET last_read_at = (SELECT created_at FROM chat_messages WHERE id = $3) WHERE conversation_id = $1 AND user_id = $2`, [m.conversationId, m.authorId, rows[0].id]);
+    await client.query('COMMIT');
+    return rows[0];
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function findMessage(id) {
+  const { rows } = await query(`SELECT ${MESSAGE_COLUMNS} FROM chat_messages x ${MESSAGE_JOINS} WHERE x.id = $1`, [id]);
+  return rows[0] || null;
+}
+
+/** A page of a conversation's messages, oldest first: before a message (older), after one (newer), or the latest. */
+async function messages(conversationId, { before = null, after = null, limit = 50 } = {}) {
+  const params = [conversationId, limit];
+  let where = '';
+  let order = 'DESC';
+  if (before) {
+    params.push(before);
+    where = `AND (x.created_at, x.id) < (SELECT created_at, id FROM chat_messages WHERE id = $3)`;
+  } else if (after) {
+    params.push(after);
+    where = `AND (x.created_at, x.id) > (SELECT created_at, id FROM chat_messages WHERE id = $3)`;
+    order = 'ASC';
+  }
+  const { rows } = await query(
+    `SELECT ${MESSAGE_COLUMNS} FROM chat_messages x ${MESSAGE_JOINS}
+      WHERE x.conversation_id = $1 ${where}
+      ORDER BY x.created_at ${order}, x.id ${order} LIMIT $2`,
+    params
+  );
+  return order === 'DESC' ? rows.reverse() : rows;
+}
+
+async function updateMessage(id, fields) {
+  const sets = [];
+  const params = [id];
+  for (const [column, value] of Object.entries(fields)) {
+    params.push(column === 'refs' ? JSON.stringify(value) : value);
+    sets.push(`${column} = $${params.length}`);
+  }
+  await query(`UPDATE chat_messages SET ${sets.join(', ')} WHERE id = $1`, params);
+}
+
+/** Messages in the person's conversations whose words match (newest first). */
+async function searchMessages(userId, ownerId, q, limit = 30) {
+  const { rows } = await query(
+    `SELECT ${MESSAGE_COLUMNS}, c.kind AS conversation_kind, c.name AS conversation_name
+       FROM chat_messages x
+       JOIN chat_conversations c ON c.id = x.conversation_id AND c.owner_user_id = $2
+       JOIN chat_members m ON m.conversation_id = c.id AND m.user_id = $1
+       ${MESSAGE_JOINS}
+      WHERE x.deleted_at IS NULL AND x.kind = 'text'
+        AND (x.search @@ plainto_tsquery('simple', $3) OR x.body ILIKE $4
+             OR EXISTS (SELECT 1 FROM files f WHERE f.id = ANY(x.file_ids) AND f.name ILIKE $4))
+      ORDER BY x.created_at DESC LIMIT $5`,
+    [userId, ownerId, q, `%${String(q).replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`, limit]
+  );
+  return rows;
+}
+
+/** Everything unread for a person across their conversations: { unread, mentions }. */
+async function unreadTotals(userId, ownerId) {
+  const { rows } = await query(
+    `SELECT count(*)::int AS unread, count(*) FILTER (WHERE $1 = ANY(x.mentions) OR x.mention_all OR c.kind = 'dm')::int AS mentions
+       FROM chat_members m
+       JOIN chat_conversations c ON c.id = m.conversation_id AND c.owner_user_id = $2
+       JOIN chat_messages x ON x.conversation_id = c.id
+      WHERE m.user_id = $1 AND m.notify <> 'none' AND x.deleted_at IS NULL AND x.kind = 'text' AND x.author_user_id IS DISTINCT FROM $1
+        AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at)`,
+    [userId, ownerId]
+  );
+  return rows[0] || { unread: 0, mentions: 0 };
+}
+
+async function settingsFor(userId) {
+  const { rows } = await query(`SELECT * FROM notification_settings WHERE user_id = $1`, [userId]);
+  return rows[0] || null;
+}
+
+async function settingsForMany(userIds) {
+  if (!userIds.length) return [];
+  const { rows } = await query(`SELECT * FROM notification_settings WHERE user_id = ANY($1::uuid[])`, [userIds]);
+  return rows;
+}
+
+async function saveSettings(userId, s) {
+  const { rows } = await query(
+    `INSERT INTO notification_settings (user_id, chat, ebay, ebay_accounts, quiet_from, quiet_to, time_zone, hide_text, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+     ON CONFLICT (user_id) DO UPDATE SET chat = $2, ebay = $3, ebay_accounts = $4, quiet_from = $5, quiet_to = $6, time_zone = $7, hide_text = $8, updated_at = now()
+     RETURNING *`,
+    [userId, s.chat, s.ebay, s.ebayAccounts, s.quietFrom, s.quietTo, s.timeZone, s.hideText]
+  );
+  return rows[0];
+}
+
+module.exports = {
+  people,
+  conversationsFor,
+  conversationFor,
+  openChannels,
+  findConversation,
+  findDm,
+  findChannelByName,
+  createConversation,
+  updateConversation,
+  deleteConversation,
+  membersOf,
+  membership,
+  addMembers,
+  removeMember,
+  setNotify,
+  markRead,
+  insertMessage,
+  findMessage,
+  messages,
+  updateMessage,
+  searchMessages,
+  unreadTotals,
+  settingsFor,
+  settingsForMany,
+  saveSettings,
+};

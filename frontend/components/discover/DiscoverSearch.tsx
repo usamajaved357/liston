@@ -3,9 +3,9 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { api, DiscoverSubjectRef } from "@/lib/api";
 
-// Discover's search box, on every Discover screen: type a product or
-// keyword and press Enter to see its figures on eBay, or pick one of the
-// eBay categories matching what's typed.
+// Discover's search box, on every Discover screen: type a keyword and
+// press Enter to see its figures on eBay, or pick one of the eBay
+// categories matching what's typed.
 
 type Suggestion = { id: string; name: string; path: string[]; leaf: boolean };
 
@@ -83,7 +83,7 @@ export function DiscoverSearch({ connectionId, onOpen, initial = "" }: { connect
     <div ref={wrap} className="relative w-full sm:max-w-[460px]">
       <form onSubmit={submit} role="search">
         <label className="relative block">
-          <span className="sr-only">Search a product or keyword</span>
+          <span className="sr-only">Search a category or keyword</span>
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-muted)]">
             <SearchGlyph />
           </span>
@@ -107,7 +107,7 @@ export function DiscoverSearch({ connectionId, onOpen, initial = "" }: { connect
               }
             }}
             maxLength={80}
-            placeholder="Search a product or keyword, e.g. cat water fountain"
+            placeholder="Search a keyword or category, e.g. cat water fountain"
             role="combobox"
             aria-autocomplete="list"
             aria-controls="discover-search-options"

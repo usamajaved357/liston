@@ -29,6 +29,8 @@ router.get('/:id/my-work', requireAuth, requireAnyFeature(KNOWN_FEATURES), requi
 router.use('/:id/analytics', require('../analytics/analytics.routes'));
 // Discover, on the Hunting page: what to hunt (categories, keywords, what's selling, a watchlist).
 router.use('/:id/discover', require('../discover/discover.routes'));
+// The Inbox's eBay messages for this account (buyers and eBay).
+router.use('/:id/inbox', require('../inbox/inbox.routes'));
 router.post('/:id/refresh', requireAuth, requireAnyFeature(['listings', 'orders']), connectionController.refresh);
 router.get('/:id/events', requireAuth, requireAnyFeature(['listings', 'orders', 'analytics']), connectionController.events);
 router.get('/:id/policies', requireAuth, requireOwner, connectionController.getPolicies);

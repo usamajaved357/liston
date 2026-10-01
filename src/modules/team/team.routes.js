@@ -5,6 +5,9 @@ const teamController = require('./team.controller');
 
 const router = express.Router();
 
+// Anyone signed in: a minute of their own time in Liston (only members' is kept; the service decides).
+router.post('/clock', requireAuth, teamController.clock);
+
 // Team management is never delegable — every route here is owner-only,
 // regardless of any feature a member might otherwise be granted.
 router.get('/members', requireAuth, requireOwner, teamController.listMembers);
@@ -13,6 +16,7 @@ router.delete('/members/:id', requireAuth, requireOwner, teamController.removeMe
 router.post('/members/:id/restore', requireAuth, requireOwner, teamController.restoreMember);
 router.get('/members/:id/overview', requireAuth, requireOwner, teamController.getMemberOverview);
 router.get('/members/:id/activity', requireAuth, requireOwner, teamController.getMemberActivity);
+router.get('/members/:id/time', requireAuth, requireOwner, teamController.getMemberTime);
 router.put('/members/:id/password', requireAuth, requireOwner, teamController.setMemberPassword);
 router.get('/members/:id/permissions', requireAuth, requireOwner, teamController.getMemberPermissions);
 router.put('/members/:id/permissions', requireAuth, requireOwner, teamController.updateMemberPermissions);

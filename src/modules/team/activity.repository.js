@@ -57,7 +57,7 @@ async function record({
 /** Every row a member made between two instants (the figures are worked out from these). */
 async function rowsFor(ownerId, actorId, startsAt, endsAt) {
   const result = await query(
-    `SELECT kind, subject_id, subject_part, connection_id, connection_label, amount, currency, created_at
+    `SELECT kind, subject_id, subject_part, connection_id, connection_label, amount, currency, detail, created_at
      FROM member_activity
      WHERE owner_user_id = $1 AND actor_user_id = $2 AND created_at >= $3 AND created_at < $4`,
     [ownerId, actorId, startsAt, endsAt]

@@ -8,6 +8,8 @@ const orderSupplier = require('./order-supplier');
 const { CARRIERS, detectCarrier } = require('./carriers');
 const { SELLER_CANCEL_REASONS } = require('../ebay/api/ebay.postorder');
 const logger = require('../../utils/logger');
+const mirror = require('../ebay/ebay-mirror.repository');
+const { orderMoney } = require('./order-money');
 
 class OrderError extends Error {
   constructor(message, statusCode = 400) {
@@ -270,11 +272,63 @@ const RETURN_DECLINE_REASONS = {
   OTHER: 'Other',
 };
 
+// What an order made, for the Inbox's details panel: what the buyer paid,
+// eBay's fees (ads apart), refunds, what reached the seller and where the
+// funds are, the supplier cost entered on the order page and the profit
+// (order-money.js). eBay's figures are the ones the Overview keeps; when
+// there are none, or they aren't paid out yet and are older than
+// MONEY_STALE_MS, eBay's Finances API is read once for the order and the
+// answer kept. The order page has the full breakdown, fee by fee.
+// Asked twice at once (two tabs, a panel opened twice), eBay is read once:
+// the read is shared while it runs and, when it found the figures, for a
+// few seconds after, for a look that checked Liston's copy just before the
+// first read kept them.
+const MONEY_STALE_MS = 6 * 60 * 60 * 1000;
+const MONEY_SHARED_MS = 10 * 1000;
+const moneyReads = new Map();
+function readOrderMoney(connectionId, userId, orderId) {
+  const key = `${connectionId}:${orderId}`;
+  if (!moneyReads.has(key)) {
+    const read = connectionService
+      .withDecryptedCredentials(connectionId, userId, (credentials) => ebayService.getOrderFinances(credentials, { connectionId, orderId }))
+      .catch((err) => {
+        logger.warn('Order money not read from eBay', { connectionId, orderId, error: err.message });
+        return { row: null, unavailable: 'error' };
+      })
+      .then((result) => {
+        // A failed or empty read isn't kept: the next look tries eBay again.
+        if (result.row) setTimeout(() => moneyReads.delete(key), MONEY_SHARED_MS).unref();
+        else moneyReads.delete(key);
+        return result;
+      });
+    moneyReads.set(key, read);
+  }
+  return moneyReads.get(key);
+}
+
+async function getOrderMoney(connectionId, userId, orderId) {
+  const [stored, costs] = await Promise.all([mirror.loadOrderFinances(connectionId, [orderId]), orderRepository.sourceCostsByOrder(connectionId, [orderId])]);
+  let row = stored.get(orderId) || null;
+  let unavailable = null;
+  if (!row || (row.fundsStatus !== 'Paid out' && Date.now() - row.syncedAt > MONEY_STALE_MS)) {
+    const fresh = await readOrderMoney(connectionId, userId, orderId);
+    if (fresh.row) row = fresh.row;
+    else if (!row) unavailable = fresh.unavailable;
+  }
+  return orderMoney(row, costs.get(orderId) || null, unavailable);
+}
+
 async function getOrderCases(connectionId, userId, orderId) {
   const order = await fulfillmentOrder(connectionId, userId, orderId).catch(() => null);
   const cases = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
     ebayService.getOrderCases(credentials, { orderId, legacyOrderId: order?.legacyOrderId })
   );
+  // The Inbox's marks for this buyer's conversations follow at once (not on its next ten-minute read).
+  if (!cases.unavailable) {
+    require('../inbox/order-issues.service')
+      .noteOrder(connectionId, { orderIds: [orderId, order?.legacyOrderId], buyer: order?.buyer?.username || null, itemIds: (order?.lineItems || []).map((l) => l.itemId), cases })
+      .catch(() => {});
+  }
   return { returns: cases.returns, inquiries: cases.inquiries, disputes: cases.disputes, unavailable: cases.unavailable, returnDeclineReasons: Object.entries(RETURN_DECLINE_REASONS).map(([code, label]) => ({ code, label })) };
 }
 
@@ -498,4 +552,4 @@ async function supplierStateLookup(connectionId) {
     });
 }
 
-module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, dispatchOrders, dispatchLookup, BULK_DISPATCH_MAX, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, supplierStateLookup, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };
+module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, dispatchOrders, dispatchLookup, BULK_DISPATCH_MAX, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, supplierStateLookup, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, getOrderMoney, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };

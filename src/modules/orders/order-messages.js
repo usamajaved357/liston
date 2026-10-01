@@ -13,10 +13,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const clean = (s) => String(s || '').replace(/\s*\[[^[\]]*\]\s*$/, '').replace(/\s+/g, ' ').trim();
 
+/** The buyer's first name as eBay gave it (shouting "JAVED" made "Javed"), else null. */
+function firstName(order) {
+  const first = clean(order?.shippingAddress?.name || order?.buyerName || '').split(' ')[0];
+  if (!first) return null;
+  return first === first.toUpperCase() || first === first.toLowerCase() ? first.charAt(0).toUpperCase() + first.slice(1).toLowerCase() : first;
+}
+
 /** The buyer's first name if eBay gave one, else their username. */
 function buyerName(order) {
-  const name = clean(order.shippingAddress?.name || order.buyerName || '');
-  return name ? name.split(' ')[0] : order.buyerUserId || 'there';
+  return firstName(order) || order.buyerUserId || 'there';
 }
 
 /** The item as the buyer knows it: its title (cut to 80 characters), and "and more" for several. */
@@ -49,4 +55,4 @@ function dueOrders(orders, { since, done, now = Date.now(), isCancelled = () => 
   });
 }
 
-module.exports = { DELIVERED_DEFAULT, DELIVERED_WITHIN_DAYS, fill, dueOrders, buyerName, itemName };
+module.exports = { DELIVERED_DEFAULT, DELIVERED_WITHIN_DAYS, fill, dueOrders, buyerName, firstName, itemName };

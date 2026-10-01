@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import { api, ApiError, type OrderCases, type OrderDetailResponse, type OrderSourcing } from "@/lib/api";
@@ -34,6 +34,7 @@ import {
 import { SourcingCard } from "@/components/orders/SourcingCard";
 import { ActionDialog, type ActionKind } from "@/components/orders/ActionDialog";
 import { CaseDialog, CasesPanel, type CaseAction } from "@/components/orders/CaseDialogs";
+import { MessageBuyerDialog } from "@/components/orders/MessageBuyerDialog";
 import { AccountPageSkeleton, OrderDetailSkeleton } from "@/components/Skeleton";
 
 // One eBay order, laid out the way Seller Hub's order page is — the
@@ -84,6 +85,8 @@ export default function OrderDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [saveNotes, setSaveNotes] = useState<Record<string, { tone: "ok" | "bad"; text: string } | null>>({});
   const [moreOpen, setMoreOpen] = useState(false);
+  // "Message buyer" from Liston (people with the Inbox here; the rest go to eBay's contact page).
+  const [messaging, setMessaging] = useState(false);
   const [action, setAction] = useState<ActionKind | null>(null);
   const [actionNote, setActionNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
@@ -134,6 +137,18 @@ export default function OrderDetailPage() {
       cancelled = true;
     };
   }, [params.id, params.orderId, reloadKey, data?.actionsEnabled]);
+
+  // Opened at its cases or its cancellation request (from the Inbox, "#cases" / "#cancel-request"):
+  // taken there once they've loaded, since they come in after the page.
+  const jumped = useRef(false);
+  useEffect(() => {
+    if (jumped.current) return;
+    const target = window.location.hash.slice(1);
+    const el = target ? document.getElementById(target) : null;
+    if (!el) return;
+    jumped.current = true;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [cases, data]);
 
   useEffect(() => {
     if (!moreOpen) return;
@@ -337,6 +352,7 @@ export default function OrderDetailPage() {
               </div>
             )}
             {order.cancelRequests.some((r) => r.state === "REQUESTED") && (
+              <div id="cancel-request" className="scroll-mt-4">
               <Alert variant="warning">
                 <span className="flex flex-wrap items-center justify-between gap-2">
                   <span>
@@ -356,9 +372,12 @@ export default function OrderDetailPage() {
                   </span>
                 </span>
               </Alert>
+              </div>
             )}
             {cases && (cases.returns.length > 0 || cases.inquiries.length > 0 || cases.disputes.length > 0) && (
-              <CasesPanel cases={cases} order={order} currency={currency} onAct={(c) => setCaseAction(c)} />
+              <div id="cases" className="scroll-mt-4">
+                <CasesPanel cases={cases} order={order} currency={currency} onAct={(c) => setCaseAction(c)} />
+              </div>
             )}
             {order.buyerCheckoutNotes && (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-[13px] text-amber-900">
@@ -435,7 +454,8 @@ export default function OrderDetailPage() {
                               { label: "Send refund", run: guarded(() => setAction("refund")), disabled: order.paymentStatus === "FULLY_REFUNDED" },
                               { label: "View payment details", run: () => scrollTo("payment") },
                               { label: order.cancelRequests.some((r) => r.state === "REQUESTED") ? "Approve cancellation" : "Cancel order", run: guarded(() => setAction("cancel")), disabled: dispatched || cancelled },
-                              { label: "Message buyer", href: messageUrl },
+                              // Through Liston, into the Inbox, for whoever has it here (an owner always); else eBay's own contact page.
+                              !connection.permissions || connection.permissions.inbox ? { label: "Message buyer", run: () => setMessaging(true), disabled: !order.buyer.username } : { label: "Message buyer", href: messageUrl },
                               { label: "Report buyer", href: reportBuyerUrl },
                               { label: "Relist", href: relistUrl },
                               { label: "Sell similar", href: sellSimilarUrl },
@@ -888,6 +908,9 @@ export default function OrderDetailPage() {
             </button>
           </div>
         </Modal>
+      )}
+      {messaging && order?.buyer.username && (
+        <MessageBuyerDialog connectionId={connection.id} orderId={order.orderId} buyer={order.buyer.username} item={firstItem ? cleanTitle(firstItem.title) : null} onClose={() => setMessaging(false)} />
       )}
       {caseAction && order && cases && (
         <CaseDialog

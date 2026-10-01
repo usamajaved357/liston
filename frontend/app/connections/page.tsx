@@ -290,7 +290,7 @@ export default function ConnectionsPage() {
       header={
         <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Connections</h1>
+            <h1 className="text-lg font-semibold text-[var(--color-ink)]">Marketplace</h1>
             <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">The marketplace accounts Liston can draft and publish to.</p>
           </div>
           <div className="page-header-controls">

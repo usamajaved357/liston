@@ -100,6 +100,12 @@ function ListingRow({
   return (
     <li
       onClick={open}
+      // Dragged into team chat, it's shared as the listing's card.
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("application/x-liston-ref", JSON.stringify({ kind: "listing", id: String(item.itemId) }));
+        e.dataTransfer.effectAllowed = "copy";
+      }}
       className={`group flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 transition-colors hover:bg-[var(--color-paper)] sm:flex-nowrap sm:gap-x-4 sm:px-5 sm:py-3.5 ${item.viewItemUrl ? "cursor-pointer" : ""}`}
     >
       <Thumb src={item.imageUrl} />

@@ -109,6 +109,32 @@ async function getMemberActivity(req, res, next) {
   }
 }
 
+async function getMemberTime(req, res, next) {
+  try {
+    res.status(200).json(await teamService.getMemberTime(req.ownerId, req.params.id, rangeQuery(req.query)));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const clockSchema = z.object({
+  working: z.boolean(),
+  area: z.string().max(32),
+  connectionId: z.string().uuid().nullable().optional(),
+});
+
+// A minute of the signed-in person's time in Liston, from one of their tabs (members' only are kept).
+async function clock(req, res, next) {
+  try {
+    const parsed = clockSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    await teamService.clock({ role: req.role, userId: req.userId, ownerId: req.ownerId }, parsed.data);
+    res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function getMemberPermissions(req, res, next) {
   try {
     const permissions = await teamService.getMemberPermissions(req.params.id, req.ownerId);
@@ -131,4 +157,4 @@ async function updateMemberPermissions(req, res, next) {
   }
 }
 
-module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity };
+module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity, getMemberTime, clock };

@@ -12,15 +12,19 @@ import { dayRangeLabel } from "@/components/charts/chart-format";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { downloadCsv, toCsv } from "@/lib/csv";
-import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, timeAgo } from "@/components/team/team-shared";
+import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, Switch, timeAgo } from "@/components/team/team-shared";
 import { MemberPerformance } from "@/components/team/MemberPerformance";
+import { MemberTimeView } from "@/components/team/MemberTime";
+import { waitText } from "@/components/team/time-format";
 
 // One team member's page: what they did (figures for any range against the
-// period before, day by day and per eBay account), the full activity log
-// with a CSV for pay, and their access. Everything counts in the owner's
-// days; an order line or listing counts once per range.
+// period before, day by day and per eBay account), their time in Liston
+// (working and idle, day by day, where it went), the full activity log with
+// a CSV for pay (each buyer conversation opening that chat), and their
+// access. Everything counts in the owner's days; an order line or listing
+// counts once per range.
 
-type Tab = "performance" | "activity" | "access";
+type Tab = "performance" | "time" | "activity" | "access";
 
 const RANGE_OPTIONS: { key: TeamRange; label: string }[] = [
   { key: "today", label: "Today" },
@@ -37,6 +41,8 @@ const EXTRA_KINDS: { key: string; label: string }[] = [
   { key: "order.supplier_updated", label: "Supplier order updates" },
   { key: "order.note", label: "Notes" },
   { key: "order.archived", label: "Archived orders" },
+  { key: "inbox.assigned", label: "Conversations given to someone" },
+  { key: "inbox.noted", label: "Notes on conversations" },
   { key: "listing.checked", label: "Deeper checks" },
   { key: "listing.draft_deleted", label: "Deleted drafts" },
   { key: "account.store_category_added", label: "Shop categories added" },
@@ -51,6 +57,7 @@ const EXTRA_KINDS: { key: string; label: string }[] = [
 function Tabs({ value, onChange }: { value: Tab; onChange: (t: Tab) => void }) {
   const tabs: { key: Tab; label: string }[] = [
     { key: "performance", label: "Performance" },
+    { key: "time", label: "Time" },
     { key: "activity", label: "Activity" },
     { key: "access", label: "Access" },
   ];
@@ -151,6 +158,8 @@ function kindStyle(kind: string): { tile: string; icon: React.ReactNode } {
     return { tile: "bg-violet-50 text-violet-600 ring-violet-200", icon: <path d="M4 9.5V5a1 1 0 011-1h4.5l6.5 6.5-5.5 5.5L4 9.5zM7.3 7.3h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /> };
   if (area === "hunt")
     return { tile: "bg-amber-50 text-amber-600 ring-amber-200", icon: <><circle cx="10" cy="10" r="6" stroke="currentColor" strokeWidth="1.6" /><circle cx="10" cy="10" r="2.3" stroke="currentColor" strokeWidth="1.6" /></> };
+  if (area === "inbox")
+    return { tile: "bg-teal-50 text-teal-600 ring-teal-200", icon: <path d="M4.5 5h11a1 1 0 011 1v6.5a1 1 0 01-1 1H9.5L6.5 16v-2.5h-2a1 1 0 01-1-1V6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /> };
   if (area === "session")
     return { tile: "bg-slate-50 text-slate-500 ring-slate-200", icon: <path d="M8 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H8M12 6.5L15.5 10 12 13.5M15.5 10H8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /> };
   return { tile: "bg-teal-50 text-teal-600 ring-teal-200", icon: <path d="M3.5 8l1.5-4h10l1.5 4M3.5 8v8h13V8M3.5 8h13M8 16v-4h4v4" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /> };
@@ -184,7 +193,21 @@ function subjectLink(item: MemberActivityItem): string | null {
   if (item.subjectType === "order") return `/accounts/${item.connectionId}/orders/${encodeURIComponent(item.subjectId)}`;
   if (item.subjectType === "listing") return `/accounts/${item.connectionId}/listings?q=${encodeURIComponent(item.subjectId)}`;
   if (item.subjectType === "hunt" && item.kind !== "hunt.withdrawn" && item.kind !== "hunt.removed") return `/accounts/${item.connectionId}/hunting?open=${encodeURIComponent(item.subjectId)}`;
+  // A buyer conversation they answered, resolved, gave or noted: that chat in the account's Inbox.
+  if (item.subjectType === "conversation") return `/accounts/${item.connectionId}/inbox?e=${item.connectionId}~${encodeURIComponent(item.subjectId)}`;
   return null;
+}
+
+// The line under an action: a note's words, what a buyer conversation came to (how long the buyer had waited, who it went to), else its title.
+function activityLine(i: MemberActivityItem): string | null {
+  if (i.kind === "order.note" && typeof i.detail.text === "string") return `\u201c${i.detail.text}\u201d`;
+  if (i.subjectType === "conversation") {
+    const waited = typeof i.detail.waitedMinutes === "number" ? i.detail.waitedMinutes : null;
+    if (i.kind === "inbox.replied" && waited !== null) return `The buyer had waited ${waitText(waited)}`;
+    if (i.kind === "inbox.assigned" && typeof i.detail.toName === "string") return `To ${i.detail.toName}`;
+    return null;
+  }
+  return i.title;
 }
 
 function ActivityLog({ memberId, name, range, custom, connections, metrics, kind, onKind, recordingSince }: {
@@ -324,7 +347,16 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
               <ul className="divide-y divide-[var(--color-line)]">
                 {g.items.map((i) => {
                   const href = subjectLink(i);
-                  const subject = i.subjectType === "order" ? `Order ${i.subjectId}` : i.subjectType === "listing" ? `#${i.subjectId}` : i.subjectType === "draft" ? "Draft" : null;
+                  const subject =
+                    i.subjectType === "order"
+                      ? `Order ${i.subjectId}`
+                      : i.subjectType === "listing"
+                        ? `#${i.subjectId}`
+                        : i.subjectType === "draft"
+                          ? "Draft"
+                          : i.subjectType === "conversation"
+                            ? `Chat with ${i.title || "a buyer"}`
+                            : null;
                   const k = kindStyle(i.kind);
                   const at = inZone(i.at, timeZone);
                   return (
@@ -339,16 +371,17 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
                           <span className="font-medium">{i.label}</span>
                           {subject && <span className="text-[var(--color-muted)]"> · </span>}
                           {!subject ? null : href ? (
-                            <Link href={href} className="font-mono text-[11.5px] text-[var(--color-primary)] hover:underline">
+                            <Link href={href} className={`${i.subjectType === "conversation" ? "font-medium text-[12px]" : "font-mono text-[11.5px]"} text-[var(--color-primary)] hover:underline`}>
                               {subject}
                             </Link>
                           ) : (
                             <span className="font-mono text-[11.5px] text-[var(--color-muted)]">{subject}</span>
                           )}
                         </p>
-                        {(i.title || (i.kind === "order.note" && typeof i.detail.text === "string")) && (
-                          <p className="mt-0.5 truncate text-[11.5px] text-[var(--color-muted)]">{i.kind === "order.note" && typeof i.detail.text === "string" ? `\u201c${i.detail.text}\u201d` : i.title}</p>
-                        )}
+                        {(() => {
+                          const line = activityLine(i);
+                          return line ? <p className="mt-0.5 truncate text-[11.5px] text-[var(--color-muted)]">{line}</p> : null;
+                        })()}
                         <p className="mt-0.5 text-[11px] text-[var(--color-muted)] sm:hidden">
                           {[i.connectionLabel, i.amount != null ? formatMoney({ amount: i.amount, currency: i.currency || undefined }) : null].filter(Boolean).join(" · ")}
                         </p>
@@ -388,7 +421,7 @@ function MemberPageBody() {
   const user = liveUser ?? cachedUser;
 
   // Tab, range and log filter live in the URL: shareable, and kept on Back.
-  const tab = (["performance", "activity", "access"].includes(searchParams.get("tab") || "") ? searchParams.get("tab") : "performance") as Tab;
+  const tab = (["performance", "time", "activity", "access"].includes(searchParams.get("tab") || "") ? searchParams.get("tab") : "performance") as Tab;
   const range = (RANGE_OPTIONS.some((r) => r.key === searchParams.get("range")) ? searchParams.get("range") : "7d") as TeamRange;
   const custom = useMemo(() => ({ from: searchParams.get("from") || "", to: searchParams.get("to") || "" }), [searchParams]);
   const kind = searchParams.get("kind") || "";
@@ -576,9 +609,10 @@ function MemberPageBody() {
 
             {tab === "performance" && (
               <div className={loading ? "opacity-60 transition-opacity" : "transition-opacity"}>
-                <MemberPerformance key={`${data.range.from}:${data.range.to}`} data={data} onOpenLog={(k) => setQuery({ tab: "activity", kind: k })} />
+                <MemberPerformance key={`${data.range.from}:${data.range.to}`} data={data} onOpenLog={(k) => setQuery({ tab: "activity", kind: k })} onOpenTime={() => setQuery({ tab: "time" })} />
               </div>
             )}
+            {tab === "time" && <MemberTimeView memberId={memberId} name={name} range={range} custom={custom} />}
             {tab === "activity" && (
               <ActivityLog recordingSince={data.recordingSince} memberId={memberId} name={name} range={range} custom={custom} connections={data.connections} metrics={data.metrics} kind={kind} onKind={(k) => setQuery({ kind: k || null })} />
             )}
@@ -595,6 +629,8 @@ function MemberPageBody() {
                 <div className="border-t border-[var(--color-line)]">
                   <AccessGrid member={memberForGrid} connections={connections.filter((c) => c.platform_key === "ebay")} knownFeatures={data.knownFeatures} onChange={changeAccess} />
                 </div>
+                {/* Team chat is everyone's; running its channels is the owner's unless given. */}
+                <ChatManageRow permissions={memberForGrid.permissions || []} name={member!.name || "they"} disabled={removed} onChange={changeAccess} />
               </div>
             )}
           </>
@@ -629,5 +665,31 @@ export default function MemberPage() {
     <Suspense fallback={null}>
       <MemberPageBody />
     </Suspense>
+  );
+}
+
+function ChatManageRow({ permissions, name, disabled, onChange }: { permissions: { connection_id: string | null; feature: string; allowed: boolean }[]; name: string; disabled: boolean; onChange: (updates: PermissionUpdate[]) => Promise<void> }) {
+  const on = permissions.some((p) => p.feature === "chat_manage" && p.connection_id === null && p.allowed);
+  const [busy, setBusy] = useState(false);
+  async function flip() {
+    setBusy(true);
+    try {
+      await onChange([{ connectionId: null, feature: "chat_manage", allowed: !on }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="flex items-center gap-3 border-t border-[var(--color-line)] px-5 py-3">
+      <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-[15px] font-bold ring-1 ring-inset ${on ? "bg-emerald-50 text-emerald-600 ring-emerald-200" : "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]"}`} aria-hidden>
+        #
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-semibold text-[var(--color-ink)]">Manage team chat channels</p>
+        <p className="text-[11.5px] text-[var(--color-muted)]">Everyone has team chat. With this, {name} can also make, rename, archive and delete channels and choose who&apos;s in them.</p>
+      </div>
+      <span className={`hidden text-[11.5px] font-medium sm:inline ${on ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{on ? "On" : "Off"}</span>
+      <Switch on={on} disabled={disabled || busy} onChange={flip} label="Manage team chat channels" />
+    </div>
   );
 }

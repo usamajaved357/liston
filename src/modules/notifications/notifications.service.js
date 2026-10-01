@@ -1,9 +1,13 @@
 const notificationsRepository = require('./notifications.repository');
 const push = require('./push');
+const userEvents = require('../realtime/user-events');
 const logger = require('../../utils/logger');
 
 // What Liston tells a person: kept for the bell, and pushed to every browser
-// they turned push notifications on in.
+// they turned push notifications on in. Each change is also said on the
+// person's live stream (`notifications.changed`) so an open bell follows at once.
+
+const changed = (userId) => userEvents.emit(String(userId), { type: 'notifications.changed' });
 
 /**
  * Tells someone something: kept for the bell, then pushed in the background.
@@ -19,9 +23,37 @@ async function notify({ userId, actorUserId = null, kind, title, body = null, ur
     logger.warn('Notification not kept', { kind, error: err.message });
     return null;
   }
+  changed(userId);
   // Pushed in the background: the action that caused it doesn't wait on the push services.
   pushTo(userId, { id: row.id, kind, title, body, url, tag: subjectId ? `${kind.split('.')[0]}-${subjectId}` : row.id }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
   return row;
+}
+
+/**
+ * A notification kept once per subject (a chat conversation, an eBay
+ * conversation): the bell shows one line counting up; `push` (when given)
+ * is sent to the person's browsers — tag, title, body, url, image — and
+ * left out when they shouldn't be disturbed. Never throws.
+ */
+async function notifyGrouped({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId, detail = {}, push: pushed = null }) {
+  if (!userId || !kind || !title || !subjectId) return null;
+  let row;
+  try {
+    row = await notificationsRepository.upsertGrouped({ userId, actorUserId, kind, title, body, url, subjectType, subjectId, detail });
+  } catch (err) {
+    logger.warn('Notification not kept', { kind, error: err.message });
+    return null;
+  }
+  changed(userId);
+  if (pushed) pushTo(userId, { id: row.id, kind, url, ...pushed }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
+  return row;
+}
+
+/** The person opened what these notifications were about: they're read. */
+async function readSubject(userId, kind, subjectId) {
+  const count = await notificationsRepository.markReadBySubject(userId, kind, subjectId).catch(() => 0);
+  if (count) changed(userId);
+  return count;
 }
 
 /** Sends one notification to every browser the person turned push on in; forgets the ones that are gone. */
@@ -61,6 +93,7 @@ async function list(userId) {
 
 async function markRead(userId, ids) {
   await notificationsRepository.markRead(userId, ids || null);
+  changed(userId);
   return list(userId);
 }
 
@@ -77,6 +110,7 @@ async function subscribe(userId, { endpoint, keys, userAgent }) {
 /** Clears some (or all) of a person's notifications. */
 async function clear(userId, ids) {
   await notificationsRepository.deleteFor(userId, ids || null);
+  changed(userId);
   return list(userId);
 }
 
@@ -96,4 +130,4 @@ async function unsubscribe(userId, endpoint) {
   await notificationsRepository.deleteSubscription(userId, endpoint);
 }
 
-module.exports = { notify, list, markRead, clear, subscribe, unsubscribe, sendTest };
+module.exports = { notify, notifyGrouped, readSubject, pushTo, list, markRead, clear, subscribe, unsubscribe, sendTest };

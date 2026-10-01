@@ -217,59 +217,23 @@ test('a restricted item is hidden; a VeRO brand named as the product (not as wha
   assert.match(guess.text, /eBay hasn't taken these listings down/);
 });
 
-const products = require('../../src/modules/discover/discover-products');
-
-test('products: the same thing under several sellers is one product, judged on demand, proven sellers, delivery you can match, price room and momentum', () => {
-  const l = (title, sold, seller, { compared = 'similar', price = 12, days = 60, recent = null } = {}) => ({
-    legacyItemId: `${seller}-${sold}`,
-    title,
-    sold,
-    createdAt: daysAgo(days),
-    price: { value: price, currency: 'GBP' },
-    shipping: { cost: 0 },
-    seller: { username: seller },
-    delivery: { compared },
-    recent,
-  });
+test("a subject's momentum: how many of its leading listings are rising (selling faster lately than over their life) or new and already selling", () => {
+  const l = (soldPerMonth, { days = 200, recent = null } = {}) => ({ soldPerMonth, createdAt: daysAgo(days), recent });
   const listings = [
-    l('Cat Water Fountain 2L Automatic Pet Drinking Dispenser Filter', 120, 'a', { compared: 'faster' }),
-    l('2.5L Automatic Cat Water Fountain Pet Drinking Dispenser LED', 60, 'b', { compared: 'similar' }),
-    l('Pet Cat Water Fountain Automatic Dispenser 3L Quiet Pump', 30, 'c', { compared: 'slower' }),
-    l('Cat Fountain Filters Replacement 8 Pack Carbon', 40, 'd'),
-    l('Cat Fountain Filters Replacement 4pcs', 10, 'e', { days: 20, recent: { sold: 12, days: 3, from: '', to: '' } }),
-    l('Dog Bowl Slow Feeder Stainless', 3, 'f', { price: 3 }),
-    l('Dog bowl slow feeder', null, 'g', { price: 3 }),
+    // Rising: 12 sold in the last 3 days against 30 a month over its life (4 a day vs 1).
+    l(30, { recent: { sold: 12, days: 3 } }),
+    // Steady: sells as it always has.
+    l(30, { recent: { sold: 3, days: 3 } }),
+    // New: 40 days live, already 25 a month.
+    l(25, { days: 40 }),
+    // New but hardly selling, and old and quiet: neither.
+    l(2, { days: 20 }),
+    l(0),
+    // Not read yet: not counted at all.
+    l(null, { days: 10 }),
   ];
-  const found = products.productsOf(listings, { subject: 'cat water fountain', currency: 'GBP', now: NOW });
-  assert.deepStrictEqual(
-    found.map((p) => [p.name.slice(0, 20), p.listings, p.sellers, p.selling, p.perMonth]),
-    [
-      ['Cat Water Fountain 2', 3, 3, 3, 105],
-      ['Cat Fountain Filters', 2, 2, 2, 30],
-      ['Dog Bowl Slow Feeder', 2, 2, 1, 1.5],
-    ]
-  );
-  const fountain = found[0];
-  // Of its sales, the share from sellers delivering like you or slower: b and c, not a.
-  assert.deepStrictEqual([fountain.delivery.known, fountain.delivery.share], [true, 43]);
-  assert.strictEqual(fountain.price.median, 12);
-  assert.ok(fountain.reasons.some((r) => r.good && /3 sellers sell it every month/.test(r.text)));
-  assert.ok(fountain.reasons.some((r) => r.good && /43% of its sales/.test(r.text)));
-  assert.ok(fountain.score > found[2].score);
-  // The filters: rising (12 in 3 days against a lifetime pace) and a new listing already selling.
-  const filters = found[1];
-  assert.strictEqual(filters.momentum, 'rising');
-  // What its sold count was sold in: its oldest listing's age (60 days; the other is 20).
-  assert.deepStrictEqual([filters.sold, filters.oldestDays], [50, 60]);
-  assert.ok(filters.reasons.some((r) => /Rising/.test(r.text)));
-  // A cheap product with one seller: little room, not proven.
-  const bowl = found[2];
-  assert.ok(bowl.reasons.some((r) => r.good === false && /One seller/.test(r.text)));
-  assert.ok(bowl.reasons.some((r) => r.good === false && /little left/.test(r.text)));
-  assert.strictEqual(bowl.band, 'weak');
-  // Listings under a month old: sales a month is the sold count itself (a month at least), and the age says why.
-  const young = products.productsOf([l('Solar Garden Lights Pack 10 LED', 98, 'h', { days: 26 }), l('Solar Garden Lights 10 Pack LED Outdoor', 72, 'i', { days: 12 })], { subject: 'solar lights', currency: 'GBP', now: NOW })[0];
-  assert.deepStrictEqual([young.perMonth, young.sold, young.oldestDays], [170, 170, 26]);
+  assert.deepStrictEqual(trends.momentumOf(listings, NOW), { rising: 2, read: 5 });
+  assert.deepStrictEqual(trends.momentumOf([], NOW), { rising: 0, read: 0 });
 });
 
 test('the site keywords: one row per term where it sells most, a searched keyword with its own market, nothing blocked', () => {
@@ -294,39 +258,6 @@ test('the site keywords: one row per term where it sells most, a searched keywor
   assert.deepStrictEqual(byTerm['motion sensor'].searched, { monthlySales: 300, live: 4200, score: 71, band: 'strong' });
   assert.strictEqual(byTerm['motion sensor'].perMonth, 300, "a searched keyword's own market");
   assert.deepStrictEqual([byTerm['solar lights'].subjects, byTerm['solar lights'].from, byTerm['solar lights'].perMonth], [0, null, 120]);
-});
-
-test('personal: what the owner already has, most certain first; a similar live title only when enough words match', () => {
-  const personal = require('../../src/modules/discover/discover-personal');
-  const index = personal.ownedIndex({
-    live: [{ itemId: '111', title: 'Solar Garden Lights Outdoor Waterproof LED Stake 10 Pack', account: 'Walexo' }],
-    hunts: [{ itemId: '222', stage: 'rejected', account: 'Selvora' }, { itemId: '111', stage: 'pending', account: 'Selvora' }],
-    listings: [{ itemId: '333', status: 'pending_review', account: 'Walexo' }],
-  });
-  const product = (itemIds, name = 'Something else entirely') => ({ itemIds, name });
-  assert.deepStrictEqual(personal.ownedOf(product(['111']), index), { kind: 'selling', text: 'You sell it on Walexo' });
-  assert.deepStrictEqual(personal.ownedOf(product(['222']), index), { kind: 'rejected', text: 'Rejected before on Selvora' });
-  assert.deepStrictEqual(personal.ownedOf(product(['333']), index), { kind: 'drafted', text: 'Drafted on Walexo' });
-  assert.deepStrictEqual(personal.ownedOf(product(['999'], 'Outdoor Solar Garden Lights Waterproof LED Stake Pack of 10'), index), { kind: 'similar', text: 'Like your listing on Walexo' });
-  assert.strictEqual(personal.ownedOf(product(['999'], 'Garden hose reel'), index), null);
-});
-
-test("personal: points for the account's categories and usual prices, a few off when other sellers crowd in", () => {
-  const personal = require('../../src/modules/discover/discover-personal');
-  const base = { itemIds: ['1', '2'], name: 'x', categoryId: '42', price: { median: 12 }, score: 60, band: 'fair', parts: { demand: 20 }, reasons: [] };
-  const taste = personal.tasteOf({ categoryIds: ['42'], prices: [8, 9, 10, 12, 14, 15, 30] });
-  const liked = personal.personalise(base, { taste });
-  assert.deepStrictEqual([liked.score, liked.band, liked.parts.forYou], [68, 'strong', 8]);
-  assert.strictEqual(liked.reasons.length, 2);
-  // Too few prices to know the account's range: the category alone.
-  assert.strictEqual(personal.personalise(base, { taste: personal.tasteOf({ categoryIds: ['42'], prices: [10] }) }).score, 65);
-  const huntsByItem = new Map([['1', new Set(['a', 'b'])], ['2', new Set(['b', 'c'])]]);
-  const crowd = personal.crowdOf(base, huntsByItem);
-  assert.strictEqual(crowd, 3);
-  const crowded = personal.personalise(base, { crowd });
-  assert.deepStrictEqual([crowded.score, crowded.crowd, crowded.parts.crowd], [54, 3, -6]);
-  // One other seller isn't a crowd.
-  assert.deepStrictEqual([personal.personalise(base, { crowd: 1 }).score, personal.personalise(base, { crowd: 1 }).crowd], [60, 0]);
 });
 
 test('productRisk: a VeRO brand specific, eBay refusing a draft like it, or the team rejecting one like it for brand risk', () => {

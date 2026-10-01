@@ -110,6 +110,14 @@ async function getCases(req, res, next) {
   }
 }
 
+async function getMoney(req, res, next) {
+  try {
+    res.status(200).json(await orderService.getOrderMoney(req.params.id, req.ownerId, req.params.orderId));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function declineCancellation(req, res, next) {
   try {
     res.status(200).json(await orderService.declineCancellation(req.params.id, req.ownerId, req.userId, req.params.orderId));
@@ -212,4 +220,4 @@ async function updateSourceAccount(req, res, next) {
   }
 }
 
-module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, dispatchOrders, refundOrder, cancelOrder, setArchived, getCases, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, listSourceAccounts, createSourceAccount, updateSourceAccount };
+module.exports = { getOrder, saveSourcing, addNote, dispatchOrder, dispatchOrders, refundOrder, cancelOrder, setArchived, getCases, getMoney, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, listSourceAccounts, createSourceAccount, updateSourceAccount };

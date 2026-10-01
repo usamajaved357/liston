@@ -6,6 +6,7 @@ import { api, ApiError, User } from "@/lib/api";
 import { PasswordField } from "@/components/PasswordField";
 import { PasswordInput } from "@/components/PasswordInput";
 import { AppShell } from "@/components/AppShell";
+import { NotificationSettingsCard } from "@/components/inbox/NotificationSettingsCard";
 import { MemberSidebarFooter } from "@/components/MemberSidebarFooter";
 import { NotificationBell } from "@/components/NotificationBell";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -349,6 +350,8 @@ export default function AccountPage() {
             </div>
           </SettingRow>
         </div>
+
+        <NotificationSettingsCard />
 
         <div className="card">
           <SettingRow title="Password" description="Choose a strong password you're not using anywhere else. You'll stay logged in on this device." last>

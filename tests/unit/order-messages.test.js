@@ -23,6 +23,15 @@ const order = (id, deliveredAt, over = {}) => ({
   ...over,
 });
 
+test("the buyer's first name: as eBay gave it, a shouted or whispered one tidied, none when eBay gave none", () => {
+  assert.strictEqual(orderMessages.firstName(order('a', null, { shippingAddress: { name: 'JAVED MIAH' } })), 'Javed');
+  assert.strictEqual(orderMessages.firstName(order('a', null, { shippingAddress: { name: 'sara khan' } })), 'Sara');
+  assert.strictEqual(orderMessages.firstName(order('a', null, { shippingAddress: { name: 'McKenzie Ross' } })), 'McKenzie');
+  assert.strictEqual(orderMessages.firstName(order('a', null, { shippingAddress: null, buyerName: 'Tom Hale' })), 'Tom');
+  assert.strictEqual(orderMessages.firstName(order('a', null, { shippingAddress: null, buyerName: null })), null);
+  assert.strictEqual(orderMessages.buyerName(order('a', null, { shippingAddress: { name: 'JAVED MIAH' } })), 'Javed');
+});
+
 test('the delivered message names the buyer and the item, and goes only to orders delivered lately, once each', () => {
   const text = orderMessages.fill('Hi {buyer}, how is your {item}?', order('a', hoursAgo(1)));
   assert.strictEqual(text, 'Hi Jane, how is your Cat Water Fountain 2L?');

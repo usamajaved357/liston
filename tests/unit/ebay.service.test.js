@@ -1037,3 +1037,16 @@ test('buildInventoryItem carries the parcel eBay needs for calculated postage: k
   assert.deepStrictEqual(buildInventoryItem({ ...base, package: { weightKg: 0.2 }, marketplaceId: 'EBAY_AU' }).packageWeightAndSize, { weight: { value: 0.2, unit: 'KILOGRAM' } }, 'the weight alone when the box size is unknown');
   assert.strictEqual('packageWeightAndSize' in buildInventoryItem(base), false, 'nothing without a weight');
 });
+
+test("an order is cancelled only when the cancellation went through: a buyer's request still waiting, or one declined, leaves it standing", () => {
+  const base = { checkoutStatus: 'Complete', shippedTime: '2026-09-20T10:00:00Z', deliveredAt: '2026-09-23T10:00:00Z' };
+  assert.strictEqual(ebayService.classifyOrderStatus({ ...base, cancelStatus: 'NotApplicable' }), 'delivered');
+  assert.strictEqual(ebayService.classifyOrderStatus({ ...base, cancelStatus: 'CancelRejected', status: 'Completed' }), 'delivered', 'declined: eBay shows it Completed, shipped and delivered');
+  assert.strictEqual(ebayService.classifyOrderStatus({ checkoutStatus: 'Complete', cancelStatus: 'CancelPending' }), 'awaiting_dispatch', 'a request waiting on the seller: still to dispatch');
+  assert.strictEqual(ebayService.classifyOrderStatus({ checkoutStatus: 'Complete', cancelStatus: 'CancelRequest' }), 'awaiting_dispatch');
+  assert.strictEqual(ebayService.classifyOrderStatus({ ...base, cancelStatus: 'CancelFailed' }), 'delivered');
+  assert.strictEqual(ebayService.classifyOrderStatus({ checkoutStatus: 'Complete', cancelStatus: 'CancelClosedWithRefund', status: 'Cancelled' }), 'cancelled');
+  assert.strictEqual(ebayService.classifyOrderStatus({ checkoutStatus: 'Complete', cancelStatus: 'CancelComplete' }), 'cancelled', "Fulfillment's CANCELED");
+  assert.strictEqual(ebayService.classifyOrderStatus({ checkoutStatus: 'Incomplete', cancelStatus: 'CancelClosedForCommitment', status: 'Cancelled' }), 'cancelled', "eBay's own order status says so");
+  assert.ok(ebayService.CANCEL_REQUESTED_STATUSES.has('CancelPending'));
+});

@@ -104,4 +104,33 @@ function dailySales(reads, { today, days = 14 } = {}) {
   return analyticsDays.daysBetween(from, today).map((day) => ({ day, value: totals.has(day) ? Math.round(totals.get(day) * 10) / 10 : null }));
 }
 
-module.exports = { recentSales, summarise, dailySales, WEEK };
+// New or selling faster lately, per listing: rising — at least 2 sold over 2
+// days of readings or more, at 1.5 times its lifetime pace or faster — or
+// new: live NEW_DAYS or less and already selling NEW_PACE a month.
+const NEW_DAYS = 90;
+const NEW_PACE = 10;
+const RISING_LIFT = 1.5;
+
+/**
+ * How many of a subject's leading listings are new or rising (listings
+ * from summarise, each with soldPerMonth, recent and createdAt): { rising,
+ * read } — read: how many have a sold count. eBay doesn't share buyers'
+ * search volume, so this momentum stands in for "trending".
+ */
+function momentumOf(listings, now = Date.now()) {
+  let rising = 0;
+  let read = 0;
+  for (const l of listings) {
+    if (l.soldPerMonth === null || l.soldPerMonth === undefined) continue;
+    read += 1;
+    const lifePerDay = l.soldPerMonth / 30;
+    const recentOk = l.recent && l.recent.days >= 2 && l.recent.sold >= 2;
+    const faster = recentOk && (!lifePerDay || l.recent.sold / l.recent.days / lifePerDay >= RISING_LIFT);
+    const days = l.createdAt ? Math.floor((now - Date.parse(l.createdAt)) / 86400000) : null;
+    const fresh = days !== null && days >= 0 && days <= NEW_DAYS && l.soldPerMonth >= NEW_PACE;
+    if (faster || fresh) rising += 1;
+  }
+  return { rising, read };
+}
+
+module.exports = { recentSales, summarise, dailySales, momentumOf, WEEK, NEW_DAYS };

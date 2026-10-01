@@ -1,14 +1,21 @@
 "use client";
 
+import { Suspense, useState } from "react";
 import { useParams } from "next/navigation";
 import { useConnection } from "@/lib/useConnection";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
 import { AccountPageSkeleton } from "@/components/Skeleton";
+import { AccountInboxView } from "@/components/inbox/InboxView";
 
+// The Inbox on an account: its eBay messages, with Inbox access (team chat
+// is the Dashboard's Inbox). How fresh Liston's copy of eBay is sits in the
+// header beside the bell, so the conversations get the page's height.
 export default function AccountInboxPage() {
   const params = useParams<{ id: string }>();
   const { connection, user, loading, error } = useConnection(params.id);
+  // The header's spot for the sync state, filled by the inbox below.
+  const [syncSlot, setSyncSlot] = useState<HTMLElement | null>(null);
 
   if (loading) {
     return <AccountPageSkeleton />;
@@ -22,6 +29,7 @@ export default function AccountInboxPage() {
     );
   }
 
+  const canSee = !connection.permissions || Boolean(connection.permissions.inbox);
   return (
     <AccountShell
       connectionId={connection.id}
@@ -32,28 +40,22 @@ export default function AccountInboxPage() {
       status={connection.status}
       permissions={connection.permissions}
       user={user}
+      fill
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Inbox</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            {connection.label} · {connection.marketplace?.name ?? connection.platform_name}
-          </p>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">{connection.label}&apos;s buyers and eBay</p>
         </div>
       }
+      actions={canSee ? <span ref={setSyncSlot} className="flex items-center" /> : undefined}
     >
-      <div className="rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-6">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-base font-bold text-[var(--color-ink)]">Buyer messages</h2>
-          <span className="rounded-full bg-[var(--color-line)] px-2.5 py-0.5 text-xs font-medium text-[var(--color-muted)]">
-            Coming soon
-          </span>
-        </div>
-        <div className="mt-4 rounded-lg border border-dashed border-[var(--color-line)] p-8 text-center">
-          <p className="text-sm text-[var(--color-muted)]">
-            Buyer messages for this account will show up here once messaging is built.
-          </p>
-        </div>
-      </div>
+      {canSee ? (
+        <Suspense fallback={null}>
+          <AccountInboxView connectionId={connection.id} isOwner={user.role !== "member"} syncSlot={syncSlot} />
+        </Suspense>
+      ) : (
+        <div className="card flex flex-1 items-center justify-center p-8 text-center text-[13px] text-[var(--color-muted)]">You don&apos;t have access to this account&apos;s messages. Ask the owner for Inbox access.</div>
+      )}
     </AccountShell>
   );
 }

@@ -11,6 +11,30 @@ async function insert({ userId, actorUserId = null, kind, title, body = null, ur
   return rows[0];
 }
 
+/**
+ * One unread notification per subject (a chat conversation): a new one
+ * replaces the unread one there, counting up in detail.count, moved to the
+ * top; after it's read the next starts a new one.
+ */
+async function upsertGrouped({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId, detail = {} }) {
+  const { rows } = await query(
+    `UPDATE notifications
+        SET actor_user_id = $2, title = $4, body = $5, url = $6,
+            detail = $8::jsonb || jsonb_build_object('count', coalesce((detail->>'count')::int, 1) + 1), created_at = now()
+      WHERE id = (SELECT id FROM notifications WHERE user_id = $1 AND kind = $3 AND subject_id = $7 AND read_at IS NULL ORDER BY created_at DESC LIMIT 1)
+      RETURNING *`,
+    [userId, actorUserId, kind, title, body, url, String(subjectId), JSON.stringify(detail || {})]
+  );
+  if (rows[0]) return rows[0];
+  return insert({ userId, actorUserId, kind, title, body, url, subjectType, subjectId, detail: { ...detail, count: 1 } });
+}
+
+/** Marks a person's notifications about one subject read (they opened the conversation). */
+async function markReadBySubject(userId, kind, subjectId) {
+  const { rowCount } = await query(`UPDATE notifications SET read_at = now() WHERE user_id = $1 AND kind = $2 AND subject_id = $3 AND read_at IS NULL`, [userId, kind, String(subjectId)]);
+  return rowCount;
+}
+
 /** A person's latest notifications, newest first, and how many are unread. */
 async function listFor(userId, { limit = 30 } = {}) {
   const [list, unread] = await Promise.all([
@@ -71,4 +95,4 @@ async function touchSubscription(endpoint) {
   await query('UPDATE push_subscriptions SET last_sent_at = now() WHERE endpoint = $1', [endpoint]);
 }
 
-module.exports = { insert, listFor, markRead, deleteFor, saveSubscription, deleteSubscription, forgetEndpoint, subscriptionsFor, touchSubscription };
+module.exports = { insert, upsertGrouped, markReadBySubject, listFor, markRead, deleteFor, saveSubscription, deleteSubscription, forgetEndpoint, subscriptionsFor, touchSubscription };

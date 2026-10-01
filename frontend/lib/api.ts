@@ -608,12 +608,29 @@ export interface TeamMember {
   deactivated_at?: string | null; // removed: no login, history kept
   lastActiveAt?: string | null; // their last recorded action
   today?: TeamMetrics; // what they've done today (Team page cards)
+  // Their time in Liston today (minutes), and whether a tab of theirs is open now.
+  time?: { working: number; idle: number; lastSeenAt: string | null; inListon: boolean };
   permissions: TeamMemberPermission[];
 }
 
 // A member's figures (backend team/activity.js METRICS). An order line or
 // listing counts once per range, however often it was touched.
-export type TeamMetricKey = "active_days" | "supplier_orders" | "dispatched" | "cases" | "published" | "edited" | "relisted" | "ended" | "drafted" | "draft_work" | "hunted" | "hunts_reviewed";
+export type TeamMetricKey =
+  | "active_days"
+  | "supplier_orders"
+  | "dispatched"
+  | "cases"
+  | "published"
+  | "edited"
+  | "relisted"
+  | "ended"
+  | "drafted"
+  | "draft_work"
+  | "hunted"
+  | "hunts_reviewed"
+  | "inbox_answered"
+  | "inbox_resolved"
+  | "inbox_sent";
 export type TeamMetrics = Record<TeamMetricKey, number>;
 export type TeamRange = "today" | "yesterday" | "7d" | "30d" | "this_month" | "last_month" | "custom";
 
@@ -640,6 +657,24 @@ export interface MemberOverview {
   };
   connections: { id: string; label: string }[];
   knownFeatures: string[];
+  // How quickly they answer buyers: the median minutes a buyer had waited before each reply.
+  replyTime?: { median: number | null; count: number };
+  previousReplyTime?: { median: number | null; count: number };
+  // Their time in Liston in the period (minutes), and before.
+  time?: { working: number; idle: number };
+  previousTime?: { working: number; idle: number };
+}
+
+// A member's time in Liston for a range (minutes): working and idle, each
+// day's stretches (minutes after that day's midnight), and where it went.
+export type WorkArea = "dashboard" | "overview" | "inbox" | "orders" | "listings" | "hunting" | "research" | "analytics" | "campaigns" | "settings" | "other";
+export interface MemberTime {
+  range: { key: TeamRange; from: string; to: string; days: number; timeZone: string; previous: { from: string; to: string } };
+  trackedSince: string | null;
+  totals: { working: number; idle: number; actions: number; actionsPerHour: number | null; daysInListon: number };
+  previous: { working: number; idle: number; actions: number };
+  days: { day: string; working: number; idle: number; first: string | null; last: string | null; actions: number; spans: { from: number; to: number; working: boolean; area: WorkArea }[] }[];
+  areas: { area: WorkArea; label: string; working: number; idle: number; actions: number }[];
 }
 
 // A team member's own work on one account (their Overview there): the same
@@ -654,7 +689,7 @@ export interface MemberActivityItem {
   id: string;
   kind: string;
   label: string;
-  subjectType: "order" | "listing" | "draft" | "account" | "session" | "hunt";
+  subjectType: "order" | "listing" | "draft" | "account" | "session" | "hunt" | "conversation";
   subjectId: string;
   subjectPart: string | null;
   title: string | null;
@@ -911,6 +946,25 @@ export interface OrderDispute {
   openedAt: string | null;
   respondBy: string | null;
   closed: boolean;
+}
+
+// What one order made (the Inbox's details panel): eBay's figures as Liston
+// keeps them (null until eBay posts the sale), the supplier cost entered on
+// the order page, and the profit when both are known.
+export interface OrderMoney {
+  currency: string | null;
+  gross: number | null;
+  // eBay's fees other than ads; the promoted-listing fee apart.
+  fees: number | null;
+  adFees: number | null;
+  refunds: number | null;
+  earnings: number | null;
+  fundsStatus: string | null;
+  cost: { value: number; currency: string | null } | null;
+  profit: number | null;
+  margin: number | null;
+  // Why there are no figures: linked without the finances permission, not posted by eBay yet, or eBay couldn't be read.
+  unavailable: "scope" | "pending" | "error" | null;
 }
 
 export interface OrderCases {
@@ -2046,103 +2100,7 @@ export interface MemberHunting {
   reasons: (HuntReason & { count: number })[];
 }
 
-// ---- Discover (the Hunting page's tab for finding what to hunt) ----------------
-
-export interface DiscoverListing {
-  itemId: string;
-  title: string;
-  image: string | null;
-  url: string | null;
-  price: { value: number; currency: string } | null;
-  shipping: { cost: number; free: boolean } | null;
-  landed: number | null; // price with postage
-  seller: { username: string; feedbackScore: number | null; feedbackPercentage: number | null } | null;
-  overseas: boolean;
-  country: string | null;
-  category: string | null;
-  categoryId: string | null;
-  createdAt: string | null;
-  daysLive: number | null;
-  delivery: { min: number | null; max: number | null; compared: "faster" | "similar" | "slower" | "unknown" };
-  sold: number | null; // eBay's total, null until read
-  soldPerMonth: number | null;
-  options: { label: string; sold: number; price: number | null }[] | null; // best-selling first
-  optionCount: number;
-  readDay: string | null;
-  recent: { sold: number; days: number; from: string; to: string } | null; // sold between two readings
-  lift?: number | null; // rising: selling this many times faster lately than over its life
-  flag?: DiscoverFlag | null;
-}
-// A product: the same thing sold by several sellers, grouped, judged the way a hunter judges it.
-export interface DiscoverProduct {
-  key: string;
-  name: string;
-  image: string | null;
-  url: string | null;
-  category: string | null;
-  categoryId: string | null;
-  listings: number;
-  itemIds: string[];
-  read: number;
-  sellers: number;
-  selling: number; // sellers selling it every month
-  perMonth: number;
-  sold: number;
-  price: { low: number; median: number; high: number } | null;
-  delivery: { known: boolean; share: number | null; sellers: number; perMonth: number | null }; // sales from sellers delivering like you or slower
-  leaderShare: number | null;
-  momentum: "rising" | "new" | "steady" | "quiet";
-  lift: number | null;
-  newestDays: number | null;
-  oldestDays?: number | null; // its oldest listing with a sold count: what `sold` was sold in
-  recent: { sold: number; days: number } | null;
-  score: number;
-  band: DiscoverOpportunity["band"];
-  parts: { demand: number; proven: number; fit: number; room: number; momentum: number; spread: number };
-  reasons: { good: boolean | null; text: string }[];
-  flag: DiscoverFlag | null;
-  brand: string | null;
-  branded: boolean | null; // null until a reading carries the brand
-  seller: { username: string | null; score: number | null; percentage: number | null }; // the leading listing's seller
-  smallestSellerScore: number | null; // the smallest seller selling it every month
-  from?: { kind: "category" | "keyword"; value: string; name: string; path: string[] };
-  // What the owner already has of it: their live listing is among its listings, a listing Liston made
-  // came from it, it was hunted (and where that got to), or a live listing has a very similar title.
-  mine?: { kind: "selling" | "listed" | "drafted" | "hunted" | "rejected" | "similar"; text: string } | null;
-  // Other Liston sellers who hunted it in the last two weeks (counted from two; never who).
-  crowd?: number;
-  // Its takedown risk for this owner: a VeRO brand (source "list": Liston's list; "ai": only the AI's guess, never eBay's word),
-  // eBay's refusals of their drafts, their team's brand-risk rejections.
-  risk?: { kind: "vero" | "refused" | "rejected"; level: "bad" | "warn"; text: string; source?: "list" | "ai"; brand?: string } | null;
-}
-// The filters a hunter reaches for; the same set on a subject's page (applied there) and in Winners (applied by the server).
-export interface DiscoverWinnersFilters {
-  q?: string;
-  fit?: boolean;
-  priceMin?: number | null;
-  priceMax?: number | null;
-  brand?: "any" | "unbranded" | "branded";
-  rating?: "any" | "top" | "good" | "weak";
-  size?: "any" | "small" | "medium" | "large";
-  listedWithin?: number | null; // days: its youngest listing with a sold count is at most this old
-  minSales?: number;
-  newOnly?: boolean;
-  sort?: "score" | "sales" | "rising" | "new" | "price";
-  // Products the owner already has: shown and marked, or left out (a similar title is only ever marked).
-  mine?: "show" | "hide";
-  // VeRO and the owner's eBay history: products at risk hidden ("safe") or shown marked ("all").
-  safety?: "safe" | "all";
-}
-export interface DiscoverWinners {
-  products: DiscoverProduct[];
-  matched: number;
-  mineHidden?: number;
-  riskHidden?: number;
-  pool: { subjects: number; listings: number; read: number };
-  market: { id: string; name: string; currency: string };
-  account: { min: number; max: number } | null;
-  at: string;
-}
+// ---- Discover (the Hunting page's tab for judging categories and keywords) ------
 
 // A keyword worth hunting across everything explored on the site: its sales a month (a searched
 // keyword's own market; otherwise the titles with it where it sells most), eBay's sold counts, its lift
@@ -2226,12 +2184,14 @@ export interface DiscoverChild {
     takenAt: string;
   } | null;
 }
+// Discover's day of eBay Browse calls: sold-count reads left (the account's, when it asks) and searches;
+// `paused` once eBay's count of the Browse pool passes Discover's share (research and drafting keep the rest).
 export interface DiscoverBudget {
-  trading: number;
+  reads: number;
   browse: number;
-  tradingPaused: boolean;
-  used: { trading: number; browse: number };
-  limits: { trading: number; browse: number };
+  paused: boolean;
+  used: { reads: number; account: number; browse: number };
+  limits: { reads: number; account: number; browse: number };
   resetAt: string;
 }
 export interface DiscoverAccount {
@@ -2311,16 +2271,15 @@ export interface DiscoverExplore {
   figures: DiscoverFigures;
   opportunity: DiscoverOpportunity;
   recent: { sold: number; days: number; listings: number } | null;
-  rising: DiscoverListing[];
-  products: DiscoverProduct[];
-  listings: DiscoverListing[];
+  // Of its leading listings read, how many are new or selling faster lately.
+  momentum: { rising: number; read: number };
   keywords: DiscoverKeyword[];
   brands: { name: string; count: number; unbranded: boolean }[];
   categories: { id: string; name: string; count: number }[];
   children: DiscoverChild[];
   // `reading`: sold counts still being read in the background (the page asks again); `progress`: how far.
-  // `of`: the leading listings read from eBay; `focused`: listings read beyond them for the filters (Load more).
-  reads: { asked: number; read: number; of?: number; focused?: number; more: boolean; stopped: boolean; signInFailed?: boolean; step: number; reading?: boolean; progress?: { done: number; of: number } };
+  // `of`: the leading listings kept (restricted ones hidden); `stopped`: the day's reads ran out first.
+  reads: { asked: number; read: number; of: number; stopped: boolean; reading?: boolean; progress?: { done: number; of: number } };
   watch: { id: string } | null;
   ranking: { total: number; done: number } | null;
   market: { id: string; name: string; currency: string; country?: string; flag?: string };
@@ -2350,8 +2309,7 @@ export interface DiscoverBestCategory {
   score: number;
   band: DiscoverOpportunity["band"];
   keyword: string | null;
-  products: number;
-  // Of its products, how many are new or rising: trending.
+  // Of its leading listings read, how many are new or selling faster lately: trending.
   rising: number;
 }
 export interface DiscoverStart {
@@ -2363,8 +2321,8 @@ export interface DiscoverStart {
   yourScoring?: { total: number; done: number } | null;
   topCategories: DiscoverCategoryCard[];
   watches: number;
-  // The best products across everything explored on the site, for the start screen.
-  winners: { products: DiscoverProduct[]; total: number; keywords?: number; pool: { subjects: number; listings: number; read: number } } | null;
+  // The size of everything explored on the site: its keywords that sell and the categories ranked.
+  pool: { keywords: number; categories: number; subjects: number; listings: number; read: number } | null;
   watchPreview: DiscoverWatch[];
   // What anyone on the site explored in the last few days (shared across accounts).
   recent: { kind: "category" | "keyword"; value: string; name: string; path: string[]; openedAt: string; flag?: DiscoverFlag | null; scanned: { score: number; band: DiscoverOpportunity["band"]; total: number; monthlySales: number } | null }[];
@@ -2382,7 +2340,7 @@ export interface DiscoverWatch {
   figures: { total: number; medianPerMonth: number | null; selling: number; read: number; price: number | null } | null;
   opportunity?: { score: number; band: DiscoverOpportunity["band"] };
   recent?: { sold: number; days: number; listings: number } | null;
-  rising?: DiscoverListing[];
+  momentum?: { rising: number; read: number };
 }
 export interface DiscoverWatchList {
   items: DiscoverWatch[];
@@ -2466,24 +2424,6 @@ function researchQuery(params: ResearchParams): URLSearchParams {
 }
 
 // The Products tab's filters as query values (the Winners list, and Find more with the same).
-function winnersQuery(f: DiscoverWinnersFilters): URLSearchParams {
-  const q = new URLSearchParams();
-  if (f.q) q.set("q", f.q);
-  if (f.fit) q.set("fit", "1");
-  if (f.priceMin !== null && f.priceMin !== undefined) q.set("priceMin", String(f.priceMin));
-  if (f.priceMax !== null && f.priceMax !== undefined) q.set("priceMax", String(f.priceMax));
-  if (f.brand && f.brand !== "any") q.set("brand", f.brand);
-  if (f.rating && f.rating !== "any") q.set("rating", f.rating);
-  if (f.size && f.size !== "any") q.set("size", f.size);
-  if (f.listedWithin) q.set("listedWithin", String(f.listedWithin));
-  if (f.minSales) q.set("minSales", String(f.minSales));
-  if (f.newOnly) q.set("newOnly", "1");
-  if (f.sort) q.set("sort", f.sort);
-  if (f.mine) q.set("mine", f.mine);
-  if (f.safety) q.set("safety", f.safety);
-  return q;
-}
-
 export const api = {
   signup: (email: string, password: string, extra: { name?: string; accessNote?: string } = {}) =>
     request<AuthResponse>("/api/auth/signup", {
@@ -2655,6 +2595,8 @@ export const api = {
   // payment disputes) and the seller's answers to them.
   getOrderCases: (connectionId: string, orderId: string) =>
     request<OrderCases>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cases`),
+  // What an order made: fees, earnings, supplier cost, profit.
+  getOrderMoney: (connectionId: string, orderId: string) => request<OrderMoney>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/money`),
   declineCancellation: (connectionId: string, orderId: string) =>
     request<{ declined: boolean }>(`/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/cancel/decline`, { method: "POST" }),
   respondToReturn: (connectionId: string, orderId: string, input: { returnId: string; action: "accept" | "decline" | "received" | "refund" | "message"; comment?: string; declineReason?: string; amount?: string | null }) =>
@@ -2726,22 +2668,10 @@ export const api = {
     return request<HuntList>(`/api/connections/${connectionId}/hunting?${query.toString()}`);
   },
   discoverStart: (connectionId: string) => request<DiscoverStart>(`/api/connections/${connectionId}/discover`),
-  // `focus`: the page's filters when loading more: only listings that can pass them are read.
-  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef, reads?: number, focus?: DiscoverWinnersFilters | null) => {
+  discoverExplore: (connectionId: string, subject: DiscoverSubjectRef) => {
     const q = new URLSearchParams();
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
-    if (reads) q.set("reads", String(reads));
-    if (focus) {
-      if (focus.q) q.set("fq", focus.q);
-      if (focus.fit) q.set("fit", "1");
-      if (focus.priceMin !== null && focus.priceMin !== undefined) q.set("priceMin", String(focus.priceMin));
-      if (focus.priceMax !== null && focus.priceMax !== undefined) q.set("priceMax", String(focus.priceMax));
-      if (focus.brand && focus.brand !== "any") q.set("brand", focus.brand);
-      if (focus.rating && focus.rating !== "any") q.set("rating", focus.rating);
-      if (focus.size && focus.size !== "any") q.set("size", focus.size);
-      if (focus.listedWithin) q.set("listedWithin", String(focus.listedWithin));
-    }
     return request<DiscoverExplore>(`/api/connections/${connectionId}/discover/explore?${q.toString()}`);
   },
   discoverReview: (connectionId: string, subject: DiscoverSubjectRef) => {
@@ -2749,17 +2679,6 @@ export const api = {
     if (subject.categoryId) q.set("categoryId", subject.categoryId);
     if (subject.q) q.set("q", subject.q);
     return request<{ compliance: DiscoverCompliance; checked: boolean; hidden: number; marked?: number }>(`/api/connections/${connectionId}/discover/review?${q.toString()}`);
-  },
-  // "Find more products for these filters": more listings that can pass them read in the explored subjects most likely to have them.
-  discoverWinnersMore: (connectionId: string, f: DiscoverWinnersFilters = {}) =>
-    request<{ read: number; subjects: string[]; more: boolean; signInFailed?: boolean; stopped?: boolean }>(`/api/connections/${connectionId}/discover/winners/more`, {
-      method: "POST",
-      body: JSON.stringify(Object.fromEntries(winnersQuery(f).entries())),
-    }),
-  discoverWinners: (connectionId: string, f: DiscoverWinnersFilters = {}, limit?: number) => {
-    const q = winnersQuery(f);
-    if (limit) q.set("limit", String(limit));
-    return request<DiscoverWinners>(`/api/connections/${connectionId}/discover/winners?${q.toString()}`);
   },
   // The keywords worth hunting across everything explored on the site.
   discoverKeywords: (connectionId: string, f: { q?: string; sort?: DiscoverSiteKeywordSort; searchedOnly?: boolean; limit?: number } = {}) => {
@@ -3031,6 +2950,15 @@ export const api = {
       `/api/team/members/${id}/activity?${q.toString()}`
     );
   },
+  // Their time in Liston for a range.
+  getMemberTime: (id: string, range: TeamRange, custom?: { from: string; to: string }) => {
+    const q = new URLSearchParams({ range, tz: viewerTimeZone() });
+    if (range === "custom" && custom) {
+      q.set("from", custom.from);
+      q.set("to", custom.to);
+    }
+    return request<MemberTime>(`/api/team/members/${id}/time?${q.toString()}`);
+  },
   setTeamMemberPassword: (id: string, password: string) =>
     request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
@@ -3038,5 +2966,375 @@ export const api = {
     request<{ permissions: TeamMemberPermission[] }>(`/api/team/members/${memberId}/permissions`, {
       method: "PUT",
       body: JSON.stringify({ permissions }),
+    }),
+};
+
+// ---- Inbox: shared files, Liston cards, team chat -----------------------------------
+
+// A file shared in the Inbox. `url` and `thumbUrl` are signed links that run
+// out (open them again from Liston); an eBay attachment's `url` is public.
+export interface SharedFile {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  width: number | null;
+  height: number | null;
+  image: boolean;
+  url: string;
+  thumbUrl: string | null;
+  createdAt: string;
+}
+
+export type ListonCardKind = "order" | "listing" | "draft" | "hunt";
+export type ListonCardFact = { kind: "money"; amount: number; currency: string; label?: string } | { kind: "text"; text: string } | { kind: "date"; at: string };
+// A preview of something in Liston, from any account: `url` opens it in that
+// account. `locked`: it's in an account (or area) the viewer can't open;
+// `gone`: it's no longer in Liston. Neither carries any details.
+export type ListonCard =
+  | {
+      kind: ListonCardKind;
+      id: string;
+      key: string;
+      account: { id: string; label: string | null };
+      title: string;
+      image: string | null;
+      status: { label: string; tone: "good" | "warn" | "bad" | "info" | "muted" } | null;
+      facts: ListonCardFact[];
+      url: string;
+      locked: false;
+      gone?: undefined;
+    }
+  | { kind: ListonCardKind; id: string; key: string; locked: true; gone?: undefined }
+  | { kind: ListonCardKind; id: string; key: string; gone: true; locked?: undefined };
+export type ListonRef = { kind: ListonCardKind; id: string; connectionId?: string };
+
+export interface ChatPerson {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+  role: "owner" | "member";
+  removed: boolean;
+  online?: boolean;
+}
+export interface ChatMember extends ChatPerson {
+  memberRole: "admin" | "member";
+  lastReadAt: string | null;
+}
+export type ChatNotify = "all" | "mentions" | "none";
+export interface ChatConversation {
+  id: string;
+  kind: "dm" | "group" | "channel";
+  name: string | null;
+  title: string;
+  topic: string | null;
+  private: boolean;
+  account: { id: string; label: string } | null;
+  archived: boolean;
+  members: ChatMember[];
+  unread: number;
+  unreadMentions: number;
+  notify: ChatNotify;
+  myRole: "admin" | "member";
+  lastMessage: { id: string; at: string; kind: "text" | "system"; author: { id: string; name: string } | null; text: string | null } | null;
+  lastMessageAt: string | null;
+  createdAt: string;
+  permissions: { manage: boolean; addPeople: boolean; leave: boolean };
+}
+export interface ChatOpenChannel {
+  id: string;
+  name: string;
+  title: string;
+  topic: string | null;
+  memberCount: number;
+  account: { id: string; label: string } | null;
+}
+export interface ChatMessage {
+  id: string;
+  conversationId: string;
+  kind: "text" | "system";
+  body: string;
+  author: { id: string; name: string; avatarUrl: string | null } | null;
+  createdAt: string;
+  editedAt: string | null;
+  deleted: boolean;
+  replyTo: { id: string; author: { id: string; name: string } | null; text: string } | null;
+  cards: ListonCard[];
+  files: SharedFile[];
+  links: { url: string; title: string | null; description: string | null; image: string | null; site: string | null }[];
+  mentions: string[];
+  mentionAll: boolean;
+  // A system line: what happened ("added", "renamed"…), by whom, to whom.
+  detail: { action?: string; by?: string | null; userIds?: string[]; from?: string | null; to?: string | null };
+}
+export interface ChatList {
+  conversations: ChatConversation[];
+  openChannels: ChatOpenChannel[];
+  canManageChannels: boolean;
+  unread: { unread: number; mentions: number };
+}
+export interface NotificationSettings {
+  chat: ChatNotify;
+  ebay: "all" | "chosen" | "none";
+  ebayAccounts: string[];
+  quietFrom: number | null;
+  quietTo: number | null;
+  timeZone: string | null;
+  hideText: boolean;
+}
+
+/**
+ * Uploads a file for the Inbox (the raw bytes, its name in a header),
+ * reporting progress from 0 to 1. `purpose`: "chat" (private to the team) or
+ * "ebay" (an attachment for a buyer).
+ */
+export function uploadFile(file: File | Blob, { name, purpose = "chat", onProgress }: { name?: string; purpose?: "chat" | "ebay"; onProgress?: (share: number) => void } = {}): Promise<SharedFile> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}/api/files?purpose=${purpose}`);
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-File-Name", encodeURIComponent(name || (file as File).name || "file"));
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.onload = () => {
+      let data: { error?: string } & Partial<SharedFile> = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data as SharedFile);
+      else reject(new ApiError(data.error || (xhr.status === 413 ? "Files can be up to 25 MB." : "Couldn't upload it."), xhr.status));
+    };
+    xhr.onerror = () => reject(new ApiError("Couldn't upload it. Check your connection.", 0));
+    xhr.send(file);
+  });
+}
+
+export const inboxApi = {
+  // Liston cards
+  resolveCards: (refs: ListonRef[]) => request<{ cards: (ListonCard | null)[] }>(`/api/references/resolve`, { method: "POST", body: JSON.stringify({ refs }) }),
+  detectCards: (text: string) => request<{ cards: ListonCard[] }>(`/api/references/detect`, { method: "POST", body: JSON.stringify({ text }) }),
+  searchCards: (q: string, kinds?: ListonCardKind[]) =>
+    request<{ cards: ListonCard[] }>(`/api/references/search?q=${encodeURIComponent(q)}${kinds?.length ? `&kinds=${kinds.join(",")}` : ""}`),
+  // Team chat
+  chatPeople: () => request<{ people: ChatPerson[] }>(`/api/chat/people`),
+  chatList: () => request<ChatList>(`/api/chat/conversations`),
+  chatUnread: () => request<{ unread: number; mentions: number }>(`/api/chat/unread`),
+  chatGet: (id: string) => request<ChatConversation>(`/api/chat/conversations/${id}`),
+  chatOpenDm: (userId: string) => request<ChatConversation>(`/api/chat/dm`, { method: "POST", body: JSON.stringify({ userId }) }),
+  chatCreateGroup: (userIds: string[], name?: string | null) => request<ChatConversation>(`/api/chat/groups`, { method: "POST", body: JSON.stringify({ userIds, name: name || null }) }),
+  chatCreateChannel: (input: { name: string; topic?: string | null; private?: boolean; connectionId?: string | null; userIds?: string[] }) =>
+    request<ChatConversation>(`/api/chat/channels`, { method: "POST", body: JSON.stringify(input) }),
+  chatUpdate: (id: string, input: { name?: string | null; topic?: string | null; private?: boolean; connectionId?: string | null; archived?: boolean }) =>
+    request<ChatConversation>(`/api/chat/conversations/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
+  chatDelete: (id: string) => request<void>(`/api/chat/conversations/${id}`, { method: "DELETE" }),
+  chatAddPeople: (id: string, userIds: string[]) => request<ChatConversation>(`/api/chat/conversations/${id}/people`, { method: "POST", body: JSON.stringify({ userIds }) }),
+  chatRemovePerson: (id: string, userId: string) => request<void>(`/api/chat/conversations/${id}/people/${userId}`, { method: "DELETE" }),
+  chatJoin: (id: string) => request<ChatConversation>(`/api/chat/conversations/${id}/join`, { method: "POST" }),
+  chatSetNotify: (id: string, notify: ChatNotify) => request<ChatConversation>(`/api/chat/conversations/${id}/notify`, { method: "PUT", body: JSON.stringify({ notify }) }),
+  chatMessages: (id: string, page: { before?: string; after?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (page.before) q.set("before", page.before);
+    if (page.after) q.set("after", page.after);
+    if (page.limit) q.set("limit", String(page.limit));
+    return request<{ messages: ChatMessage[]; hasMore: boolean }>(`/api/chat/conversations/${id}/messages${q.toString() ? `?${q}` : ""}`);
+  },
+  chatSend: (id: string, input: { body?: string; mentions?: string[]; fileIds?: string[]; refs?: ListonRef[]; replyToId?: string | null }) =>
+    request<ChatMessage>(`/api/chat/conversations/${id}/messages`, { method: "POST", body: JSON.stringify(input) }),
+  chatRead: (id: string, messageId?: string | null) =>
+    request<{ readAt: string; unread: { unread: number; mentions: number } }>(`/api/chat/conversations/${id}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
+  chatTyping: (id: string) => request<void>(`/api/chat/conversations/${id}/typing`, { method: "POST" }),
+  chatEdit: (messageId: string, body: string, mentions: string[] = []) => request<ChatMessage>(`/api/chat/messages/${messageId}`, { method: "PATCH", body: JSON.stringify({ body, mentions }) }),
+  chatDeleteMessage: (messageId: string) => request<void>(`/api/chat/messages/${messageId}`, { method: "DELETE" }),
+  chatSearch: (q: string) => request<{ results: { message: ChatMessage; conversation: { id: string; kind: string; title: string } }[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`),
+  notificationSettings: () => request<NotificationSettings>(`/api/chat/settings`),
+  saveNotificationSettings: (input: Partial<NotificationSettings>) => request<NotificationSettings>(`/api/chat/settings`, { method: "PUT", body: JSON.stringify(input) }),
+};
+
+// ---- Inbox: eBay messages -----------------------------------------------------------
+
+export type EbayFolder = "buyers" | "ebay" | "archived" | "all";
+// "cases": every buyer conversation with an open return, item-not-received request, payment dispute or cancellation request.
+export type EbayShow = "all" | "unread" | "waiting" | "mine" | "cases";
+// One conversation in a list: a buyer's (FROM_MEMBERS) or eBay's own (FROM_EBAY).
+export interface EbayConversationRow {
+  conversationId: string;
+  account: { id: string; label: string | null };
+  type: "FROM_MEMBERS" | "FROM_EBAY";
+  status: "ACTIVE" | "ARCHIVE" | "DELETE";
+  title: string | null;
+  otherParty: string | null;
+  referenceId: string | null;
+  image: string | null;
+  unread: number;
+  latestPreview: string | null;
+  latestSubject: string | null;
+  latestAt: string | null;
+  latestFromSeller: boolean;
+  // When the buyer started waiting for an answer (they spoke last).
+  waitingSince: string | null;
+  assignee: { id: string; name: string } | null;
+  workStatus: "open" | "waiting" | "done";
+  labels: string[];
+  // An open return, item-not-received request or payment dispute on the buyer's order for the item, or a cancellation they asked for (Orders access only).
+  issue: { kind: "return" | "inquiry" | "dispute" | "cancel"; label: string; respondBy: string | null; orderId: string | null } | null;
+}
+export interface EbayInboxList {
+  conversations: EbayConversationRow[];
+  // `cases`: conversations with an open case (null without Orders access on any of these accounts).
+  counts: { buyers: number; ebay: number; waiting: number; archived: number; cases: number | null };
+  sync: { syncedAt: string | null; syncing: boolean; neverSynced: boolean; error: { message: string; scope: boolean } | null };
+  hasMore: boolean;
+  accounts: { id: string; label: string }[];
+}
+export interface EbayMessage {
+  id: string;
+  fromSeller: boolean;
+  sender: string | null;
+  subject: string | null;
+  text: string;
+  // eBay's notices: their links, as buttons.
+  links: { text: string; url: string }[];
+  // eBay's notices: the notice's own HTML, drawn as eBay designed it (null for plain text).
+  html: string | null;
+  media: { name: string | null; type: string | null; url: string; image: boolean }[];
+  read: boolean | null;
+  createdAt: string;
+}
+export interface EbayOrderSummary {
+  orderId: string;
+  status: string;
+  statusLabel: string;
+  total: { amount: number; currency: string } | null;
+  createdAt: string | null;
+  paidAt: string | null;
+  shippedAt: string | null;
+  deliveredAt: string | null;
+  estimatedDelivery: { min: string | null; max: string } | null;
+  dispatchBy: string | null;
+  tracking: { number: string; carrier: string | null }[];
+  items: { itemId: string; title: string; quantity: number; variation: string | null; image: string | null }[];
+  aboutThis: boolean;
+  // The buyer asked to cancel and the seller hasn't answered.
+  cancelRequested: boolean;
+  // How it goes and where to ("Greenock, PA15 4TB"), and the supplier order behind each line (Liston's own records).
+  postage: string | null;
+  shipTo: string | null;
+  supplier: { status: "to_order" | "ordered" | "shipped" | "delivered" | "problem"; statusLabel: string; orderNo: string | null; tracking: string | null; carrier: string | null; placedAt: string | null; placedBy: string | null }[];
+  url: string;
+}
+// What the details panel adds about a conversation's listing, from Liston's own copies (Listings access; views and conversion with Analytics).
+export interface EbayListingInsights {
+  // Live, ended, or not in the account's kept listings (null).
+  live: boolean | null;
+  watchers: number | null;
+  listedAt: string | null;
+  endedAt: string | null;
+  // Sold (from orders) and viewed (stored traffic) over the last `days` days.
+  days: number;
+  sold: number | null;
+  views: number | null;
+  impressions: number | null;
+  conversion: number | null;
+  supplierUrl: string | null;
+  specifics: { name: string; value: string }[];
+}
+// Someone on the team, by name.
+export interface TeamPerson {
+  id: string;
+  name: string;
+}
+export type EbayWorkStatus = "open" | "waiting" | "done";
+// A note on a buyer's conversation that only the team sees.
+export interface EbayNote {
+  id: string;
+  body: string;
+  author: TeamPerson | null;
+  createdAt: string;
+  mine: boolean;
+  // Its writer, or the owner.
+  canDelete: boolean;
+}
+export interface EbayThread {
+  conversation: EbayConversationRow;
+  messages: EbayMessage[];
+  notes: EbayNote[];
+  // Who it can be given to: the owner and the members with the Inbox on this account.
+  team: TeamPerson[];
+  // Where it stands for the team, and who said so.
+  work: { status: EbayWorkStatus; at: string | null; by: TeamPerson | null };
+  context: {
+    item: { itemId: string; title: string | null; image: string | null; price: { amount: number; currency: string } | null; url: string | null; ebayUrl: string; insights: EbayListingInsights | null } | null;
+    listing: ListonCard | null;
+    // What to call the buyer in a reply: the first name on their latest order (Orders access only).
+    buyerName: string | null;
+    orders: EbayOrderSummary[];
+    order: EbayOrderSummary | null;
+    ordersHidden: boolean;
+    otherConversations: { conversationId: string; title: string | null; referenceId: string | null; preview: string | null; at: string | null }[];
+  };
+  // eBay couldn't be read just now: what's kept is shown.
+  stale: { message: string } | null;
+}
+
+// A quick reply: an account's ready-written message, its {buyer}, {item}, {order}… filled in by the reply box.
+export interface QuickReply {
+  id: string;
+  name: string;
+  body: string;
+  updatedAt: string;
+}
+export interface QuickReplyList {
+  replies: QuickReply[];
+  tokens: { key: string; label: string }[];
+  canEdit: boolean;
+  limits: { name: number; body: number; count: number };
+}
+
+export const ebayInboxApi = {
+  list: (connectionId: string | null, params: { folder?: EbayFolder; show?: EbayShow; q?: string; before?: string; refresh?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (params.folder) q.set("folder", params.folder);
+    if (params.show && params.show !== "all") q.set("show", params.show);
+    if (params.q) q.set("q", params.q);
+    if (params.before) q.set("before", params.before);
+    if (params.refresh) q.set("refresh", "1");
+    const path = connectionId ? `/api/connections/${connectionId}/inbox` : `/api/inbox`;
+    return request<EbayInboxList>(`${path}${q.toString() ? `?${q}` : ""}`);
+  },
+  thread: (connectionId: string, conversationId: string) => request<EbayThread>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}`),
+  setRead: (connectionId: string, conversationId: string, read: boolean) =>
+    request<{ ok: true }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: JSON.stringify({ read }) }),
+  setStatus: (connectionId: string, conversationId: string, status: "ACTIVE" | "ARCHIVE") =>
+    request<{ ok: true }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/status`, { method: "POST", body: JSON.stringify({ status }) }),
+  refresh: (connectionId: string) => request<{ changed: number }>(`/api/connections/${connectionId}/inbox/refresh`, { method: "POST" }),
+  // Unread conversations (buyers' and eBay's) for the sidebar; never reads eBay.
+  unread: (connectionId: string) => request<{ unread: number }>(`/api/connections/${connectionId}/inbox/unread`),
+  quickReplies: (connectionId: string) => request<QuickReplyList>(`/api/connections/${connectionId}/inbox/quick-replies`),
+  addQuickReply: (connectionId: string, input: { name: string; body: string }) => request<QuickReply>(`/api/connections/${connectionId}/inbox/quick-replies`, { method: "POST", body: JSON.stringify(input) }),
+  saveQuickReply: (connectionId: string, id: string, input: { name: string; body: string }) =>
+    request<QuickReply>(`/api/connections/${connectionId}/inbox/quick-replies/${id}`, { method: "PUT", body: JSON.stringify(input) }),
+  deleteQuickReply: (connectionId: string, id: string) => request<{ ok: true }>(`/api/connections/${connectionId}/inbox/quick-replies/${id}`, { method: "DELETE" }),
+  // A reply to a buyer. Text eBay blocks comes back as `warnings` (sent: false) unless `confirm`.
+  reply: (connectionId: string, conversationId: string, input: { text: string; fileIds?: string[]; confirm?: boolean }) =>
+    request<{ sent: true; message: EbayMessage } | { sent: false; warnings: { kind: string; text: string }[] }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  // The team's working: who has it (null: no one), where it stands, notes only the team sees.
+  assign: (connectionId: string, conversationId: string, userId: string | null) =>
+    request<{ assignee: TeamPerson | null }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/assign`, { method: "POST", body: JSON.stringify({ userId }) }),
+  setWork: (connectionId: string, conversationId: string, status: EbayWorkStatus) =>
+    request<{ status: EbayWorkStatus }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/work`, { method: "POST", body: JSON.stringify({ status }) }),
+  addNote: (connectionId: string, conversationId: string, body: string) =>
+    request<{ note: EbayNote }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/notes`, { method: "POST", body: JSON.stringify({ body }) }),
+  deleteNote: (connectionId: string, conversationId: string, noteId: string) =>
+    request<{ ok: true }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/notes/${noteId}`, { method: "DELETE" }),
+  // "Message buyer" from an order: warnings first (sent: false) unless `confirm`.
+  messageBuyer: (connectionId: string, input: { orderId: string; text: string; confirm?: boolean }) =>
+    request<{ sent: true; conversationId: string | null; buyer: string } | { sent: false; warnings: { kind: string; text: string }[] }>(`/api/connections/${connectionId}/inbox/message-buyer`, {
+      method: "POST",
+      body: JSON.stringify(input),
     }),
 };

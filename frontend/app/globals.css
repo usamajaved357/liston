@@ -31,6 +31,16 @@
   --color-danger: #e11d48; /* rose-600 */
   --color-danger-soft: #fff1f2; /* rose-50 */
 
+  /* the Inbox's chats: the wallpaper behind the messages, your bubbles, their times */
+  --color-chat: #eceff5;
+  --color-bubble-out: #e0e5ff;
+  --color-bubble-meta: #667085;
+  --shadow-bubble: 0 1px 0.5px rgba(15, 23, 42, 0.13);
+  /* the same, crisper: a fine outline all round and a firmer line underneath */
+  --shadow-bubble-sharp: 0 0 0 0.5px rgba(15, 23, 42, 0.1), 0 1px 1px rgba(15, 23, 42, 0.16);
+  /* a scrollbar that shows only while it's being scrolled (.scroll-quiet) */
+  --color-scroll-thumb: rgba(15, 23, 42, 0.3);
+
   --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px -8px rgba(15, 23, 42, 0.08);
   --shadow-pop: 0 12px 32px -12px rgba(15, 23, 42, 0.25);
   --radius-card: 16px;
@@ -407,6 +417,15 @@ select:focus-visible {
     min-height: auto;
     overflow: visible;
   }
+  /* A page that fills the screen and scrolls inside itself (the Inbox's panes) keeps doing so. */
+  [data-page-column]:has(> [data-fill]) {
+    overflow: hidden;
+  }
+  [data-page-column] > [data-scroller][data-fill] {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow: hidden;
+  }
   /* An action bar (Add for review, say) stays at the foot of the screen. */
   [data-page-column] > [data-pinned-footer] {
     position: sticky;
@@ -421,4 +440,45 @@ select:focus-visible {
   textarea {
     font-size: 16px !important;
   }
+}
+
+/* A scroll area whose bar shows only while someone is scrolling it, then
+   fades (useQuietScrollbar sets data-scrolling). Where scrollbar-color is
+   supported the ::-webkit-scrollbar styles are ignored, so each browser
+   gets one of the two. */
+@supports (scrollbar-color: auto) {
+  .scroll-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.4s ease;
+  }
+  .scroll-quiet[data-scrolling] {
+    scrollbar-color: var(--color-scroll-thumb) transparent;
+    transition: none;
+  }
+}
+@supports not (scrollbar-color: auto) {
+  .scroll-quiet::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-quiet::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scroll-quiet::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: transparent;
+  }
+  .scroll-quiet[data-scrolling]::-webkit-scrollbar-thumb {
+    background-color: var(--color-scroll-thumb);
+  }
+}
+
+/* The wallpaper behind a chat's messages: the chat colour with faint line
+   drawings of what the business deals in (parcels, tags, a van, a basket). */
+.chat-wallpaper {
+  background-color: var(--color-chat);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220' viewBox='0 0 220 220'%3E%3Cg fill='none' stroke='%230f172a' stroke-opacity='0.055' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cg transform='translate(18 20) rotate(-12)'%3E%3Cpath d='M0 6l10-6 10 6v12l-10 6-10-6zM0 6l10 6 10-6M10 12v12'/%3E%3C/g%3E%3Cg transform='translate(120 14) rotate(18)'%3E%3Cpath d='M0 9V1h8l10 10-8 8z'/%3E%3Ccircle cx='4.5' cy='5' r='1.5'/%3E%3C/g%3E%3Cg transform='translate(176 70) rotate(-8)'%3E%3Cpath d='M0 3a3 3 0 013-3h14a3 3 0 013 3v9a3 3 0 01-3 3H8l-5 4v-4H3a3 3 0 01-3-3z'/%3E%3C/g%3E%3Cg transform='translate(64 84) rotate(6)'%3E%3Cpath d='M0 2h13v11H0zM13 6h5l4 4v3h-9'/%3E%3Ccircle cx='5' cy='15' r='2'/%3E%3Ccircle cx='17' cy='15' r='2'/%3E%3C/g%3E%3Cg transform='translate(20 132) rotate(-14)'%3E%3Cpath d='M9 0l2.6 5.6 6.1.7-4.5 4.2 1.2 6L9 13.5 3.6 16.5l1.2-6L.3 6.3l6.1-.7z'/%3E%3C/g%3E%3Cg transform='translate(128 124) rotate(10)'%3E%3Cpath d='M0 1h3l2.5 11h11L19 4H5'/%3E%3Ccircle cx='7' cy='16' r='1.5'/%3E%3Ccircle cx='15' cy='16' r='1.5'/%3E%3C/g%3E%3Cg transform='translate(186 176) rotate(-10)'%3E%3Cpath d='M7 19s7-6.5 7-12A7 7 0 000 7c0 5.5 7 12 7 12z'/%3E%3Ccircle cx='7' cy='7' r='2.5'/%3E%3C/g%3E%3Cg transform='translate(72 176) rotate(-6)'%3E%3Crect width='22' height='15' rx='2.5'/%3E%3Cpath d='M0 5h22M4 11h5'/%3E%3C/g%3E%3Ccircle cx='100' cy='60' r='2'/%3E%3Ccircle cx='168' cy='130' r='1.6'/%3E%3Ccircle cx='40' cy='196' r='1.8'/%3E%3Ccircle cx='200' cy='30' r='1.5'/%3E%3Cpath d='M150 196l6-3M96 150l4 5'/%3E%3C/g%3E%3C/svg%3E");
 }

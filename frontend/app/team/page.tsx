@@ -9,10 +9,12 @@ import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatShortDate } from "@/lib/format";
 import { LoginDetails, MemberAvatar, accessSummary, timeAgo } from "@/components/team/team-shared";
+import { minutesText } from "@/components/team/time-format";
 
 // The Team page: one compact card per member (who, what they can reach,
-// when they were last active, what they've done today). A card opens the
-// member's page, where their work and their access live.
+// when they were last active, what they've done today and their time in
+// Liston today, working and idle, with a dot while they're in it now). A
+// card opens the member's page, where their work, time and access live.
 
 // Today's figures in a line, the non-zero ones in this order.
 const TODAY_WORDS: [TeamMetricKey, string, string][] = [
@@ -27,6 +29,8 @@ const TODAY_WORDS: [TeamMetricKey, string, string][] = [
   ["draft_work", "draft worked on", "drafts worked on"],
   ["hunted", "product hunted", "products hunted"],
   ["hunts_reviewed", "hunt reviewed", "hunts reviewed"],
+  ["inbox_answered", "buyer answered", "buyers answered"],
+  ["inbox_resolved", "query resolved", "queries resolved"],
 ];
 function todayLine(member: TeamMember): string | null {
   const t = member.today;
@@ -47,6 +51,12 @@ function MemberCard({ member, connections, knownFeatures }: { member: TeamMember
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="truncate text-[14px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{member.name || member.email}</p>
+          {!removed && member.time?.inListon && (
+            <span className="flex flex-shrink-0 items-center gap-1 text-[10.5px] font-medium text-emerald-700" title="A Liston tab of theirs is open now">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
+              In Liston
+            </span>
+          )}
           {removed && <span className="chip text-[10.5px] text-[var(--color-muted)]">Removed {formatShortDate(member.deactivated_at!)}</span>}
         </div>
         <p className="truncate text-[12px] text-[var(--color-muted)]">{removed ? member.email : accessSummary(member, connections, knownFeatures)}</p>
@@ -61,6 +71,12 @@ function MemberCard({ member, connections, knownFeatures }: { member: TeamMember
             </>
           )}
         </p>
+        {!removed && member.time && member.time.working + member.time.idle > 0 && (
+          <p className="mt-0.5 truncate text-[11.5px] text-[var(--color-muted)]">
+            Time today: <span className="font-medium text-[var(--color-ink)]">{minutesText(member.time.working)} working</span>
+            {member.time.idle > 0 && <> · {minutesText(member.time.idle)} idle</>}
+          </p>
+        )}
       </div>
       <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5" aria-hidden>
         <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

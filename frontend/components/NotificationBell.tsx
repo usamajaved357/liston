@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { api, NotificationList } from "@/lib/api";
 import { disablePush, enablePush, pushState, PushState, refreshPush } from "@/lib/push";
 import { ago } from "@/components/hunting/HuntBits";
+import { useMyEvents } from "@/lib/useMyEvents";
 
 // The bell in the page header: what Liston has told this person (a reviewer
 // approved, rejected, sent back or removed one of their hunted products),
@@ -44,6 +45,21 @@ const KIND: Record<string, Kind> = {
     chip: "bg-slate-100 text-slate-600 ring-slate-200",
     note: "border-slate-300",
     icon: <path d="M5 6.5h10M8.5 6.5V5h3v1.5M6.5 6.5l.6 8.5h5.8l.6-8.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />,
+  },
+  // A buyer's new eBay message, and a conversation given to you.
+  "inbox.message": {
+    label: "Buyer message",
+    ring: "bg-sky-50 text-sky-600 ring-sky-200",
+    chip: "bg-sky-50 text-sky-700 ring-sky-200",
+    note: "border-sky-300",
+    icon: <path d="M5 5.5h10a1 1 0 011 1v6a1 1 0 01-1 1H9.5L6.5 16v-2.5H5a1 1 0 01-1-1v-6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />,
+  },
+  "inbox.assigned": {
+    label: "Given to you",
+    ring: "bg-indigo-50 text-indigo-600 ring-indigo-200",
+    chip: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+    note: "border-indigo-300",
+    icon: <path d="M10 9.5a2.8 2.8 0 100-5.6 2.8 2.8 0 000 5.6zM4.8 16c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />,
   },
 };
 const OTHER: Kind = {
@@ -240,6 +256,11 @@ export function NotificationBell() {
       // The bell stays as it was; the next poll tries again.
     }
   }, [show]);
+
+  // Live: the server says when a line is added or read, and the bell follows at once.
+  useMyEvents((e) => {
+    if (e.type === "notifications.changed") load(false);
+  });
 
   useEffect(() => {
     const first = setTimeout(() => load(false), 0);

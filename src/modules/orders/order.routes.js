@@ -17,6 +17,7 @@ router.post('/:orderId/refund', requireAuth, requireFeature('orders'), orderCont
 router.post('/:orderId/cancel', requireAuth, requireFeature('orders'), orderController.cancelOrder);
 router.post('/:orderId/archive', requireAuth, requireFeature('orders'), orderController.setArchived);
 router.get('/:orderId/cases', requireAuth, requireFeature('orders'), orderController.getCases);
+router.get('/:orderId/money', requireAuth, requireFeature('orders'), orderController.getMoney);
 router.post('/:orderId/cancel/decline', requireAuth, requireFeature('orders'), orderController.declineCancellation);
 router.post('/:orderId/returns', requireAuth, requireFeature('orders'), orderController.respondToReturn);
 router.post('/:orderId/inquiries', requireAuth, requireFeature('orders'), orderController.respondToInquiry);
