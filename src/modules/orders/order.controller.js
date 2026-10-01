@@ -20,6 +20,8 @@ const sourcingSchema = z.object({
   notes: z.string().max(4000).optional(),
   quantity: z.number().int().positive().optional(),
   dispatchOnEbay: z.boolean().optional(),
+  // The order's other variations of the same item, which take the same supplier order.
+  alsoFor: z.array(z.object({ lineKey: z.string().min(1).max(80), quantity: z.number().int().positive().optional() })).max(50).optional(),
 });
 
 async function getOrder(req, res, next) {

@@ -688,10 +688,12 @@ export default function OrderDetailPage() {
                       carriers={data.carriers}
                       actionsEnabled={data.actionsEnabled}
                       currency={currency}
-                      onSaved={(sourcing, dispatch) => {
+                      onSaved={(sourcing, dispatch, siblings) => {
                         applySourcing(sourcing);
+                        for (const other of siblings) applySourcing(other);
                         if (dispatch?.ok) load();
                       }}
+                      siblings={order.lineItems.filter((o) => o.itemId && o.itemId === li.itemId && o.sourcingKey !== li.sourcingKey).map((o) => ({ lineKey: o.sourcingKey, quantity: o.quantity }))}
                       defaultOpen={!li.sourcing || (li.sourcing.status !== "shipped" && li.sourcing.status !== "delivered")}
                       note={saveNotes[li.sourcingKey] || null}
                       onNote={(n) => setSaveNotes((current) => ({ ...current, [li.sourcingKey]: n }))}

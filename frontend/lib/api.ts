@@ -35,6 +35,14 @@ async function request<T>(
     },
   });
 
+  // A sign-in renewed while in use: kept, so it doesn't run out mid-work.
+  const renewed = res.headers.get("X-Liston-Token");
+  if (renewed && typeof window !== "undefined") {
+    try {
+      localStorage.setItem("token", renewed);
+    } catch {}
+  }
+
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
@@ -42,6 +50,13 @@ async function request<T>(
       try {
         localStorage.removeItem("liston:me");
       } catch {}
+      // The sign-in has run out (or the login was removed): to the sign-in page, not an error on this one.
+      if (data.code === "SESSION_ENDED" && !window.location.pathname.startsWith("/login")) {
+        try {
+          localStorage.removeItem("token");
+        } catch {}
+        window.location.assign("/login");
+      }
     }
     // The approval gate: any 403 carrying accessStatus means this account
     // isn't approved yet — send them to the review screen from anywhere.
@@ -1025,6 +1040,8 @@ export interface SourcingPatch {
   notes?: string;
   quantity?: number;
   dispatchOnEbay?: boolean;
+  // The order's other variations of the same item: they take the same supplier order (not the cost) and ship with it.
+  alsoFor?: { lineKey: string; quantity: number }[];
 }
 
 export interface SourceAccount {
@@ -2577,7 +2594,7 @@ export const api = {
   // Saves one line's supplier-order details; a new tracking number also
   // dispatches the line on eBay (see `dispatch` in the response).
   saveOrderSourcing: (connectionId: string, orderId: string, lineKey: string, patch: SourcingPatch) =>
-    request<{ sourcing: OrderSourcing; dispatch: { ok: boolean; fulfillmentId?: string | null; reason?: string; code?: string | null } | null }>(
+    request<{ sourcing: OrderSourcing; siblings?: OrderSourcing[]; dispatch: { ok: boolean; fulfillmentId?: string | null; reason?: string; code?: string | null } | null }>(
       `/api/connections/${connectionId}/orders/${encodeURIComponent(orderId)}/sourcing/${encodeURIComponent(lineKey)}`,
       { method: "PUT", body: JSON.stringify(patch) }
     ),

@@ -133,3 +133,61 @@ test('sourcing keeps the supplier login on the line itself', async () => {
   assert.strictEqual(sourcing.sourcePassword, 'Welcome123.');
   assert.strictEqual(sourcing.status, 'ordered');
 });
+
+test("the same item's other variations in the order take the supplier order saved on one (not its cost), and ship with it", async () => {
+  const { userId, connectionId } = await fixture();
+  const orderId = '14-15224-41553';
+  const siblings = [
+    { lineKey: '10022222222222', quantity: 1 },
+    { lineKey: '10033333333333', quantity: 2 },
+  ];
+  // The third variation already went in its own parcel.
+  await orderService.saveSourcing(connectionId, userId, userId, orderId, '10033333333333', { trackingNumber: 'LP00000000000001', dispatchOnEbay: false });
+
+  const placed = await orderService.saveSourcing(connectionId, userId, userId, orderId, '10011111111111', {
+    sourceEmail: 'flipx.ltd@example.com',
+    sourcePassword: 'pw',
+    sourceOrderNo: '3076965095733148',
+    placedAt: '2026-10-01',
+    cardLabel: 'Tide',
+    notes: 'One AliExpress order',
+    cost: { value: '2.63', currency: 'GBP' },
+    trackingNumber: '',
+    quantity: 1,
+    alsoFor: siblings,
+  });
+  assert.deepStrictEqual(placed.siblings.map((x) => x.lineItemId).sort(), ['10022222222222', '10033333333333']);
+  const second = placed.siblings.find((x) => x.lineItemId === '10022222222222');
+  assert.deepStrictEqual([second.sourceEmail, second.sourcePassword, second.sourceOrderNo, second.cardLabel, second.notes, second.status, second.placedBy.id], ['flipx.ltd@example.com', 'pw', '3076965095733148', 'Tide', 'One AliExpress order', 'ordered', userId]);
+  assert.strictEqual(second.cost, null, "each variation's own cost");
+  const apart = placed.siblings.find((x) => x.lineItemId === '10033333333333');
+  assert.deepStrictEqual([apart.sourceOrderNo, apart.trackingNumber, apart.status], ['3076965095733148', 'LP00000000000001', 'shipped'], 'its own parcel kept');
+
+  // A tracking number saved on the second variation: the first ships with it, in one eBay dispatch; the split parcel doesn't.
+  const dispatchMock = mock.method(ebayService, 'dispatchOrder', async (credentials, input) => ({ fulfillmentId: 'F-1', input }));
+  try {
+    const shipped = await orderService.saveSourcing(connectionId, userId, userId, orderId, '10022222222222', {
+      sourceOrderNo: '3076965095733148',
+      trackingNumber: 'YT2600000000000',
+      quantity: 1,
+      alsoFor: [{ lineKey: '10011111111111', quantity: 1 }, siblings[1]],
+    });
+    assert.strictEqual(dispatchMock.mock.callCount(), 1);
+    assert.deepStrictEqual(dispatchMock.mock.calls[0].arguments[1].lineItems, [
+      { lineItemId: '10022222222222', quantity: 1 },
+      { lineItemId: '10011111111111', quantity: 1 },
+    ]);
+    assert.strictEqual(shipped.dispatch.ok, true);
+    const first = shipped.siblings.find((x) => x.lineItemId === '10011111111111');
+    assert.deepStrictEqual([first.trackingNumber, first.status, first.cost.value], ['YT2600000000000', 'shipped', 2.63]);
+    assert.strictEqual(shipped.siblings.find((x) => x.lineItemId === '10033333333333').trackingNumber, 'LP00000000000001');
+  } finally {
+    dispatchMock.mock.restore();
+  }
+});
+
+test('a sibling variation only shows shipped alongside a parcel it is in', () => {
+  const patch = { source_email: 'a@example.com', status: 'shipped', cost_value: 3 };
+  assert.deepStrictEqual(orderService.siblingPatch(patch, { existing: { tracking_number: 'X1' }, sibling: null, tracking: undefined, carrier: 'Yodel' }), { source_email: 'a@example.com' }, 'an email edited on a line shipped before: no parcel, no status');
+  assert.deepStrictEqual(orderService.siblingPatch(patch, { existing: { tracking_number: 'X1' }, sibling: { tracking_number: 'X1' }, tracking: undefined, carrier: 'Yodel' }), { source_email: 'a@example.com', status: 'shipped' }, 'in the same parcel');
+});

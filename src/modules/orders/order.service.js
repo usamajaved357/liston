@@ -401,9 +401,40 @@ async function archivedOrderIds(connectionId) {
 
 const SOURCING_STATUSES = ['to_order', 'ordered', 'shipped', 'delivered', 'problem'];
 
+// What one line's supplier order shares with the order's other variations
+// of the same item: one supplier order holds them all, so everything but
+// each variation's own cost.
+const SHARED_COLUMNS = ['source_account_id', 'source_email', 'source_password', 'source_order_no', 'placed_at', 'placed_by', 'card_label', 'notes', 'source_platform'];
+
+/**
+ * The patch a sibling line (another variation of the same item in the
+ * order) takes from a line's save: the shared columns, and a new tracking
+ * number (with its carrier and status) when the sibling had none or had the
+ * same one as this line: they ship together. A sibling with its own tracking
+ * number (a split parcel) keeps it, and its status. Pure.
+ */
+function siblingPatch(patch, { existing, sibling, tracking, carrier }) {
+  const out = {};
+  for (const key of SHARED_COLUMNS) if (patch[key] !== undefined) out[key] = patch[key];
+  const theirs = sibling?.tracking_number || null;
+  const mine = existing?.tracking_number || null;
+  const apart = Boolean(theirs && theirs !== mine);
+  const takesTracking = tracking !== undefined && !apart;
+  if (takesTracking) {
+    out.tracking_number = tracking || null;
+    out.carrier = carrier;
+  }
+  // Shipped only alongside a parcel it's in; placed, to order or a problem whatever.
+  const together = takesTracking ? Boolean(tracking) : Boolean(theirs && theirs === mine);
+  if (patch.status && !apart && (together || !['shipped', 'delivered'].includes(patch.status))) out.status = patch.status;
+  return out;
+}
+
 // Saves the supplier-order details for one line. A tracking number that is
 // new (or changed) also dispatches the line on eBay — that is the moment the
-// team used to copy it into Seller Hub by hand.
+// team used to copy it into Seller Hub by hand. `input.alsoFor`: the order's
+// other variations of the same item ([{ lineKey, quantity }]), which take
+// the same supplier order (siblingPatch) and are dispatched with it.
 async function saveSourcing(connectionId, userId, actorId, orderId, lineKey, input) {
   const existing = await orderRepository.findSourcing(connectionId, orderId, lineKey);
   const patch = {};
@@ -450,28 +481,48 @@ async function saveSourcing(connectionId, userId, actorId, orderId, lineKey, inp
     await orderRepository.addEvent({ connectionId, orderId, lineItemId: lineKey, kind: 'sourcing.ordered', detail: { sourceOrderNo: patch.source_order_no, sourceAccountId: row.source_account_id }, actorUserId: actorId });
   }
 
+  // The same item's other variations take the same supplier order; a new
+  // tracking number goes to those shipping with this line, and they're
+  // dispatched with it below.
+  const trackingChanged = Boolean(tracking && tracking !== existing?.tracking_number);
+  const siblings = [];
+  for (const other of (input.alsoFor || []).filter((o) => o.lineKey && o.lineKey !== lineKey)) {
+    const before = await orderRepository.findSourcing(connectionId, orderId, other.lineKey);
+    const shared = siblingPatch(patch, { existing, sibling: before, tracking: trackingChanged ? tracking : undefined, carrier: row.carrier });
+    if (!Object.keys(shared).length) continue;
+    await orderRepository.upsertSourcing({ connectionId, orderId, lineItemId: other.lineKey, ...shared });
+    if (shared.source_order_no && shared.source_order_no !== before?.source_order_no) {
+      await orderRepository.addEvent({ connectionId, orderId, lineItemId: other.lineKey, kind: 'sourcing.ordered', detail: { sourceOrderNo: shared.source_order_no, sourceAccountId: shared.source_account_id ?? before?.source_account_id ?? null }, actorUserId: actorId });
+    }
+    siblings.push({ lineKey: other.lineKey, quantity: other.quantity, ships: Boolean(shared.tracking_number && shared.tracking_number !== before?.tracking_number) });
+  }
+
   // Dispatch on eBay when the tracking is new or different, and the line
-  // has a Fulfillment id to dispatch by.
+  // has a Fulfillment id to dispatch by: with the variations shipping with
+  // it, in one go.
   let dispatch = null;
-  const trackingChanged = tracking && tracking !== existing?.tracking_number;
   const wantsDispatch = input.dispatchOnEbay !== false;
   if (trackingChanged && wantsDispatch) {
     if (!lineKey || lineKey.startsWith('line-')) {
       dispatch = { ok: false, reason: 'Reconnect this eBay account to let Liston mark orders dispatched.' };
     } else {
+      const shipping = [{ lineKey, quantity: input.quantity }, ...siblings.filter((o) => o.ships && !o.lineKey.startsWith('line-'))];
       try {
         const result = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) =>
           ebayService.dispatchOrder(credentials, {
             connectionId,
             orderId,
-            lineItems: [{ lineItemId: lineKey, quantity: Number(input.quantity || 1) }],
+            lineItems: shipping.map((o) => ({ lineItemId: o.lineKey, quantity: Number(o.quantity || 1) })),
             carrier: row.carrier || 'Other',
             trackingNumber: tracking,
             shippedDate: new Date().toISOString(),
           })
         );
-        row = await orderRepository.upsertSourcing({ connectionId, orderId, lineItemId: lineKey, dispatched_at: new Date().toISOString(), dispatched_by: actorId, ebay_fulfillment_id: result.fulfillmentId, status: 'shipped' });
-        await orderRepository.addEvent({ connectionId, orderId, lineItemId: lineKey, kind: 'ebay.dispatched_by_liston', detail: { carrier: row.carrier, trackingNumber: tracking, fulfillmentId: result.fulfillmentId }, actorUserId: actorId });
+        for (const o of shipping) {
+          const saved = await orderRepository.upsertSourcing({ connectionId, orderId, lineItemId: o.lineKey, dispatched_at: new Date().toISOString(), dispatched_by: actorId, ebay_fulfillment_id: result.fulfillmentId, status: 'shipped' });
+          if (o.lineKey === lineKey) row = saved;
+          await orderRepository.addEvent({ connectionId, orderId, lineItemId: o.lineKey, kind: 'ebay.dispatched_by_liston', detail: { carrier: row.carrier, trackingNumber: tracking, fulfillmentId: result.fulfillmentId }, actorUserId: actorId });
+        }
         dispatch = { ok: true, fulfillmentId: result.fulfillmentId };
       } catch (err) {
         logger.warn('Dispatch on eBay failed', { connectionId, orderId, lineKey, message: err.message, code: err.code });
@@ -493,7 +544,8 @@ async function saveSourcing(connectionId, userId, actorId, orderId, lineKey, inp
 
   const rows = await orderRepository.listSourcingForOrder(connectionId, orderId);
   const view = sourcingView(rows.find((r) => r.line_item_id === lineKey) || row);
-  return { sourcing: view, dispatch };
+  const siblingViews = siblings.map((o) => rows.find((r) => r.line_item_id === o.lineKey)).filter(Boolean).map(sourcingView);
+  return { sourcing: view, siblings: siblingViews, dispatch };
 }
 
 async function addNote(connectionId, actorId, orderId, text) {
@@ -552,4 +604,4 @@ async function supplierStateLookup(connectionId) {
     });
 }
 
-module.exports = { OrderError, getOrder, saveSourcing, addNote, dispatchOrder, dispatchOrders, dispatchLookup, BULK_DISPATCH_MAX, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, supplierStateLookup, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, getOrderMoney, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };
+module.exports = { OrderError, getOrder, saveSourcing, siblingPatch, addNote, dispatchOrder, dispatchOrders, dispatchLookup, BULK_DISPATCH_MAX, refundOrder, cancelOrder, setArchived, archivedOrderIds, listSourceAccounts, createSourceAccount, updateSourceAccount, sourcingForOrders, supplierStateLookup, SOURCING_STATUSES, REFUND_REASONS, getOrderCases, getOrderMoney, declineCancellation, respondToReturn, respondToInquiry, respondToDispute, RETURN_DECLINE_REASONS };

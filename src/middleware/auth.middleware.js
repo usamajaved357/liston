@@ -9,6 +9,16 @@ const userRepository = require('../modules/users/user.repository');
 // connections/listings/etc. all live under the owner's account. Existing
 // connection-scoped repository calls take req.ownerId instead of req.userId
 // with no signature changes needed elsewhere.
+//
+// A sign-in lasts a week (JWT_EXPIRES_IN) from its last renewal: a token
+// over a day old comes back renewed in the X-Liston-Token header, which the
+// pages keep, so someone using Liston isn't signed out mid-work. One that
+// has run out (or is no good) is a 401 with code SESSION_ENDED, on which
+// the pages go to the sign-in page; a database hiccup is a 500, never a
+// sign-out.
+const RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
+const ended = (res, error) => res.status(401).json({ error, code: 'SESSION_ENDED' });
+
 async function requireAuth(req, res, next) {
   // Already resolved by a router-level guard on this request.
   if (req.userId) return next();
@@ -18,16 +28,18 @@ async function requireAuth(req, res, next) {
   }
 
   const token = header.slice('Bearer '.length);
+  let payload;
   try {
-    const payload = authService.verifyToken(token);
+    payload = authService.verifyToken(token);
+  } catch {
+    return ended(res, 'Your sign-in has run out. Sign in again.');
+  }
+  try {
     const user = await userRepository.findRoleInfo(payload.sub);
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
+    if (!user) return ended(res, 'Your sign-in has run out. Sign in again.');
     // A member the owner removed is signed out at their next request.
-    if (user.deactivated_at) {
-      return res.status(401).json({ error: 'This login has been removed by the account owner.' });
-    }
+    if (user.deactivated_at) return ended(res, 'This login has been removed by the account owner.');
+    if (payload.iat && Date.now() - payload.iat * 1000 > RENEW_AFTER_MS) res.setHeader('X-Liston-Token', authService.issueToken(user));
     req.userId = user.id;
     req.userEmail = user.email;
     req.role = user.role;
@@ -36,7 +48,7 @@ async function requireAuth(req, res, next) {
     req.accessStatus = user.role === 'member' ? (await userRepository.findRoleInfo(user.parent_user_id))?.access_status || 'active' : user.access_status;
     next();
   } catch (err) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    next(err);
   }
 }
 

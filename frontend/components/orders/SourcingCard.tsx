@@ -11,7 +11,8 @@ import { useAccountTimeZone } from "@/lib/timezone";
 // supplier order number, who placed it and when, which card, what it cost,
 // and the supplier's tracking. Collapsed it reads as one line; open, every
 // field is editable. Saving a new tracking number dispatches the item on
-// eBay.
+// eBay. The order's other variations of the same item (`siblings`) take
+// what's saved here, all but the cost: one supplier order holds them.
 
 function EyeIcon({ open }: { open: boolean }) {
   return open ? (
@@ -37,6 +38,7 @@ export function SourcingCard({
   note,
   onNote,
   defaultOpen,
+  siblings = [],
 }: {
   connectionId: string;
   orderId: string;
@@ -44,12 +46,14 @@ export function SourcingCard({
   carriers: { code: string; label: string }[];
   actionsEnabled: boolean;
   currency: string;
-  onSaved: (sourcing: OrderSourcing, dispatch: { ok: boolean; reason?: string } | null) => void;
+  onSaved: (sourcing: OrderSourcing, dispatch: { ok: boolean; reason?: string } | null, siblings: OrderSourcing[]) => void;
   // Kept by the parent: the card remounts on each save (it is keyed by the
   // saved row) and the message must outlive that.
   note: { tone: "ok" | "bad"; text: string } | null;
   onNote: (note: { tone: "ok" | "bad"; text: string } | null) => void;
   defaultOpen: boolean;
+  // The order's other variations of this item.
+  siblings?: { lineKey: string; quantity: number }[];
 }) {
   const timeZone = useAccountTimeZone();
   const s = line.sourcing;
@@ -97,14 +101,17 @@ export function SourcingCard({
       ...(carrier ? { carrier } : {}),
       // The status follows the data unless the person changed it.
       ...(status !== (s?.status || "to_order") ? { status } : {}),
+      ...(siblings.length ? { alsoFor: siblings } : {}),
     };
     try {
       const result = await api.saveOrderSourcing(connectionId, orderId, line.sourcingKey, patch);
-      onSaved(result.sourcing, result.dispatch);
+      const shared = result.siblings || [];
+      onSaved(result.sourcing, result.dispatch, shared);
+      const also = shared.length ? ` Also on the other ${shared.length === 1 ? "variation" : `${shared.length} variations`} of this item.` : "";
       if (result.dispatch) {
-        setNote(result.dispatch.ok ? { tone: "ok", text: "Saved — marked dispatched on eBay with this tracking number." } : { tone: "bad", text: `Saved, but not dispatched on eBay: ${result.dispatch.reason}` });
+        setNote(result.dispatch.ok ? { tone: "ok", text: `Saved — marked dispatched on eBay with this tracking number.${also}` } : { tone: "bad", text: `Saved, but not dispatched on eBay: ${result.dispatch.reason}` });
       } else {
-        setNote({ tone: "ok", text: "Saved." });
+        setNote({ tone: "ok", text: `Saved.${also}` });
       }
     } catch (err) {
       setNote({ tone: "bad", text: err instanceof ApiError ? err.message : "Couldn't save. Try again." });

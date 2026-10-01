@@ -210,6 +210,7 @@ function verifyToken(token) {
 module.exports = {
   signup,
   login,
+  issueToken,
   verifyToken,
   verifyEmail,
   resendVerification,
