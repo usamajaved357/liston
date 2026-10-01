@@ -1798,8 +1798,13 @@ function amountOf(node) {
   return { value: Number(node.value), currency: node.currency };
 }
 
+// A return the seller has refunded (in full or in part, eBay's states and
+// statuses for it): handled, though eBay may not have closed it yet.
+const RETURN_REFUNDED = /^(AUTO_REFUND_INITIATED|REFUND_INITIATED|REFUND_AS_PAYOUT_INITIATED|REFUND_SENT_PENDING_CONFIRMATION|PARTIAL_REFUNDED|PARTIAL_REFUND_INITIATED|PARTIAL_REFUND_AS_PAYOUT_INITIATED|PARTIAL_REFUND_NON_PAYPAL_INITIATED|LESS_THAN_A_FULL_REFUND_ISSUED)$/;
+
 function mapReturn(r) {
   const info = r.creationInfo || {};
+  const refundedSoFar = Number(r.sellerTotalRefund?.actualRefundAmount?.value ?? r.actualRefundAmount?.value) || 0;
   return {
     id: String(r.returnId),
     state: r.state || null, // e.g. RETURN_REQUESTED, RETURN_REQUESTED_TIMEOUT, ITEM_SHIPPED, ITEM_DELIVERED, CLOSED
@@ -1814,20 +1819,25 @@ function mapReturn(r) {
     refundAmount: amountOf(r.actualRefundAmount || r.sellerTotalRefund?.actualRefundAmount || r.buyerTotalRefund?.estimatedRefundAmount),
     tracking: r.shipmentTracking?.trackingNumber || null,
     carrier: r.shipmentTracking?.carrierUsed || null,
-    closed: /CLOSED|REFUNDED|ESCALATED_CLOSED/i.test(String(r.state || '')),
+    closed: /CLOSED|REFUNDED|^ITEM_KEPT$|^RETURN_REQUEST_TIMEOUT$/i.test(String(r.state || '')),
+    refunded: RETURN_REFUNDED.test(String(r.state || '')) || RETURN_REFUNDED.test(String(r.status || '')) || refundedSoFar > 0,
   };
 }
 
+// eBay's search names an inquiry's state inquiryStatusEnum (OPEN, PENDING,
+// WAITING_SELLER_RESPONSE, WAITING_BUYER_RESPONSE, CLOSED, CS_CLOSED,
+// CLOSED_WITH_ESCALATION); reading one on its own, state or status.
 function mapInquiry(i) {
+  const state = i.inquiryStatusEnum || i.state || i.status || null;
   return {
     id: String(i.inquiryId),
-    state: i.state || null, // e.g. OPEN, WAITING_FOR_SELLER_RESPONSE, CLOSED
-    status: i.status || null,
+    state,
+    status: i.status || i.inquiryStatusEnum || null,
     itemId: i.itemId ? String(i.itemId) : null,
     openedAt: i.creationDate?.value || i.creationDate || null,
     respondBy: i.sellerResponseDue?.respondByDate?.value || i.respondByDate?.value || null,
     claimAmount: amountOf(i.claimAmount),
-    closed: /CLOSED/i.test(String(i.state || '')),
+    closed: /CLOSED/i.test(String(state || '')),
   };
 }
 
@@ -1872,10 +1882,12 @@ async function getOrderCases(credentials, { orderId, legacyOrderId }) {
 }
 
 // Every open return, item-not-received request and payment dispute on the
-// account (the latest 50 of each eBay lists), for the Inbox to mark the
-// conversations they're about: each with its order, buyer and item where
-// eBay names them, and when the seller must answer by. Read-only and
-// best-effort: a list eBay won't give is left out.
+// account, for the Inbox to mark the conversations they're about: each with
+// its order, buyer and item where eBay names them, and when the seller must
+// answer by. Open as eBay says (the returns it lists as open, the inquiries
+// and disputes it hasn't closed, up to 200 of each), less any the seller has
+// already refunded. Read-only and best-effort: a list eBay won't give is
+// left out.
 async function getOpenCases(credentials) {
   if (!canManageOrders(credentials)) return { cases: [], unavailable: 'scope' };
   const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
@@ -1886,8 +1898,8 @@ async function getOpenCases(credentials) {
       return null;
     });
   const [returns, inquiries, disputes] = await Promise.all([
-    quiet('returns', ebayPostOrder.searchReturns(accessToken, {}, marketplaceId)),
-    quiet('inquiries', ebayPostOrder.searchInquiries(accessToken, {}, marketplaceId)),
+    quiet('returns', ebayPostOrder.searchReturns(accessToken, { states: 'ALL_OPEN', limit: 200 }, marketplaceId)),
+    quiet('inquiries', ebayPostOrder.searchInquiries(accessToken, { limit: 200 }, marketplaceId)),
     quiet('payment disputes', ebayFulfillment.getPaymentDisputeSummaries(accessToken, {}, marketplaceId)),
   ]);
   const text = (v) => (v === undefined || v === null || v === '' ? null : String(v));
@@ -1896,7 +1908,7 @@ async function getOpenCases(credentials) {
     ...(inquiries?.members || []).map((i) => ({ ...mapInquiry(i), kind: 'inquiry', orderId: text(i.orderId), buyer: text(i.buyer || i.buyerLoginName) })),
     ...(disputes?.paymentDisputeSummaries || []).map((d) => ({ ...mapDispute(d), kind: 'dispute', orderId: text(d.orderId), buyer: text(d.buyerUsername), itemId: text(d.lineItems?.[0]?.itemId) })),
   ]
-    .filter((c) => !c.closed)
+    .filter((c) => !c.closed && !c.refunded)
     .map(({ id, kind, orderId, buyer, itemId, respondBy }) => ({ id, kind, orderId, buyer, itemId: itemId || null, respondBy: respondBy || null }));
   return {
     cases,

@@ -303,20 +303,6 @@ export function EbayInbox({
                   onActiveChange(null);
                 })
               }
-              onAssign={(userId) =>
-                conv &&
-                act(async () => {
-                  await ebayInboxApi.assign(conv.account.id, conv.conversationId, userId);
-                  await loadThread(true);
-                })
-              }
-              onWork={(status) =>
-                conv &&
-                act(async () => {
-                  await ebayInboxApi.setWork(conv.account.id, conv.conversationId, status);
-                  await loadThread(true);
-                })
-              }
               onDeleteNote={(n) =>
                 conv &&
                 act(async () => {

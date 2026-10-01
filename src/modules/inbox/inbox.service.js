@@ -21,6 +21,8 @@ const notificationsService = require('../notifications/notifications.service');
 const chatRepository = require('../chat/chat.repository');
 const chatRules = require('../chat/chat-rules');
 const logger = require('../../utils/logger');
+const filesService = require('../files/files.service');
+const eps = require('../ai-generation/image-pipeline/eps');
 
 // The Inbox's eBay messages: every conversation an account has with buyers
 // and with eBay, read from eBay's Message API into Liston (the first time
@@ -37,13 +39,11 @@ const logger = require('../../utils/logger');
 // eBay pushes each new message (NEW_MESSAGE, ebay-push.js): the account's
 // latest conversations are read at once and the pushed message kept, and a
 // buyer's new message reaches the team's devices (everyone with the Inbox
-// on that account, or once it's given to someone, them and the owner; each
-// person's eBay setting, quiet hours and "hide the text" respected; never
-// while they're reading it). Team working: a conversation is given to
-// someone, marked Open, Waiting or Done (a buyer writing again opens it),
-// and carries notes only the team sees; each is the person's work on
-// record (member_activity), as replies are, with how long the buyer had
-// waited. "Message buyer" starts a conversation from an order.
+// on that account; each person's eBay setting, quiet hours and "hide the
+// text" respected; never while they're reading it). A buyer's conversation
+// carries notes only the team sees; notes and replies are the person's work
+// on record (member_activity), a reply with how long the buyer had waited.
+// "Message buyer" starts a conversation from an order.
 
 class InboxError extends Error {
   constructor(message, statusCode = 400, code = null) {
@@ -66,7 +66,6 @@ const syncing = new Map(); // connectionId -> the read running now
 const TELL_WITHIN_MS = 24 * 60 * 60 * 1000;
 // Pushed messages are gathered for a moment per account: a burst costs one read.
 const PUSH_BATCH_MS = 1500;
-const WORK = ['open', 'waiting', 'done'];
 const MAX_NOTE = 2000;
 
 // ---- who may see what ---------------------------------------------------------------
@@ -201,8 +200,6 @@ function sync(connectionId, ownerId, { full = false } = {}) {
       });
       await inboxRepository.recordSync(connectionId, { full: whole });
       if (arrived.length) {
-        // The buyer wrote again: whatever it was marked, it's open.
-        await inboxRepository.reopen(connectionId, arrived.map((r) => r.conversationId));
         tellTeam(connectionId, ownerId, arrived).catch((err) => logger.warn('Inbox: new messages not pushed', { connectionId, error: err.message }));
       }
       if (changed.length) await announce(connectionId, ownerId, { changed: changed.length });
@@ -264,11 +261,10 @@ async function _flushPushed() {
 }
 
 /**
- * A buyer's new messages, to the devices of the people who'd answer: each
- * one's eBay setting (every account, chosen ones, none), never while
- * they're reading that conversation, kept for the bell but not pushed in
- * their quiet hours, the text hidden when they asked. A conversation given
- * to someone goes to them and the owner.
+ * A buyer's new messages, to the devices of everyone with the Inbox on the
+ * account: each one's eBay setting (every account, chosen ones, none),
+ * never while they're reading that conversation, kept for the bell but not
+ * pushed in their quiet hours, the text hidden when they asked.
  */
 async function tellTeam(connectionId, ownerId, arrived) {
   const [viewers, connection] = await Promise.all([viewersOf(connectionId, ownerId), connectionRepository.findByIdForUser(connectionId, ownerId)]);
@@ -277,11 +273,8 @@ async function tellTeam(connectionId, ownerId, arrived) {
   const label = connection?.label || 'eBay';
   let told = 0;
   for (const r of arrived) {
-    const conv = await inboxRepository.findConversation(connectionId, r.conversationId);
-    const assignee = conv?.assigned_to ? String(conv.assigned_to) : null;
-    const to = assignee && viewers.includes(assignee) ? [...new Set([assignee, String(ownerId)])] : viewers;
     const buyer = r.otherParty || 'A buyer';
-    for (const userId of to) {
+    for (const userId of viewers) {
       const s = settings.get(userId);
       if (!rules.wantsEbayPush(s, connectionId)) continue;
       if (userEvents.isViewing(userId, `ebay:${connectionId}:${r.conversationId}`)) continue;
@@ -367,8 +360,6 @@ function rowShape(r, accounts, items, issues = new Map()) {
     latestAt: r.latest_at,
     latestFromSeller: r.latest_from_seller,
     waitingSince: rules.waitingSince(r),
-    assignee: personOf(r.assigned_to, r.assignee_name, r.assignee_email),
-    workStatus: r.work_status,
     labels: r.labels || [],
     // An open return, case or dispute on the buyer's order for the item, or a cancellation they asked for (Orders access only).
     issue: issues.get(`${r.connection_id}:${r.conversation_id}`) || null,
@@ -420,7 +411,7 @@ async function list(auth, { connectionId = null, folder = 'buyers', show = 'all'
         return row;
       });
   } else {
-    rows = await inboxRepository.listConversations(ids, { folder, show, q, userId: auth.userId, before, limit });
+    rows = await inboxRepository.listConversations(ids, { folder, show, q, before, limit });
     for (const id of withOrders) {
       for (const [conv, issue] of await orderIssues.issuesFor(id, rows.filter((r) => r.connection_id === id))) issues.set(`${id}:${conv}`, issue);
     }
@@ -601,11 +592,10 @@ async function thread(auth, connectionId, conversationId, { markRead = true } = 
   }
   // The bell's line about it (and the lock screen's) is read too.
   if (markRead) notificationsService.readSubject(auth.userId, 'inbox.message', `${connectionId}:${conversationId}`).catch(() => {});
-  const [messages, context, notes, team] = await Promise.all([
+  const [messages, context, notes] = await Promise.all([
     inboxRepository.messagesOf(connectionId, conversationId),
     contextOf(auth, account, conv),
     conv.type === 'FROM_MEMBERS' ? inboxRepository.notesOf(connectionId, conversationId) : [],
-    conv.type === 'FROM_MEMBERS' ? teamOf(connectionId, auth.ownerId) : [],
   ]);
   const items = await imagesFor([connectionId], [conv.reference_id]);
   const issues = new Map();
@@ -616,9 +606,6 @@ async function thread(auth, connectionId, conversationId, { markRead = true } = 
     conversation: conversationShape(conv, account, items, issues),
     messages: messages.map((m) => messageShape(m, conv.type)),
     notes: notes.map((n) => noteShape(n, auth)),
-    // Who it can be given to: the owner and the members with the Inbox on this account.
-    team,
-    work: { status: conv.work_status, at: conv.work_status_at || null, by: personOf(conv.work_status_by, conv.work_status_by_name, conv.work_status_by_email) },
     context,
     stale,
   };
@@ -664,6 +651,32 @@ function mediaTypeOf(mime) {
 }
 
 /**
+ * What eBay is handed for each attachment: a photo put on eBay's own picture
+ * service first (where eBay keeps the photos buyers and sellers attach on
+ * eBay; a link to Liston reached no buyer), a document as its HTTPS link
+ * from Liston, which eBay fetches.
+ */
+async function mediaForEbay(files, { accessToken, marketplaceId, connectionId }) {
+  return Promise.all(
+    files.map(async (f) => {
+      const type = mediaTypeOf(f.mime);
+      if (type !== 'IMAGE') {
+        const url = filesService.publicUrl(f);
+        if (!/^https:\/\//.test(url || '')) throw new InboxError(`${f.name} can't go to eBay from here: eBay fetches documents over HTTPS and this server's address (API_URL) isn't.`, 400);
+        return { name: f.name, type, url };
+      }
+      const bytes = await filesService.bytesOf(f);
+      if (!bytes) throw new InboxError(`${f.name} couldn't be read. Attach it again.`, 400);
+      const url = await eps.upload(accessToken, bytes, { marketplaceId, pictureName: f.name, account: connectionId }).catch((err) => {
+        logger.warn('Inbox: attachment not put on eBay', { connectionId, error: err.message });
+        throw new InboxError(`eBay wouldn't take ${f.name}. Try again, or send it as a JPEG or PNG.`, 502);
+      });
+      return { name: f.name, type, url };
+    })
+  );
+}
+
+/**
  * Replies to a buyer in their conversation: the text (at most 2,000
  * characters) and up to 5 attachments uploaded for eBay first. Text eBay
  * blocks or flags (contact details, links off eBay, paying outside eBay)
@@ -684,12 +697,14 @@ async function reply(auth, connectionId, conversationId, { text, fileIds = [], c
   if (files.length !== ids.length || files.some((f) => f.owner_user_id !== auth.ownerId || f.purpose !== 'ebay' || String(f.uploaded_by) !== String(auth.userId))) {
     throw new InboxError("One of those attachments isn't yours to send.", 400);
   }
-  const media = files.map((f) => ({ name: f.name, type: mediaTypeOf(f.mime), url: require('../files/files.service').publicUrl(f) }));
-  if (media.some((m) => !m.type)) throw new InboxError('eBay takes photos, PDFs, Word documents and text files as attachments.', 400);
+  if (files.some((f) => !mediaTypeOf(f.mime))) throw new InboxError('eBay takes photos, PDFs, Word documents and text files as attachments.', 400);
   const warnings = rules.warningsFor(body);
   if (warnings.length && !confirm) return { sent: false, warnings };
 
-  const out = await withEbay(connectionId, auth.ownerId, ({ accessToken, marketplaceId }) => ebayMessage.sendMessage(accessToken, { conversationId, text: body, media }, marketplaceId));
+  const { out, media } = await withEbay(connectionId, auth.ownerId, async ({ accessToken, marketplaceId }) => {
+    const hosted = await mediaForEbay(files, { accessToken, marketplaceId, connectionId });
+    return { out: await ebayMessage.sendMessage(accessToken, { conversationId, text: body, media: hosted }, marketplaceId), media: hosted };
+  });
   const sent = {
     messageId: out.messageId || `sent-${Date.now()}`,
     sender: null,
@@ -711,80 +726,19 @@ async function reply(auth, connectionId, conversationId, { text, fileIds = [], c
   return { sent: true, message: messageShape(saved, conv.type), account: { id: account.id, label: account.label } };
 }
 
-// ---- team working ---------------------------------------------------------------------
-
-const teamCache = new Map();
-/** The people a conversation on this account can be given to: the owner, then the members with the Inbox there, by name. */
-async function teamOf(connectionId, ownerId) {
-  const hit = teamCache.get(connectionId);
-  if (hit && Date.now() - hit.at < 60 * 1000) return hit.people;
-  const viewers = await viewersOf(connectionId, ownerId);
-  const byId = new Map((await inboxRepository.peopleByIds(viewers)).map((u) => [String(u.id), u]));
-  const people = viewers.map((id) => personOf(id, byId.get(id)?.name, byId.get(id)?.email));
-  teamCache.set(connectionId, { at: Date.now(), people });
-  return people;
-}
+// ---- team notes ---------------------------------------------------------------------
 
 async function buyerConversation(auth, connectionId, conversationId) {
   await requireAccount(auth, connectionId);
   const conv = await inboxRepository.findConversation(connectionId, conversationId);
   if (!conv) throw new InboxError('Conversation not found.', 404);
-  if (conv.type !== 'FROM_MEMBERS') throw new InboxError("eBay's own messages aren't team work.", 400);
+  if (conv.type !== 'FROM_MEMBERS') throw new InboxError("eBay's own messages can't have notes.", 400);
   return conv;
 }
 
 function noteShape(n, auth) {
   const mine = String(n.author_user_id) === String(auth.userId);
   return { id: String(n.id), body: n.body, author: personOf(n.author_user_id, n.author_name, n.author_email), createdAt: n.created_at, mine, canDelete: mine || auth.role === 'owner' };
-}
-
-/** Gives a buyer's conversation to someone with the Inbox on its account (null: to no one); they're told. */
-async function assign(auth, connectionId, conversationId, userId) {
-  const conv = await buyerConversation(auth, connectionId, conversationId);
-  const to = userId ? String(userId) : null;
-  const team = await teamOf(connectionId, auth.ownerId);
-  const person = to ? team.find((p) => p.id === to) : null;
-  if (to && !person) throw new InboxError("They don't have the Inbox on this account.", 400);
-  if (String(conv.assigned_to || '') === String(to || '')) return { assignee: person };
-  await inboxRepository.assign(connectionId, conversationId, to);
-  if (to) {
-    await activityRepository
-      .record({ actorUserId: auth.userId, connectionId, kind: 'inbox.assigned', subjectType: 'conversation', subjectId: conversationId, title: conv.other_party, detail: { to, toName: person.name, itemId: conv.reference_id || null } })
-      .catch(() => {});
-    if (to !== String(auth.userId)) {
-      const by = team.find((p) => p.id === String(auth.userId))?.name || 'Someone';
-      notificationsService
-        .notify({
-          userId: to,
-          actorUserId: auth.userId,
-          kind: 'inbox.assigned',
-          title: `${by} gave you ${conv.other_party || 'a buyer'}'s conversation`,
-          body: conv.latest_preview || null,
-          url: `/accounts/${connectionId}/inbox?e=${connectionId}~${encodeURIComponent(conversationId)}`,
-          subjectType: 'conversation',
-          subjectId: `${connectionId}:${conversationId}`,
-          detail: { connectionId, conversationId, buyer: conv.other_party },
-        })
-        .catch(() => {});
-    }
-  }
-  await announce(connectionId, auth.ownerId, { conversationId });
-  return { assignee: person };
-}
-
-/** Marks where a buyer's conversation stands: open, waiting (on the buyer, a supplier…) or done (resolved, on their record). */
-async function setWork(auth, connectionId, conversationId, status) {
-  if (!WORK.includes(status)) throw new InboxError('Open, Waiting or Done.', 400);
-  const conv = await buyerConversation(auth, connectionId, conversationId);
-  if (conv.work_status === status) return { status };
-  await inboxRepository.setWorkStatus(connectionId, conversationId, status, auth.userId);
-  if (status === 'done') {
-    await activityRepository
-      .record({ actorUserId: auth.userId, connectionId, kind: 'inbox.resolved', subjectType: 'conversation', subjectId: conversationId, title: conv.other_party, detail: { itemId: conv.reference_id || null } })
-      .catch(() => {});
-  }
-  await announce(connectionId, auth.ownerId, { conversationId });
-  return { status };
 }
 
 /** A note on a buyer's conversation that only the team sees. */
@@ -877,8 +831,6 @@ module.exports = {
   forgetMember,
   onPushedMessage,
   tellTeam,
-  assign,
-  setWork,
   addNote,
   deleteNote,
   messageBuyer,

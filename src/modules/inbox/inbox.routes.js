@@ -19,9 +19,7 @@ router.post('/message-buyer', requireAuth, requireFeature('inbox'), c.messageBuy
 router.get('/:conversationId', requireAuth, requireFeature('inbox'), c.thread);
 router.post('/:conversationId/read', requireAuth, requireFeature('inbox'), c.setRead);
 router.post('/:conversationId/status', requireAuth, requireFeature('inbox'), c.setStatus);
-// The team's working: who has it, where it stands, notes only the team sees.
-router.post('/:conversationId/assign', requireAuth, requireFeature('inbox'), c.assign);
-router.post('/:conversationId/work', requireAuth, requireFeature('inbox'), c.setWork);
+// Notes only the team sees.
 router.post('/:conversationId/notes', requireAuth, requireFeature('inbox'), c.addNote);
 router.delete('/:conversationId/notes/:noteId', requireAuth, requireFeature('inbox'), c.deleteNote);
 // A reply to a buyer: a real message, sent when someone presses Send.

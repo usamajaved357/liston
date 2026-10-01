@@ -38,18 +38,16 @@ test('a gap breaks a stretch; each kind of work belongs to its area', () => {
   assert.strictEqual(workTime.areaKey('constructor'), 'other', 'only real areas');
 });
 
-test("buyers answered once per conversation, every message sent, queries resolved, and the median reply time", () => {
+test("buyers answered once per conversation, every message sent, and the median reply time", () => {
   const rows = [
     { kind: 'inbox.replied', subject_id: 'c1', detail: { waitedMinutes: 30 }, created_at: '2026-10-01T09:00:00Z' },
     { kind: 'inbox.replied', subject_id: 'c1', detail: { waitedMinutes: null }, created_at: '2026-10-01T09:05:00Z' },
     { kind: 'inbox.replied', subject_id: 'c2', detail: { waitedMinutes: 90 }, created_at: '2026-10-01T10:00:00Z' },
     { kind: 'inbox.messaged', subject_id: 'c3', detail: {}, created_at: '2026-10-01T11:00:00Z' },
-    { kind: 'inbox.resolved', subject_id: 'c1', detail: {}, created_at: '2026-10-01T11:30:00Z' },
-    { kind: 'inbox.resolved', subject_id: 'c1', detail: {}, created_at: '2026-10-01T12:30:00Z' },
   ];
   const m = activity.metricsFrom(rows, 'UTC');
-  assert.deepStrictEqual([m.inbox_answered, m.inbox_sent, m.inbox_resolved, m.active_days], [3, 4, 1, 1]);
+  assert.deepStrictEqual([m.inbox_answered, m.inbox_sent, m.active_days], [3, 4, 1]);
   assert.deepStrictEqual(activity.replyTime(rows), { median: 60, count: 2 }, 'only replies to a waiting buyer, (30 + 90) / 2');
   assert.deepStrictEqual(activity.replyTime([]), { median: null, count: 0 });
-  assert.strictEqual(activity.KINDS['inbox.resolved'], 'Resolved a buyer query');
+  assert.strictEqual(activity.KINDS['inbox.resolved'], 'Resolved a buyer query', 'no longer recorded; earlier entries still read');
 });

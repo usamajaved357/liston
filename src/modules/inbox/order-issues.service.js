@@ -60,7 +60,7 @@ async function issuesFor(connectionId, conversations) {
   const byBuyer = new Map();
   for (const o of orders) {
     const list = byBuyer.get(o.buyer) || [];
-    list.push({ orderId: o.order_id, itemIds: o.item_ids || [], cancelRequested: ebayService.CANCEL_REQUESTED_STATUSES.has(o.cancel_status) });
+    list.push({ orderId: o.order_id, itemIds: o.item_ids || [], cancelRequested: ebayService.CANCEL_REQUESTED_STATUSES.has(o.cancel_status), refunded: Boolean(o.refunded) });
     byBuyer.set(o.buyer, list);
   }
   const out = new Map();

@@ -54,13 +54,6 @@ const KIND: Record<string, Kind> = {
     note: "border-sky-300",
     icon: <path d="M5 5.5h10a1 1 0 011 1v6a1 1 0 01-1 1H9.5L6.5 16v-2.5H5a1 1 0 01-1-1v-6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />,
   },
-  "inbox.assigned": {
-    label: "Given to you",
-    ring: "bg-indigo-50 text-indigo-600 ring-indigo-200",
-    chip: "bg-indigo-50 text-indigo-700 ring-indigo-200",
-    note: "border-indigo-300",
-    icon: <path d="M10 9.5a2.8 2.8 0 100-5.6 2.8 2.8 0 000 5.6zM4.8 16c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />,
-  },
 };
 const OTHER: Kind = {
   label: "Liston",

@@ -34,3 +34,47 @@ test("an order's cases read afresh replace what the snapshot had for it", () => 
   const opened = rules.withOrderCases(before, { orderIds: ['17-1'], buyer: 'haks_mm2', itemIds: ['111'], cases: [{ id: 'i7', kind: 'inquiry', itemId: '111', respondBy: '2026-10-05', closed: false }] });
   assert.deepStrictEqual(opened.map((c) => [c.id, c.kind, c.orderId, c.buyer]), [['x9', 'return', '17-9', 'other'], ['i7', 'inquiry', '17-1', 'haks_mm2']]);
 });
+
+test("a case on an order the seller has refunded is handled: its mark goes, even before eBay closes it", () => {
+  const conv = { otherParty: 'haks_mm2', referenceId: '111' };
+  const refunded = [{ orderId: '17-1', itemIds: ['111'], cancelRequested: false, refunded: true }];
+  assert.strictEqual(rules.issueFor(conv, { orders: refunded, cases: [{ id: 'r1', kind: 'return', orderId: '17-1' }] }), null, 'the return on the refunded order');
+  assert.strictEqual(rules.issueFor(conv, { orders: refunded, cases: [{ id: 'i1', kind: 'inquiry', buyer: 'haks_mm2', itemId: '111' }] }), null, 'an inquiry found by buyer and item');
+  const twice = [...refunded, { orderId: '17-3', itemIds: ['111'], cancelRequested: false, refunded: false }];
+  assert.strictEqual(rules.issueFor(conv, { orders: twice, cases: [{ id: 'i2', kind: 'inquiry', buyer: 'haks_mm2', itemId: '111' }] }).kind, 'inquiry', 'bought twice, one order not refunded: still open');
+  const fresh = rules.withOrderCases([], { orderIds: ['17-1'], buyer: 'haks_mm2', itemIds: ['111'], cases: [{ id: 'r1', kind: 'return', closed: false, refunded: true }] });
+  assert.deepStrictEqual(fresh, [], 'a return eBay shows refunded, read on the order page');
+});
+
+test("the account's open cases are read as eBay states them: inquiries by their status, refunded returns left out", async (t) => {
+  const { mock } = require('node:test');
+  const ebayService = require('../../src/modules/ebay/ebay.service');
+  const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
+  const ebayPostOrder = require('../../src/modules/ebay/api/ebay.postorder');
+  const ebayFulfillment = require('../../src/modules/ebay/api/ebay.fulfillment');
+  t.after(() => mock.restoreAll());
+  mock.method(ebayOauth, 'hasScope', () => true);
+  let asked = null;
+  mock.method(ebayPostOrder, 'searchReturns', async (token, filters) => {
+    asked = filters;
+    return {
+      members: [
+        { returnId: 1, orderId: '17-1', buyerLoginName: 'a', state: 'RETURN_REQUESTED', status: 'RETURN_REQUESTED' },
+        { returnId: 2, orderId: '17-2', buyerLoginName: 'b', state: 'ITEM_KEPT', status: 'LESS_THAN_A_FULL_REFUND_ISSUED' },
+        { returnId: 3, orderId: '17-3', buyerLoginName: 'c', state: 'RETURN_REQUESTED', status: 'RETURN_REQUESTED', sellerTotalRefund: { actualRefundAmount: { value: '4.50', currency: 'GBP' } } },
+      ],
+    };
+  });
+  mock.method(ebayPostOrder, 'searchInquiries', async () => ({
+    members: [
+      { inquiryId: 10, buyer: 'd', itemId: 111, inquiryStatusEnum: 'WAITING_SELLER_RESPONSE', respondByDate: { value: '2026-10-04T00:00:00Z' } },
+      { inquiryId: 11, buyer: 'e', itemId: 222, inquiryStatusEnum: 'CLOSED' },
+      { inquiryId: 12, buyer: 'f', itemId: 333, inquiryStatusEnum: 'CS_CLOSED' },
+    ],
+  }));
+  mock.method(ebayFulfillment, 'getPaymentDisputeSummaries', async () => ({ paymentDisputeSummaries: [{ paymentDisputeId: 'p1', orderId: '17-9', buyerUsername: 'g', paymentDisputeStatus: 'CLOSED' }] }));
+  const out = await ebayService.getOpenCases({ accessToken: 't', accessTokenExpiresAt: Date.now() + 3600000, refreshToken: 'r', marketplaceId: 'EBAY_GB' });
+  assert.strictEqual(asked.states, 'ALL_OPEN', 'eBay asked for its open returns only');
+  assert.deepStrictEqual(out.cases.map((c) => `${c.kind}:${c.id}`), ['return:1', 'inquiry:10'], 'refunded returns and closed inquiries and disputes left out');
+  assert.strictEqual(out.cases[1].respondBy, '2026-10-04T00:00:00Z');
+});

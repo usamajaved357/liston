@@ -22,8 +22,9 @@ function trendDays(range, today) {
 // The measures the chart can show, as the money cards count them: what
 // buyers paid, orders and units (cancelled orders left out), and from eBay's
 // figures for each order what it took, what reached the seller and what was
-// left after the supplier. The account's own charges (listing fees, the shop
-// subscription) land on the day eBay billed them.
+// left after the supplier. The account's own charges land on the day eBay
+// billed them (listing fees, ads), the shop subscription a share on each day
+// it pays for (store-fee-days).
 const MONEY_KEYS = ['sales', 'fees', 'earnings', 'profit'];
 const KEYS = ['sales', 'orders', 'units', ...MONEY_KEYS.slice(1)];
 const empty = () => Object.fromEntries(KEYS.map((k) => [k, 0]));

@@ -6,7 +6,8 @@
 // with a buyer about a listing (`otherPartyUsername` + a LISTING reference;
 // eBay threads it with anything already said). Needs the commerce.message
 // scope on the seller's token (see ebay.oauth). Text is at most 2,000
-// characters; up to 5 attachments as self-hosted HTTPS links.
+// characters; up to 5 attachments as HTTPS links (photos on eBay's picture
+// service, put there first by the Inbox; documents on Liston's).
 const { request } = require('./ebay.client');
 const ebayOauth = require('./ebay.oauth');
 

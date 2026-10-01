@@ -12,10 +12,13 @@ const lower = (v) => String(v || '').trim().toLowerCase();
 
 /**
  * `conv`: { otherParty, referenceId }; `orders`: that buyer's orders as
- * [{ orderId, itemIds, cancelRequested }]; `cases`: the account's open
- * cases [{ id, kind, orderId, buyer, itemId, respondBy }]. A case is this
- * conversation's when it's on one of the buyer's orders for the item, or
- * names the buyer and the item. { kind, label, respondBy, orderId } or null.
+ * [{ orderId, itemIds, cancelRequested, refunded }]; `cases`: the account's
+ * open cases [{ id, kind, orderId, buyer, itemId, respondBy }]. A case is
+ * this conversation's when it's on one of the buyer's orders for the item,
+ * or names the buyer and the item; one whose order the seller has refunded
+ * (eBay's finances show money back to the buyer) is handled and left out,
+ * whether or not eBay has closed it yet. { kind, label, respondBy, orderId }
+ * or null.
  */
 function issueFor(conv, { orders = [], cases = [] } = {}) {
   const buyer = lower(conv.otherParty);
@@ -23,8 +26,15 @@ function issueFor(conv, { orders = [], cases = [] } = {}) {
   if (!buyer || !item) return null;
   const forItem = orders.filter((o) => (o.itemIds || []).map(String).includes(item));
   const orderIds = new Set(forItem.map((o) => String(o.orderId)));
+  // The case's own order when eBay names it, else the buyer's orders for the item (all of them refunded to count).
+  const refunded = (c) => {
+    const own = c.orderId && forItem.find((o) => String(o.orderId) === String(c.orderId));
+    if (own) return Boolean(own.refunded);
+    return forItem.length > 0 && forItem.every((o) => o.refunded);
+  };
   const found = cases
     .filter((c) => (c.orderId && orderIds.has(String(c.orderId))) || (c.buyer && lower(c.buyer) === buyer && c.itemId && String(c.itemId) === item))
+    .filter((c) => !refunded(c))
     .map((c) => ({ kind: c.kind, respondBy: c.respondBy || null, orderId: c.orderId && orderIds.has(String(c.orderId)) ? String(c.orderId) : forItem[0]?.orderId || null }));
   const asked = forItem.find((o) => o.cancelRequested);
   if (asked) found.push({ kind: 'cancel', respondBy: null, orderId: String(asked.orderId) });
@@ -46,7 +56,7 @@ function withOrderCases(snapshot, { orderIds = [], buyer = null, itemIds = [], c
     (c) => !caseIds.has(String(c.id)) && !(c.orderId && ids.has(String(c.orderId))) && !(buyer && c.buyer && lower(c.buyer) === lower(buyer) && c.itemId && items.has(String(c.itemId)))
   );
   const fresh = cases
-    .filter((c) => !c.closed)
+    .filter((c) => !c.closed && !c.refunded)
     .map((c) => ({ id: String(c.id), kind: c.kind, orderId: orderIds[0] ? String(orderIds[0]) : null, buyer: buyer || null, itemId: c.itemId ? String(c.itemId) : [...items][0] || null, respondBy: c.respondBy || null }));
   return [...kept, ...fresh];
 }

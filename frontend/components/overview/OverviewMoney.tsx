@@ -98,7 +98,7 @@ const STEPS: Step[] = [
     tone: "out",
     accent: "bg-rose-400",
     note: (m) => (m.settledSales > 0 ? `${percent(m.fees, m.settledSales)} of sales` : "Taken by eBay"),
-    hint: "Everything eBay took: the fees on each order, ads, listing fees and the eBay Store subscription",
+    hint: "Everything eBay took: the fees on each order, ads, listing fees and the eBay Store subscription (each day's share of it, not the whole month on the day eBay bills it)",
     fromEbay: true,
     details: [
       { label: "Order fees", figure: { kind: "money", of: (m) => m.fees - m.adFees - (m.accountFees ?? 0) }, fromEbay: true, tone: "out" },

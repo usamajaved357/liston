@@ -1,8 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { EbayMessage, EbayNote, EbayThread, EbayWorkStatus } from "@/lib/api";
-import { useCachedUser } from "@/lib/session";
+import { EbayMessage, EbayNote, EbayThread } from "@/lib/api";
 import { FileRow, PhotoGrid } from "../MessageFiles";
 import { RichText } from "../MessageBubble";
 import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, LatestButton, MenuItem, Meta, PopMenu } from "../ChatBubble";
@@ -10,7 +9,7 @@ import { colorFor, dayLabel, initialOf, timeLabel } from "../inbox-format";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { EbayMark, IssueBadge } from "./EbayConversationList";
 import { NoticeCard } from "./EbayNotice";
-import { AssignButton, NoteBubble, WorkButton } from "./EbayWork";
+import { NoteBubble } from "./EbayWork";
 
 // One eBay conversation, as WhatsApp shows a chat: a slim header (who,
 // and what it's about: a tag for an order, a listing or neither, then the
@@ -172,8 +171,6 @@ export function EbayThreadView({
   details,
   composer,
   showAccount = true,
-  onAssign,
-  onWork,
   onDeleteNote,
 }: {
   data: EbayThread | null;
@@ -190,12 +187,9 @@ export function EbayThreadView({
   composer?: ReactNode;
   // Every account together: which account the conversation is with.
   showAccount?: boolean;
-  // The team's working (a buyer's conversation): give it to someone, mark where it stands, delete a note.
-  onAssign?: (userId: string | null) => void;
-  onWork?: (status: EbayWorkStatus) => void;
+  // A team note on a buyer's conversation, deleted.
   onDeleteNote?: (note: EbayNote) => void;
 }) {
-  const me = useCachedUser()?.id || null;
   const scroller = useRef<HTMLDivElement>(null);
   // Its scrollbar shows only while someone is scrolling.
   const scrollerRef = useQuietScrollbar(scroller);
@@ -307,8 +301,6 @@ export function EbayThreadView({
               <IssueBadge issue={conv.issue} className="!px-2 !py-0.5 !text-[11px]" />
             </a>
           )}
-          {!ebay && onWork && <WorkButton status={data.work?.status || "open"} by={data.work?.by || null} disabled={busy} onChange={onWork} />}
-          {!ebay && onAssign && <AssignButton team={data.team || []} assignee={conv?.assignee || null} me={me} disabled={busy} onAssign={onAssign} />}
           {!ebay && (
             <HeaderButton label={detailsOpen ? "Hide details" : "Order and listing details"} onClick={onToggleDetails} active={detailsOpen}>
               <svg viewBox="0 0 24 24" fill="none" className="h-[19px] w-[19px]" aria-hidden>

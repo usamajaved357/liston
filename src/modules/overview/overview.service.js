@@ -5,7 +5,8 @@
 //
 // Everything is read from Liston's own copies: orders from the order mirror,
 // each order's fees and earnings from ebay_order_finances and the account's
-// own charges (listing fees, subscriptions) from ebay_account_charges (both
+// own charges (listing fees, subscriptions; the shop's spread over the days
+// it pays for, store-fee-days) from ebay_account_charges (both
 // read from eBay's Finances API in bulk, in the background, at most every
 // half hour), supplier
 // costs from order_sourcing. One account failing (expired token, eBay hiccup)
@@ -26,6 +27,7 @@ const { query } = require('../../db/client');
 const logger = require('../../utils/logger');
 const huntingRepository = require('../hunting/hunting.repository');
 const listingTrend = require('./listing-trend');
+const storeFeeDays = require('./store-fee-days');
 
 const RANGES = new Set(['today', '7d', '30d', '90d', 'this_month', 'last_month']);
 // Every listing figure an account has, added up per market.
@@ -60,7 +62,8 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
     return { listings: count.totalEntries || 0, orders: inRange, recent: sales, credentialsChanged: count.credentialsChanged, credentials: count.credentials };
   });
   // Listing work in the same dates, in the same time zone as the orders.
-  const [start, end] = ebayService.resolveRangeWindow(range, null, null, timeZone || marketplaces.timeZoneOf(connection.marketplace?.id || marketplaces.DEFAULT_ID));
+  const tz = timeZone || marketplaces.timeZoneOf(connection.marketplace?.id || marketplaces.DEFAULT_ID);
+  const [start, end] = ebayService.resolveRangeWindow(range, null, null, tz);
   const [work, hunting] = await Promise.all([
     listingRepository.countListingWork(connection.id, start, end),
     huntingRepository.countForOverview(connection.id, start, end).catch(() => ({ ...huntingRepository.EMPTY_OVERVIEW })),
@@ -70,7 +73,8 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
     mirror.loadOrderFinances(connection.id, orderIds),
     orderRepository.sourceCostsByOrder(connection.id, orderIds),
     orderRepository.listArchivedOrderIds(connection.id).catch(() => []),
-    mirror.loadAccountCharges(connection.id, currency, start, end),
+    // The shop subscription billed before the dates may pay for days in them (store-fee-days).
+    mirror.loadAccountCharges(connection.id, currency, storeFeeDays.readFrom(start), new Date()),
   ]);
   // The Listings tab's chart and its newest listings, from Liston's own records (no eBay call).
   const listingWork = await listingExtras(connection, { range, timeZone, start, end, orders }).catch((err) => {
@@ -84,7 +88,7 @@ async function accountFigures(connection, ownerId, { range, timeZone, extras = f
     // what waits now), then drafts and what went live (of them, from hunted products).
     listings: { live: listings, ...work, ...hunting },
     ...(extras ? await salesExtras(connection, { range, timeZone, orders, recent }) : {}),
-    money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled, charges }),
+    money: moneySummary.summarise(orders, moneyByOrder, costs, { currency, isCancelled, charges: storeFeeDays.chargesInDates(charges, { start, end, timeZone: tz }) }),
     // The same dates' orders by state, for the account Overview's queue.
     queue: countQueue(orders, ebayService.classifyOrderStatus, archived),
     financesPending: !settled,
@@ -154,9 +158,10 @@ async function salesExtras(connection, { range, timeZone, orders, recent }) {
   const [finances, costs, charges] = await Promise.all([
     mirror.loadOrderFinances(connection.id, recentIds),
     orderRepository.sourceCostsByOrder(connection.id, recentIds),
-    mirror.loadAccountCharges(connection.id, currency, since, new Date()),
+    mirror.loadAccountCharges(connection.id, currency, storeFeeDays.readFrom(since), new Date()),
   ]);
-  const trend = salesTrend.salesTrend(recent?.orders || [], { timeZone: tz, range, today, isCancelled, finances, costs, charges, currency });
+  const charged = storeFeeDays.chargesInDates(charges, { start: since, end: new Date(), timeZone: tz });
+  const trend = salesTrend.salesTrend(recent?.orders || [], { timeZone: tz, range, today, isCancelled, finances, costs, charges: charged, currency });
   const top = salesTrend.bestSellers(orders, { isCancelled, limit: 6 });
   const live = recent?.listings || new Map();
   const ended = top.filter((b) => !live.has(b.itemId)).map((b) => b.itemId);

@@ -14,6 +14,7 @@ const orderIssues = require('../../src/modules/inbox/order-issues.service');
 const ebayPostOrder = require('../../src/modules/ebay/api/ebay.postorder');
 const ebayFulfillment = require('../../src/modules/ebay/api/ebay.fulfillment');
 const ebayOauth = require('../../src/modules/ebay/api/ebay.oauth');
+const eps = require('../../src/modules/ai-generation/image-pipeline/eps');
 
 // The Inbox's eBay messages, with eBay's Message API stood in for: the
 // account's conversations read into Liston (all the first time, then only
@@ -359,7 +360,7 @@ test("a buyer's conversation is marked with an open return (eBay's for the whole
     const base = `/api/connections/${t.connection.id}/inbox`;
     await inboxService.sync(t.connection.id, t.owner.id);
     await orderIssues.refresh(t.connection.id, t.owner.id);
-    assert.deepStrictEqual(searched, [['returns', {}]], "one read for the whole account, not one per order");
+    assert.deepStrictEqual(searched, [['returns', { states: 'ALL_OPEN', limit: 200 }]], "one read for the whole account (eBay's open returns), not one per order");
 
     const rows = (await request('GET', base, undefined, t.owner.token)).data.conversations;
     const byId = Object.fromEntries(rows.map((r) => [r.conversationId, r.issue]));
@@ -413,13 +414,18 @@ test('an account connected before messages were added is asked to reconnect, and
   }
 });
 
-test('replying to a buyer: a warning first when eBay would block it, attachments on public links, kept at once as the last word, never for eBay\'s own', async () => {
+test('replying to a buyer: a warning first when eBay would block it, photos put on eBay first, kept at once as the last word, never for eBay\'s own', async () => {
   const t = await setup();
   const calls = stubEbay({ buyers: [conv('c1')], ebay: [conv('e1', { type: 'FROM_EBAY', text: 'Notice' })], threads: { c1: [] } });
   const sent = [];
   mock.method(ebayMessage, 'sendMessage', async (token, body) => {
     sent.push(body);
     return { messageId: 'reply-1', conversationId: body.conversationId };
+  });
+  const hosted = [];
+  mock.method(eps, 'upload', async (token, bytes, options) => {
+    hosted.push({ size: bytes.length, ...options });
+    return 'https://i.ebayimg.com/images/g/abc/s-l1600.jpg';
   });
   try {
     await inboxService.sync(t.connection.id, t.owner.id);
@@ -430,14 +436,21 @@ test('replying to a buyer: a warning first when eBay would block it, attachments
     assert.deepStrictEqual([warned.status, warned.data.sent, warned.data.warnings.map((w) => w.kind)], [200, false, ['email']]);
     assert.strictEqual(sent.length, 0);
 
-    // A photo uploaded for eBay goes on its public link, as an IMAGE.
+    // A photo uploaded for eBay goes on eBay's picture service first, and eBay gets that link, as an IMAGE.
     const photo = await require('sharp')({ create: { width: 20, height: 20, channels: 3, background: '#f00' } }).jpeg().toBuffer();
     const up = await fetch(`${baseUrl}/api/files?purpose=ebay`, { method: 'POST', headers: { Authorization: `Bearer ${t.owner.token}`, 'Content-Type': 'image/jpeg', 'X-File-Name': 'label.jpg' }, body: photo });
     const file = await up.json();
     const reply = await request('POST', `${base}/c1/messages`, { text: 'So sorry for the delay, it was dispatched on the 23rd. Here is the label:', fileIds: [file.id] }, t.owner.token);
     assert.strictEqual(reply.status, 201, JSON.stringify(reply.data));
-    assert.deepStrictEqual(sent[0], { conversationId: 'c1', text: 'So sorry for the delay, it was dispatched on the 23rd. Here is the label:', media: [{ name: 'label.jpg', type: 'IMAGE', url: file.url }] });
-    assert.deepStrictEqual([reply.data.message.id, reply.data.message.fromSeller, reply.data.message.media[0].image], ['reply-1', true, true]);
+    assert.deepStrictEqual(hosted.map((h) => [h.size > 0, h.pictureName, h.account]), [[true, 'label.jpg', t.connection.id]]);
+    assert.deepStrictEqual(sent[0], { conversationId: 'c1', text: 'So sorry for the delay, it was dispatched on the 23rd. Here is the label:', media: [{ name: 'label.jpg', type: 'IMAGE', url: 'https://i.ebayimg.com/images/g/abc/s-l1600.jpg' }] });
+    assert.deepStrictEqual([reply.data.message.id, reply.data.message.fromSeller, reply.data.message.media[0].image, reply.data.message.media[0].url], ['reply-1', true, true, 'https://i.ebayimg.com/images/g/abc/s-l1600.jpg']);
+
+    // A document goes on Liston's own link, which eBay must fetch over HTTPS: refused from a server without one.
+    const pdf = await (await fetch(`${baseUrl}/api/files?purpose=ebay`, { method: 'POST', headers: { Authorization: `Bearer ${t.owner.token}`, 'Content-Type': 'application/pdf', 'X-File-Name': 'invoice.pdf' }, body: '%PDF-1.4 x' })).json();
+    const local = await request('POST', `${base}/c1/messages`, { text: 'Your invoice', fileIds: [pdf.id] }, t.owner.token);
+    assert.deepStrictEqual([local.status, /HTTPS/.test(local.data.error)], [400, true]);
+    assert.strictEqual(sent.length, 1, 'nothing sent without it');
     const row = (await request('GET', base, undefined, t.owner.token)).data.conversations[0];
     assert.deepStrictEqual([row.latestFromSeller, row.waitingSince, row.latestPreview], [true, null, 'So sorry for the delay, it was dispatched on the 23rd. Here is the label:']);
     const { rows } = await pool.query(`SELECT kind, subject_type, subject_id FROM member_activity WHERE connection_id = $1 AND kind = 'inbox.replied'`, [t.connection.id]);

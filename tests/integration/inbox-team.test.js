@@ -99,7 +99,7 @@ function stubEbay(state) {
 const notificationsOf = async (userId, kind) => (await pool.query('SELECT title, body, url, subject_id FROM notifications WHERE user_id = $1 AND kind = $2 ORDER BY created_at', [userId, kind])).rows;
 const activityOf = async (actorId, kind) => (await pool.query('SELECT subject_type, subject_id, title, detail FROM member_activity WHERE actor_user_id = $1 AND kind = $2 ORDER BY created_at', [actorId, kind])).rows;
 
-test('a buyer conversation is team work: given to someone with the Inbox there (who is told), notes only the team sees, Open / Waiting / Done, each on the doer\'s record', async () => {
+test('a buyer conversation carries notes only the team sees, and answering it is on the doer\'s record with how long the buyer waited', async () => {
   const t = await setup();
   const state = { buyers: [conv('c1', t.seller)], ebay: [conv('e1', t.seller, { type: 'FROM_EBAY', text: 'Notice' })], threads: { c1: [{ messageId: 'c1-last', body: 'Where is my parcel?', sender: 'and_630713', recipient: t.seller, createdAt: ago(10), media: [] }] } };
   const calls = stubEbay(state);
@@ -108,18 +108,10 @@ test('a buyer conversation is team work: given to someone with the Inbox there (
 
   const opened = await request('GET', `${base}/c1`, undefined, t.sara.token);
   assert.strictEqual(opened.status, 200, JSON.stringify(opened.data));
-  assert.deepStrictEqual(opened.data.team.map((p) => p.id).sort(), [t.owner.id, t.sara.id].sort(), 'the owner and the members with the Inbox here');
-  assert.deepStrictEqual([opened.data.notes, opened.data.work.status], [[], 'open']);
-
-  // Given to someone: only people with the Inbox on this account.
-  assert.strictEqual((await request('POST', `${base}/c1/assign`, { userId: t.tom.id }, t.owner.token)).status, 400, 'Tom has no Inbox here');
-  const given = await request('POST', `${base}/c1/assign`, { userId: t.sara.id }, t.owner.token);
-  assert.deepStrictEqual([given.status, given.data.assignee?.name], [200, 'Sara']);
-  assert.match((await notificationsOf(t.sara.id, 'inbox.assigned'))[0].title, /gave you and_630713's conversation/);
-  assert.strictEqual((await activityOf(t.owner.id, 'inbox.assigned')).length, 1);
-  const row = (await request('GET', base, undefined, t.owner.token)).data.conversations.find((c) => c.conversationId === 'c1');
-  assert.strictEqual(row.assignee.name, 'Sara');
-  assert.strictEqual((await request('POST', `${base}/e1/assign`, { userId: t.sara.id }, t.owner.token)).status, 400, "eBay's own messages aren't team work");
+  assert.deepStrictEqual(opened.data.notes, []);
+  assert.strictEqual((await request('POST', `${base}/c1/assign`, { userId: t.sara.id }, t.owner.token)).status, 404, 'no giving conversations to people');
+  assert.strictEqual((await request('POST', `${base}/c1/work`, { status: 'done' }, t.owner.token)).status, 404, 'no Open / Waiting / Done');
+  assert.strictEqual((await request('POST', `${base}/e1/notes`, { body: 'x' }, t.owner.token)).status, 400, "eBay's own messages take no notes");
 
   // Notes: the team's only; its writer or the owner deletes one.
   const note = await request('POST', `${base}/c1/notes`, { body: 'Supplier says it ships Friday' }, t.sara.token);
@@ -135,22 +127,16 @@ test('a buyer conversation is team work: given to someone with the Inbox there (
   assert.strictEqual((await request('POST', `${base}/c1/notes`, { body: '   ' }, t.sara.token)).status, 400);
   assert.strictEqual(calls.sent.length, 0, 'nothing went to the buyer');
 
-  // Sara answers (the buyer had waited about ten minutes), then marks it done; done twice is once.
+  // Sara answers (the buyer had waited about ten minutes).
   const replied = await request('POST', `${base}/c1/messages`, { text: 'It ships Friday, sorry for the wait.' }, t.sara.token);
   assert.strictEqual(replied.status, 201, JSON.stringify(replied.data));
   const [reply] = await activityOf(t.sara.id, 'inbox.replied');
   assert.ok(reply.detail.waitedMinutes >= 9 && reply.detail.waitedMinutes <= 11, `waited ${reply.detail.waitedMinutes}`);
-  assert.strictEqual((await request('POST', `${base}/c1/work`, { status: 'done' }, t.sara.token)).status, 200);
-  await request('POST', `${base}/c1/work`, { status: 'done' }, t.sara.token);
-  assert.strictEqual((await activityOf(t.sara.id, 'inbox.resolved')).length, 1);
-  const done = await request('GET', `${base}/c1`, undefined, t.owner.token);
-  assert.deepStrictEqual([done.data.work.status, done.data.work.by.name], ['done', 'Sara']);
-  assert.strictEqual((await request('POST', `${base}/c1/work`, { status: 'closed' }, t.sara.token)).status, 400);
 
-  // Her Team page: buyers answered, queries resolved, messages sent, her reply time; the log opens the chat.
+  // Her Team page: buyers answered, messages sent, her reply time; the log opens the chat.
   const overview = await request('GET', `/api/team/members/${t.sara.id}/overview?range=today&tz=UTC`, undefined, t.owner.token);
   assert.strictEqual(overview.status, 200, JSON.stringify(overview.data));
-  assert.deepStrictEqual([overview.data.totals.inbox_answered, overview.data.totals.inbox_resolved, overview.data.totals.inbox_sent], [1, 1, 1]);
+  assert.deepStrictEqual([overview.data.totals.inbox_answered, overview.data.totals.inbox_sent, 'inbox_resolved' in overview.data.totals], [1, 1, false]);
   assert.ok(overview.data.replyTime.median >= 9 && overview.data.replyTime.count === 1);
   const log = await request('GET', `/api/team/members/${t.sara.id}/activity?range=today&tz=UTC&kind=inbox_answered`, undefined, t.owner.token);
   assert.deepStrictEqual(log.data.items.map((i) => [i.kind, i.subjectType, i.subjectId, i.title, i.connectionId]), [['inbox.replied', 'conversation', 'c1', 'and_630713', t.connection.id]]);
@@ -164,7 +150,6 @@ test("eBay's push of a buyer's message: read in at once, kept so opening reads n
   await inboxService.sync(t.connection.id, t.owner.id);
   assert.strictEqual((await notificationsOf(t.owner.id, 'inbox.message')).length, 0, 'the first read is history, not news');
   await request('GET', `${base}/c1`, undefined, t.owner.token);
-  await request('POST', `${base}/c1/work`, { status: 'done' }, t.owner.token);
 
   // The buyer writes again; Sara is reading that conversation; the owner turned eBay pushes off.
   await pool.query(`INSERT INTO notification_settings (user_id, ebay) VALUES ($1, 'none')`, [t.owner.id]);
@@ -194,7 +179,6 @@ test("eBay's push of a buyer's message: read in at once, kept so opening reads n
   assert.strictEqual(told[0].url, `/accounts/${t.connection.id}/inbox?e=${t.connection.id}~c1`);
 
   const reopened = await request('GET', `${base}/c1`, undefined, t.sara.token);
-  assert.strictEqual(reopened.data.work.status, 'open', 'the buyer wrote again');
   assert.deepStrictEqual(reopened.data.messages.map((m) => m.id), ['c1-last', 'm-2', 'm-3'], 'the pushed messages were kept');
   assert.strictEqual(calls.thread, 1, 'opening it read nothing more from eBay');
   const readNow = await pool.query(`SELECT read_at FROM notifications WHERE user_id = $1 AND kind = 'inbox.message'`, [t.sara.id]);

@@ -53,11 +53,12 @@ function rejectCancellation(accessToken, cancelId, marketplaceId) {
 
 // --- returns ---------------------------------------------------------------
 
-function searchReturns(accessToken, { orderId, states } = {}, marketplaceId) {
+// `states`: eBay's return_state filter (ALL_OPEN: every return eBay hasn't closed).
+function searchReturns(accessToken, { orderId, states, limit = 50 } = {}, marketplaceId) {
   const params = new URLSearchParams();
   if (orderId) params.set('order_id', orderId);
   if (states) params.set('return_state', states);
-  params.set('limit', '50');
+  params.set('limit', String(limit));
   return call(accessToken, 'GET', `/return/search?${params.toString()}`, undefined, marketplaceId);
 }
 
@@ -104,10 +105,10 @@ function sendReturnMessage(accessToken, returnId, content, marketplaceId) {
 
 // --- item-not-received inquiries --------------------------------------------
 
-function searchInquiries(accessToken, { orderId } = {}, marketplaceId) {
+function searchInquiries(accessToken, { orderId, limit = 50 } = {}, marketplaceId) {
   const params = new URLSearchParams();
   if (orderId) params.set('order_id', orderId);
-  params.set('limit', '50');
+  params.set('limit', String(limit));
   return call(accessToken, 'GET', `/inquiry/search?${params.toString()}`, undefined, marketplaceId);
 }
 

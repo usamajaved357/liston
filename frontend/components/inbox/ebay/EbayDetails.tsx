@@ -41,7 +41,7 @@ function useOpenCases(connectionId: string, orderId: string | null) {
       .then((c: OrderCases) => {
         if (!live || c.unavailable) return;
         setCases([
-          ...c.returns.filter((r) => !r.closed).map((r) => ({ key: `r${r.id}`, label: "Return open", respondBy: r.respondBy })),
+          ...c.returns.filter((r) => !r.closed && !r.refunded).map((r) => ({ key: `r${r.id}`, label: "Return open", respondBy: r.respondBy })),
           ...c.inquiries.filter((r) => !r.closed).map((r) => ({ key: `i${r.id}`, label: "Item not received", respondBy: r.respondBy })),
           ...c.disputes.filter((r) => !r.closed).map((r) => ({ key: `d${r.id}`, label: "Payment dispute", respondBy: r.respondBy })),
         ]);

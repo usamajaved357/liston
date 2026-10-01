@@ -138,7 +138,7 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
   const showListings = has("listings") || any(LISTING_KEYS);
   const showHunting = has("hunting") || has("hunting_review") || Boolean(h && (h.hunter.hunted || h.previousHunter.hunted)) || any(["hunted"]);
   const showReviews = has("hunting_review") || Boolean(h && (h.reviewer.reviewed || h.previousReviewer.reviewed));
-  const INBOX_KEYS: TeamMetricKey[] = ["inbox_answered", "inbox_resolved", "inbox_sent"];
+  const INBOX_KEYS: TeamMetricKey[] = ["inbox_answered", "inbox_sent"];
   const showInbox = has("inbox") || any(INBOX_KEYS);
   const time = data.time;
   const prevTime = data.previousTime;
@@ -149,14 +149,13 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
   // placed and shipped, listings drafted and published, products hunted and
   // (decided by a reviewer, on the day decided) approved and rejected, and
   // converting (their finds with a sale that day).
-  type ChartKey = "supplier_orders" | "dispatched" | "cases" | "inbox_answered" | "inbox_resolved" | "drafted" | "published" | "hunted" | "approved" | "rejected" | "converting";
+  type ChartKey = "supplier_orders" | "dispatched" | "cases" | "inbox_answered" | "drafted" | "published" | "hunted" | "approved" | "rejected" | "converting";
   type OutcomeKey = "approved" | "rejected" | "converting";
   const isOutcome = (k: ChartKey): k is OutcomeKey => k === "approved" || k === "rejected" || k === "converting";
   const CHART: { key: ChartKey; label: string; area: "orders" | "listings" | "hunting" | "inbox" | "cases"; log?: TeamMetricKey }[] = [
     { key: "supplier_orders", label: "Orders placed", area: "orders", log: "supplier_orders" },
     { key: "dispatched", label: "Orders shipped", area: "orders", log: "dispatched" },
     { key: "inbox_answered", label: "Buyers answered", area: "inbox", log: "inbox_answered" },
-    { key: "inbox_resolved", label: "Buyer queries resolved", area: "inbox", log: "inbox_resolved" },
     { key: "cases", label: "Cases handled", area: "cases", log: "cases" },
     { key: "drafted", label: "Listings drafted", area: "listings", log: "drafted" },
     { key: "published", label: "Listings published", area: "listings", log: "published" },
@@ -234,7 +233,6 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
             headlineMetric="inbox_answered"
             onOpenLog={onOpenLog}
             rows={[
-              { label: "Queries resolved", value: fullNumber(t.inbox_resolved), metric: "inbox_resolved", tone: t.inbox_resolved ? "good" : "plain", hint: "Conversations marked Done" },
               { label: "Messages sent", value: fullNumber(t.inbox_sent), metric: "inbox_sent" },
               {
                 label: "Typical reply time",

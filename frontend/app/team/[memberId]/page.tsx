@@ -41,7 +41,6 @@ const EXTRA_KINDS: { key: string; label: string }[] = [
   { key: "order.supplier_updated", label: "Supplier order updates" },
   { key: "order.note", label: "Notes" },
   { key: "order.archived", label: "Archived orders" },
-  { key: "inbox.assigned", label: "Conversations given to someone" },
   { key: "inbox.noted", label: "Notes on conversations" },
   { key: "listing.checked", label: "Deeper checks" },
   { key: "listing.draft_deleted", label: "Deleted drafts" },
@@ -198,13 +197,12 @@ function subjectLink(item: MemberActivityItem): string | null {
   return null;
 }
 
-// The line under an action: a note's words, what a buyer conversation came to (how long the buyer had waited, who it went to), else its title.
+// The line under an action: a note's words, what a buyer conversation came to (how long the buyer had waited), else its title.
 function activityLine(i: MemberActivityItem): string | null {
   if (i.kind === "order.note" && typeof i.detail.text === "string") return `\u201c${i.detail.text}\u201d`;
   if (i.subjectType === "conversation") {
     const waited = typeof i.detail.waitedMinutes === "number" ? i.detail.waitedMinutes : null;
     if (i.kind === "inbox.replied" && waited !== null) return `The buyer had waited ${waitText(waited)}`;
-    if (i.kind === "inbox.assigned" && typeof i.detail.toName === "string") return `To ${i.detail.toName}`;
     return null;
   }
   return i.title;

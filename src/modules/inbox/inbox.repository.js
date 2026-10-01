@@ -71,19 +71,14 @@ const FOLDERS = {
 /**
  * A page of conversations on these accounts, newest first. `folder`:
  * buyers, ebay, archived, all; `show`: all, unread, waiting (the buyer
- * spoke last), mine (assigned to `userId`); `q`: a buyer, an item number,
- * or words in the conversation.
+ * spoke last); `q`: a buyer, an item number, or words in the conversation.
  */
-async function listConversations(connectionIds, { folder = 'buyers', show = 'all', q = '', userId = null, before = null, limit = 50 } = {}) {
+async function listConversations(connectionIds, { folder = 'buyers', show = 'all', q = '', before = null, limit = 50 } = {}) {
   if (!connectionIds.length) return [];
   const params = [connectionIds, limit];
   const where = [FOLDERS[folder] || FOLDERS.buyers];
   if (show === 'unread') where.push('c.unread_count > 0');
-  if (show === 'waiting') where.push(`c.type = 'FROM_MEMBERS' AND NOT c.latest_from_seller AND c.work_status <> 'done'`);
-  if (show === 'mine' && userId) {
-    params.push(userId);
-    where.push(`c.assigned_to = $${params.length}`);
-  }
+  if (show === 'waiting') where.push(`c.type = 'FROM_MEMBERS' AND NOT c.latest_from_seller`);
   const words = String(q || '').trim();
   if (words) {
     params.push(`%${words.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`, words);
@@ -97,8 +92,7 @@ async function listConversations(connectionIds, { folder = 'buyers', show = 'all
     where.push(`c.latest_at < $${params.length}`);
   }
   const { rows } = await query(
-    `SELECT c.*, u.name AS assignee_name, u.email AS assignee_email
-       FROM ebay_conversations c LEFT JOIN users u ON u.id = c.assigned_to
+    `SELECT c.* FROM ebay_conversations c
       WHERE c.connection_id = ANY($1::uuid[]) AND ${where.join(' AND ')}
       ORDER BY c.latest_at DESC NULLS LAST, c.conversation_id LIMIT $2`,
     params
@@ -113,7 +107,7 @@ async function counts(connectionIds) {
     `SELECT
        count(*) FILTER (WHERE type = 'FROM_MEMBERS' AND status = 'ACTIVE' AND unread_count > 0)::int AS buyers,
        count(*) FILTER (WHERE type = 'FROM_EBAY' AND status = 'ACTIVE' AND unread_count > 0)::int AS ebay,
-       count(*) FILTER (WHERE type = 'FROM_MEMBERS' AND status = 'ACTIVE' AND NOT latest_from_seller AND work_status <> 'done')::int AS waiting,
+       count(*) FILTER (WHERE type = 'FROM_MEMBERS' AND status = 'ACTIVE' AND NOT latest_from_seller)::int AS waiting,
        count(*) FILTER (WHERE status = 'ARCHIVE')::int AS archived
      FROM ebay_conversations WHERE connection_id = ANY($1::uuid[])`,
     [connectionIds]
@@ -123,9 +117,7 @@ async function counts(connectionIds) {
 
 async function findConversation(connectionId, conversationId) {
   const { rows } = await query(
-    `SELECT c.*, u.name AS assignee_name, u.email AS assignee_email, w.name AS work_status_by_name, w.email AS work_status_by_email
-       FROM ebay_conversations c LEFT JOIN users u ON u.id = c.assigned_to LEFT JOIN users w ON w.id = c.work_status_by
-      WHERE c.connection_id = $1 AND c.conversation_id = $2`,
+    `SELECT c.* FROM ebay_conversations c WHERE c.connection_id = $1 AND c.conversation_id = $2`,
     [connectionId, conversationId]
   );
   return rows[0] || null;
@@ -172,14 +164,17 @@ async function updateConversation(connectionId, conversationId, fields) {
   await query(`UPDATE ebay_conversations SET ${sets.join(', ')} WHERE connection_id = $1 AND conversation_id = $2`, params);
 }
 
-/** These buyers' orders on this account: order id, buyer (lower case), eBay's cancel status and the items, newest first. */
+/** These buyers' orders on this account: order id, buyer (lower case), eBay's cancel status, the items and whether any money went back to the buyer (eBay's finances), newest first. */
 async function orderFactsByBuyers(connectionId, buyers) {
   const names = [...new Set(buyers.filter(Boolean).map((b) => String(b).toLowerCase()))];
   if (!names.length) return [];
   const { rows } = await query(
-    `SELECT order_id, lower(data->>'buyerUserId') AS buyer, data->>'cancelStatus' AS cancel_status,
-            ARRAY(SELECT li->>'itemId' FROM jsonb_array_elements(coalesce(data->'lineItems', '[]'::jsonb)) li) AS item_ids
-       FROM ebay_orders WHERE connection_id = $1 AND lower(data->>'buyerUserId') = ANY($2) ORDER BY created_at DESC`,
+    `SELECT o.order_id, lower(o.data->>'buyerUserId') AS buyer, o.data->>'cancelStatus' AS cancel_status,
+            ARRAY(SELECT li->>'itemId' FROM jsonb_array_elements(coalesce(o.data->'lineItems', '[]'::jsonb)) li) AS item_ids,
+            coalesce(f.refunds, 0) > 0 AS refunded
+       FROM ebay_orders o
+       LEFT JOIN ebay_order_finances f ON f.connection_id = o.connection_id AND f.order_id = o.order_id
+      WHERE o.connection_id = $1 AND lower(o.data->>'buyerUserId') = ANY($2) ORDER BY o.created_at DESC`,
     [connectionId, names]
   );
   return rows;
@@ -308,31 +303,6 @@ async function keepPushed(connectionId, conversationId, m) {
   return rowCount > 0;
 }
 
-/** Gives a conversation to someone (null: no one). */
-async function assign(connectionId, conversationId, userId) {
-  await query(`UPDATE ebay_conversations SET assigned_to = $3, assigned_at = CASE WHEN $3::uuid IS NULL THEN NULL ELSE now() END WHERE connection_id = $1 AND conversation_id = $2`, [
-    connectionId,
-    conversationId,
-    userId || null,
-  ]);
-}
-
-/** Where a conversation stands for the team (open, waiting, done), and who said so. */
-async function setWorkStatus(connectionId, conversationId, status, userId) {
-  await query(`UPDATE ebay_conversations SET work_status = $3, work_status_at = now(), work_status_by = $4 WHERE connection_id = $1 AND conversation_id = $2`, [connectionId, conversationId, status, userId || null]);
-}
-
-/** The buyer wrote again: waiting or done conversations are open again (by no one). The ids reopened. */
-async function reopen(connectionId, conversationIds) {
-  if (!conversationIds.length) return [];
-  const { rows } = await query(
-    `UPDATE ebay_conversations SET work_status = 'open', work_status_at = now(), work_status_by = NULL
-      WHERE connection_id = $1 AND conversation_id = ANY($2) AND work_status <> 'open' RETURNING conversation_id`,
-    [connectionId, conversationIds]
-  );
-  return rows.map((r) => r.conversation_id);
-}
-
 /** A conversation's notes (deleted ones left out), oldest first, with who wrote each. */
 async function notesOf(connectionId, conversationId) {
   const { rows } = await query(
@@ -375,23 +345,15 @@ async function cancelRequestBuyers(connectionId, statuses) {
   return rows.map((r) => r.buyer);
 }
 
-/** These buyers' conversations about an item on this account, in the inbox or the archive, with who has each. */
+/** These buyers' conversations about an item on this account, in the inbox or the archive. */
 async function buyerConversations(connectionId, buyers) {
   const names = [...new Set(buyers.filter(Boolean).map((b) => String(b).toLowerCase()))];
   if (!names.length) return [];
   const { rows } = await query(
-    `SELECT c.*, u.name AS assignee_name, u.email AS assignee_email
-       FROM ebay_conversations c LEFT JOIN users u ON u.id = c.assigned_to
+    `SELECT c.* FROM ebay_conversations c
       WHERE c.connection_id = $1 AND c.type = 'FROM_MEMBERS' AND c.status IN ('ACTIVE', 'ARCHIVE') AND c.reference_id IS NOT NULL AND lower(c.other_party) = ANY($2)`,
     [connectionId, names]
   );
-  return rows;
-}
-
-/** People by id: { id, name, email } (for names beside their work). */
-async function peopleByIds(ids) {
-  if (!ids.length) return [];
-  const { rows } = await query(`SELECT id, name, email FROM users WHERE id = ANY($1::uuid[])`, [ids]);
   return rows;
 }
 
@@ -442,14 +404,10 @@ module.exports = {
   forgetMember,
   addSent,
   keepPushed,
-  assign,
-  setWorkStatus,
-  reopen,
   notesOf,
   addNote,
   findNote,
   deleteNote,
-  peopleByIds,
   buyersOfOrders,
   cancelRequestBuyers,
   buyerConversations,

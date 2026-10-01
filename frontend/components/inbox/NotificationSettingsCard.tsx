@@ -103,7 +103,6 @@ export function NotificationSettingsCard() {
                 {accounts.length === 0 && <span className="text-[12px] text-[var(--color-muted)]">No accounts to choose.</span>}
               </div>
             )}
-            <p className="mt-1.5 text-[11.5px] text-[var(--color-muted)]">A conversation assigned to you is always sent to you.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex cursor-pointer items-center gap-2 text-[12.5px] font-medium text-[var(--color-ink)]">

@@ -629,7 +629,6 @@ export type TeamMetricKey =
   | "hunted"
   | "hunts_reviewed"
   | "inbox_answered"
-  | "inbox_resolved"
   | "inbox_sent";
 export type TeamMetrics = Record<TeamMetricKey, number>;
 export type TeamRange = "today" | "yesterday" | "7d" | "30d" | "this_month" | "last_month" | "custom";
@@ -925,6 +924,8 @@ export interface OrderReturn {
   tracking: string | null;
   carrier: string | null;
   closed: boolean;
+  /** The seller has refunded it (in full or in part); eBay may not have closed it yet. */
+  refunded?: boolean;
 }
 
 export interface OrderInquiry {
@@ -3156,7 +3157,7 @@ export const inboxApi = {
 
 export type EbayFolder = "buyers" | "ebay" | "archived" | "all";
 // "cases": every buyer conversation with an open return, item-not-received request, payment dispute or cancellation request.
-export type EbayShow = "all" | "unread" | "waiting" | "mine" | "cases";
+export type EbayShow = "all" | "unread" | "waiting" | "cases";
 // One conversation in a list: a buyer's (FROM_MEMBERS) or eBay's own (FROM_EBAY).
 export interface EbayConversationRow {
   conversationId: string;
@@ -3174,8 +3175,6 @@ export interface EbayConversationRow {
   latestFromSeller: boolean;
   // When the buyer started waiting for an answer (they spoke last).
   waitingSince: string | null;
-  assignee: { id: string; name: string } | null;
-  workStatus: "open" | "waiting" | "done";
   labels: string[];
   // An open return, item-not-received request or payment dispute on the buyer's order for the item, or a cancellation they asked for (Orders access only).
   issue: { kind: "return" | "inquiry" | "dispute" | "cancel"; label: string; respondBy: string | null; orderId: string | null } | null;
@@ -3245,7 +3244,6 @@ export interface TeamPerson {
   id: string;
   name: string;
 }
-export type EbayWorkStatus = "open" | "waiting" | "done";
 // A note on a buyer's conversation that only the team sees.
 export interface EbayNote {
   id: string;
@@ -3260,10 +3258,6 @@ export interface EbayThread {
   conversation: EbayConversationRow;
   messages: EbayMessage[];
   notes: EbayNote[];
-  // Who it can be given to: the owner and the members with the Inbox on this account.
-  team: TeamPerson[];
-  // Where it stands for the team, and who said so.
-  work: { status: EbayWorkStatus; at: string | null; by: TeamPerson | null };
   context: {
     item: { itemId: string; title: string | null; image: string | null; price: { amount: number; currency: string } | null; url: string | null; ebayUrl: string; insights: EbayListingInsights | null } | null;
     listing: ListonCard | null;
@@ -3322,11 +3316,7 @@ export const ebayInboxApi = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  // The team's working: who has it (null: no one), where it stands, notes only the team sees.
-  assign: (connectionId: string, conversationId: string, userId: string | null) =>
-    request<{ assignee: TeamPerson | null }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/assign`, { method: "POST", body: JSON.stringify({ userId }) }),
-  setWork: (connectionId: string, conversationId: string, status: EbayWorkStatus) =>
-    request<{ status: EbayWorkStatus }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/work`, { method: "POST", body: JSON.stringify({ status }) }),
+  // Notes only the team sees.
   addNote: (connectionId: string, conversationId: string, body: string) =>
     request<{ note: EbayNote }>(`/api/connections/${connectionId}/inbox/${encodeURIComponent(conversationId)}/notes`, { method: "POST", body: JSON.stringify({ body }) }),
   deleteNote: (connectionId: string, conversationId: string, noteId: string) =>

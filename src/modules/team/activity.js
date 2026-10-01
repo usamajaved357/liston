@@ -36,6 +36,7 @@ const KINDS = {
   'hunt.removed': 'Removed a hunted product',
   'inbox.replied': 'Answered a buyer',
   'inbox.messaged': 'Messaged a buyer',
+  // No longer recorded (the Inbox's Open / Waiting / Done and Assign went, 2 Oct 2026); kept so earlier entries still read.
   'inbox.resolved': 'Resolved a buyer query',
   'inbox.assigned': 'Gave a conversation to someone',
   'inbox.noted': 'Added a note to a conversation',
@@ -84,9 +85,8 @@ const METRICS = [
   { key: 'hunted', label: 'Products hunted', kinds: ['hunt.added'], distinct: true },
   { key: 'hunts_reviewed', label: 'Hunted products reviewed', kinds: ['hunt.approved', 'hunt.rejected', 'hunt.sent_back'], distinct: true },
   // The eBay Inbox: buyers answered (a conversation once however many
-  // messages went), queries marked done, and every message sent.
+  // messages went) and every message sent.
   { key: 'inbox_answered', label: 'Buyers answered', kinds: ['inbox.replied', 'inbox.messaged'], distinct: true },
-  { key: 'inbox_resolved', label: 'Buyer queries resolved', kinds: ['inbox.resolved'], distinct: true },
   { key: 'inbox_sent', label: 'Messages sent to buyers', kinds: ['inbox.replied', 'inbox.messaged'], distinct: false },
 ];
 

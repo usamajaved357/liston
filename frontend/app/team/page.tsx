@@ -30,7 +30,6 @@ const TODAY_WORDS: [TeamMetricKey, string, string][] = [
   ["hunted", "product hunted", "products hunted"],
   ["hunts_reviewed", "hunt reviewed", "hunts reviewed"],
   ["inbox_answered", "buyer answered", "buyers answered"],
-  ["inbox_resolved", "query resolved", "queries resolved"],
 ];
 function todayLine(member: TeamMember): string | null {
   const t = member.today;

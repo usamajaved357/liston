@@ -171,7 +171,8 @@ async function send(res, file, variant) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', file.purpose === 'ebay' ? 'public, max-age=86400' : 'private, max-age=3600');
   const disposition = `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`;
-  const direct = await storage.directUrl(key, { seconds: 600, filename: inline ? file.name : null, contentType: mime }).catch(() => null);
+  // An eBay attachment's bytes come from here, never a redirect: eBay fetches the link itself, and a stored link that runs out would break.
+  const direct = file.purpose === 'ebay' ? null : await storage.directUrl(key, { seconds: 600, filename: inline ? file.name : null, contentType: mime }).catch(() => null);
   if (direct) return res.redirect(302, direct);
   const found = await storage.read(key);
   if (!found) return res.status(404).json({ error: 'Not found' });
@@ -185,6 +186,11 @@ async function send(res, file, variant) {
   found.stream.pipe(res);
 }
 
+/** A file's bytes (a Buffer), or null when they're gone. */
+async function bytesOf(file) {
+  return storage.readBuffer(file.storage_key);
+}
+
 /** Deletes eBay attachments past their 30 days, and their bytes. */
 async function removeExpired() {
   const expired = await filesRepository.findExpired();
@@ -196,4 +202,4 @@ async function removeExpired() {
   return expired.length;
 }
 
-module.exports = { upload, get, shape, signedUrl, verify, publicUrl, send, removeExpired, cleanName, FileError, MAX_BYTES, IMAGES };
+module.exports = { upload, get, shape, signedUrl, verify, publicUrl, send, bytesOf, removeExpired, cleanName, FileError, MAX_BYTES, IMAGES };

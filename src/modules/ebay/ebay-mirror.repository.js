@@ -144,7 +144,7 @@ async function upsertAccountCharges(connectionId, rows) {
 
 /**
  * An account's charges from start to end (both included) in its own
- * currency: [{ kind, feeType, amount }]. eBay bills the eBay account, not
+ * currency: [{ kind, feeType, amount, chargedAt, memo }]. eBay bills the eBay account, not
  * the site, so every connection
  * of one account (its UK and Australian sites, say) reads the same charges:
  * each counts only those in its own currency, and one also seen by an older
@@ -153,7 +153,7 @@ async function upsertAccountCharges(connectionId, rows) {
  */
 async function loadAccountCharges(connectionId, currency, start, end) {
   const result = await query(
-    `SELECT c.kind, c.fee_type, c.amount, c.charged_at FROM ebay_account_charges c
+    `SELECT c.kind, c.fee_type, c.amount, c.charged_at, c.memo FROM ebay_account_charges c
      JOIN connections me ON me.id = c.connection_id
      WHERE c.connection_id = $1 AND c.currency = $2 AND c.charged_at >= $3 AND c.charged_at <= $4
        AND NOT EXISTS (
@@ -163,7 +163,7 @@ async function loadAccountCharges(connectionId, currency, start, end) {
        )`,
     [connectionId, currency, start, end]
   );
-  return result.rows.map((r) => ({ kind: r.kind, feeType: r.fee_type, amount: Number(r.amount), chargedAt: r.charged_at }));
+  return result.rows.map((r) => ({ kind: r.kind, feeType: r.fee_type, amount: Number(r.amount), chargedAt: r.charged_at, memo: r.memo }));
 }
 
 async function pruneAccountChargesBefore(connectionId, before) {
