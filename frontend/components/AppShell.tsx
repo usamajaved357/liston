@@ -121,7 +121,7 @@ export function AppShell({ children, header, subheader, role, isAdmin, fill = fa
             <NavItem
               href="/admin/usage"
               active={pathname === "/admin/usage"}
-              label="eBay usage"
+              label="API usage"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                   <path d="M4 19h16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />

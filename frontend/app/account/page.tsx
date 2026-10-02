@@ -249,7 +249,15 @@ export default function AccountPage() {
         <div className="card">
           {/* Who you are here, at a glance. */}
           <div className="flex flex-col gap-4 rounded-t-[var(--radius-card)] border-b border-[var(--color-line)] bg-[radial-gradient(120%_140%_at_0%_0%,var(--color-primary-soft)_0%,transparent_55%)] px-5 py-5 sm:flex-row sm:items-center">
-            <AvatarUploader avatarUrl={user.avatar_url} onChange={(avatarUrl) => setUser((u) => (u ? { ...u, avatar_url: avatarUrl } : u))} />
+            <AvatarUploader
+              avatarUrl={user.avatar_url}
+              onChange={(avatarUrl) => {
+                // The saved copy too, so the sidebar's foot shows the new photo at once.
+                const next = { ...user, avatar_url: avatarUrl };
+                setUser(next);
+                cacheUser(next);
+              }}
+            />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[17px] font-semibold tracking-tight text-[var(--color-ink)]">{user.name || user.email.split("@")[0]}</p>
               <p className="truncate text-[12.5px] text-[var(--color-muted)]">{user.email}</p>
