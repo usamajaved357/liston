@@ -13,8 +13,8 @@ import { landingPathForConnection, sectionAllowed } from "@/lib/permissions";
 
 // The account rail: a slim column to the left of the sidebar, the way Slack
 // shows workspaces. At the top the team this tab is in, which opens the
-// switch to the person's other teams (with their unread); under it All
-// accounts (the team's Overview, or a member's Dashboard), each eBay
+// switch to the person's other workspaces (with their unread); under it
+// Home (the workspace's Overview, or a member's Dashboard), each eBay
 // account in the team with its name, site and unread messages, and for an
 // owner a tile to connect another. One click goes anywhere; an account keeps
 // the section you're in (Orders stays Orders) where you can open it. Shown or
@@ -303,14 +303,14 @@ export function AccountRail() {
       <TeamSwitch />
 
       <div className="flex w-full flex-1 flex-col items-center gap-3 overflow-y-auto overscroll-contain pb-4 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {/* All accounts: the team's Overview (a member's Dashboard). */}
+        {/* Home: the workspace's Overview of every account (a member's Dashboard). */}
         <p className={`${CAPTION} -mb-1`}>Accounts</p>
         <Link
           href={home}
           onClick={hide}
-          aria-label={role === "member" ? "Dashboard, your accounts" : "All accounts"}
+          aria-label="Home"
           aria-current={!here ? "page" : undefined}
-          {...bind(role === "member" ? "Dashboard" : "All accounts", role === "member" ? `Your accounts in ${team?.name || "this workspace"}` : `${team?.name || "This workspace"} · Overview`)}
+          {...bind("Home", role === "member" ? `Your accounts in ${team?.name || "this workspace"}` : `Every account in ${team?.name || "this workspace"}`)}
           className={ITEM}
         >
           <Here on={!here} />
@@ -321,14 +321,11 @@ export function AccountRail() {
                 : "bg-[var(--color-panel)] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)] group-hover:text-[var(--color-ink)] group-hover:ring-[var(--color-line-strong)]"
             }`}
           >
-            <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
-              <rect x="3.5" y="3.5" width="7" height="8" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="13.5" y="3.5" width="7" height="5" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="13.5" y="11.5" width="7" height="9" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="3.5" y="14.5" width="7" height="6" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+            <svg viewBox="0 0 24 24" fill="none" className="h-[19px] w-[19px]" aria-hidden>
+              <path d="M4 10.5L12 4l8 6.5V19a1.5 1.5 0 01-1.5 1.5H15v-5.5a1 1 0 00-1-1h-4a1 1 0 00-1 1v5.5H5.5A1.5 1.5 0 014 19v-8.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
             </svg>
           </span>
-          <span className={NAME(!here)}>{role === "member" ? "Dashboard" : "All"}</span>
+          <span className={NAME(!here)}>Home</span>
         </Link>
 
         {/* The team's eBay accounts (a member's, the ones they work on). */}

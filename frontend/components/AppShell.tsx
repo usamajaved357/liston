@@ -126,6 +126,8 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
               }
             />
           )}
+          {/* Liston's own admin pages, apart from the workspace's. */}
+          {isAdmin && <p className="mb-1 mt-5 px-2.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Admin</p>}
           {isAdmin && (
             <NavItem
               href="/admin/usage"

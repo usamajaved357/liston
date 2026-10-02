@@ -11,8 +11,8 @@ import { AccountTile, initials, ROLE_LABEL, useRailActions } from "@/components/
 
 // Find an account or a team by name: a box over the page, opened from the
 // rail's Search, the search button at the top of the sidebar, or Ctrl/Cmd+K
-// anywhere. Every account in the team with its full name, eBay site and
-// unread messages, All accounts, every team the person is in, and Connect
+// anywhere. Every account in the workspace with its full name, eBay site and
+// unread messages, Home, every workspace the person is in, and Connect
 // for an owner; typing narrows them (name, site or currency), the arrow keys
 // move, Enter opens. An account keeps the section you're in, as on the rail.
 
@@ -77,8 +77,8 @@ export function AccountFinder() {
   const member = team?.role === "member";
 
   const accountRows: Row[] = [
-    ...(has("All accounts", "Overview", "Dashboard", team?.name)
-      ? [{ key: "home", kind: "home" as const, title: member ? "Dashboard" : "All accounts", sub: member ? "Your accounts in this workspace" : "Every account together, the workspace's Overview" }]
+    ...(has("Home", "All accounts", "Overview", "Dashboard", team?.name)
+      ? [{ key: "home", kind: "home" as const, title: "Home", sub: member ? "Your accounts in this workspace" : "Every account together, the workspace's Overview" }]
       : []),
     ...connections
       .filter((c) => has(c.label, c.marketplace?.name, c.marketplace?.label, c.marketplace?.currency, c.marketplace?.countryName))
@@ -132,11 +132,8 @@ export function AccountFinder() {
       return (
         <button key={row.key} type="button" {...common} className={rowClass(index)}>
           <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/20" aria-hidden>
-            <svg viewBox="0 0 24 24" fill="none" className="h-[17px] w-[17px]">
-              <rect x="3.5" y="3.5" width="7" height="8" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="13.5" y="3.5" width="7" height="5" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="13.5" y="11.5" width="7" height="9" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="3.5" y="14.5" width="7" height="6" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+            <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]">
+              <path d="M4 10.5L12 4l8 6.5V19a1.5 1.5 0 01-1.5 1.5H15v-5.5a1 1 0 00-1-1h-4a1 1 0 00-1 1v5.5H5.5A1.5 1.5 0 014 19v-8.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
             </svg>
           </span>
           <span className="min-w-0 flex-1">
