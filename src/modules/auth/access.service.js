@@ -57,6 +57,7 @@ async function notifyAdmins(user) {
     const { sent } = await emailService.sendAccessRequestEmail(to, {
       applicantEmail: user.email,
       applicantName: user.name,
+      teamName: user.team_name || null,
       note: user.access_note,
       emailVerified: Boolean(user.emailVerified ?? user.email_verified_at),
       approveLink,
@@ -110,8 +111,9 @@ async function decide(token) {
 // Admin-side list/decide from inside the app, for when the email is lost.
 async function listPending() {
   const { rows } = await query(
-    `SELECT id, email, name, access_note, created_at, email_verified_at
-     FROM users WHERE role = 'owner' AND access_status = 'pending' ORDER BY created_at`
+    `SELECT u.id, u.email, u.name, w.name AS team_name, u.access_note, u.created_at, u.email_verified_at
+     FROM users u LEFT JOIN workspaces w ON w.owner_user_id = u.id
+     WHERE u.role = 'owner' AND u.access_status = 'pending' ORDER BY u.created_at`
   );
   return rows;
 }
@@ -120,9 +122,10 @@ async function listPending() {
 // revoked (rejected applicants are deleted, so they never appear here).
 async function listReviewed() {
   const { rows } = await query(
-    `SELECT id, email, name, access_note, created_at, email_verified_at, access_status, access_reviewed_at
-     FROM users WHERE role = 'owner' AND access_status IN ('active', 'rejected') AND access_reviewed_at > now() - interval '30 days'
-     ORDER BY access_reviewed_at DESC LIMIT 50`
+    `SELECT u.id, u.email, u.name, w.name AS team_name, u.access_note, u.created_at, u.email_verified_at, u.access_status, u.access_reviewed_at
+     FROM users u LEFT JOIN workspaces w ON w.owner_user_id = u.id
+     WHERE u.role = 'owner' AND u.access_status IN ('active', 'rejected') AND u.access_reviewed_at > now() - interval '30 days'
+     ORDER BY u.access_reviewed_at DESC LIMIT 50`
   );
   return rows;
 }

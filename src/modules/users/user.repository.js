@@ -4,7 +4,7 @@ async function findByIdWithPlan(userId) {
   const result = await query(
     `SELECT
        u.id, u.email, u.name, u.role, u.plan_id, u.listings_used_this_month, u.billing_cycle_start,
-       u.email_verified_at, u.created_at, u.avatar_url, u.access_status, u.parent_user_id, u.owner_access_at,
+       u.email_verified_at, u.created_at, u.avatar_url, u.access_status,
        p.name AS plan_name, p.max_connections, p.listings_included_per_month,
        (SELECT count(*) FROM connections c WHERE c.user_id = u.id) AS connections_used
      FROM users u
@@ -15,17 +15,38 @@ async function findByIdWithPlan(userId) {
   return result.rows[0] || null;
 }
 
-// Cheap indexed PK lookup used on every authenticated request (requireAuth)
-// to resolve role/ownerId — kept minimal on purpose.
+// A login's role on its own (an owner has a team; a member only joins
+// others'). Which team a request is in is workspace.repository sessionFor.
 async function findRoleInfo(userId) {
-  const result = await query('SELECT id, email, role, parent_user_id, access_status, deactivated_at, owner_access_at FROM users WHERE id = $1', [userId]);
+  const result = await query('SELECT id, email, role, access_status FROM users WHERE id = $1', [userId]);
   return result.rows[0] || null;
+}
+
+/** Whether the login has owner access in any team (then only those owners may remove it). */
+async function hasOwnerAccessAnywhere(userId) {
+  const result = await query('SELECT 1 FROM workspace_members WHERE user_id = $1 AND owner_access_at IS NOT NULL LIMIT 1', [userId]);
+  return result.rows.length > 0;
 }
 
 async function deleteById(userId) {
   // connections/tracked_stores/listings cascade via ON DELETE CASCADE
   // (see migration 002); jobs_log rows are kept with connection_id set to NULL.
   await query('DELETE FROM users WHERE id = $1', [userId]);
+}
+
+/**
+ * An owner's team going: the member logins that were in it alone go with
+ * it (they could no longer sign in to anything); those in other teams stay.
+ */
+async function deleteLoginsOnlyIn(ownerId) {
+  const { rowCount } = await query(
+    `DELETE FROM users u
+      WHERE u.role = 'member'
+        AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.user_id = u.id AND m.owner_user_id = $1)
+        AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.user_id = u.id AND m.owner_user_id <> $1)`,
+    [ownerId]
+  );
+  return rowCount;
 }
 
 async function findAuthById(userId) {
@@ -62,7 +83,9 @@ module.exports = {
   updateName,
   findByIdWithPlan,
   findRoleInfo,
+  hasOwnerAccessAnywhere,
   deleteById,
+  deleteLoginsOnlyIn,
   findAuthById,
   emailTakenByAnotherUser,
   updateEmail,

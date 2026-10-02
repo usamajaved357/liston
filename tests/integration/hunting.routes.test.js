@@ -528,7 +528,8 @@ test("the hunter is notified when a reviewer approves, rejects or sends back the
   assert.strictEqual(bell.data.unread, 3);
   assert.deepStrictEqual(bell.data.items.map((n) => n.kind), ['hunt.approved', 'hunt.rejected', 'hunt.sent_back']);
   const [approved, rejected, sentBack] = bell.data.items;
-  assert.strictEqual(approved.url, `/accounts/${t.connectionId}/hunting?open=${two.id}`);
+  // Opening in the product's team (`ws`), from a push too.
+  assert.strictEqual(approved.url, `/accounts/${t.connectionId}/hunting?open=${two.id}&ws=${t.ownerId}`);
   assert.match(approved.title, /^Approved: /);
   assert.match(rejected.body, /rejected it: Low demand\. “Too few sales”/);
   assert.match(sentBack.body, /sent it back for you to improve\. “Find a cheaper supplier”/);

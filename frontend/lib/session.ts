@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { User } from "@/lib/api";
+import type { User } from "@/lib/api";
 
 // The signed-in user, remembered locally so a page can paint its shell and
 // skeletons on the very first render instead of a blank "Loading…" while

@@ -130,7 +130,7 @@ test('another site of a linked account is split off as its own connection, with 
     pricing: { targetRoiPercent: 60, adsFeePercent: 5, processingFeePercent: 3, fixedFeePerOrder: 0.3, shippingCostPerOrder: 2, currency: 'GBP', roundTo99: true },
   });
   const member = await owner();
-  await pool.query(`INSERT INTO member_permissions (member_user_id, connection_id, feature, allowed) VALUES ($1, $2, 'orders', true)`, [member, uk.id]);
+  await pool.query(`INSERT INTO member_permissions (member_user_id, owner_user_id, connection_id, feature, allowed) VALUES ($1, $3, $2, 'orders', true)`, [member, uk.id, ownerId]);
 
   let sites = await connectionService.ebaySites(ownerId, uk.id, ebay);
   assert.deepStrictEqual(sites.map((s) => [s.marketplace.id, s.listings, s.connectionId]), [['EBAY_GB', 360, uk.id], ['EBAY_AU', 292, null]]);

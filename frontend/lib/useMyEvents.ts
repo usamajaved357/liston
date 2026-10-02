@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { teamHeaders } from "@/lib/team";
 
 // The signed-in person's live channel (GET /api/me/events): one stream per
 // tab, shared by everything that listens (the Inbox, the sidebar's unread
@@ -30,7 +31,7 @@ function start() {
   (async () => {
     while (!signal.aborted) {
       try {
-        const res = await fetch(`${API_URL}/api/me/events`, { headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" }, signal });
+        const res = await fetch(`${API_URL}/api/me/events`, { headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream", ...teamHeaders() }, signal });
         if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
         attempt = 0;
         if (!first) reconnectListeners.forEach((fn) => fn());
@@ -106,7 +107,7 @@ function report(view: string | null) {
   if (!token) return;
   fetch(`${API_URL}/api/me/presence`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...teamHeaders() },
     body: JSON.stringify({ tabId: TAB_ID, view, focused: document.visibilityState === "visible" && document.hasFocus() }),
     keepalive: true,
   }).catch(() => {});

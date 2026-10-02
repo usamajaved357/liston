@@ -8,7 +8,7 @@ import { Marketplace, User } from "@/lib/api";
 import { AccountTimeZoneProvider } from "@/lib/timezone";
 import { SyncStatus } from "@/components/SyncStatus";
 import { SITE_TIMEZONES } from "@/components/orders/order-ui";
-import { Logo } from "@/components/Logo";
+import { TeamSwitcher } from "@/components/TeamSwitcher";
 import { AccountSwitcher } from "@/components/AccountSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
@@ -113,10 +113,8 @@ export function AccountShell({
       sidebarClassName="gap-6"
       sidebar={
       <>
-        <div className="flex items-center gap-2.5 px-2">
-          <Logo size={30} />
-          <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
-        </div>
+        {/* The team this tab is in, switching to any other the person is in. */}
+        <TeamSwitcher />
 
         <AccountSwitcher connectionId={connectionId} label={label} platformKey={platformKey} platformName={platformName} marketplace={marketplace} />
 

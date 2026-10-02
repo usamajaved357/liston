@@ -23,5 +23,7 @@ router.put('/members/:id/password', requireAuth, requireOwner, teamController.se
 router.get('/members/:id/permissions', requireAuth, requireOwner, teamController.getMemberPermissions);
 router.put('/members/:id/permissions', requireAuth, requireOwner, teamController.updateMemberPermissions);
 router.put('/members/:id/owner-access', requireAuth, requireMainOwner, teamController.setOwnerAccess);
+// The team's name: its owner only.
+router.put('/name', requireAuth, requireMainOwner, teamController.renameTeam);
 
 module.exports = router;

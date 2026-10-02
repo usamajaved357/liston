@@ -282,6 +282,7 @@ async function tellTeam(connectionId, ownerId, arrived) {
       const body = s?.hide_text ? `New message from ${buyer}` : r.latestPreview || 'New message';
       await notificationsService.notifyGrouped({
         userId,
+        ownerId,
         kind: 'inbox.message',
         title,
         body,

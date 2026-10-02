@@ -74,7 +74,7 @@ async function people(auth) {
 /** Whether this person runs channels: the owner, or a member given "Manage channels". */
 async function canManageChannels(auth) {
   if (auth.role === 'owner') return true;
-  return teamRepository.resolvePermission(auth.userId, null, 'chat_manage');
+  return teamRepository.resolvePermission(auth.userId, null, 'chat_manage', auth.ownerId);
 }
 
 // The same auth another person would have, for resolving cards as they'd see them (owner access as the owner).
@@ -572,6 +572,7 @@ async function deliver(auth, conversation, members, row, root = null) {
     const quiet = rules.inQuietHours(s);
     await notificationsService.notifyGrouped({
       userId,
+      ownerId: auth.ownerId,
       actorUserId: auth.userId,
       kind: 'chat.message',
       title,

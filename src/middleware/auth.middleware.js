@@ -1,14 +1,18 @@
 const config = require('../config');
 const authService = require('../modules/auth/auth.service');
-const userRepository = require('../modules/users/user.repository');
+const workspaceRepository = require('../modules/team/workspace.repository');
+const teams = require('../modules/team/teams');
 
 // req.userId is always the authenticated person (identity: profile settings,
 // permission lookups). req.ownerId is whose DATA this request should operate
-// on — for an owner that's themselves; for a member (a team login created by
-// an owner, see src/modules/team/) it's their parent's id, since a member's
-// connections/listings/etc. all live under the owner's account. Existing
-// connection-scoped repository calls take req.ownerId instead of req.userId
-// with no signature changes needed elsewhere.
+// on: the team it's in (migration 051, one login in several owners' teams,
+// as Slack's workspaces). The page names the team in X-Liston-Workspace;
+// a team the login isn't in (or was removed from) is refused with code
+// TEAM_GONE, never swapped for another; without one it's the login's last
+// team. In its own team a login is the owner; in another's a member, or
+// the owner there too with owner access (req.coOwner). Existing
+// connection-scoped repository calls take req.ownerId instead of
+// req.userId with no signature changes needed elsewhere.
 //
 // A sign-in lasts a week (JWT_EXPIRES_IN) from its last renewal: a token
 // over a day old comes back renewed in the X-Liston-Token header, which the
@@ -35,22 +39,27 @@ async function requireAuth(req, res, next) {
     return ended(res, 'Your sign-in has run out. Sign in again.');
   }
   try {
-    const user = await userRepository.findRoleInfo(payload.sub);
-    if (!user) return ended(res, 'Your sign-in has run out. Sign in again.');
-    // A member the owner removed is signed out at their next request.
-    if (user.deactivated_at) return ended(res, 'This login has been removed by the account owner.');
+    const session = await workspaceRepository.sessionFor(payload.sub);
+    if (!session) return ended(res, 'Your sign-in has run out. Sign in again.');
+    const { user } = session;
+    const asked = req.headers['x-liston-workspace'] || null;
+    const picked = teams.pickTeam(session.teams, { asked, last: user.last_workspace_id });
+    // A member removed from every team they were in is signed out at their next request.
+    if (picked.none) return ended(res, 'This login has been removed by the account owner.');
+    if (picked.refused) return res.status(403).json({ error: "You're not in that team any more.", code: 'TEAM_GONE' });
     if (payload.iat && Date.now() - payload.iat * 1000 > RENEW_AFTER_MS) res.setHeader('X-Liston-Token', authService.issueToken(user));
+    const { role, coOwner } = teams.roleIn(picked.team);
     req.userId = user.id;
     req.userEmail = user.email;
-    // A member the owner gave owner access (migration 050) is the owner
-    // everywhere, on the owner's data; req.coOwner keeps them apart where
-    // only the owner may act (their own login and others with owner
-    // access, on the Team page).
-    req.coOwner = user.role === 'member' && Boolean(user.owner_access_at);
-    req.role = req.coOwner ? 'owner' : user.role;
-    req.ownerId = user.role === 'member' ? user.parent_user_id : user.id;
-    // Members ride on their owner's approval; the owner row holds the status.
-    req.accessStatus = user.role === 'member' ? (await userRepository.findRoleInfo(user.parent_user_id))?.access_status || 'active' : user.access_status;
+    req.ownerId = picked.team.ownerId;
+    req.role = role;
+    // Owner access in another's team: the owner there, apart from where only the owner may act.
+    req.coOwner = coOwner;
+    // Whether the login has a team of its own (an owner), whatever team it's in now.
+    req.ownsTeam = user.role === 'owner';
+    req.teams = session.teams;
+    // Members ride on their team owner's approval; the owner row holds the status.
+    req.accessStatus = picked.team.accessStatus || 'active';
     next();
   } catch (err) {
     next(err);

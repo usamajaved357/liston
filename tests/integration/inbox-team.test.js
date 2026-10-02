@@ -176,7 +176,8 @@ test("eBay's push of a buyer's message: read in at once, kept so opening reads n
   await new Promise((r) => setTimeout(r, 50));
   const told = await notificationsOf(t.sara.id, 'inbox.message');
   assert.deepStrictEqual(told.map((n) => [n.title, n.body, n.subject_id]), [['Walexo · and_630713', 'Hello?', `${t.connection.id}:c1`]]);
-  assert.strictEqual(told[0].url, `/accounts/${t.connection.id}/inbox?e=${t.connection.id}~c1`);
+  // Opening in the account's team (`ws`), from a push too.
+  assert.strictEqual(told[0].url, `/accounts/${t.connection.id}/inbox?e=${t.connection.id}~c1&ws=${t.owner.id}`);
 
   const reopened = await request('GET', `${base}/c1`, undefined, t.sara.token);
   assert.deepStrictEqual(reopened.data.messages.map((m) => m.id), ['c1-last', 'm-2', 'm-3'], 'the pushed messages were kept');

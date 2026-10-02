@@ -129,8 +129,8 @@ function MemberHome({ user, connections, loading }: { user: User; connections: C
               {loading
                 ? "Your team accounts."
                 : connections.length
-                  ? `You work on ${connections.length} account${connections.length === 1 ? "" : "s"} for your team. Pick one to get started.`
-                  : "Your team accounts show here once you're given access."}
+                  ? `You work on ${connections.length} account${connections.length === 1 ? "" : "s"} in ${user.team?.name || "your team"}. Pick one to get started.`
+                  : `Accounts in ${user.team?.name || "your team"} show here once you're given access.`}
             </p>
           </div>
           {/* Profile and Log out live in the sidebar. */}

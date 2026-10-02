@@ -34,6 +34,7 @@ function Person({ r, size = "md" }: { r: AccessRequest; size?: "md" | "sm" }) {
         <a href={`mailto:${r.email}`} className="block truncate text-[13px] text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:underline">
           {r.email}
         </a>
+        {r.team_name && <p className="truncate text-[12px] text-[var(--color-muted)]">{`Team: ${r.team_name}`}</p>}
       </div>
     </div>
   );

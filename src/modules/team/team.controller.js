@@ -2,10 +2,12 @@ const analyticsDays = require('../analytics/analytics-days');
 const { z } = require('zod');
 const teamService = require('./team.service');
 
+// The password is for a new login only: someone already on Liston joins
+// with their own (team.service addMember).
 const addMemberSchema = z.object({
-  email: z.string().email(),
-  name: z.string().min(1).max(100).optional(),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  email: z.string().trim().email(),
+  name: z.string().trim().min(1).max(100).optional(),
+  password: z.union([z.string().min(8, 'Password must be at least 8 characters'), z.literal('')]).optional(),
 });
 
 // The person asking, for what they may change on the team (team.service manageable).
@@ -40,8 +42,8 @@ async function addMember(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
-    const member = await teamService.addMember(req.ownerId, parsed.data);
-    res.status(201).json({ member });
+    const { member, existingLogin } = await teamService.addMember(req.ownerId, { ...parsed.data, password: parsed.data.password || undefined }, actorOf(req));
+    res.status(201).json({ member, existingLogin });
   } catch (err) {
     next(err);
   }
@@ -138,6 +140,19 @@ async function clock(req, res, next) {
   }
 }
 
+const teamNameSchema = z.object({ name: z.string().trim().min(1, 'Give the team a name.').max(60, 'Keep the team name under 60 characters.') });
+
+// Renames the team (its owner only).
+async function renameTeam(req, res, next) {
+  try {
+    const parsed = teamNameSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    res.status(200).json({ team: await teamService.renameTeam(req.ownerId, parsed.data.name, actorOf(req)) });
+  } catch (err) {
+    next(err);
+  }
+}
+
 const ownerAccessSchema = z.object({ ownerAccess: z.boolean() });
 
 // Gives a member owner access or takes it away (the owner only).
@@ -174,4 +189,4 @@ async function updateMemberPermissions(req, res, next) {
   }
 }
 
-module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, setOwnerAccess, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity, getMemberTime, clock };
+module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, setOwnerAccess, renameTeam, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity, getMemberTime, clock };

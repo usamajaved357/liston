@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Logo } from "@/components/Logo";
 import { useWorkClock } from "@/lib/useWorkClock";
 import { NowPlaying } from "@/components/inbox/NowPlaying";
-import { useCachedUser } from "@/lib/session";
+import { useCurrentTeam } from "@/lib/useCurrentTeam";
 
 // The frame both shells share: the sidebar beside the page on a laptop; on a
 // phone or a portrait tablet (below lg) a slim bar with the logo and a menu
@@ -17,8 +17,8 @@ import { useCachedUser } from "@/lib/session";
 
 export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false, children }: { sidebar: React.ReactNode; sidebarClassName?: string; member?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
-  const me = useCachedUser();
-  useWorkClock(member || Boolean(me?.owner_access));
+  const { team } = useCurrentTeam();
+  useWorkClock(member || team?.role === "owner_access");
 
   useEffect(() => {
     if (!open) return;
@@ -53,8 +53,9 @@ export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
           <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
+          {/* The sidebar's first row (the team menu) stops short of the close button. */}
           <aside
-            className={`absolute inset-y-0 left-0 w-[272px] max-w-[85vw] overflow-y-auto overscroll-contain shadow-xl ${panel}`}
+            className={`absolute inset-y-0 left-0 w-[272px] max-w-[85vw] overflow-y-auto overscroll-contain shadow-xl [&>:nth-child(2)]:mr-10 ${panel}`}
             onClick={(e) => {
               if ((e.target as HTMLElement).closest("a")) setOpen(false);
             }}

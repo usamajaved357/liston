@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Logo } from "@/components/Logo";
+import { TeamSwitcher } from "@/components/TeamSwitcher";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
 import { useInboxBadge } from "@/lib/useInboxBadge";
@@ -38,10 +38,8 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
       sidebarClassName="gap-7"
       sidebar={
       <>
-        <div className="flex items-center gap-2.5 px-2">
-          <Logo size={30} />
-          <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
-        </div>
+        {/* The team this tab is in, switching to any other the person is in. */}
+        <TeamSwitcher />
 
         <nav className="flex flex-col gap-0.5">
           {/* Overview and Connections management are owner-only concepts — a

@@ -7,6 +7,7 @@ import { disablePush, enablePush, pushState, PushState, refreshPush } from "@/li
 import { ago } from "@/components/hunting/HuntBits";
 import { useMyEvents } from "@/lib/useMyEvents";
 import { useVoicePopupOpen } from "@/lib/voicePlayback";
+import { currentTeam } from "@/lib/team";
 
 // The bell in the page header: what Liston has told this person (a reviewer
 // approved, rejected, sent back or removed one of their hunted products),
@@ -69,6 +70,19 @@ const KIND: Record<string, Kind> = {
       <>
         <circle cx="7" cy="7.5" r="3.6" stroke="currentColor" strokeWidth="1.6" />
         <path d="M9.6 10.1L16.5 17M13.6 14.1l1.7-1.7M15.2 15.7l1.4-1.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </>
+    ),
+  },
+  // Another owner added you to their team.
+  "team.added": {
+    label: "New team",
+    ring: "bg-teal-50 text-teal-600 ring-teal-200",
+    chip: "bg-teal-50 text-teal-700 ring-teal-200",
+    note: "border-teal-300",
+    icon: (
+      <>
+        <circle cx="8" cy="7" r="2.6" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M3.5 15.5c0-2.5 2-4.2 4.5-4.2s4.5 1.7 4.5 4.2M15 6.5v5M12.5 9h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
       </>
     ),
   },
@@ -208,6 +222,7 @@ function openLabel(toast: Toast): string {
   if (toast.kind?.startsWith("hunt.")) return "Open the product";
   if (toast.kind === "chat.message") return toast.url?.includes("&t=") ? "Open the thread" : "Open the conversation";
   if (toast.kind?.includes("message")) return "Open the conversation";
+  if (toast.kind === "team.added") return "Open the team";
   if (toast.kind?.startsWith("team.owner_access")) return "Reload Liston";
   return "Open";
 }
@@ -338,8 +353,9 @@ export function NotificationBell() {
     setOpen(false);
     setToast(null);
     if (!read) api.notificationsRead([id]).then(setData).catch(() => {});
-    // Owner access given or taken away: the whole app loads again under it.
-    if (url && kind?.startsWith("team.owner_access")) window.location.assign(url);
+    // Owner access given or taken away, or another team's (a push): the whole app loads again, in that team.
+    const team = url ? new URLSearchParams(url.split("?")[1] || "").get("ws") : null;
+    if (url && (kind?.startsWith("team.") || (team && team !== currentTeam()))) window.location.assign(url);
     else if (url) router.push(url);
   }
 

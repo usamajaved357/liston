@@ -155,7 +155,7 @@ test('someone with owner access can never change their own login, another with o
   assert.strictEqual((await request('DELETE', '/api/users/me', undefined, self.token)).status, 403);
 
   // Nothing changed: both still have owner access and can sign in with their own password.
-  const { rows } = await pool.query(`SELECT id, owner_access_at, deactivated_at FROM users WHERE id = ANY($1::uuid[])`, [[self.id, other.id]]);
+  const { rows } = await pool.query(`SELECT user_id, owner_access_at, deactivated_at FROM workspace_members WHERE owner_user_id = $1 AND user_id = ANY($2::uuid[])`, [t.owner.id, [self.id, other.id]]);
   assert.ok(rows.every((r) => r.owner_access_at && !r.deactivated_at));
   assert.strictEqual((await request('POST', '/api/auth/login', { email: other.email, password: other.password })).status, 200);
 

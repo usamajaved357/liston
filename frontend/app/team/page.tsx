@@ -88,7 +88,12 @@ function MemberCard({ member, connections, knownFeatures, me }: { member: TeamMe
   );
 }
 
-function AddMemberForm({ onAdd, onCancel }: { onAdd: (email: string, password: string) => void; onCancel: () => void }) {
+type Added = { email: string; name: string | null; password: string | null };
+
+// A new email gets a login with the password typed; someone already on
+// Liston (in another team, or with a team of their own) joins with their
+// own login, as on Slack, so no password is needed or used for them.
+function AddMemberForm({ onAdd, onCancel }: { onAdd: (added: Added) => void; onCancel: () => void }) {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -100,8 +105,8 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (email: string, password: s
     setError(null);
     setSubmitting(true);
     try {
-      await api.addTeamMember({ email, name: name || undefined, password });
-      onAdd(email, password);
+      const { member, existingLogin } = await api.addTeamMember({ email, name: name || undefined, password: password || undefined });
+      onAdd({ email: member.email, name: member.name, password: existingLogin ? null : password });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't add this team member. Try again.");
     } finally {
@@ -114,7 +119,7 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (email: string, password: s
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Add a team member</h2>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">They get their own login. Open them once added to choose what they can see.</p>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Open them once added to choose what they can see.</p>
         </div>
         <button type="button" onClick={onCancel} className="btn btn-ghost btn-icon" aria-label="Close">
           <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
@@ -133,11 +138,15 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (email: string, password: s
           <input id="tm-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" autoComplete="off" required className="input mt-1" />
         </div>
         <div>
-          <label className="label" htmlFor="tm-password">Password</label>
+          <label className="label" htmlFor="tm-password">
+            Password <span className="font-normal text-[var(--color-muted)]">(new logins)</span>
+          </label>
           <input id="tm-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" autoComplete="new-password" className="input mt-1" />
         </div>
       </div>
-      <p className="mt-2 text-[12px] text-[var(--color-muted)]">You&apos;ll get their login details to pass on once they&apos;re added. They can change the password themselves later.</p>
+      <p className="mt-2 text-[12px] leading-relaxed text-[var(--color-muted)]">
+        Someone new gets a login with this password, shown to you once to pass on. Someone already on Liston, in another team, joins with the email and password they use now: leave the password blank for them.
+      </p>
 
       {error && (
         <div className="notice notice-danger mt-4">
@@ -146,7 +155,7 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (email: string, password: s
       )}
 
       <div className="mt-5 flex items-center gap-2">
-        <button type="submit" disabled={submitting || !email || password.length < 8} className="btn btn-primary btn-sm">
+        <button type="submit" disabled={submitting || !email || (password.length > 0 && password.length < 8)} className="btn btn-primary btn-sm">
           {submitting ? "Adding…" : "Add member"}
         </button>
         <button type="button" onClick={onCancel} className="btn btn-ghost btn-sm">
@@ -154,6 +163,97 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (email: string, password: s
         </button>
       </div>
     </form>
+  );
+}
+
+// Someone already on Liston joined with their own login: nothing to pass on.
+function JoinedWithOwnLogin({ who, team, onDismiss }: { who: string; team: string; onDismiss: () => void }) {
+  return (
+    <div className="card flex items-start gap-3 border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] p-5">
+      <svg viewBox="0 0 20 20" fill="none" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[var(--color-accent)]" aria-hidden>
+        <path d="M5 10.5l3.2 3.2L15 6.8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-[var(--color-ink)]">{`${who} joined ${team} with their own login`}</p>
+        <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+          They already sign in to Liston, so they use the same email and password, and switch to this team from the team name at the top of their sidebar. They&apos;ve been told. Open them to choose what they can see here.
+        </p>
+      </div>
+      <button type="button" onClick={onDismiss} className="btn btn-ghost btn-icon" aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+// The team's name as the page's title; its owner renames it here.
+function TeamTitle({ name, canRename, onRenamed }: { name: string; canRename: boolean; onRenamed: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (!value.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const { team } = await api.renameTeam(value.trim());
+      onRenamed(team.name);
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't rename the team. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (editing) {
+    return (
+      <form onSubmit={save} className="flex flex-wrap items-center gap-2">
+        <input
+          autoFocus
+          onFocus={(e) => e.currentTarget.select()}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && setEditing(false)}
+          maxLength={60}
+          aria-label="Team name"
+          className="input h-9 w-[min(320px,70vw)] text-[15px] font-semibold"
+        />
+        <button type="submit" disabled={saving || !value.trim() || value.trim() === name} className="btn btn-primary btn-sm">
+          {saving ? "Saving…" : "Save"}
+        </button>
+        <button type="button" onClick={() => setEditing(false)} className="btn btn-ghost btn-sm">
+          Cancel
+        </button>
+        {error && <span className="w-full text-[12px] text-[var(--color-danger)]">{error}</span>}
+      </form>
+    );
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <h1 className="truncate text-lg font-semibold text-[var(--color-ink)]">{name}</h1>
+      {canRename && (
+        <button
+          type="button"
+          onClick={() => {
+            setValue(name);
+            setEditing(true);
+          }}
+          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
+          aria-label="Rename the team"
+          title="Rename the team"
+        >
+          <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+            <path d="M12.8 4.2l3 3L7.5 15.5H4.5v-3l8.3-8.3z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -169,6 +269,7 @@ export default function TeamPage() {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [revealed, setRevealed] = useState<{ email: string; password: string } | null>(null);
+  const [joined, setJoined] = useState<string | null>(null);
   const [showFormer, setShowFormer] = useState(false);
 
   async function loadAll() {
@@ -228,7 +329,16 @@ export default function TeamPage() {
       isAdmin={user.is_admin}
       header={
         <div>
-          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Team</h1>
+          <TeamTitle
+            key={user.team?.name || "team"}
+            name={user.team?.name || "Team"}
+            canRename={user.role === "owner" && !user.owner_access}
+            onRenamed={(teamName) => {
+              const next = { ...user, team: user.team ? { ...user.team, name: teamName } : user.team, teams: user.teams?.map((t) => (t.id === user.team?.id ? { ...t, name: teamName } : t)) };
+              setUser(next);
+              cacheUser(next);
+            }}
+          />
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
             {`Teammates get their own login and see only what ${user.owner_access ? "they're allowed" : "you allow"}. Open one to see their work and change their access.`}
           </p>
@@ -273,9 +383,15 @@ export default function TeamPage() {
               {adding && (
                 <div className="mb-6">
                   <AddMemberForm
-                    onAdd={(email, password) => {
+                    onAdd={(added) => {
                       setAdding(false);
-                      setRevealed({ email, password });
+                      if (added.password) {
+                        setJoined(null);
+                        setRevealed({ email: added.email, password: added.password });
+                      } else {
+                        setRevealed(null);
+                        setJoined(added.name || added.email);
+                      }
                       loadAll();
                     }}
                     onCancel={() => setAdding(false)}
@@ -286,6 +402,11 @@ export default function TeamPage() {
               {revealed && (
                 <div className="mb-6">
                   <LoginDetails email={revealed.email} password={revealed.password} onDismiss={() => setRevealed(null)} />
+                </div>
+              )}
+              {joined && (
+                <div className="mb-6">
+                  <JoinedWithOwnLogin who={joined} team={user.team?.name || "your team"} onDismiss={() => setJoined(null)} />
                 </div>
               )}
 

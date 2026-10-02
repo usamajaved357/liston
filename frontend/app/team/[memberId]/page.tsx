@@ -577,7 +577,8 @@ function MemberPageBody() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <Tabs value={tab} onChange={(t) => setQuery({ tab: t === "performance" ? null : t })} />
               <div className={`flex items-center gap-1.5 max-sm:ml-auto ${manage ? "" : "hidden"}`}>
-                {!removed && (
+                {/* A login also in another team (or an owner's own) is only its person's to change. */}
+                {!removed && !member?.shared_login && (
                   <button type="button" onClick={() => setResetOpen(true)} className="btn btn-secondary btn-sm !h-8 gap-1.5 !px-3 !text-[12.5px]">
                     <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
                       <circle cx="7" cy="12.5" r="3.2" stroke="currentColor" strokeWidth="1.6" />
@@ -626,6 +627,15 @@ function MemberPageBody() {
             {tab === "time" && <MemberTimeView memberId={memberId} name={name} range={range} custom={custom} />}
             {tab === "activity" && (
               <ActivityLog recordingSince={data.recordingSince} memberId={memberId} name={name} range={range} custom={custom} connections={data.connections} metrics={data.metrics} kind={kind} onKind={(k) => setQuery({ kind: k || null })} />
+            )}
+            {tab === "access" && member?.shared_login && manage && (
+              <p className="mb-3 flex items-start gap-2 rounded-xl bg-[var(--color-paper)] px-4 py-2.5 text-[12.5px] leading-relaxed text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
+                <svg viewBox="0 0 20 20" fill="none" className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden>
+                  <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
+                  <path d="M10 9v4.5M10 6.5v.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+                <span>{`${member.name || member.email} signs in to another team on Liston with this login too, so only they can change its password. What they can use here is this team's alone.`}</span>
+              </p>
             )}
             {tab === "access" && memberForGrid && (isOwner || memberForGrid.owner_access_at) && (
               <OwnerAccessCard member={memberForGrid} canChange={isOwner} ownerName={ownerName} onChange={changeOwnerAccess} />

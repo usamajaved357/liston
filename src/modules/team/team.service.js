@@ -9,6 +9,8 @@ const huntingRepository = require('../hunting/hunting.repository');
 const workTime = require('./work-time');
 const workTimeRepository = require('./work-time.repository');
 const userRepository = require('../users/user.repository');
+const workspaceRepository = require('./workspace.repository');
+const teams = require('./teams');
 const notificationsService = require('../notifications/notifications.service');
 
 const SALT_ROUNDS = 12;
@@ -55,7 +57,7 @@ async function listMembers(ownerId, { timeZone = null } = {}) {
         today: activity.metricsFrom(recent.filter((r) => r.actor_user_id === member.id), today.timeZone),
         // Their time in Liston today, and whether a tab of theirs is open now (a minute kept in the last two).
         time: { working: t?.working || 0, idle: t?.idle || 0, lastSeenAt: t?.last_minute || null, inListon: Boolean(t?.last_minute && Date.now() - new Date(t.last_minute).getTime() < 2.5 * 60 * 1000) },
-        permissions: await teamRepository.getPermissions(member.id),
+        permissions: await teamRepository.getPermissions(member.id, ownerId),
       };
     })
   );
@@ -78,7 +80,7 @@ async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone 
   const [allRows, allPrevRows, permissions, lastActive, recordingSince, hunting] = await Promise.all([
     activityRepository.rowsFor(ownerId, memberId, win.startsAt, win.endsAt),
     activityRepository.rowsFor(ownerId, memberId, win.previous.startsAt, win.previous.endsAt),
-    teamRepository.getPermissions(memberId),
+    teamRepository.getPermissions(memberId, ownerId),
     activityRepository.lastActiveAt(ownerId, memberId),
     activityRepository.recordingSince(),
     // Their hunted products' results and their reviews (hunting/hunting-stats.js).
@@ -290,15 +292,45 @@ async function getMemberActivity(ownerId, memberId, { range, from, to, timeZone 
   };
 }
 
-async function addMember(ownerId, { email, name, password }) {
+/**
+ * Adds someone to the team. An email new to Liston gets a new login with
+ * the password given. One that already signs in to Liston (in another
+ * team, or an owner of their own) joins with that same login, as on Slack:
+ * no password is set or changed, and they're told; the team shows in
+ * their team menu. Their access here starts empty, as anyone's.
+ * Returns { member, existingLogin }.
+ */
+async function addMember(ownerId, { email, name, password }, actor = null) {
+  const existing = await teamRepository.findLoginByEmail(email);
+  if (existing) {
+    if (String(existing.id) === String(ownerId)) throw new TeamError("That's the team owner's own login.", 400);
+    const already = await teamRepository.findMemberForOwner(existing.id, ownerId);
+    if (already) {
+      const who = already.name || already.email;
+      throw new TeamError(already.deactivated_at ? `${who} was removed earlier. Restore them from Former members on the Team page instead.` : `${who} is already on this team.`, 409);
+    }
+    const member = await teamRepository.addMembership({ ownerId, userId: existing.id, addedBy: actor?.userId || ownerId });
+    const [team, owner] = await Promise.all([workspaceRepository.nameOf(ownerId), userRepository.findByIdWithPlan(ownerId)]);
+    await notificationsService.notify({
+      userId: existing.id,
+      ownerId,
+      actorUserId: actor?.userId || ownerId,
+      kind: 'team.added',
+      title: `${owner?.name || owner?.email || 'An owner'} added you to ${team || 'their team'}`,
+      body: 'Switch between your teams from the team name at the top of the sidebar.',
+      url: '/connections',
+      subjectType: 'member',
+      subjectId: existing.id,
+    });
+    return { member, existingLogin: true };
+  }
+  if (!password || password.length < 8) throw new TeamError('Set a password for their new login (at least 8 characters).', 400);
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   try {
-    return await teamRepository.createMember({ ownerId, email, name, passwordHash });
+    return { member: await teamRepository.createMember({ ownerId, email, name, passwordHash, addedBy: actor?.userId || ownerId }), existingLogin: false };
   } catch (err) {
-    if (err.code === '23505') {
-      const removed = await teamRepository.findRemovedMemberByEmail(ownerId, email);
-      throw new TeamError(removed ? `${removed.name || email} was removed earlier. Restore them from Former members on the Team page instead.` : 'An account with this email already exists', 409);
-    }
+    // The same email added twice at once.
+    if (err.code === '23505') throw new TeamError('An account with this email already exists. Add it again to bring it into the team.', 409);
     throw err;
   }
 }
@@ -318,9 +350,13 @@ async function manageable(actor, memberId, ownerId) {
 }
 
 // Owners hand out member logins, so they can also reset one — the member's
-// old password stops working immediately.
+// old password stops working immediately. Never a login that's also in
+// another team or an owner's own: only its person changes that password.
 async function setMemberPassword(memberId, ownerId, password, actor) {
-  await manageable(actor, memberId, ownerId);
+  const member = await manageable(actor, memberId, ownerId);
+  if (member.shared_login) {
+    throw new TeamError(`${member.name || member.email} also signs in to another team on Liston, so only they can change their password: from their profile, or Forgot password on the sign-in page.`, 403);
+  }
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   const updated = await teamRepository.setMemberPassword(memberId, ownerId, passwordHash);
   if (!updated) {
@@ -363,13 +399,15 @@ async function setOwnerAccess(memberId, ownerId, on, actor) {
   const updated = await teamRepository.setOwnerAccess(memberId, ownerId, on);
   if (!updated) throw new TeamError('Team member not found', 404);
   if (!member.deactivated_at) {
-    const owner = await userRepository.findByIdWithPlan(ownerId);
+    const [owner, team] = await Promise.all([userRepository.findByIdWithPlan(ownerId), workspaceRepository.nameOf(ownerId)]);
     const ownerName = owner?.name || owner?.email || 'The account owner';
+    const inTeam = team ? ` in ${team}` : '';
     await notificationsService.notify({
       userId: memberId,
+      ownerId,
       actorUserId: actor?.userId || ownerId,
       kind: on ? 'team.owner_access_given' : 'team.owner_access_removed',
-      title: on ? `${ownerName} gave you owner access` : `${ownerName} took away your owner access`,
+      title: on ? `${ownerName} gave you owner access${inTeam}` : `${ownerName} took away your owner access${inTeam}`,
       body: on
         ? 'You can now see and do everything the owner can: every eBay account, settings, and the rest of the team.'
         : "You're back to the access set for you on the team. Reload Liston to see it.",
@@ -386,7 +424,7 @@ async function getMemberPermissions(memberId, ownerId) {
   if (!member) {
     throw new TeamError('Team member not found', 404);
   }
-  return teamRepository.getPermissions(memberId);
+  return teamRepository.getPermissions(memberId, ownerId);
 }
 
 // permissions: [{ connectionId: string|null, feature: string, allowed: boolean|null }]
@@ -417,11 +455,21 @@ async function updateMemberPermissions(memberId, ownerId, permissions, actor) {
       await teamRepository.clearPermission({ memberId, connectionId, feature });
     } else {
       // eslint-disable-next-line no-await-in-loop
-      await teamRepository.setPermission({ memberId, connectionId: connectionId || null, feature, allowed });
+      await teamRepository.setPermission({ memberId, ownerId, connectionId: connectionId || null, feature, allowed });
     }
   }
 
-  return teamRepository.getPermissions(memberId);
+  return teamRepository.getPermissions(memberId, ownerId);
+}
+
+/** Renames the team (its owner only: the route lets no one else in; checked here as well). */
+async function renameTeam(ownerId, name, actor = null) {
+  if (actor?.coOwner) throw new TeamError("Only the team's owner can rename it.", 403);
+  const clean = teams.cleanTeamName(name);
+  if (!clean) throw new TeamError('Give the team a name.', 400);
+  const owner = await userRepository.findByIdWithPlan(ownerId);
+  await workspaceRepository.create(ownerId, teams.defaultTeamName(owner || {}));
+  return workspaceRepository.rename(ownerId, clean);
 }
 
 module.exports = {
@@ -437,6 +485,7 @@ module.exports = {
   clock,
   setMemberPassword,
   setOwnerAccess,
+  renameTeam,
   getMemberPermissions,
   updateMemberPermissions,
   TeamError,

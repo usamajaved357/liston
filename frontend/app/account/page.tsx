@@ -259,6 +259,8 @@ export default function AccountPage() {
   const maxConnections = user.max_connections ?? 0;
   const planName = user.plan_name ?? "Unassigned";
   const isOwner = user.role !== "member";
+  // A team where they have owner access (its owner alone removes their login).
+  const coOwnerOf = user.teams?.find((t) => t.role === "owner_access") || null;
 
   return (
     <AppShell
@@ -359,15 +361,15 @@ export default function AccountPage() {
           </SettingRow>
         </div>
 
-        {user.owner_access ? (
-          // A login with owner access is the owner's to remove (the API refuses it here too).
+        {coOwnerOf ? (
+          // A login with owner access in a team is that team owner's to remove (the API refuses it here too).
           <div className="card">
             <SettingRow
               title="Your login"
-              description={`${user.owner?.name || user.owner?.email || "The account owner"} gave you owner access, so only they can change or remove this login, from their Team page.`}
+              description={`${coOwnerOf.ownerName} gave you owner access in ${coOwnerOf.name}, so only they can remove this login, from their Team page.`}
               last
             >
-              <p className="text-[13px] text-[var(--color-muted)]">{`Ask ${user.owner?.name || "the owner"} if it needs to go.`}</p>
+              <p className="text-[13px] text-[var(--color-muted)]">{`Ask ${coOwnerOf.ownerName} if it needs to go.`}</p>
             </SettingRow>
           </div>
         ) : (
@@ -375,9 +377,9 @@ export default function AccountPage() {
           <SettingRow
             title="Delete account"
             description={
-              isOwner
-                ? "Permanently deletes your account, every connected marketplace, team members and all listing data."
-                : "Permanently deletes your team member account, and you can't log in again. The eBay accounts you worked on stay with your team."
+              user.owns_team
+                ? "Permanently deletes your account and your team: every connected marketplace, all listing data, and the logins of members in no other team."
+                : "Permanently deletes your login: you leave every team you're in and can't log in again. The eBay accounts you worked on stay with their teams."
             }
             last
           >
@@ -404,9 +406,9 @@ export default function AccountPage() {
         open={confirmAction === "delete"}
         title="Delete your account?"
         description={
-          isOwner
-            ? "This permanently deletes your account, connections, and listing data. This action cannot be undone."
-            : "This permanently deletes your team member account and you won't be able to log in again. This action cannot be undone."
+          user.owns_team
+            ? "This permanently deletes your account and your team: connections, listing data, and members' logins that are in no other team. This action cannot be undone."
+            : "This permanently deletes your login: you leave every team you're in and won't be able to log in again. This action cannot be undone."
         }
         confirmLabel="Delete account"
         danger

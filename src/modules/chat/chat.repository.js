@@ -10,12 +10,17 @@ const { query, pool } = require('../../db/client');
 // A message the conversation itself shows: not a thread reply, or one also sent to it.
 const IN_TIMELINE = `(x.thread_id IS NULL OR x.also_in_conversation)`;
 
-/** The owner and their team as chat sees them (removed members included, marked). */
+/**
+ * The owner and their team as chat sees them (removed members included,
+ * marked). `role` is what each is in this team: its owner, or a member
+ * (owner access and removal are this team's, migration 051).
+ */
 async function people(ownerId) {
   const { rows } = await query(
-    `SELECT id, name, email, avatar_url, role, deactivated_at, owner_access_at FROM users
-      WHERE id = $1 OR (parent_user_id = $1 AND role = 'member')
-      ORDER BY (id = $1) DESC, lower(coalesce(name, email))`,
+    `SELECT u.id, u.name, u.email, u.avatar_url, CASE WHEN u.id = $1 THEN 'owner' ELSE 'member' END AS role, m.deactivated_at, m.owner_access_at
+       FROM users u LEFT JOIN workspace_members m ON m.user_id = u.id AND m.owner_user_id = $1
+      WHERE u.id = $1 OR m.user_id IS NOT NULL
+      ORDER BY (u.id = $1) DESC, lower(coalesce(u.name, u.email))`,
     [ownerId]
   );
   return rows;
@@ -136,8 +141,10 @@ async function deleteConversation(id) {
 async function membersOf(conversationIds) {
   if (!conversationIds.length) return [];
   const { rows } = await query(
-    `SELECT m.conversation_id, m.user_id, m.role, m.last_read_at, m.notify, u.name, u.email, u.avatar_url, u.deactivated_at
+    `SELECT m.conversation_id, m.user_id, m.role, m.last_read_at, m.notify, u.name, u.email, u.avatar_url, wm.deactivated_at
        FROM chat_members m JOIN users u ON u.id = m.user_id
+       JOIN chat_conversations c ON c.id = m.conversation_id
+       LEFT JOIN workspace_members wm ON wm.owner_user_id = c.owner_user_id AND wm.user_id = m.user_id
       WHERE m.conversation_id = ANY($1::uuid[])
       ORDER BY m.joined_at`,
     [conversationIds]
