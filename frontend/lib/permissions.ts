@@ -24,7 +24,12 @@ const SECTION_FEATURES: Record<string, string[]> = {
 };
 
 export function sectionAllowed(connection: Connection, section: string): boolean {
-  if (!connection.permissions) return true;
+  return sectionAllowedWith(connection.permissions as Record<string, boolean> | undefined, section);
+}
+
+/** The same, from the viewer's permissions on the account (undefined: the workspace owner or a co-manager, everything). */
+export function sectionAllowedWith(permissions: Record<string, boolean> | undefined, section: string): boolean {
+  if (!permissions) return true;
   const features = SECTION_FEATURES[section] ?? [];
-  return features.some((f) => connection.permissions?.[f]);
+  return features.some((f) => permissions[f]);
 }

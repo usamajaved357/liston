@@ -13,6 +13,8 @@ import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
 import { NotificationBell } from "@/components/NotificationBell";
 import { useAccountInboxBadge } from "@/lib/useInboxBadge";
+import { sectionAllowedWith } from "@/lib/permissions";
+import Link from "next/link";
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -78,6 +80,36 @@ function useHuntBadge(connectionId: string, enabled: boolean, permissions?: Reco
   return enabled ? badge : 0;
 }
 
+const SECTION_NAMES: Record<string, string> = {
+  orders: "Orders",
+  listings: "Listings",
+  research: "Research",
+  hunting: "Hunting",
+  analytics: "Analytics",
+  inbox: "the Inbox",
+  campaigns: "Campaigns",
+  settings: "this account's Settings",
+};
+
+// A section of the account the viewer hasn't been given.
+function NoAccess({ section, account, overview }: { section: string; account: string; overview: string }) {
+  return (
+    <div className="card mx-auto mt-6 flex max-w-lg flex-col items-center px-6 py-8 text-center">
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-paper)] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]" aria-hidden>
+        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+          <rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M8 11V8a4 4 0 018 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      </span>
+      <h2 className="mt-3 text-[15px] font-semibold text-[var(--color-ink)]">{`You don't have ${SECTION_NAMES[section] || "this"} on ${account}`}</h2>
+      <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">Ask the workspace owner or a co-manager if you need it. What you can open here is in the sidebar.</p>
+      <Link href={overview} className="btn btn-secondary btn-sm mt-4">
+        {`Go to ${account}'s Overview`}
+      </Link>
+    </div>
+  );
+}
+
 export function AccountShell({
   children,
   header,
@@ -101,6 +133,10 @@ export function AccountShell({
   const huntingAccess = canShow("hunting") || canShow("hunting_review") || canShow("listings");
   const huntBadge = useHuntBadge(connectionId, huntingAccess, permissions);
   const inboxBadge = useAccountInboxBadge(connectionId, canShow("inbox"));
+  // A section opened without access to it (a typed or old link): said plainly
+  // instead of the page's own error; the API refuses it either way.
+  const section = pathname.slice(base.length).split("/")[1] || "";
+  const blocked = !sectionAllowedWith(permissions, section);
 
 
   return (
@@ -265,7 +301,7 @@ export function AccountShell({
               <NotificationBell />
             </div>
           </div>
-          {subheader && <div className="mt-5">{subheader}</div>}
+          {subheader && !blocked && <div className="mt-5">{subheader}</div>}
           </div>
         )}
         <div
@@ -273,9 +309,9 @@ export function AccountShell({
           data-fill={fill ? "" : undefined}
           className={`relative flex-1 min-h-0 px-[var(--page-gutter)] ${fill ? "flex flex-col overflow-hidden pb-2" : `overflow-y-auto overscroll-contain ${header ? "pb-8" : "py-8"}`}`}
         >
-          {children}
+          {blocked ? <NoAccess section={section} account={label} overview={base} /> : children}
         </div>
-        {footer && (
+        {footer && !blocked && (
           <div
             data-pinned-footer={pinFooter ? "" : undefined}
             className={`flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)] ${pinFooter ? "shadow-[0_-8px_24px_-18px_rgba(15,23,42,0.35)]" : ""}`}
