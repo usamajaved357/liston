@@ -1,4 +1,4 @@
-const { query } = require('../../db/client');
+const { pool, query } = require('../../db/client');
 const activity = require('../team/activity');
 const activityRepository = require('../team/activity.repository');
 
@@ -96,9 +96,9 @@ async function dispatchesByOrder(connectionId) {
   return new Map(result.rows.map((r) => [r.order_id, { lines: r.lines, at: new Date(r.at).toISOString(), by: r.by_name || null, tracked: Boolean(r.tracked) }]));
 }
 
-// ---- messages Liston sent buyers by itself (migration 037) ----------------------
+// ---- messages Liston sent buyers by itself (migrations 037, 048) ----------------
 
-/** The orders on an account already sent (or failed to be sent) a message of this kind. */
+/** The orders on an account already sent (or claimed, refused or skipped for) a message of this kind. */
 async function messagedOrderIds(connectionId, kind) {
   const result = await query('SELECT order_id FROM order_messages WHERE connection_id = $1 AND kind = $2', [connectionId, kind]);
   return new Set(result.rows.map((r) => r.order_id));
@@ -113,24 +113,97 @@ async function saveMessage({ connectionId, orderId, kind, status, buyer, itemId,
   );
 }
 
+/**
+ * Claims the right to send one order its message, before eBay is asked:
+ * resolves to 'claimed' (send it, then finishMessage), 'taken' (another run
+ * has it, or it was dealt with before) or 'skipped' (with `buyerGapHours`,
+ * this buyer was sent this message on another order that recently; noted
+ * with that order). The check and the claim happen under a lock on the
+ * account, kind and buyer, so two runs at once can't both pass.
+ */
+async function claimMessage({ connectionId, orderId, kind, buyer, itemId, text, buyerGapHours = 0 }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`order-message:${connectionId}:${kind}:${buyer || orderId}`]);
+    const known = await client.query('SELECT 1 FROM order_messages WHERE connection_id = $1 AND order_id = $2 AND kind = $3', [connectionId, orderId, kind]);
+    if (known.rowCount) {
+      await client.query('COMMIT');
+      return 'taken';
+    }
+    let status = 'sending';
+    let error = null;
+    if (buyerGapHours > 0 && buyer) {
+      const recent = await client.query(
+        `SELECT order_id FROM order_messages
+          WHERE connection_id = $1 AND kind = $2 AND buyer = $3 AND status IN ('sending', 'sent') AND sent_at > now() - make_interval(hours => $4)
+          ORDER BY sent_at DESC LIMIT 1`,
+        [connectionId, kind, buyer, buyerGapHours]
+      );
+      if (recent.rowCount) {
+        status = 'skipped';
+        error = `Already sent to this buyer for order ${recent.rows[0].order_id} in the last ${buyerGapHours} hours`;
+      }
+    }
+    await client.query(
+      `INSERT INTO order_messages (connection_id, order_id, kind, status, buyer, item_id, text, error)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (connection_id, order_id, kind) DO NOTHING`,
+      [connectionId, orderId, kind, status, buyer || null, itemId || null, status === 'skipped' ? null : text || null, error]
+    );
+    await client.query('COMMIT');
+    return status === 'skipped' ? 'skipped' : 'claimed';
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** How a claimed message went: 'sent' (with eBay's conversation) or 'failed' (with eBay's reason). Never tried again. */
+async function finishMessage({ connectionId, orderId, kind, status, error = null, conversationId = null }) {
+  await query(
+    `UPDATE order_messages SET status = $4, error = $5, conversation_id = $6, sent_at = now()
+      WHERE connection_id = $1 AND order_id = $2 AND kind = $3 AND status = 'sending'`,
+    [connectionId, orderId, kind, status, error ? String(error).slice(0, 500) : null, conversationId]
+  );
+}
+
+/**
+ * A claim left 'sending' (the server stopped while eBay was being asked) is
+ * closed as failed after a while: eBay may or may not have taken it, and
+ * sending again could message the buyer twice, so it isn't.
+ */
+async function closeStaleClaims(minutes = 15) {
+  const result = await query(
+    `UPDATE order_messages SET status = 'failed', error = 'Interrupted while eBay was being asked, so not sent again in case it arrived'
+      WHERE status = 'sending' AND sent_at < now() - make_interval(mins => $1)`,
+    [minutes]
+  );
+  return result.rowCount;
+}
+
 async function messagesForOrder(connectionId, orderId) {
   const result = await query('SELECT kind, status, error, sent_at FROM order_messages WHERE connection_id = $1 AND order_id = $2 ORDER BY sent_at', [connectionId, orderId]);
   return result.rows.map((r) => ({ kind: r.kind, status: r.status, error: r.error, sentAt: new Date(r.sent_at).toISOString() }));
 }
 
-/** An account's latest messages and how many went and failed in the last 30 days (for Settings). */
-async function recentMessages(connectionId, limit = 8) {
+/** An account's latest messages, and how many of each kind went, failed or were skipped in the last 30 days (for Settings). */
+async function recentMessages(connectionId, limit = 10) {
   const [rows, counts] = await Promise.all([
-    query('SELECT order_id, kind, status, buyer, error, sent_at FROM order_messages WHERE connection_id = $1 ORDER BY sent_at DESC LIMIT $2', [connectionId, limit]),
+    query("SELECT order_id, kind, status, buyer, error, sent_at FROM order_messages WHERE connection_id = $1 AND status <> 'sending' ORDER BY sent_at DESC LIMIT $2", [connectionId, limit]),
     query(
-      `SELECT count(*) FILTER (WHERE status = 'sent')::int AS sent, count(*) FILTER (WHERE status = 'failed')::int AS failed
-         FROM order_messages WHERE connection_id = $1 AND sent_at > now() - interval '30 days'`,
+      `SELECT kind, count(*) FILTER (WHERE status = 'sent')::int AS sent, count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped
+         FROM order_messages WHERE connection_id = $1 AND sent_at > now() - interval '30 days' GROUP BY kind`,
       [connectionId]
     ),
   ]);
+  const byKind = {};
+  for (const r of counts.rows) byKind[r.kind] = { sent: r.sent, failed: r.failed, skipped: r.skipped };
+  const total = (key) => counts.rows.reduce((n, r) => n + r[key], 0);
   return {
     items: rows.rows.map((r) => ({ orderId: r.order_id, kind: r.kind, status: r.status, buyer: r.buyer, error: r.error, sentAt: new Date(r.sent_at).toISOString() })),
-    last30: counts.rows[0],
+    last30: { sent: total('sent'), failed: total('failed'), byKind },
   };
 }
 
@@ -250,6 +323,9 @@ async function sourceCostsByOrder(connectionId, orderIds) {
 module.exports = {
   messagedOrderIds,
   saveMessage,
+  claimMessage,
+  finishMessage,
+  closeStaleClaims,
   messagesForOrder,
   recentMessages,
   dispatchesByOrder,

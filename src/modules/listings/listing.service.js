@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const listingRepository = require('./listing.repository');
 const connectionService = require('../connections/connection.service');
+const connectionRepository = require('../connections/connection.repository');
 const ebayService = require('../ebay/ebay.service');
 const marketplaces = require('../ebay/marketplaces');
 const orchestrator = require('../ai-generation/generation.orchestrator');
@@ -414,9 +415,15 @@ async function getDraftDetail(id, userId) {
     }
   }
 
+  // Whether the account's description template shows photos, for the
+  // editor's "Photos in the description" (Classic doesn't).
+  const connection = listing.connection_id ? await connectionRepository.findByIdForUser(listing.connection_id, userId).catch(() => null) : null;
+  const template = connection ? descriptionTemplate.templatePhotos(connection.settings?.template, connection.settings?.ebay?.marketplaceId) : null;
+
   return {
     listing,
     policies,
+    template,
     category: await categoryInfoFor(listing.generated_data || {}),
     // Words eBay's hazardous-materials filter blocks, for the editor to
     // flag as the seller types (see policy-words.js).
@@ -667,6 +674,18 @@ async function updateDraft(id, userId, patch) {
   for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'imageUrls', 'sku', 'storeCategoryNames']) {
     if (patch[field] !== undefined) draft[field] = patch[field];
   }
+  // The description's own photos: only the draft's photos (a new one comes
+  // through the upload); null goes back to the listing's.
+  if (patch.descriptionImages !== undefined) {
+    if (patch.descriptionImages === null) {
+      delete draft.descriptionImages;
+    } else {
+      const known = new Set([...imagePipeline.draftImages(listing.generated_data || {}), ...imagePipeline.draftImages(draft)]);
+      const chosen = [...new Set(patch.descriptionImages)];
+      if (chosen.some((url) => !known.has(url))) throw new ListingError("Only this listing's own photos can go in its description. Upload a new one from the description's photos.", 400);
+      draft.descriptionImages = chosen.slice(0, DESCRIPTION_PHOTOS);
+    }
+  }
   if (patch.secondaryCategoryId !== undefined) draft.secondaryCategoryId = patch.secondaryCategoryId || null;
 
   // Moving category: the path comes from eBay's tree (never typed), and the
@@ -865,7 +884,7 @@ async function proposeImageRevision(id, userId, { imageUrl, instruction }) {
 
   // Only an image already on this draft can be revised — otherwise this
   // endpoint would happily process any URL the caller supplied.
-  const known = [...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])];
+  const known = imagePipeline.draftImages(draft);
   if (!known.includes(imageUrl)) {
     throw new ListingError("That image isn't part of this draft", 400);
   }
@@ -893,14 +912,21 @@ async function acceptImageRevision(id, userId, { proposalId, replaces }) {
     return eps.upload(accessToken, proposal.buffer, { marketplaceId, account: listing.connection_id });
   });
 
-  draft.imageUrls = (draft.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url));
-  draft.variants = (draft.variants || []).map((variant) => ({
-    ...variant,
-    imageUrls: (variant.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url)),
-  }));
+  Object.assign(draft, replacePhoto(draft, replaces, hostedUrl));
 
   const updated = await listingRepository.updateGeneratedData(id, draft);
   return { listing: updated, imageUrl: hostedUrl };
+}
+
+// One photo swapped for another wherever it appears: the gallery, the
+// variations and the description's own choice.
+function replacePhoto(draft, from, to) {
+  const swap = (urls) => (urls || []).map((url) => (url === from ? to : url));
+  return {
+    imageUrls: swap(draft.imageUrls),
+    variants: (draft.variants || []).map((variant) => ({ ...variant, imageUrls: swap(variant.imageUrls) })),
+    ...(Array.isArray(draft.descriptionImages) ? { descriptionImages: swap(draft.descriptionImages) } : {}),
+  };
 }
 
 // The seller's own photo, from their computer, hosted on eBay and put into
@@ -912,9 +938,12 @@ function uploadDraftImage(id, userId, input) {
   return governor.withContext({ priority: 'user' }, () => uploadDraftImageNow(id, userId, input));
 }
 
-async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex }) {
+async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex, forDescription = false }) {
   const listing = await loadEditableDraft(id, userId);
   const draft = { ...(listing.generated_data || {}) };
+  if (forDescription && !replaces && descriptionImagesOf(draft).slice(0, DESCRIPTION_PHOTOS).length >= DESCRIPTION_PHOTOS) {
+    throw new ListingError(`The description shows up to ${DESCRIPTION_PHOTOS} photos. Take one out first.`, 400);
+  }
 
   // Whatever the browser labelled it — AI tools save .avif, .jfif, .webp, or
   // a file with no type at all — the bytes decide: anything that reads as a
@@ -938,11 +967,10 @@ async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex
   });
 
   if (replaces) {
-    draft.imageUrls = (draft.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url));
-    draft.variants = (draft.variants || []).map((variant) => ({
-      ...variant,
-      imageUrls: (variant.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url)),
-    }));
+    Object.assign(draft, replacePhoto(draft, replaces, hostedUrl));
+  } else if (forDescription) {
+    // The description's gallery only; following the listing's photos until now, it starts from them.
+    draft.descriptionImages = [...descriptionImagesOf(draft).slice(0, DESCRIPTION_PHOTOS - 1), hostedUrl];
   } else if (variantIndex !== undefined && Array.isArray(draft.variants)) {
     if (!draft.variants[variantIndex]) throw new ListingError('That variation no longer exists.', 400);
     draft.variants = draft.variants.map((variant, i) => (i === variantIndex ? { ...variant, imageUrls: [hostedUrl] } : variant));
@@ -963,7 +991,7 @@ async function fetchDraftImage(id, userId, url) {
   const listing = await listingRepository.findByIdForUser(id, userId);
   if (!listing) throw new ListingError('Listing not found', 404);
   const draft = listing.generated_data || {};
-  const known = new Set([...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])]);
+  const known = new Set(imagePipeline.draftImages(draft));
   if (!known.has(url)) throw new ListingError("That image isn't part of this listing.", 404);
 
   const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
@@ -1117,8 +1145,18 @@ async function recommendedListings(credentials, connection, { exclude, count, se
   }
 }
 
+// The most photos a description template's gallery shows.
+const DESCRIPTION_PHOTOS = 8;
+
+// The photos a description template's gallery shows: the ones chosen for
+// it in the editor, else the listing's own (the template shows up to 8).
+function descriptionImagesOf(draft) {
+  return Array.isArray(draft.descriptionImages) ? draft.descriptionImages : draft.imageUrls || [];
+}
+
 // The branded description for a draft: the AI copy inside this account's
 // template, with this account's live listings recommended underneath.
+// `listing` carries the draft as it will go (its photos already on eBay).
 async function renderDraftDescription(listing, userId) {
   const draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
@@ -1127,8 +1165,9 @@ async function renderDraftDescription(listing, userId) {
     productName: isVariation ? draft.commonTitle : draft.title,
     description: isVariation ? draft.commonDescription : draft.description,
     condition: (isVariation ? draft.variants[0]?.condition : draft.condition) || 'NEW',
-    // The card layouts show the listing's photos and item specifics.
-    images: draft.imageUrls || [],
+    // The card layouts show the listing's photos (or the ones chosen for the
+    // description) and item specifics.
+    images: descriptionImagesOf(draft),
     specifics: (isVariation ? draft.variesBy?.aspects : draft.aspects) || {},
     exclude: listing.external_product_id || listing.edit_of_item_id,
     // The listing's own mix of best sellers, stable across preview and publish.
@@ -1418,7 +1457,8 @@ async function publishLiveEdit(listing, userId) {
     if (stock <= 0) throw new ListingError('Set the quantity above 0 before relisting: eBay won’t relist a listing with no stock.', 400);
   }
 
-  const html = await renderDraftDescription(listing, userId);
+  // From the draft as it goes, its photos now on eBay (the copy loaded above predates that).
+  const html = await renderDraftDescription({ ...listing, generated_data: draft }, userId);
   // Same readiness rules as a new publish (no axis in the shared set,
   // identifiers marked "Does Not Apply").
   const readied = await readyAspectsForPublish(draft);
@@ -1821,7 +1861,8 @@ async function publishNow(listing, id, userId) {
       // suffix each attempt sidesteps that entirely.
       // The branded HTML is the offer's listingDescription; the plain text
       // stays as the inventory item's (4,000-char) description.
-      const html = await renderDraftDescription(listing, userId);
+      // From the draft as it goes, its photos now on eBay (the copy loaded at the start predates that).
+      const html = await renderDraftDescription({ ...listing, generated_data: draft }, userId);
       const branded = {
         ...readyDraft,
         identifiers,

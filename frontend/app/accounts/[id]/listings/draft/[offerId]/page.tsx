@@ -8,6 +8,7 @@ import {
   ApiError,
   AspectSchemaEntry,
   ConnectionPolicies,
+  DescriptionTemplatePhotos,
   DraftCategoryInfo,
   DraftContent,
   DraftListing,
@@ -29,6 +30,7 @@ import { EditorHeader } from "@/components/EditorHeader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { CategoryPicker, CategorySelection, ShopCategoryPicker, shopCategoryLabel } from "@/components/CategoryPicker";
 import { RichTextEditor, markersToHtml } from "@/components/RichTextEditor";
+import { DESCRIPTION_PHOTOS, DescriptionPhotos } from "@/components/listings/DescriptionPhotos";
 import { currencySymbol, formatPrice } from "@/lib/format";
 
 // The draft editor. A draft lives only in Liston until Publish, so every
@@ -1804,6 +1806,9 @@ export default function DraftEditorPage() {
   const [applyingFix, setApplyingFix] = useState(false);
   const [imageCheck, setImageCheck] = useState<ImageCheck | null>(null);
   const [uploading, setUploading] = useState(false);
+  // The photos the description template shows (null: the listing's own), and whether the template shows any.
+  const [descImages, setDescImages] = useState<string[] | null>(null);
+  const [templatePhotos, setTemplatePhotos] = useState<DescriptionTemplatePhotos | null>(null);
 
   const [saving, setSaving] = useState(false);
   // Leaving with unsaved changes: asked first.
@@ -1868,6 +1873,7 @@ export default function DraftEditorPage() {
     const aspects = isVariationDraft(c) ? c.variesBy.aspects : c.aspects;
     setSpecifics(withSchemaRows(Object.entries(aspects || {}).map(([name, values]) => ({ name, value: values.join(", ") })), categoryInfoRef.current));
     setImages(c.imageUrls || []);
+    setDescImages(c.descriptionImages ?? null);
     setSelectedImage(0);
     setRemovedRows(new Set());
     setRemovedAxisValues([]);
@@ -1945,6 +1951,7 @@ export default function DraftEditorPage() {
         setCategoryInfo(data.category);
         setPolicyWords(data.policyWords || []);
         setMayPublish(data.canPublish !== false);
+        setTemplatePhotos(data.template ?? null);
         resetFrom(data.listing);
         loadSecondaryPath((data.listing.generated_data as DraftContent).secondaryCategoryId);
       })
@@ -2031,6 +2038,7 @@ export default function DraftEditorPage() {
       if (description !== single.description) patch.description = description;
     }
     if (content && JSON.stringify(images) !== JSON.stringify(content.imageUrls)) patch.imageUrls = images;
+    if (content && JSON.stringify(descImages) !== JSON.stringify(content.descriptionImages ?? null)) patch.descriptionImages = descImages;
     if (aspectsChanged) patch.aspects = editedAspects;
     if (condition !== ((variation ? variation.variants[0]?.condition : single!.condition) || "NEW")) patch.condition = condition;
     if (policiesChanged) patch.listingPolicies = policyIds;
@@ -2385,13 +2393,34 @@ export default function DraftEditorPage() {
         const data = await api.uploadDraftImage(latest.id, file, target);
         latest = data.listing;
         if (target.replaces) {
-          setImages((imgs) => imgs.map((u) => (u === target.replaces ? data.imageUrl : u)));
+          const replaced = target.replaces;
+          setImages((imgs) => imgs.map((u) => (u === replaced ? data.imageUrl : u)));
+          setDescImages((d) => d && d.map((u) => (u === replaced ? data.imageUrl : u)));
           target = {}; // only the first file can replace; the rest append
         } else if (target.variantIndex === undefined) {
           setImages((imgs) => [...imgs, data.imageUrl]);
         }
       }
       setListing(latest);
+      // Saved already, so nothing is left to save: the eBay preview is rebuilt here.
+      previewOutdated(latest.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't upload that image.");
+    } finally {
+      setUploading(false);
+    }
+  }
+  // A photo for the description template only: on eBay at once, added after
+  // the description's photos as they stand here (saved or not).
+  async function uploadForDescription(file: File) {
+    if (!listing) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const data = await api.uploadDraftImage(listing.id, file, { forDescription: true });
+      setDescImages((d) => [...(d ?? images.slice(0, DESCRIPTION_PHOTOS)).filter((u) => u !== data.imageUrl), data.imageUrl].slice(0, DESCRIPTION_PHOTOS));
+      setListing(data.listing);
+      previewOutdated(data.listing.id);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't upload that image.");
     } finally {
@@ -2682,7 +2711,9 @@ export default function DraftEditorPage() {
       // server-side; the local gallery follows so the carousel updates.
       const data = await api.acceptDraftImage(listing.id, imageProposal.proposalId, imageProposalTarget);
       setImages((imgs) => imgs.map((u) => (u === imageProposalTarget ? data.imageUrl : u)));
+      setDescImages((d) => d && d.map((u) => (u === imageProposalTarget ? data.imageUrl : u)));
       setListing(data.listing);
+      previewOutdated(data.listing.id);
       setImageProposal(null);
       setImageProposalTarget(null);
     } catch (err) {
@@ -3316,6 +3347,17 @@ export default function DraftEditorPage() {
                     )}
                   </div>
                 )}
+                <DescriptionPhotos
+                  chosen={descImages}
+                  listingPhotos={images}
+                  otherPhotos={[...(variation?.variants.flatMap((v) => v.imageUrls || []) || []), ...Object.values(imageOverrides)]}
+                  template={templatePhotos}
+                  settingsHref={`/accounts/${params.id}/settings?tab=template`}
+                  editable={editable && !busy}
+                  uploading={uploading}
+                  onChange={setDescImages}
+                  onUpload={uploadForDescription}
+                />
               </div>
 
               {variation && (

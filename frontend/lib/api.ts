@@ -1002,16 +1002,28 @@ export interface OrderEvent {
 
 // A message Liston sent the buyer by itself (the delivered thank-you).
 export interface OrderMessage {
-  kind: "delivered";
-  status: "sent" | "failed";
+  kind: "placed" | "delivered";
+  status: "sending" | "sent" | "failed" | "skipped";
   error: string | null;
   sentAt: string;
 }
 // The account's buyer-message settings (Settings → Messages).
+export type BuyerMessageKind = "placed" | "delivered";
+export interface BuyerMessageSetting {
+  enabled: boolean;
+  text: string | null; // null: Liston's wording (defaultText)
+  enabledAt: string | null;
+  defaultText: string;
+}
 export interface BuyerMessageSettings {
-  delivered: { enabled: boolean; text: string | null; enabledAt: string | null; defaultText: string };
+  placed: BuyerMessageSetting; // the welcome, as soon as a buyer orders
+  delivered: BuyerMessageSetting; // the thank-you once eBay shows it delivered
+  store: string; // what {store} signs off with
   canMessage: boolean; // the eBay sign-in allows messaging (an older one needs a reconnect)
-  recent: { items: { orderId: string; kind: string; status: "sent" | "failed"; buyer: string | null; error: string | null; sentAt: string }[]; last30: { sent: number; failed: number } };
+  recent: {
+    items: { orderId: string; kind: BuyerMessageKind; status: "sent" | "failed" | "skipped"; buyer: string | null; error: string | null; sentAt: string }[];
+    last30: { sent: number; failed: number; byKind: Partial<Record<BuyerMessageKind, { sent: number; failed: number; skipped: number }>> };
+  };
 }
 
 export interface OrderDetailResponse {
@@ -1209,6 +1221,8 @@ export interface SingleDraftContent {
   title: string;
   description: string;
   imageUrls: string[];
+  // The photos the description template's gallery shows (up to 8); absent: the listing's.
+  descriptionImages?: string[];
   aspects?: Record<string, string[]>;
   condition?: string;
   quantity: number;
@@ -1244,6 +1258,8 @@ export interface VariationDraftContent {
   commonTitle: string;
   commonDescription: string;
   imageUrls: string[];
+  // The photos the description template's gallery shows (up to 8); absent: the listing's.
+  descriptionImages?: string[];
   variesBy: {
     aspects: Record<string, string[]>;
     aspectsImageVariesBy: string[];
@@ -1267,6 +1283,13 @@ export interface VariationDraftContent {
 }
 
 export type DraftContent = SingleDraftContent | VariationDraftContent;
+
+// Whether the account's description template shows the listing's photos (the Showcase layouts do; Classic doesn't).
+export interface DescriptionTemplatePhotos {
+  layout: string;
+  name: string;
+  photos: boolean;
+}
 
 export function isVariationDraft(content: DraftContent): content is VariationDraftContent {
   return "variants" in content;
@@ -1398,6 +1421,8 @@ export interface PriceBreakdown {
 // Only what changed. Variants are keyed by index (a local draft has no SKUs
 // yet); removals are expressed as such rather than as a replacement array.
 export interface DraftPatch {
+  // The description template's photos; null: the listing's own.
+  descriptionImages?: string[] | null;
   title?: string;
   commonTitle?: string;
   description?: string;
@@ -2801,8 +2826,8 @@ export const api = {
     ),
 
   getConnectionMessages: (id: string) => request<BuyerMessageSettings>(`/api/connections/${id}/messages`),
-  updateConnectionMessages: (id: string, delivered: { enabled: boolean; text: string | null }) =>
-    request<BuyerMessageSettings>(`/api/connections/${id}/messages`, { method: "PUT", body: JSON.stringify({ delivered }) }),
+  updateConnectionMessages: (id: string, changes: Partial<Record<BuyerMessageKind, { enabled: boolean; text?: string | null }>>) =>
+    request<BuyerMessageSettings>(`/api/connections/${id}/messages`, { method: "PUT", body: JSON.stringify(changes) }),
   updateConnectionTemplate: (id: string, template: DescriptionTemplate) =>
     request<{ settings: { template: DescriptionTemplate } }>(`/api/connections/${id}/template`, {
       method: "PUT",
@@ -2839,7 +2864,7 @@ export const api = {
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
 
   getDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null; policyWords?: string[]; canPublish?: boolean }>(`/api/listings/${listingId}`),
+    request<{ listing: DraftListing; policies: ConnectionPolicies | null; template?: DescriptionTemplatePhotos | null; category: DraftCategoryInfo | null; policyWords?: string[]; canPublish?: boolean }>(`/api/listings/${listingId}`),
 
   // Ways out when eBay refuses the draft's variation attribute in its category.
   getVariationFixes: (listingId: string) => request<VariationFixes>(`/api/listings/${listingId}/variation-fixes`),
@@ -2902,8 +2927,9 @@ export const api = {
     }),
   // The seller's own photo, sent as a data: URL. `replaces` swaps an existing
   // image wherever it appears; `variantIndex` sets a variation's photo;
-  // neither appends to the gallery.
-  uploadDraftImage: (listingId: string, file: File, target: { replaces?: string; variantIndex?: number } = {}) =>
+  // `forDescription` adds it to the description template's photos only;
+  // none of them appends to the gallery.
+  uploadDraftImage: (listingId: string, file: File, target: { replaces?: string; variantIndex?: number; forDescription?: boolean } = {}) =>
     new Promise<{ listing: DraftListing; imageUrl: string }>((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(new ApiError("Couldn't read that file.", 400));

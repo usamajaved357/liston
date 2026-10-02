@@ -315,6 +315,18 @@ const PLACEHOLDERS = [
   ['reviews', 'The reviews section as HTML'],
 ];
 
+/**
+ * Whether the account's description template shows the listing's photos:
+ * the Showcase layouts do (a gallery of up to 8), Classic and a seller's own
+ * HTML don't. { layout, name, photos }.
+ */
+function templatePhotos(template, marketplaceId) {
+  const t = templateWithDefaults(template, marketplaceId);
+  const custom = Boolean(t.customHtml && t.customHtml.trim());
+  const layout = LAYOUTS.find((l) => l.id === t.layout) || LAYOUTS[0];
+  return { layout: custom ? 'custom' : layout.id, name: custom ? 'your own HTML' : layout.name, photos: !custom && showcase.VARIANTS.includes(layout.id) };
+}
+
 function fillPlaceholders(html, values) {
   return String(html).replace(/\{\{\s*([a-zA-Z]+)\s*\}\}/g, (match, key) => (key in values ? String(values[key]) : match));
 }
@@ -502,4 +514,4 @@ function renderTemplateSource({ template, marketplaceId }) {
     .replace(/\{\{Condition\}\}/g, '{{condition}}');
 }
 
-module.exports = { LAYOUTS, renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, dropSellerNotes, listItem, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS };
+module.exports = { LAYOUTS, renderDescription, renderTemplateSource, fillPlaceholders, textToHtml, dropSellerNotes, listItem, templateWithDefaults, DEFAULT_TEMPLATE, PLACEHOLDERS, FONTS, templatePhotos };

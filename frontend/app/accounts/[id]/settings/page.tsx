@@ -658,7 +658,7 @@ export default function AccountSettingsPage() {
         connection.platform_key === "ebay" && (
             // Tabs and Save stay put while the page scrolls. The row spans
             // exactly the left column, so Save sits on that column's edge.
-            <div className={tab === "template" ? "max-w-6xl xl:grid xl:grid-cols-[minmax(0,1fr)_460px] xl:gap-6" : "max-w-3xl"}>
+            <div className={tab === "template" ? "max-w-6xl xl:grid xl:grid-cols-[minmax(0,1fr)_460px] xl:gap-6" : tab === "messages" ? "max-w-4xl" : "max-w-3xl"}>
               <div className="flex items-center justify-between gap-3">
                 <PillTabs label="Settings" tabs={tabs.map((t) => ({ key: t.key, label: t.label, attention: t.attention }))} value={tab} onChange={setTab} />
                 {!loading && tab !== "messages" && saveControl}
@@ -670,7 +670,7 @@ export default function AccountSettingsPage() {
       {connection.platform_key !== "ebay" ? (
         <Alert variant="info">Settings aren&apos;t available for {connection.platform_name} yet.</Alert>
       ) : (
-        <div className={tab === "template" ? "max-w-6xl" : "max-w-3xl"}>
+        <div className={tab === "template" ? "max-w-6xl" : tab === "messages" ? "max-w-4xl" : "max-w-3xl"}>
           {tab === "policies" &&
             (loading ? (
               <Skeleton />

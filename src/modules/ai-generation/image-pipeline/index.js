@@ -130,15 +130,14 @@ async function buildVariantImage({ sourceImageUrl, accessToken, marketplaceId })
   }
 }
 
-/** The draft's photos (gallery and variations) that aren't on eBay yet. */
-function unhostedImages(draft) {
-  const all = [...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])];
-  return [...new Set(all.filter((url) => url && !eps.isEbayHosted(url)))];
+/** Every photo URL on a draft: gallery, variations and the description's own choice. */
+function draftImages(draft) {
+  return [...new Set([...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || []), ...(draft.descriptionImages || [])].filter(Boolean))];
 }
 
-/** Every photo URL on a draft: gallery and variations. */
-function draftImages(draft) {
-  return [...new Set([...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])].filter(Boolean))];
+/** The draft's photos (gallery, variations, description) that aren't on eBay yet. */
+function unhostedImages(draft) {
+  return draftImages(draft).filter((url) => !eps.isEbayHosted(url));
 }
 
 /**
@@ -150,6 +149,7 @@ function swapDraftImages(draft, hosted, dropped = []) {
   const swap = (urls) => [...new Set((urls || []).map((url) => hosted.get(url) || url).filter((url) => !dropped.includes(url)))];
   const imageUrls = swap(draft.imageUrls);
   const next = { ...draft, imageUrls };
+  if (Array.isArray(draft.descriptionImages)) next.descriptionImages = swap(draft.descriptionImages);
   if (Array.isArray(draft.variants)) {
     next.variants = draft.variants.map((variant) => {
       const own = swap(variant.imageUrls);

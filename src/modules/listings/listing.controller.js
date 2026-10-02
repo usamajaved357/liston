@@ -121,10 +121,10 @@ async function removeInactive(req, res, next) {
 
 async function getOne(req, res, next) {
   try {
-    const { listing, policies, category, policyWords } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
+    const { listing, policies, template, category, policyWords } = await listingService.getDraftDetail(req.params.listingId, req.ownerId);
     // Whether this person's Publish button shows (a live listing's changes don't need it).
     const canPublish = await canPublishListings(req, listing?.connection_id || req.listingRow?.connection_id);
-    res.status(200).json({ listing, policies, category, policyWords, canPublish });
+    res.status(200).json({ listing, policies, template, category, policyWords, canPublish });
   } catch (err) {
     next(err);
   }
@@ -246,6 +246,9 @@ const updateDraftSchema = z
     aspects: z.record(z.array(z.string())).optional(),
     // Order matters: position 0 is the search thumbnail.
     imageUrls: z.array(z.string().url()).optional(),
+    // The photos the description template's gallery shows, in order (up to
+    // 8, each one of the draft's own); null: the listing's photos.
+    descriptionImages: z.array(z.string().url()).max(8, 'The description shows up to 8 photos.').nullable().optional(),
     price: offerPriceSchema.optional(),
     quantity: z.number().int().min(0).optional(),
     // Policies can differ per listing (a fragile item ships differently);
@@ -410,6 +413,8 @@ const uploadImageSchema = z.object({
   dataUrl: z.string().min(30).max(20 * 1024 * 1024),
   replaces: z.string().url().optional(),
   variantIndex: z.number().int().min(0).optional(),
+  // A photo for the description template's gallery only, not the listing's.
+  forDescription: z.boolean().optional(),
 });
 
 async function uploadImage(req, res, next) {

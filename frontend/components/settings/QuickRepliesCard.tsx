@@ -1,9 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, QuickReply, QuickReplyList, ebayInboxApi } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { TOKENS, fillReply, unknownTokens } from "@/components/inbox/ebay/quick-replies";
+import { TOKENS, fillReply } from "@/components/inbox/ebay/quick-replies";
+import { SettingsSection } from "./SettingsSection";
+import { FillIn, TemplateEditor, TokenText } from "./TemplateEditor";
 
 // Settings → Messages: the account's quick replies, the messages the Inbox's
 // reply box offers on "/". Each has a name (what's picked) and its text,
@@ -23,103 +25,48 @@ const SAMPLE = {
   delivery: "between 6 October and 9 October",
 };
 
-// Each fill-in in a word or two, for the strip above the list (the full sentence is its tooltip).
-const SHORT: Record<string, string> = { buyer: "first name", username: "eBay username", item: "the item", order: "order number", carrier: "delivery company", tracking: "tracking number", delivery: "when it's due" };
-
-/** A reply's text with its fill-ins marked (one Liston doesn't know in amber). */
-function TokenText({ text }: { text: string }) {
-  const parts = text.split(/(\{[a-z_]+\})/gi);
-  return (
-    <>
-      {parts.map((part, i) => {
-        const token = /^\{([a-z_]+)\}$/i.exec(part);
-        if (!token) return <Fragment key={i}>{part}</Fragment>;
-        const known = (TOKENS as readonly string[]).includes(token[1].toLowerCase());
-        return (
-          <span key={i} className={`rounded px-[3px] font-medium ${known ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "bg-amber-50 text-amber-700"}`}>
-            {part}
-          </span>
-        );
-      })}
-    </>
-  );
-}
+// Each fill-in in a word or two, for its chip (the full sentence is its tooltip).
+const SHORT: Record<string, string> = { buyer: "First name", username: "eBay username", item: "Item", order: "Order number", carrier: "Delivery company", tracking: "Tracking number", delivery: "When it's due" };
 
 type Draft = { id: string | null; name: string; body: string };
 
-function Editor({ draft, tokens, limits, saving, error, onChange, onSave, onCancel }: { draft: Draft; tokens: QuickReplyList["tokens"]; limits: QuickReplyList["limits"]; saving: boolean; error: string | null; onChange: (d: Draft) => void; onSave: () => void; onCancel: () => void }) {
-  const area = useRef<HTMLTextAreaElement>(null);
-  const caret = useRef<number | null>(null);
-  const strange = unknownTokens(draft.body);
-
-  useEffect(() => {
-    if (caret.current === null || !area.current) return;
-    area.current.focus();
-    area.current.setSelectionRange(caret.current, caret.current);
-    caret.current = null;
-  }, [draft.body]);
-
-  // A fill-in goes where the cursor is (or at the end).
-  function insert(key: string) {
-    const el = area.current;
-    const token = `{${key}}`;
-    const from = el?.selectionStart ?? draft.body.length;
-    const to = el?.selectionEnd ?? from;
-    caret.current = from + token.length;
-    onChange({ ...draft, body: `${draft.body.slice(0, from)}${token}${draft.body.slice(to)}` });
-  }
-
+function Editor({ draft, tokens, limits, store, saving, error, onChange, onSave, onCancel }: { draft: Draft; tokens: QuickReplyList["tokens"]; limits: QuickReplyList["limits"]; store: string; saving: boolean; error: string | null; onChange: (d: Draft) => void; onSave: () => void; onCancel: () => void }) {
+  const fillIns: FillIn[] = tokens.map((t) => ({ key: t.key, label: SHORT[t.key] || t.key, hint: t.label }));
   return (
-    <div className="bg-[var(--color-paper)]/60 px-6 py-5">
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <div className="min-w-0 space-y-3">
-          <div>
-            <label htmlFor="quick-name" className="text-[12px] font-semibold text-[var(--color-ink)]">
-              Name
-            </label>
-            <input id="quick-name" value={draft.name} onChange={(e) => onChange({ ...draft, name: e.target.value })} maxLength={limits.name} placeholder="What you'll pick it by, e.g. Dispatched" className="input mt-1.5 w-full text-[13px]" autoFocus={!draft.id} />
-          </div>
-          <div>
-            <label htmlFor="quick-body" className="text-[12px] font-semibold text-[var(--color-ink)]">
-              Message
-            </label>
-            <textarea ref={area} id="quick-body" value={draft.body} onChange={(e) => onChange({ ...draft, body: e.target.value })} rows={10} maxLength={limits.body} placeholder={"Hi {buyer},\n\n…"} className="input mt-1.5 !h-auto w-full resize-y py-2 text-[13px] leading-relaxed" />
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span className="mr-0.5 text-[11.5px] text-[var(--color-muted)]">Add</span>
-              {tokens.map((t) => (
-                <button key={t.key} type="button" onClick={() => insert(t.key)} title={t.label} className="rounded-md bg-[var(--color-primary-soft)] px-1.5 py-0.5 font-mono text-[11.5px] text-[var(--color-primary)] transition-colors hover:bg-[var(--color-primary)] hover:text-white">
-                  {`{${t.key}}`}
-                </button>
-              ))}
-              <span className="ml-auto text-[11.5px] tabular-nums text-[var(--color-muted)]">
-                {draft.body.length} / {limits.body.toLocaleString()}
-              </span>
-            </div>
-            {strange.length > 0 && <p className="mt-1.5 text-[11.5px] text-amber-700">{strange.join(", ")} isn&apos;t a fill-in Liston knows, so it would reach the buyer as it is.</p>}
-          </div>
+    <TemplateEditor
+      id={`quick-body-${draft.id || "new"}`}
+      value={draft.body}
+      onChange={(body) => onChange({ ...draft, body })}
+      fillIns={fillIns}
+      limit={limits.body}
+      preview={draft.body.trim() ? fillReply(draft.body, SAMPLE) : ""}
+      from={store}
+      to={SAMPLE.buyer}
+      note="Filled in from the conversation when it's used. A fill-in the conversation doesn't have yet (tracking before it's sent, say) stays in the reply box to fill in by hand before it goes."
+      top={
+        <div>
+          <label htmlFor={`quick-name-${draft.id || "new"}`} className="text-[12px] font-semibold text-[var(--color-ink)]">
+            Name
+          </label>
+          <input id={`quick-name-${draft.id || "new"}`} value={draft.name} onChange={(e) => onChange({ ...draft, name: e.target.value })} maxLength={limits.name} placeholder="What you'll pick it by, e.g. Dispatched" className="input mt-1.5 w-full text-[13px]" autoFocus={!draft.id} />
         </div>
-        <div className="min-w-0">
-          <p className="text-[12px] font-semibold text-[var(--color-ink)]">What the buyer reads</p>
-          <div className="mt-1.5 whitespace-pre-line rounded-2xl rounded-tl-sm bg-[var(--color-panel)] px-4 py-3 text-[13px] leading-relaxed text-[var(--color-ink)] shadow-[var(--shadow-bubble)]">{draft.body.trim() ? fillReply(draft.body, SAMPLE) : <span className="text-[var(--color-muted)]">Your message, filled in for an example order.</span>}</div>
-          <p className="mt-2 text-[11.5px] leading-snug text-[var(--color-muted)]">
-            Filled in from the conversation when it&apos;s used. A fill-in the conversation doesn&apos;t have yet (tracking before it&apos;s sent, say) stays in the reply box to fill in by hand before it goes.
-          </p>
-        </div>
-      </div>
-      <div className="mt-4 flex items-center justify-end gap-2">
-        {error && <span className="mr-auto text-[12.5px] text-[var(--color-danger)]">{error}</span>}
-        <button type="button" onClick={onCancel} className="btn btn-ghost btn-sm">
-          Cancel
-        </button>
-        <button type="button" onClick={onSave} disabled={saving || !draft.name.trim() || !draft.body.trim()} className="btn btn-primary btn-sm">
-          {saving ? "Saving…" : draft.id ? "Save" : "Add quick reply"}
-        </button>
-      </div>
-    </div>
+      }
+      footer={
+        <>
+          {error && <span className="mr-auto text-[12.5px] text-[var(--color-danger)]">{error}</span>}
+          <button type="button" onClick={onCancel} className="btn btn-ghost btn-sm">
+            Cancel
+          </button>
+          <button type="button" onClick={onSave} disabled={saving || !draft.name.trim() || !draft.body.trim()} className="btn btn-primary btn-sm">
+            {saving ? "Saving…" : draft.id ? "Save" : "Add quick reply"}
+          </button>
+        </>
+      }
+    />
   );
 }
 
-export function QuickRepliesCard({ connectionId }: { connectionId: string }) {
+export function QuickRepliesCard({ connectionId, store = "" }: { connectionId: string; store?: string }) {
   const [data, setData] = useState<QuickReplyList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -176,64 +123,61 @@ export function QuickRepliesCard({ connectionId }: { connectionId: string }) {
     }
   }
 
-  if (!data) return loadError ? <div className="card px-6 py-5 text-[13px] text-[var(--color-danger)]">{loadError}</div> : <div className="card h-48 animate-pulse" />;
-  const full = data.replies.length >= data.limits.count;
+  const full = Boolean(data && data.replies.length >= data.limits.count);
+  const addButton = data?.canEdit && (
+    <button type="button" onClick={() => edit({ id: null, name: "", body: "Hi {buyer},\n\n" })} disabled={full || Boolean(draft && !draft.id)} className="btn btn-secondary btn-sm flex-shrink-0 gap-1.5" title={full ? `Up to ${data.limits.count} quick replies` : undefined}>
+      <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+        <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      </svg>
+      Add a quick reply
+    </button>
+  );
+  const known = data?.tokens.map((t) => t.key) || [...TOKENS];
 
   return (
+    <SettingsSection
+      title="Quick replies"
+      description={
+        <>
+          Type <kbd className="rounded border border-[var(--color-line)] bg-[var(--color-panel)] px-1 font-mono text-[12px]">/</kbd> in a buyer conversation to pick one. It loads into the reply box with its fill-ins completed, for you to check before sending.
+        </>
+      }
+      action={addButton}
+    >
+      {!data ? (
+        loadError ? <div className="card px-6 py-5 text-[13px] text-[var(--color-danger)]">{loadError}</div> : <div className="card h-48 animate-pulse" />
+      ) : (
     <div className="card overflow-hidden">
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--color-line)] px-6 py-5">
-        <div className="min-w-[240px] flex-1">
-          <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Quick replies</h2>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            Type <kbd className="rounded border border-[var(--color-line)] bg-[var(--color-paper)] px-1 font-mono text-[12px]">/</kbd> in a buyer conversation to pick one. It loads into the reply box with its fill-ins completed, for you to check before sending.
-          </p>
-        </div>
-        {data.canEdit && (
-          <button type="button" onClick={() => edit({ id: null, name: "", body: "Hi {buyer},\n\n" })} disabled={full || Boolean(draft && !draft.id)} className="btn btn-secondary btn-sm flex-shrink-0 gap-1.5" title={full ? `Up to ${data.limits.count} quick replies` : undefined}>
-            <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
-              <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-            Add a quick reply
-          </button>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-[var(--color-line)] px-6 py-3 text-[12px] text-[var(--color-muted)]">
-        <span className="font-semibold text-[var(--color-ink)]">Fill-ins</span>
-        {data.tokens.map((t) => (
-          <span key={t.key} className="inline-flex items-center gap-1.5" title={t.label}>
-            <code className="rounded bg-[var(--color-primary-soft)] px-1 font-mono text-[11.5px] text-[var(--color-primary)]">{`{${t.key}}`}</code>
-            {SHORT[t.key] || t.label}
-          </span>
-        ))}
-      </div>
-
-      {draft && !draft.id && <Editor draft={draft} tokens={data.tokens} limits={data.limits} saving={saving} error={error} onChange={setDraft} onSave={save} onCancel={() => setDraft(null)} />}
+      {draft && !draft.id && <Editor draft={draft} tokens={data.tokens} limits={data.limits} store={store} saving={saving} error={error} onChange={setDraft} onSave={save} onCancel={() => setDraft(null)} />}
 
       {data.replies.length === 0 && !draft ? (
         <p className="px-6 py-8 text-center text-[13px] text-[var(--color-muted)]">No quick replies yet. Add the messages you send most, and they&apos;re a &ldquo;/&rdquo; away in every conversation.</p>
       ) : (
-        <ul className="divide-y divide-[var(--color-line)]">
+        <ul className={`divide-y divide-[var(--color-line)] ${draft && !draft.id ? "border-t border-[var(--color-line)]" : ""}`}>
           {data.replies.map((r) =>
             draft?.id === r.id ? (
-              <li key={r.id}>
-                <Editor draft={draft} tokens={data.tokens} limits={data.limits} saving={saving} error={error} onChange={setDraft} onSave={save} onCancel={() => setDraft(null)} />
+              <li key={r.id} className="[&>div]:border-t-0">
+                <Editor draft={draft} tokens={data.tokens} limits={data.limits} store={store} saving={saving} error={error} onChange={setDraft} onSave={save} onCancel={() => setDraft(null)} />
               </li>
             ) : (
-              <li key={r.id} className="group flex items-start gap-4 px-6 py-3.5">
+              <li key={r.id} className="group flex items-start gap-4 px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)]/50 sm:px-6">
                 <button type="button" onClick={() => data.canEdit && edit({ id: r.id, name: r.name, body: r.body })} className="min-w-0 flex-1 text-left" disabled={!data.canEdit}>
                   <span className="block text-[13.5px] font-semibold text-[var(--color-ink)]">{r.name}</span>
                   <span className="mt-0.5 line-clamp-2 text-[12.5px] leading-[19px] text-[var(--color-muted)]">
-                    <TokenText text={r.body.replace(/\s+/g, " ")} />
+                    <TokenText text={r.body.replace(/\s+/g, " ")} known={known} />
                   </span>
                 </button>
                 {data.canEdit && (
-                  <span className="flex flex-shrink-0 items-center gap-1 pt-0.5 opacity-70 transition-opacity group-hover:opacity-100">
-                    <button type="button" onClick={() => edit({ id: r.id, name: r.name, body: r.body })} className="rounded-full px-2.5 py-1 text-[12px] font-medium text-[var(--color-primary)] hover:bg-[var(--color-primary-soft)]">
-                      Edit
+                  <span className="flex flex-shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+                    <button type="button" onClick={() => edit({ id: r.id, name: r.name, body: r.body })} aria-label={`Edit ${r.name}`} title="Edit" className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-muted)] hover:bg-[var(--color-primary-soft)] hover:text-[var(--color-primary)]">
+                      <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+                        <path d="M12.5 4.5l3 3L7 16H4v-3l8.5-8.5z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                      </svg>
                     </button>
-                    <button type="button" onClick={() => setDeleting(r)} className="rounded-full px-2.5 py-1 text-[12px] font-medium text-[var(--color-muted)] hover:bg-rose-50 hover:text-rose-600">
-                      Delete
+                    <button type="button" onClick={() => setDeleting(r)} aria-label={`Delete ${r.name}`} title="Delete" className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-muted)] hover:bg-rose-50 hover:text-rose-600">
+                      <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+                        <path d="M4.5 6h11M8 6V4.5h4V6M6 6l.7 9.2a1 1 0 001 .8h4.6a1 1 0 001-.8L14 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
                     </button>
                   </span>
                 )}
@@ -243,9 +187,11 @@ export function QuickRepliesCard({ connectionId }: { connectionId: string }) {
         </ul>
       )}
       {data.replies.length > 0 && (
-        <div className="border-t border-[var(--color-line)] px-6 py-2.5 text-[11.5px] text-[var(--color-muted)]">
+        <div className="border-t border-[var(--color-line)] px-5 py-2.5 text-[11.5px] text-[var(--color-muted)] sm:px-6">
           {data.replies.length} of up to {data.limits.count}
         </div>
+      )}
+    </div>
       )}
 
       <ConfirmDialog
@@ -258,6 +204,6 @@ export function QuickRepliesCard({ connectionId }: { connectionId: string }) {
         onConfirm={remove}
         onCancel={() => setDeleting(null)}
       />
-    </div>
+    </SettingsSection>
   );
 }
