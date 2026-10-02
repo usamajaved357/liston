@@ -48,9 +48,9 @@ const KIND: Record<string, Kind> = {
     note: "border-slate-300",
     icon: <path d="M5 6.5h10M8.5 6.5V5h3v1.5M6.5 6.5l.6 8.5h5.8l.6-8.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />,
   },
-  // The owner gave you owner access, or took it away.
+  // The workspace owner made you a co-manager (owner access), or stopped it.
   "team.owner_access_given": {
-    label: "Owner access",
+    label: "Co-manager",
     ring: "bg-indigo-50 text-indigo-600 ring-indigo-200",
     chip: "bg-indigo-50 text-indigo-700 ring-indigo-200",
     note: "border-indigo-300",
@@ -73,7 +73,7 @@ const KIND: Record<string, Kind> = {
       </>
     ),
   },
-  // Another owner added you to their workspace.
+  // Another workspace owner added you to their workspace.
   "team.added": {
     label: "New workspace",
     ring: "bg-teal-50 text-teal-600 ring-teal-200",

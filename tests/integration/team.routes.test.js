@@ -232,7 +232,7 @@ test('DELETE /api/team/members/:id removes the login but keeps the member, who c
   assert.strictEqual(status, 401, 'signed out at the next request');
   const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
   assert.strictEqual(login.status, 403);
-  assert.match(login.data.error, /removed by the account owner/);
+  assert.match(login.data.error, /removed by the workspace owner/);
 
   const { data } = await request('GET', '/api/team/members', undefined, ownerToken);
   assert.ok(data.members.find((m) => m.id === memberId).deactivated_at, 'still listed, as removed');

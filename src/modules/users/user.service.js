@@ -68,7 +68,7 @@ async function deleteAccount(userId) {
   const user = await userRepository.findRoleInfo(userId);
   if (!user) throw new UserError('User not found', 404);
   if (await userRepository.hasOwnerAccessAnywhere(userId)) {
-    throw new UserError('Your login has owner access in a workspace, so only that workspace\'s owner can remove it, from their Team page.', 403);
+    throw new UserError('You\'re a co-manager in a workspace, so only that workspace\'s owner can remove your login, from their Members page.', 403);
   }
   if (user.role === 'owner') await userRepository.deleteLoginsOnlyIn(userId);
   await userRepository.deleteById(userId);

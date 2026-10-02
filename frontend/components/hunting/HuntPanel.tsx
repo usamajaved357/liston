@@ -52,8 +52,8 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
           {hunt.foundByListon
             ? hunt.permissions.canDecide
               ? ` Hunted from ${hunt.addedFrom === "research" ? "Product research" : "Discover"}: it's approved only when you approve it here.`
-              : ` Hunted from ${hunt.addedFrom === "research" ? "Product research" : "Discover"}: the owner or a reviewer approves or rejects it.`
-            : hunt.hunter?.id === you && " The owner or a reviewer decides on it."}
+              : ` Hunted from ${hunt.addedFrom === "research" ? "Product research" : "Discover"}: the workspace owner or a reviewer approves or rejects it.`
+            : hunt.hunter?.id === you && " The workspace owner or a reviewer decides on it."}
         </Banner>
       );
     case "sent_back":
@@ -94,7 +94,7 @@ function StatusBanner({ hunt, you }: { hunt: HuntDetail; you: string }) {
     case "approved":
       return (
         <Banner tone="emerald">
-          <b className="font-semibold">Approved</b> {hunt.autoApproved ? "as the owner added it" : `by ${who(hunt.reviewer)}`} {ago(hunt.decidedAt)}.
+          <b className="font-semibold">Approved</b> {hunt.autoApproved ? "as the workspace owner added it" : `by ${who(hunt.reviewer)}`} {ago(hunt.decidedAt)}.
           {hunt.decisionNote && <Quote text={hunt.decisionNote} />}
           {hunt.draftState === "drafting" && <p className="mt-1 text-[12.5px] text-emerald-900/80">Liston is drafting it now, with the options that earn. It moves to the Drafts page when it&apos;s done.</p>}
           {hunt.draftState === "failed" && (
@@ -179,7 +179,7 @@ function Timeline({ events, you }: { events: HuntTimelineEvent[]; you: string })
                 </b>
                 {e.by ? ` by ${e.by.id === you ? "you" : e.by.name}` : e.system ? " by Liston" : ""}
                 {e.from === "research" ? " from Product research" : e.from === "discover" ? " from Discover" : e.byListon ? " (supplier found by Liston)" : ""}
-                {e.auto ? " (the owner's own find, approved as added)" : ""}
+                {e.auto ? " (the workspace owner's own find, approved as added)" : ""}
                 {e.reason ? ` · ${e.reason}` : ""}
                 <span className="text-[var(--color-muted)]"> · {new Date(e.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</span>
               </p>
@@ -565,8 +565,8 @@ export function HuntPanel({ huntId, you, onClose, onChanged, startEditing = fals
         title="Remove this product?"
         description={
           hunt?.hunter && hunt.hunter.id !== you
-            ? `It comes off the hunting list, whatever its stage, and ${hunt.hunter.name} is notified. Its history stays in the team's activity.`
-            : "It comes off the hunting list, whatever its stage. Its history stays in the team's activity."
+            ? `It comes off the hunting list, whatever its stage, and ${hunt.hunter.name} is notified. Its history stays in the workspace's activity.`
+            : "It comes off the hunting list, whatever its stage. Its history stays in the workspace's activity."
         }
         confirmLabel="Remove"
         danger

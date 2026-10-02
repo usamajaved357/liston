@@ -119,7 +119,7 @@ export function MemberAccess({ connection }: { connection: Connection }) {
         )}
       </div>
       {areas.length === 0 ? (
-        <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">Nothing switched on here yet. Ask your team owner for access.</p>
+        <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">Nothing switched on here yet. Ask the workspace owner or a co-manager for access.</p>
       ) : (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {areas.map((a) => (

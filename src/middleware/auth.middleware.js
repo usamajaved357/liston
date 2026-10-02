@@ -45,7 +45,7 @@ async function requireAuth(req, res, next) {
     const asked = req.headers['x-liston-workspace'] || null;
     const picked = teams.pickTeam(session.teams, { asked, last: user.last_workspace_id });
     // A member removed from every team they were in is signed out at their next request.
-    if (picked.none) return ended(res, 'This login has been removed by the account owner.');
+    if (picked.none) return ended(res, 'This login has been removed by the workspace owner.');
     if (picked.refused) return res.status(403).json({ error: "You're not in that workspace any more.", code: 'TEAM_GONE' });
     if (payload.iat && Date.now() - payload.iat * 1000 > RENEW_AFTER_MS) res.setHeader('X-Liston-Token', authService.issueToken(user));
     const { role, coOwner } = teams.roleIn(picked.team);

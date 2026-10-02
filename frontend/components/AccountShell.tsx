@@ -8,6 +8,7 @@ import { AccountTimeZoneProvider } from "@/lib/timezone";
 import { SyncStatus } from "@/components/SyncStatus";
 import { SITE_TIMEZONES } from "@/components/orders/order-ui";
 import { SidebarHeader } from "@/components/SidebarHeader";
+import { SidebarFooter } from "@/components/SidebarFooter";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
 import { NotificationBell } from "@/components/NotificationBell";
@@ -243,6 +244,8 @@ export function AccountShell({
           )}
         </nav>
 
+        {/* Who's signed in, and Log out. */}
+        <SidebarFooter />
       </>
       }
     >

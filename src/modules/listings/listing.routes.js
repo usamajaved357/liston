@@ -77,7 +77,7 @@ async function requirePublish(req, res, next) {
     const listing = req.listingRow;
     const liveEdit = Boolean(listing?.edit_of_item_id) && !listing?.source_data?.ended;
     if (!listing || liveEdit || (await canPublishListings(req, listing.connection_id))) return next();
-    return res.status(403).json({ error: "You can draft and edit on this account, but publishing to eBay needs the Publish listings access. Ask the owner to publish it, or to give you that access." });
+    return res.status(403).json({ error: "You can draft and edit on this account, but publishing to eBay needs the Publish listings access. Ask the workspace owner or a co-manager to publish it, or to give you that access." });
   } catch (err) {
     return next(err);
   }

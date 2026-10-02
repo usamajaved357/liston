@@ -465,7 +465,7 @@ function MemberPageBody() {
         router.replace("/login");
         return;
       }
-      setError(err instanceof ApiError ? (err.status === 404 ? "This team member doesn't exist, or isn't on your team." : err.message) : "Couldn't load this team member.");
+      setError(err instanceof ApiError ? (err.status === 404 ? "This member doesn't exist, or isn't in your workspace." : err.message) : "Couldn't load this member.");
     } finally {
       setAnswered(figuresKey);
     }
@@ -520,7 +520,7 @@ function MemberPageBody() {
   // Their login and access are the viewer's to change (canManageMember); owner access is the owner's alone.
   const manage = Boolean(member && canManageMember(user, member));
   const isOwner = user.role === "owner" && !user.owner_access;
-  const ownerName = user.owner?.name || user.owner?.email || "the account owner";
+  const ownerName = user.owner?.name || user.owner?.email || "the workspace owner";
 
   return (
     <AppShell
@@ -534,8 +534,8 @@ function MemberPageBody() {
           <Link
             href="/team"
             className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"
-            aria-label="Back to Team"
-            title="Back to Team"
+            aria-label="Back to Members"
+            title="Back to Members"
           >
             <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
               <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -544,7 +544,7 @@ function MemberPageBody() {
           {member && <MemberAvatar member={member} size={46} />}
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 truncate text-lg font-semibold text-[var(--color-ink)]">
-              <span className="truncate">{name || "Team member"}</span>
+              <span className="truncate">{name || "Member"}</span>
               {member?.id === user.id && <YouBadge />}
               {member?.owner_access_at && <OwnerAccessBadge size="md" />}
               {removed && <span className="chip text-[11px] font-medium text-[var(--color-muted)]">Removed {formatShortDate(member!.deactivated_at!)}</span>}
@@ -642,8 +642,8 @@ function MemberPageBody() {
             )}
             {tab === "access" && memberForGrid?.owner_access_at && (
               <p className="px-1 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-                {`With owner access, ${member!.id === user.id ? "you" : member!.name || "they"} can use every area on every account and team chat's channels.`}
-                {isOwner && " The access set for them before is kept, and applies again if you take owner access away."}
+                {`As a co-manager, ${member!.id === user.id ? "you" : member!.name || "they"} can use every area on every account and workspace chat's channels.`}
+                {isOwner && " The access set for them before is kept, and applies again if they stop being a co-manager."}
               </p>
             )}
             {tab === "access" && memberForGrid && !memberForGrid.owner_access_at && manage && (
@@ -679,7 +679,7 @@ function MemberPageBody() {
       <ConfirmDialog
         open={confirmRemove}
         title={`Remove ${name}'s access?`}
-        description={`They're signed out and can't log in from now on. Their work stays on record here, and you can restore them any time${member?.owner_access_at ? ", with their owner access" : ""}.`}
+        description={`They're signed out and can't log in from now on. Their work stays on record here, and you can restore them any time${member?.owner_access_at ? ", still a co-manager" : ""}.`}
         confirmLabel="Remove access"
         danger
         loading={busy}
@@ -715,11 +715,11 @@ function ChatManageRow({ permissions, name, disabled, onChange }: { permissions:
         #
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold text-[var(--color-ink)]">Manage team chat channels</p>
-        <p className="text-[11.5px] text-[var(--color-muted)]">Everyone has team chat. With this, {name} can also make, rename, archive and delete channels and choose who&apos;s in them.</p>
+        <p className="text-[13px] font-semibold text-[var(--color-ink)]">Manage chat channels</p>
+        <p className="text-[11.5px] text-[var(--color-muted)]">Everyone has workspace chat. With this, {name} can also make, rename, archive and delete channels and choose who&apos;s in them.</p>
       </div>
       <span className={`hidden text-[11.5px] font-medium sm:inline ${on ? "text-emerald-700" : "text-[var(--color-muted)]"}`}>{on ? "On" : "Off"}</span>
-      <Switch on={on} disabled={disabled || busy} onChange={flip} label="Manage team chat channels" />
+      <Switch on={on} disabled={disabled || busy} onChange={flip} label="Manage chat channels" />
     </div>
   );
 }

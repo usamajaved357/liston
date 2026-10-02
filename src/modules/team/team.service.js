@@ -70,7 +70,7 @@ async function listMembers(ownerId, { timeZone = null } = {}) {
 // `connectionId`: one eBay account's work only (a member's own Overview there).
 async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone = null, connectionId = null } = {}) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
-  if (!member) throw new TeamError('Team member not found', 404);
+  if (!member) throw new TeamError('Member not found', 404);
   const connections = await connectionRepository.findAllByUser(ownerId);
   // One account's days are that account's site's, as on its Overview.
   const scoped = connectionId ? connections.find((c) => c.id === connectionId) : null;
@@ -166,7 +166,7 @@ async function getMemberOverview(ownerId, memberId, { range, from, to, timeZone 
  * units, no amounts. Members only; an owner's account Overview has the rest.
  */
 async function getOwnWork(viewer, connectionId, { range, from, to, timeZone = null } = {}) {
-  if (viewer.role !== 'member') throw new TeamError('This shows a team member their own work.', 403);
+  if (viewer.role !== 'member') throw new TeamError('This shows a member their own work.', 403);
   const data = await getMemberOverview(viewer.ownerId, viewer.userId, { range, from, to, timeZone, connectionId });
   const resolved = await teamRepository.getResolvedPermissions(viewer.userId, connectionId);
   const counts = (list) => (list || []).map(({ orders, units, lastAt }) => ({ orders, units, lastAt }));
@@ -222,7 +222,7 @@ async function clock(auth, { working, area, connectionId = null }) {
  */
 async function getMemberTime(ownerId, memberId, { range, from, to, timeZone = null } = {}) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
-  if (!member) throw new TeamError('Team member not found', 404);
+  if (!member) throw new TeamError('Member not found', 404);
   const win = activity.rangeWindow(range, { from, to, timeZone: await zoneFor(ownerId, timeZone) });
   const [minutes, prevMinutes, rows, prevRows, since] = await Promise.all([
     workTimeRepository.minutesFor(ownerId, memberId, win.startsAt, win.endsAt),
@@ -264,7 +264,7 @@ const FEED_MAX = 5000;
  */
 async function getMemberActivity(ownerId, memberId, { range, from, to, timeZone = null, kind, connectionId, before, limit = 50 } = {}) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
-  if (!member) throw new TeamError('Team member not found', 404);
+  if (!member) throw new TeamError('Member not found', 404);
   const win = activity.rangeWindow(range, { from, to, timeZone: await zoneFor(ownerId, timeZone) });
   // A figure's name (e.g. "cases") stands for all of its kinds.
   const metric = activity.METRICS.find((m) => m.key === kind);
@@ -307,7 +307,7 @@ async function addMember(ownerId, { email, name, password }, actor = null) {
     const already = await teamRepository.findMemberForOwner(existing.id, ownerId);
     if (already) {
       const who = already.name || already.email;
-      throw new TeamError(already.deactivated_at ? `${who} was removed earlier. Restore them from Former members on the Team page instead.` : `${who} is already in this workspace.`, 409);
+      throw new TeamError(already.deactivated_at ? `${who} was removed earlier. Restore them from Former members on the Members page instead.` : `${who} is already in this workspace.`, 409);
     }
     const member = await teamRepository.addMembership({ ownerId, userId: existing.id, addedBy: actor?.userId || ownerId });
     const [team, owner] = await Promise.all([workspaceRepository.nameOf(ownerId), userRepository.findByIdWithPlan(ownerId)]);
@@ -341,10 +341,10 @@ async function addMember(ownerId, { email, name, password }, actor = null) {
 // the owner's alone.
 async function manageable(actor, memberId, ownerId) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
-  if (!member) throw new TeamError('Team member not found', 404);
+  if (!member) throw new TeamError('Member not found', 404);
   if (actor?.coOwner) {
-    if (String(member.id) === String(actor.userId)) throw new TeamError('Your own login and access are managed by the account owner.', 403);
-    if (member.owner_access_at) throw new TeamError(`${member.name || member.email} has owner access, so only the account owner can change their login or access.`, 403);
+    if (String(member.id) === String(actor.userId)) throw new TeamError('Your own login and access are managed by the workspace owner.', 403);
+    if (member.owner_access_at) throw new TeamError(`${member.name || member.email} is a co-manager, so only the workspace owner can change their login or access.`, 403);
   }
   return member;
 }
@@ -360,7 +360,7 @@ async function setMemberPassword(memberId, ownerId, password, actor) {
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   const updated = await teamRepository.setMemberPassword(memberId, ownerId, passwordHash);
   if (!updated) {
-    throw new TeamError('Team member not found', 404);
+    throw new TeamError('Member not found', 404);
   }
 }
 
@@ -371,7 +371,7 @@ async function removeMember(memberId, ownerId, actor) {
   await manageable(actor, memberId, ownerId);
   const done = await teamRepository.setMemberDeactivated(memberId, ownerId, true);
   if (!done) {
-    throw new TeamError('Team member not found', 404);
+    throw new TeamError('Member not found', 404);
   }
 }
 
@@ -379,7 +379,7 @@ async function restoreMember(memberId, ownerId, actor) {
   await manageable(actor, memberId, ownerId);
   const done = await teamRepository.setMemberDeactivated(memberId, ownerId, false);
   if (!done) {
-    throw new TeamError('Team member not found', 404);
+    throw new TeamError('Member not found', 404);
   }
 }
 
@@ -391,25 +391,25 @@ async function restoreMember(memberId, ownerId, actor) {
  * access. Returns the member.
  */
 async function setOwnerAccess(memberId, ownerId, on, actor) {
-  if (actor?.coOwner) throw new TeamError('Only the account owner can give or take away owner access.', 403);
+  if (actor?.coOwner) throw new TeamError('Only the workspace owner can make someone a co-manager or stop it.', 403);
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
-  if (!member) throw new TeamError('Team member not found', 404);
+  if (!member) throw new TeamError('Member not found', 404);
   if (on && member.deactivated_at) throw new TeamError(`${member.name || member.email} was removed. Restore them first.`, 409);
   if (Boolean(member.owner_access_at) === on) return member;
   const updated = await teamRepository.setOwnerAccess(memberId, ownerId, on);
-  if (!updated) throw new TeamError('Team member not found', 404);
+  if (!updated) throw new TeamError('Member not found', 404);
   if (!member.deactivated_at) {
     const [owner, team] = await Promise.all([userRepository.findByIdWithPlan(ownerId), workspaceRepository.nameOf(ownerId)]);
-    const ownerName = owner?.name || owner?.email || 'The account owner';
-    const inTeam = team ? ` in ${team}` : '';
+    const ownerName = owner?.name || owner?.email || 'The workspace owner';
+    const inTeam = team ? ` of ${team}` : '';
     await notificationsService.notify({
       userId: memberId,
       ownerId,
       actorUserId: actor?.userId || ownerId,
       kind: on ? 'team.owner_access_given' : 'team.owner_access_removed',
-      title: on ? `${ownerName} gave you owner access${inTeam}` : `${ownerName} took away your owner access${inTeam}`,
+      title: on ? `${ownerName} made you a co-manager${inTeam}` : `${ownerName} stopped you being a co-manager${inTeam}`,
       body: on
-        ? 'You can now see and do everything the owner can: every eBay account, settings, and the rest of the team.'
+        ? 'You can now see and do everything the workspace owner can: every eBay account, settings, and the rest of the workspace.'
         : "You're back to the access set for you in the workspace. Reload Liston to see it.",
       url: on ? '/dashboard' : '/connections',
       subjectType: 'member',
@@ -422,7 +422,7 @@ async function setOwnerAccess(memberId, ownerId, on, actor) {
 async function getMemberPermissions(memberId, ownerId) {
   const member = await teamRepository.findMemberForOwner(memberId, ownerId);
   if (!member) {
-    throw new TeamError('Team member not found', 404);
+    throw new TeamError('Member not found', 404);
   }
   return teamRepository.getPermissions(memberId, ownerId);
 }
@@ -472,6 +472,29 @@ async function renameTeam(ownerId, name, actor = null) {
   return workspaceRepository.rename(ownerId, clean);
 }
 
+/**
+ * Deletes the workspace: its owner only, who types its name to confirm.
+ * Everything in it goes, with the member logins in no other workspace. The
+ * owner's login stays when they're in another workspace (a member there from
+ * then on) and goes with it otherwise. { loginKept }.
+ */
+async function deleteWorkspace(ownerId, confirmName, actor = null) {
+  if (!actor || actor.coOwner || String(actor.userId) !== String(ownerId)) throw new TeamError('Only the workspace owner can delete it.', 403);
+  const name = await workspaceRepository.nameOf(ownerId);
+  if (!name) throw new TeamError('Workspace not found', 404);
+  if (String(confirmName || '').trim().toLowerCase() !== name.trim().toLowerCase()) {
+    throw new TeamError(`Type the workspace's name, ${name}, to delete it.`, 400);
+  }
+  const session = await workspaceRepository.sessionFor(ownerId);
+  if ((session?.teams || []).some((t) => !t.own)) {
+    await workspaceRepository.removeKeepingLogin(ownerId);
+    return { loginKept: true };
+  }
+  await userRepository.deleteLoginsOnlyIn(ownerId);
+  await userRepository.deleteById(ownerId);
+  return { loginKept: false };
+}
+
 module.exports = {
   KNOWN_FEATURES: teamRepository.KNOWN_FEATURES,
   listMembers,
@@ -486,6 +509,7 @@ module.exports = {
   setMemberPassword,
   setOwnerAccess,
   renameTeam,
+  deleteWorkspace,
   getMemberPermissions,
   updateMemberPermissions,
   TeamError,

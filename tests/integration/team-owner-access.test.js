@@ -94,7 +94,7 @@ test('owner access gives a member everything the owner has, and taking it away p
   // They were told.
   const { rows: told } = await pool.query(`SELECT kind, title FROM notifications WHERE user_id = $1 ORDER BY created_at`, [t.partner.id]);
   assert.deepStrictEqual(told.map((n) => n.kind), ['team.owner_access_given']);
-  assert.match(told[0].title, /Olive Owner gave you owner access/);
+  assert.match(told[0].title, /Olive Owner made you a co-manager/);
 
   // Taken away: back to their own (empty) access from the next request.
   const removed = await giveOwnerAccess(t, t.partner, false);

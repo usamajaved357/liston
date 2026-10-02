@@ -105,7 +105,9 @@ export function SidebarHeader({ account }: { account?: { id: string; label: stri
           <p className={title} title={team.name}>
             {team.name}
           </p>
-          <p className="mt-1 truncate text-[11.5px] leading-4 text-[var(--color-muted)]">{n ? `${ROLE_LABEL[team.role]} · ${n} eBay account${n === 1 ? "" : "s"}` : ROLE_LABEL[team.role]}</p>
+          <p className="mt-1 truncate text-[11.5px] leading-4 text-[var(--color-muted)]" title={n ? `${n} eBay account${n === 1 ? "" : "s"}` : undefined}>
+            {ROLE_LABEL[team.role]}
+          </p>
         </div>
         {toggle}
       </div>

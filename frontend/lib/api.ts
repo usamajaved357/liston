@@ -2587,6 +2587,8 @@ export const api = {
   switchTeam: (id: string) => request<{ team: { id: string; role: "owner" | "member"; coOwner: boolean } }>("/api/users/me/team", { method: "POST", body: JSON.stringify({ id }) }),
   teamOfConnection: (connectionId: string) => request<{ team: { id: string } }>(`/api/users/me/team-of?connectionId=${encodeURIComponent(connectionId)}`),
   renameTeam: (name: string) => request<{ team: { id: string; name: string } }>("/api/team/name", { method: "PUT", body: JSON.stringify({ name }) }),
+  // Deletes the workspace (its owner, typing its name); `loginKept` when they're in another workspace.
+  deleteWorkspace: (name: string) => request<{ loginKept: boolean }>("/api/team/workspace", { method: "DELETE", body: JSON.stringify({ name }) }),
   // The owner's dashboard: "today" is the viewer's own day.
   overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}&tz=${encodeURIComponent(viewerTimeZone())}`),
 

@@ -108,7 +108,7 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (added: Added) => void; onC
       const { member, existingLogin } = await api.addTeamMember({ email, name: name || undefined, password: password || undefined });
       onAdd({ email: member.email, name: member.name, password: existingLogin ? null : password });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add this team member. Try again.");
+      setError(err instanceof ApiError ? err.message : "Couldn't add this member. Try again.");
     } finally {
       setSubmitting(false);
     }
@@ -118,7 +118,7 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (added: Added) => void; onC
     <form onSubmit={handleSubmit} className="card p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Add a team member</h2>
+          <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Add a member</h2>
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Open them once added to choose what they can see.</p>
         </div>
         <button type="button" onClick={onCancel} className="btn btn-ghost btn-icon" aria-label="Close">
@@ -287,10 +287,10 @@ export default function TeamPage() {
         return;
       }
       if (err instanceof ApiError && err.status === 403) {
-        setError("Only the account owner can manage team members.");
+        setError("Only the workspace owner or a co-manager can manage members.");
         return;
       }
-      setError("Couldn't load your team. Try refreshing.");
+      setError("Couldn't load the members. Try refreshing.");
     } finally {
       setLoading(false);
     }
@@ -340,7 +340,7 @@ export default function TeamPage() {
             }}
           />
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            {`Teammates get their own login and see only what ${user.owner_access ? "they're allowed" : "you allow"}. Open one to see their work and change their access.`}
+            {`Members get their own login and see only what ${user.owner_access ? "they're allowed" : "you allow"}. Open one to see their work and change their access.`}
           </p>
         </div>
       }
@@ -359,7 +359,7 @@ export default function TeamPage() {
             <div className="mb-4 flex items-start gap-3 rounded-xl border border-[var(--color-primary)]/20 bg-[var(--color-primary-soft)]/60 px-4 py-3">
               <OwnerAccessBadge size="md" />
               <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-[var(--color-ink)]">
-                {`${user.owner?.name || user.owner?.email || "The account owner"} gave you owner access, so you run the team. Your own login and anyone else's with owner access are ${user.owner?.name || "the owner"}'s to change.`}
+                {`${user.owner?.name || user.owner?.email || "The workspace owner"} made you a co-manager, so you run the workspace. Your own login and other co-managers' are ${user.owner?.name || "the workspace owner"}'s to change.`}
               </p>
             </div>
           )}
@@ -368,7 +368,7 @@ export default function TeamPage() {
             <>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <p className="text-[13px] text-[var(--color-muted)]">
-                  <span className="font-medium text-[var(--color-ink)]">{active.length}</span> team member{active.length === 1 ? "" : "s"}
+                  <span className="font-medium text-[var(--color-ink)]">{active.length}</span> member{active.length === 1 ? "" : "s"}
                 </p>
                 {!adding && (
                   <button type="button" onClick={() => setAdding(true)} className="btn btn-primary btn-sm">
@@ -413,8 +413,8 @@ export default function TeamPage() {
               {active.length === 0 ? (
                 !adding && (
                   <div className="card px-6 py-12 text-center">
-                    <p className="text-sm font-medium text-[var(--color-ink)]">No team members yet</p>
-                    <p className="mt-1 text-[13px] text-[var(--color-muted)]">Add a teammate, then open them to pick which accounts and areas they can work in.</p>
+                    <p className="text-sm font-medium text-[var(--color-ink)]">No members yet</p>
+                    <p className="mt-1 text-[13px] text-[var(--color-muted)]">Add a member, then open them to pick which accounts and areas they can work in.</p>
                     <button type="button" onClick={() => setAdding(true)} className="btn btn-primary btn-sm mt-4">
                       Add your first member
                     </button>

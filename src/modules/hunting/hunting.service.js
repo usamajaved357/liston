@@ -788,7 +788,7 @@ async function decide(auth, huntId, input) {
   if (!rules.canDecide(hunt, viewer)) {
     if (!viewer.canReview) refuse("You don't review hunted products on this account.");
     if (!['pending', 'sent_back', 'approved', 'rejected'].includes(stageOf(hunt))) refuse('It has been drafted already, so its review is settled.');
-    refuse("You can't review a product you hunted. The owner or another reviewer decides on it.");
+    refuse("You can't review a product you hunted. The workspace owner or another reviewer decides on it.");
   }
   const fields = decisionFields(input);
   await huntingRepository.setDecision(hunt.id, fields, auth.userId);

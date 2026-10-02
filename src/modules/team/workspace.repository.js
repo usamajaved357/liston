@@ -1,4 +1,5 @@
-const { query } = require('../../db/client');
+const { pool, query } = require('../../db/client');
+const userRepository = require('../users/user.repository');
 
 // Teams and who's in them (migration 051): `workspaces` (one per owner, its
 // name) and `workspace_members` (a login's place in another owner's team:
@@ -77,4 +78,45 @@ async function teamOfConnection(userId, connectionId) {
   return rows[0]?.owner_id || null;
 }
 
-module.exports = { sessionFor, teamsFor, create, rename, nameOf, setLast, teamOfConnection };
+// Everything kept under a workspace's owner's id, in the order it goes: the
+// people's places and records in it, its chat, files, hunting, Discover
+// watches and supplier logins, its eBay accounts (their listings, orders,
+// messages and the rest go with them, ON DELETE CASCADE), then the workspace.
+const OWNED = [
+  ['workspace_members', 'owner_user_id'],
+  ['member_permissions', 'owner_user_id'],
+  ['member_minutes', 'owner_user_id'],
+  ['member_activity', 'owner_user_id'],
+  ['notifications', 'owner_user_id'],
+  ['chat_conversations', 'owner_user_id'],
+  ['files', 'owner_user_id'],
+  ['hunted_products', 'owner_user_id'],
+  ['discover_watches', 'owner_user_id'],
+  ['source_accounts', 'owner_user_id'],
+  ['connections', 'user_id'],
+  ['workspaces', 'owner_user_id'],
+];
+
+/**
+ * A workspace deleted while its owner's login stays (it's in other
+ * workspaces): the member logins in no other workspace go, then everything
+ * kept under the owner's id, and the login is a member's from then on, of
+ * the workspaces it's still in. One transaction.
+ */
+async function removeKeepingLogin(ownerId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await userRepository.deleteLoginsOnlyIn(ownerId, client);
+    for (const [table, column] of OWNED) await client.query(`DELETE FROM ${table} WHERE ${column} = $1`, [ownerId]);
+    await client.query(`UPDATE users SET role = 'member', last_workspace_id = NULL, updated_at = now() WHERE id = $1`, [ownerId]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { sessionFor, teamsFor, create, rename, nameOf, setLast, teamOfConnection, removeKeepingLogin };

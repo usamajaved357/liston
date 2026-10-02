@@ -61,7 +61,7 @@ test('a sign-in that has run out, or a login removed, ends the session with a co
   // Removed from every team they were in (and no team of their own).
   mock.method(workspaceRepository, 'sessionFor', async () => ({ user: { ...user, role: 'member' }, teams: [] }));
   const removed = await call(tokenAt(60));
-  assert.deepStrictEqual([removed.status, removed.body.code, removed.body.error], [401, 'SESSION_ENDED', 'This login has been removed by the account owner.']);
+  assert.deepStrictEqual([removed.status, removed.body.code, removed.body.error], [401, 'SESSION_ENDED', 'This login has been removed by the workspace owner.']);
 });
 
 test('the database failing is an error to retry, not a sign-out', async () => {

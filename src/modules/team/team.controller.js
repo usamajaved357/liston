@@ -153,13 +153,26 @@ async function renameTeam(req, res, next) {
   }
 }
 
+const deleteWorkspaceSchema = z.object({ name: z.string().max(200) });
+
+// Deletes the workspace and everything in it (its owner only, typing its name).
+async function deleteWorkspace(req, res, next) {
+  try {
+    const parsed = deleteWorkspaceSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Type the workspace's name to delete it." });
+    res.status(200).json(await teamService.deleteWorkspace(req.ownerId, parsed.data.name, actorOf(req)));
+  } catch (err) {
+    next(err);
+  }
+}
+
 const ownerAccessSchema = z.object({ ownerAccess: z.boolean() });
 
 // Gives a member owner access or takes it away (the owner only).
 async function setOwnerAccess(req, res, next) {
   try {
     const parsed = ownerAccessSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: 'Say whether they should have owner access.' });
+    if (!parsed.success) return res.status(400).json({ error: 'Say whether they should be a co-manager.' });
     const member = await teamService.setOwnerAccess(req.params.id, req.ownerId, parsed.data.ownerAccess, actorOf(req));
     res.status(200).json({ member });
   } catch (err) {
@@ -189,4 +202,4 @@ async function updateMemberPermissions(req, res, next) {
   }
 }
 
-module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, setOwnerAccess, renameTeam, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity, getMemberTime, clock };
+module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, setOwnerAccess, renameTeam, deleteWorkspace, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity, getMemberTime, clock };

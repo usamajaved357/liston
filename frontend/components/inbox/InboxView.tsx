@@ -61,7 +61,7 @@ export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOw
   const modeSwitch = (
     <PillTabs
       tabs={[
-        { key: "team" as const, label: "Team chat", count: unread.unread || undefined, countTone: unread.mentions ? "alert" : "default" },
+        { key: "team" as const, label: "Workspace chat", count: unread.unread || undefined, countTone: unread.mentions ? "alert" : "default" },
         ...(canSeeEbay ? [{ key: "ebay" as const, label: "eBay messages" }] : []),
       ]}
       value={mode}

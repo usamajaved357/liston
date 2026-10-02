@@ -22,7 +22,8 @@ import { landingPathForConnection, sectionAllowed } from "@/lib/permissions";
 // hidden from the button at the top of the sidebar; the account finder
 // (Ctrl/Cmd+K, "Find an account" in the sidebar) searches them by name.
 
-export const ROLE_LABEL: Record<UserTeam["role"], string> = { owner: "Owner", owner_access: "Owner access", member: "Team member" };
+// What the person is in a workspace: its owner, a co-manager (owner access: everything the owner has), or a member.
+export const ROLE_LABEL: Record<UserTeam["role"], string> = { owner: "Workspace owner", owner_access: "Co-manager", member: "Member" };
 
 export function initials(name: string, fallback: string) {
   const letters = name
@@ -270,16 +271,12 @@ function TeamSwitch() {
                 );
               })}
             </div>
-            {teams.length < 2 && <p className="border-t border-[var(--color-line)] px-3.5 py-2.5 text-[12px] leading-snug text-[var(--color-muted)]">When another owner adds you to their workspace, it shows here.</p>}
-            {team.role !== "member" && (
-              <Link href="/team" onClick={() => setAt(null)} className="flex items-center gap-2 border-t border-[var(--color-line)] px-3.5 py-2.5 text-[12.5px] font-medium text-[var(--color-ink)] hover:bg-[var(--color-paper)]">
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-[var(--color-muted)]" aria-hidden>
-                  <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  <circle cx="17" cy="8.5" r="2.3" stroke="currentColor" strokeWidth="1.6" />
-                  <path d="M15.5 14c2.5 0 5 1.6 5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                </svg>
-                {team.role === "owner" ? "Workspace name and members" : "Team members"}
+            {teams.length < 2 && <p className="border-t border-[var(--color-line)] px-3.5 py-2.5 text-[12px] leading-snug text-[var(--color-muted)]">When another workspace owner adds you to their workspace, it shows here.</p>}
+            {/* Workspace settings (its name, people, accounts, deleting it): its owner's alone. */}
+            {team.role === "owner" && (
+              <Link href="/workspace" onClick={() => setAt(null)} className="flex items-center gap-2.5 border-t border-[var(--color-line)] px-3.5 py-2.5 text-[12.5px] font-medium text-[var(--color-ink)] hover:bg-[var(--color-paper)]">
+                <span className="text-[var(--color-muted)]">{SETTINGS_ICON}</span>
+                Workspace settings
               </Link>
             )}
           </div>,
@@ -309,6 +306,16 @@ function useScrollEdges() {
   }, []);
   return { scroller, content, edges, measure };
 }
+
+// Settings: three sliders (the account's Settings tab draws the same).
+export const SETTINGS_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+    <path d="M4 7h10M18 7h2M4 12h2M10 12h10M4 17h10M18 17h2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <circle cx="16" cy="7" r="2" stroke="currentColor" strokeWidth="1.8" />
+    <circle cx="8" cy="12" r="2" stroke="currentColor" strokeWidth="1.8" />
+    <circle cx="16" cy="17" r="2" stroke="currentColor" strokeWidth="1.8" />
+  </svg>
+);
 
 export const DASHBOARD_ICON = (
   <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>

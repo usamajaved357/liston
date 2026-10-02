@@ -324,7 +324,7 @@ const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink
     ink: "text-emerald-600",
     details: [
       { label: "By a reviewer", of: (w) => num(w.approved) - num(w.approvedAsAdded), hint: "Opened on the Hunting page and approved" },
-      { label: "Owner's own", of: (w) => num(w.approvedAsAdded), hint: "Hunted by the owner with their own supplier: approved as added" },
+      { label: "Owner's own", of: (w) => num(w.approvedAsAdded), hint: "Hunted by the workspace owner with their own supplier: approved as added" },
     ],
   },
   {

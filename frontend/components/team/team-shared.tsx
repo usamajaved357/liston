@@ -253,19 +253,19 @@ const KEY_ICON = (
   </>
 );
 
-/** "Owner access" beside a member's name. */
+/** "Co-manager" beside a member's name (owner access: everything the workspace owner has). */
 export function OwnerAccessBadge({ size = "sm" }: { size?: "sm" | "md" }) {
   return (
     <span
       className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/20 ${
         size === "md" ? "h-6 px-2.5 text-[11.5px]" : "h-5 px-2 text-[10.5px]"
       }`}
-      title="Everything the owner can see and do"
+      title="Everything the workspace owner can see and do"
     >
       <svg viewBox="0 0 20 20" fill="none" className={size === "md" ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden>
         {KEY_ICON}
       </svg>
-      Owner access
+      Co-manager
     </span>
   );
 }
@@ -286,7 +286,7 @@ export function canManageMember(viewer: { id: string; owner_access?: boolean }, 
   return member.id !== viewer.id && !member.owner_access_at;
 }
 
-const OWNER_ACCESS_GIVES = ["Every eBay account and every area in it", "Connecting and removing eBay accounts, and every account's settings", "Adding team members and changing their access"];
+const OWNER_ACCESS_GIVES = ["Every eBay account and every area in it", "Connecting and removing eBay accounts, and every account's settings", "Adding members and changing their access"];
 
 /**
  * The top of a member's Access tab: owner access, everything the owner has.
@@ -330,24 +330,24 @@ export function OwnerAccessCard({ member, canChange, ownerName, onChange }: { me
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Owner access</h2>
-            {on && <span className="text-[11.5px] font-medium text-[var(--color-primary)]">On since {formatShortDate(member.owner_access_at!)}</span>}
+            <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Co-manager</h2>
+            {on && <span className="text-[11.5px] font-medium text-[var(--color-primary)]">Since {formatShortDate(member.owner_access_at!)}</span>}
           </div>
           <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
             {canChange
               ? on
-                ? `${name} sees and does everything you can, and runs the rest of the team. They can't change your login, their own, or anyone else's with owner access. Only you can take it away.`
-                : `Gives ${name} everything you can see and do, and the rest of the team to run. Only you can give it or take it away, and only you manage a login that has it.`
+                ? `${name} sees and does everything you can, and runs the rest of the workspace. They can't change your login, their own, or another co-manager's. Only you can stop it.`
+                : `Makes ${name} a co-manager: everything you can see and do, and the rest of the workspace to run. Only you make someone a co-manager or stop it, and only you manage a co-manager's login.`
               : on
-                ? `Everything ${ownerName} can see and do, and the rest of the team to run. Only ${ownerName} can change this login or take owner access away.`
-                : `Only ${ownerName} can give owner access.`}
+                ? `Everything ${ownerName} can see and do, and the rest of the workspace to run. Only ${ownerName} can change this login or stop you being a co-manager.`
+                : `Only ${ownerName}, the workspace owner, can make someone a co-manager.`}
           </p>
-          {canChange && removed && !on && <p className="mt-1 text-[12px] text-[var(--color-muted)]">{`Restore ${first === "they" ? "them" : first} first to give owner access.`}</p>}
+          {canChange && removed && !on && <p className="mt-1 text-[12px] text-[var(--color-muted)]">{`Restore ${first === "they" ? "them" : first} first to make them a co-manager.`}</p>}
         </div>
         {canChange && (
           <span className="flex flex-shrink-0 items-center gap-2 pt-1.5">
             <span className={`hidden text-[11.5px] font-medium sm:inline ${on ? "text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`}>{on ? "On" : "Off"}</span>
-            <Switch on={on} disabled={busy || (!on && removed)} onChange={() => setAsking(!on)} label="Owner access" />
+            <Switch on={on} disabled={busy || (!on && removed)} onChange={() => setAsking(!on)} label="Co-manager" />
           </span>
         )}
       </div>
@@ -357,7 +357,7 @@ export function OwnerAccessCard({ member, canChange, ownerName, onChange }: { me
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => !busy && setAsking(null)}>
           <div role="alertdialog" aria-modal="true" aria-labelledby="owner-access-title" className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h2 id="owner-access-title" className="text-lg font-semibold text-[var(--color-ink)]">
-              {asking ? `Give ${name} owner access?` : `Take away ${name}'s owner access?`}
+              {asking ? `Make ${name} a co-manager?` : `Stop ${name} being a co-manager?`}
             </h2>
             {asking ? (
               <>
@@ -373,7 +373,7 @@ export function OwnerAccessCard({ member, canChange, ownerName, onChange }: { me
                   ))}
                 </ul>
                 <p className="mt-3 rounded-lg bg-[var(--color-paper)] px-3 py-2 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-                  They can&apos;t change your login, their own, or anyone else&apos;s with owner access, and can&apos;t give owner access to anyone. You can take it away at any time.
+                  They can&apos;t change your login, their own, or another co-manager&apos;s, and can&apos;t make anyone a co-manager. You can stop it at any time.
                 </p>
               </>
             ) : (
@@ -385,7 +385,7 @@ export function OwnerAccessCard({ member, canChange, ownerName, onChange }: { me
                 Cancel
               </button>
               <button type="button" onClick={() => apply(asking)} disabled={busy} className={`btn ${asking ? "btn-primary" : "btn-danger"}`}>
-                {busy ? (asking ? "Giving…" : "Taking away…") : asking ? "Give owner access" : "Take away owner access"}
+                {busy ? (asking ? "Making co-manager…" : "Stopping…") : asking ? "Make co-manager" : "Stop being co-manager"}
               </button>
             </div>
           </div>
@@ -567,7 +567,7 @@ export function AccessGrid({
 
 /** "Orders and Listings on all accounts" / "on 3 of 9 accounts" / "No access yet". */
 export function accessSummary(member: TeamMember, connections: Connection[], knownFeatures: string[]): string {
-  if (member.owner_access_at) return "Everything the owner can see and do · all accounts";
+  if (member.owner_access_at) return "Everything the workspace owner can see and do · all accounts";
   const rows = permissionsGrid(member, connections, knownFeatures);
   const global = rows[0].values;
   const perAccount = rows.slice(1);

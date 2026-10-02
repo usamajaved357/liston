@@ -178,9 +178,9 @@ export function TeamChat({
                 <path d="M4 6.5A2.5 2.5 0 016.5 4h11A2.5 2.5 0 0120 6.5v7a2.5 2.5 0 01-2.5 2.5H10l-4 4v-4A2 2 0 014 14V6.5z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
               </svg>
             </span>
-            <p className="mt-3 text-[15px] font-semibold text-[var(--color-ink)]">Talk to your team</p>
+            <p className="mt-3 text-[15px] font-semibold text-[var(--color-ink)]">Chat with your workspace</p>
             <p className="mt-1 max-w-sm text-[13px] leading-relaxed text-[var(--color-muted)]">
-              Channels and direct messages for everyone in your team, with threads, voice messages and files. Paste an order number, item number or Liston link and it becomes a card anyone can open in the right account.
+              Channels and direct messages for everyone in your workspace, with threads, voice messages and files. Paste an order number, item number or Liston link and it becomes a card anyone can open in the right account.
             </p>
             <button type="button" onClick={() => setDialog("chat")} className="btn btn-primary btn-sm mt-4">
               New message

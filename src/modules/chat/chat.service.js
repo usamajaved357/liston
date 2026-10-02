@@ -221,7 +221,7 @@ async function requireMember(auth, id) {
 
 async function requireManage(auth, conversation) {
   if (conversation.kind === 'channel' ? !(await canManageChannels(auth)) : conversation.kind !== 'group') {
-    refuse(conversation.kind === 'channel' ? 'Only the owner, or someone given Manage channels, can change channels.' : "A direct message can't be changed.");
+    refuse(conversation.kind === 'channel' ? 'Only the workspace owner, a co-manager, or someone given Manage channels, can change channels.' : "A direct message can't be changed.");
   }
 }
 
@@ -231,7 +231,7 @@ async function teamIds(auth, ids) {
   const out = [];
   for (const id of ids || []) {
     const p = everyone.get(String(id));
-    if (!p || p.deactivated_at) refuse("That person isn't in your team.", 400);
+    if (!p || p.deactivated_at) refuse("That person isn't in your workspace.", 400);
     out.push(String(p.id));
   }
   return [...new Set(out)];
@@ -287,7 +287,7 @@ async function validAccount(auth, connectionId) {
 
 /** Makes a channel (owner or Manage channels): its name, topic, public or private, an account it's about, its first people. */
 async function createChannel(auth, { name, topic = null, isPrivate = false, connectionId = null, userIds = [] }) {
-  if (!(await canManageChannels(auth))) refuse('Only the owner, or someone given Manage channels, can make channels.');
+  if (!(await canManageChannels(auth))) refuse('Only the workspace owner, a co-manager, or someone given Manage channels, can make channels.');
   const clean = rules.channelName(name);
   if (!rules.validChannelName(clean)) refuse('Name the channel with letters, numbers and hyphens (e.g. flipx-orders).', 400);
   if (await chatRepository.findChannelByName(auth.ownerId, clean)) refuse(`There's already a #${clean}.`, 409);
@@ -361,7 +361,7 @@ async function remove(auth, id) {
   const c = await chatRepository.findConversation(id, auth.ownerId);
   if (!c) refuse('Conversation not found.', 404);
   if (c.kind !== 'channel') refuse('Only channels can be deleted.', 400);
-  if (!(await canManageChannels(auth))) refuse('Only the owner, or someone given Manage channels, can delete channels.');
+  if (!(await canManageChannels(auth))) refuse('Only the workspace owner, a co-manager, or someone given Manage channels, can delete channels.');
   const members = await chatRepository.membersOf([id]);
   await chatRepository.deleteConversation(id);
   userEvents.emitMany(members.map((m) => String(m.user_id)), { type: 'chat.conversation', conversationId: id, removed: true });

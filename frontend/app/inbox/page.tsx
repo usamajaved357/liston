@@ -4,10 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
-import { MemberSidebarFooter } from "@/components/MemberSidebarFooter";
 import { NotificationBell } from "@/components/NotificationBell";
 import { PageSkeleton } from "@/components/PageSkeleton";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { InboxView } from "@/components/inbox/InboxView";
 
@@ -18,7 +16,6 @@ export default function InboxPage() {
   const cachedUser = useCachedUser();
   const [liveUser, setUser] = useState<User | null>(null);
   const user = liveUser ?? cachedUser;
-  const [confirmLogout, setConfirmLogout] = useState(false);
 
   useEffect(() => {
     if (!localStorage.getItem("token")) {
@@ -55,12 +52,11 @@ export default function InboxPage() {
       role={user.role}
       isAdmin={user.is_admin}
       fill
-      sidebarFooter={isOwner ? undefined : <MemberSidebarFooter user={user} onLogout={() => setConfirmLogout(true)} />}
       header={
         <div className="flex items-start justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">Inbox</h1>
-            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Talk to your team.</p>
+            <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Chat with everyone in your workspace.</p>
           </div>
           <NotificationBell />
         </div>
@@ -69,17 +65,6 @@ export default function InboxPage() {
       <Suspense fallback={null}>
         <InboxView me={user.id} isOwner={isOwner} />
       </Suspense>
-      <ConfirmDialog
-        open={confirmLogout}
-        title="Log out?"
-        description="You'll need your email and password to come back."
-        confirmLabel="Log out"
-        onConfirm={() => {
-          localStorage.removeItem("token");
-          router.push("/login");
-        }}
-        onCancel={() => setConfirmLogout(false)}
-      />
     </AppShell>
   );
 }

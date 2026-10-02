@@ -767,7 +767,7 @@ async function deleteNote(auth, connectionId, conversationId, noteId) {
   await buyerConversation(auth, connectionId, conversationId);
   const note = /^\d+$/.test(String(noteId)) ? await inboxRepository.findNote(connectionId, conversationId, noteId) : null;
   if (!note) throw new InboxError('Note not found.', 404);
-  if (auth.role !== 'owner' && String(note.author_user_id) !== String(auth.userId)) throw new InboxError('Only who wrote a note, or the owner, can delete it.', 403);
+  if (auth.role !== 'owner' && String(note.author_user_id) !== String(auth.userId)) throw new InboxError('Only who wrote a note, the workspace owner or a co-manager, can delete it.', 403);
   await inboxRepository.deleteNote(note.id);
   await announce(connectionId, auth.ownerId, { conversationId });
   return { ok: true };

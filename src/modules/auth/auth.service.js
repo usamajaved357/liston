@@ -198,7 +198,7 @@ async function login({ email, password }) {
   const session = await workspaceRepository.sessionFor(user.id);
   const picked = teams.pickTeam(session?.teams || [], { last: session?.user.last_workspace_id });
   if (picked.none) {
-    throw new AuthError('This login has been removed by the account owner.', 403);
+    throw new AuthError('This login has been removed by the workspace owner.', 403);
   }
   await query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
   // When each person started, for their record in every team they're in (attendance).

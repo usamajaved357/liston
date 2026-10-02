@@ -7,14 +7,13 @@ import { landingPathForConnection } from "@/lib/permissions";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
-import { AccountMenu } from "@/components/AccountMenu";
+import { HeaderAvatar } from "@/components/AccountMenu";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Alert } from "@/components/Alert";
 import { AccountCards } from "@/components/AccountCards";
 import { AddConnectionPanel } from "@/components/AddConnectionPanel";
 import { MemberAccess } from "@/components/MemberAccess";
 import { NotificationBell } from "@/components/NotificationBell";
-import { MemberSidebarFooter } from "@/components/MemberSidebarFooter";
 import { ebayConnectError } from "@/lib/connect-errors";
 
 const TrashIcon = (
@@ -109,8 +108,6 @@ function ConnectionBanner() {
 // lands, so it must always be a real page rather than something that
 // bounces the viewer back to where they came from.
 function MemberHome({ user, connections, loading }: { user: User; connections: Connection[]; loading: boolean }) {
-  const router = useRouter();
-  const [confirmLogout, setConfirmLogout] = useState(false);
   const first = (user.name || "").trim().split(/\s+/)[0] || null;
   const attention = connections.filter((c) => c.status !== "active").length;
 
@@ -120,7 +117,6 @@ function MemberHome({ user, connections, loading }: { user: User; connections: C
       maxConnections={0}
       planName=""
       role="member"
-      sidebarFooter={<MemberSidebarFooter user={user} onLogout={() => setConfirmLogout(true)} />}
       header={
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -158,7 +154,7 @@ function MemberHome({ user, connections, loading }: { user: User; connections: C
       ) : connections.length === 0 ? (
         <div className="card mx-auto max-w-md px-6 py-10 text-center">
           <p className="text-[14px] font-semibold text-[var(--color-ink)]">No accounts yet</p>
-          <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">Ask whoever manages Liston for your team to give you access to an account. It shows here as soon as they do.</p>
+          <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">Ask the workspace owner or a co-manager to give you access to an account. It shows here as soon as they do.</p>
         </div>
       ) : (
         <AccountCards
@@ -174,18 +170,6 @@ function MemberHome({ user, connections, loading }: { user: User; connections: C
           }
         />
       )}
-
-      <ConfirmDialog
-        open={confirmLogout}
-        title="Log out?"
-        description="You'll need to log in again to access your accounts."
-        confirmLabel="Log out"
-        onCancel={() => setConfirmLogout(false)}
-        onConfirm={() => {
-          localStorage.removeItem("token");
-          router.push("/login");
-        }}
-      />
     </AppShell>
   );
 }
@@ -200,7 +184,6 @@ export default function ConnectionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
-  const [confirmLogout, setConfirmLogout] = useState(false);
   const [pendingDeleteConnectionId, setPendingDeleteConnectionId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -244,10 +227,6 @@ export default function ConnectionsPage() {
     return () => window.removeEventListener("liston:add-account", onAdd);
   }, []);
 
-  function handleLogout() {
-    localStorage.removeItem("token");
-    router.push("/login");
-  }
 
   async function handleDeleteConnection() {
     if (!pendingDeleteConnectionId) return;
@@ -303,12 +282,7 @@ export default function ConnectionsPage() {
             <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">The marketplace accounts Liston can draft and publish to.</p>
           </div>
           <div className="page-header-controls">
-            <AccountMenu
-              email={user.email}
-              subtitle={`${planName} plan`}
-              avatarUrl={user.avatar_url}
-              onLogout={() => setConfirmLogout(true)}
-            />
+            <HeaderAvatar email={user.email} avatarUrl={user.avatar_url} />
           </div>
         </div>
       }
@@ -373,15 +347,6 @@ export default function ConnectionsPage() {
           )}
         </>
       )}
-
-      <ConfirmDialog
-        open={confirmLogout}
-        title="Log out?"
-        description="You'll need to log in again to access your dashboard."
-        confirmLabel="Log out"
-        onCancel={() => setConfirmLogout(false)}
-        onConfirm={handleLogout}
-      />
       <ConfirmDialog
         open={pendingDeleteConnectionId !== null}
         title={pendingDelete ? `Remove ${pendingDelete.label}${pendingDelete.marketplace ? ` · ${pendingDelete.marketplace.name}` : ""}?` : "Remove this account?"}

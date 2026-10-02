@@ -101,7 +101,7 @@ export function MemberTimeView({ memberId, name, range, custom }: { memberId: st
           <p className="mx-auto mt-1 max-w-xl text-[12px] leading-relaxed text-[var(--color-muted)]">
             {data.trackedSince
               ? `${first} wasn't in Liston in these days.`
-              : `Liston keeps a team member's time from their first visit after this was switched on; ${first} hasn't been in since.`}{" "}
+              : `Liston keeps a member's time from their first visit after this was switched on; ${first} hasn't been in since.`}{" "}
             A minute counts as working when there was a click, key press or scroll in Liston within the last couple of minutes, and idle when Liston was open with
             nothing done.
           </p>

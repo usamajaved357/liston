@@ -252,7 +252,7 @@ export function MarkBadges({ marks }: { marks: ResearchMarks | null }) {
   if (marks.risk)
     out.push({
       key: "risk",
-      text: marks.risk.kind === "rejected" ? "Your team rejected one like it" : "eBay refused yours like it",
+      text: marks.risk.kind === "rejected" ? "Your workspace rejected one like it" : "eBay refused yours like it",
       tone: marks.risk.level === "bad" ? "bg-rose-50 text-rose-700 ring-rose-200" : "bg-amber-50 text-amber-800 ring-amber-200",
       title: marks.risk.text,
     });

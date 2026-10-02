@@ -1,19 +1,19 @@
 const teamRepository = require('../modules/team/team.repository');
 
 // Requires requireAuth to have run first (needs req.role/req.userId/req.ownerId).
-// A member with owner access passes (req.role is 'owner' for them).
+// A co-manager (owner access) passes (req.role is 'owner' for them).
 function requireOwner(req, res, next) {
   if (req.role !== 'owner') {
-    return res.status(403).json({ error: 'Only the account owner can do this.' });
+    return res.status(403).json({ error: 'Only the workspace owner or a co-manager can do this.' });
   }
   next();
 }
 
-// The account's own owner only, never someone given owner access: giving
-// and taking away owner access.
+// The workspace owner only, never a co-manager: making someone a co-manager
+// or stopping it, and renaming the workspace.
 function requireMainOwner(req, res, next) {
   if (req.role !== 'owner' || req.coOwner) {
-    return res.status(403).json({ error: 'Only the account owner can do this.' });
+    return res.status(403).json({ error: 'Only the workspace owner can do this.' });
   }
   next();
 }

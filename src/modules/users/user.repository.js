@@ -38,8 +38,8 @@ async function deleteById(userId) {
  * An owner's team going: the member logins that were in it alone go with
  * it (they could no longer sign in to anything); those in other teams stay.
  */
-async function deleteLoginsOnlyIn(ownerId) {
-  const { rowCount } = await query(
+async function deleteLoginsOnlyIn(ownerId, client = null) {
+  const { rowCount } = await (client || { query }).query(
     `DELETE FROM users u
       WHERE u.role = 'member'
         AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.user_id = u.id AND m.owner_user_id = $1)
