@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingSort, ListingStatusFilter } from "@/lib/api";
+import { api, ApiError, DraftListing, isVariationDraft, Listing, ListingSort, ListingStatusFilter, ListingStock } from "@/lib/api";
 import { readView, writeView } from "@/lib/viewState";
 import { ViewMenu } from "@/components/ViewMenu";
 import { useConnection } from "@/lib/useConnection";
@@ -18,6 +18,7 @@ import { useAccountTimeZone } from "@/lib/timezone";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
 import { PillTabs } from "@/components/PillTabs";
+import { PriceStockDialog } from "@/components/listings/PriceStockDialog";
 
 type Tab = ListingStatusFilter | "draft";
 const TrashIcon = (
@@ -84,9 +85,12 @@ function ListingRow({
   onDelete,
   onEnd,
   onAnalytics,
+  onPriceStock,
 }: {
   item: Listing;
   onEdit: () => void;
+  // A live listing: its price and stock alone, changed on eBay without a full edit.
+  onPriceStock?: () => void;
   relist?: boolean; // an ended listing: opens it to relist
   editing: boolean;
   onDelete?: () => void;
@@ -151,6 +155,21 @@ function ListingRow({
           aria-label={`Analytics for ${item.title}`}
         >
           {ChartIcon}
+        </button>
+      )}
+      {onPriceStock && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPriceStock();
+          }}
+          className="btn btn-secondary flex-shrink-0 !h-7 !px-3 !text-[12px]"
+          title="Change the price or stock on eBay without editing the whole listing"
+          aria-label="Price and stock"
+        >
+          <span className="sm:hidden">Stock</span>
+          <span className="hidden sm:inline">Price &amp; stock</span>
         </button>
       )}
       <button
@@ -301,6 +320,9 @@ export default function AccountListingsPage() {
   const [analyticsItem, setAnalyticsItem] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<Listing | null>(null);
   const [itemToEnd, setItemToEnd] = useState<Listing | null>(null);
+  // The live listing whose price and stock are open, and the note after a change went.
+  const [priceStockItem, setPriceStockItem] = useState<Listing | null>(null);
+  const [stockNote, setStockNote] = useState<string | null>(null);
   const [endingItem, setEndingItem] = useState(false);
   const [deletingItem, setDeletingItem] = useState(false);
 
@@ -394,6 +416,16 @@ export default function AccountListingsPage() {
       setError(err instanceof ApiError ? err.message : "Couldn't open this listing for editing. Try again.");
       setEditingItemId(null);
     }
+  }
+
+  // The row shows what eBay now has: the lowest price and everything left to buy.
+  function applyStock(itemId: string, stock: ListingStock) {
+    const prices = stock.rows.map((r) => r.price).filter((p): p is NonNullable<typeof p> => Boolean(p));
+    const lowest = prices.length ? prices.reduce((a, b) => (b.amount < a.amount ? b : a)) : null;
+    const available = stock.rows.reduce((n, r) => n + r.available, 0);
+    setItems((list) => list.map((i) => (i.itemId === itemId ? { ...i, ...(lowest ? { price: { ...(i.price || lowest), amount: lowest.amount, currency: lowest.currency } } : {}), quantityAvailable: available } : i)));
+    setStockNote(`Price and stock updated on eBay for "${stock.title}".`);
+    setTimeout(() => setStockNote(null), 6000);
   }
 
   async function handleDeleteItem() {
@@ -551,6 +583,11 @@ export default function AccountListingsPage() {
           <span className="flex-1">{error}</span>
         </div>
       )}
+      {stockNote && (
+        <div className="notice notice-success mb-4" role="status">
+          <span className="flex-1">{stockNote}</span>
+        </div>
+      )}
       {endedItemId && (
         <div className="notice notice-success mb-4">
           <span className="flex-1">Listing #{endedItemId} has been ended on eBay. It now sits under Inactive.</span>
@@ -637,6 +674,7 @@ export default function AccountListingsPage() {
                 relist={filter === "inactive"}
                 onDelete={filter === "inactive" && !connection.permissions ? () => setItemToDelete(item) : undefined}
                 onEnd={filter === "active" ? () => setItemToEnd(item) : undefined}
+                onPriceStock={filter === "active" ? () => setPriceStockItem(item) : undefined}
               />
             ))}
           </ul>
@@ -673,6 +711,16 @@ export default function AccountListingsPage() {
         onCancel={() => setDraftToDelete(null)}
         onConfirm={handleDeleteDraft}
       />
+      {priceStockItem && (
+        <PriceStockDialog
+          connectionId={connection.id}
+          itemId={priceStockItem.itemId}
+          title={priceStockItem.title}
+          imageUrl={priceStockItem.imageUrl}
+          onClose={() => setPriceStockItem(null)}
+          onSaved={(stock) => applyStock(priceStockItem.itemId, stock)}
+        />
+      )}
       {analyticsItem && (
         <ListingAnalyticsPanel
           connectionId={connection.id}

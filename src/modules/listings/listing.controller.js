@@ -107,6 +107,54 @@ async function endLive(req, res, next) {
   }
 }
 
+// A live listing's price and stock, and each variation's, for the Listings tab's quick edit.
+async function getStock(req, res, next) {
+  try {
+    if (!/^\d{9,15}$/.test(String(req.params.itemId))) return res.status(400).json({ error: 'That does not look like an eBay item number.' });
+    res.status(200).json(await listingService.getListingStock(req.params.id, req.ownerId, String(req.params.itemId)));
+  } catch (err) {
+    next(err);
+  }
+}
+
+const stockSchema = z.object({
+  // A row's key from getStock; price as typed ("12.50"); quantity what's left to buy.
+  changes: z
+    .array(
+      z.object({
+        key: z.string().min(1).max(500),
+        price: z.union([z.string().max(20), z.number()]).nullable().optional(),
+        quantity: z.number().int().min(0).max(100000).nullable().optional(),
+      })
+    )
+    .min(1, 'Change a price or a stock figure first.')
+    .max(500),
+});
+
+async function updateStock(req, res, next) {
+  try {
+    if (!/^\d{9,15}$/.test(String(req.params.itemId))) return res.status(400).json({ error: 'That does not look like an eBay item number.' });
+    const parsed = stockSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+    const itemId = String(req.params.itemId);
+    const result = await listingService.updateListingStock(req.params.id, req.ownerId, itemId, parsed.data.changes);
+    if (result.changed) {
+      await activityRepository.record({
+        actorUserId: req.userId,
+        connectionId: req.params.id,
+        kind: 'listing.price_stock',
+        subjectType: 'listing',
+        subjectId: itemId,
+        title: result.listing.title || null,
+        detail: { fields: result.changed.fields, before: result.changed.before, after: result.changed.after, options: result.results.filter((r) => r.ok).length },
+      });
+    }
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function removeInactive(req, res, next) {
   try {
     if (!/^\d{9,15}$/.test(String(req.params.itemId))) {
@@ -130,10 +178,28 @@ async function getOne(req, res, next) {
   }
 }
 
-// The branded HTML a draft will publish with — for the editor's preview.
+// What the editor shows, unsaved, for the preview (POST): the photos' order
+// included. Rendered only, never saved.
+const previewViewSchema = z.object({
+  title: z.string().max(200).optional(),
+  description: z.string().max(60000).optional(),
+  imageUrls: z.array(z.string().url()).max(48).optional(),
+  descriptionImages: z.array(z.string().url()).max(8).nullable().optional(),
+  aspects: z.record(z.array(z.string().max(1000)).max(200)).optional(),
+  condition: z.string().max(40).optional(),
+});
+
+// The branded HTML a draft will publish with — for the editor's preview: the
+// saved draft (GET), or what's on screen (POST).
 async function descriptionPreview(req, res, next) {
   try {
-    const html = await listingService.previewDescription(req.params.listingId, req.ownerId);
+    let view = null;
+    if (req.method === 'POST') {
+      const parsed = previewViewSchema.safeParse(req.body || {});
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
+      view = parsed.data;
+    }
+    const html = await listingService.previewDescription(req.params.listingId, req.ownerId, view);
     res.status(200).json({ html });
   } catch (err) {
     next(err);
@@ -487,4 +553,4 @@ async function remove(req, res, next) {
 }
 
 module.exports = {
-  listingFacts, generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, endLive, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, regenerateSku, fixPolicyWords, reviseImage, acceptImage, uploadImage, downloadImage, publish };
+  listingFacts, generateDraft, previewDraft, listDrafts, startLiveEdit, removeInactive, endLive, getStock, updateStock, getOne, descriptionPreview, update, variationFixes, applyVariationFix, splitVariant, remove, reviseText, regenerateSku, fixPolicyWords, reviseImage, acceptImage, uploadImage, downloadImage, publish };

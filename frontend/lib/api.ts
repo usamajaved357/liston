@@ -767,6 +767,33 @@ export interface Listing {
   lastEditedAt?: string | null; // its latest edit from Liston
 }
 
+// A live listing's price and stock, and each variation's, for the Listings
+// tab's quick edit (changed on eBay without revising anything else).
+export interface ListingStockRow {
+  key: string; // "item", a variation's "sku:…", or "opt:…" for one with no SKU
+  sku: string | null;
+  label: string | null; // the variation's options ("Black / M"); null for a single listing
+  specifics: Record<string, string[]> | null;
+  price: Money | null;
+  available: number; // left to buy
+  sold: number;
+}
+export interface ListingStock {
+  itemId: string;
+  title: string;
+  imageUrl: string | null;
+  currency: string | null;
+  variation: boolean;
+  axes: string[];
+  rows: ListingStockRow[];
+}
+export interface ListingStockResult {
+  results: { key: string; ok: boolean; error?: string }[];
+  listing: ListingStock;
+  changed: { fields: string[]; before: { price: number | null; quantity: number }; after: { price: number | null; quantity: number } } | null;
+  warnings: string[];
+}
+
 // The Orders page's orders (backend orders/order-sort.js). Left unset, the
 // backend picks: the nearest dispatch deadline on Awaiting dispatch, else newest.
 export type OrderSort = "newest" | "oldest" | "dispatch_soonest" | "total_high";
@@ -1283,6 +1310,16 @@ export interface VariationDraftContent {
 }
 
 export type DraftContent = SingleDraftContent | VariationDraftContent;
+
+// What the editor shows, for previewing the description before it's saved.
+export interface DescriptionPreviewView {
+  title?: string;
+  description?: string;
+  imageUrls?: string[];
+  descriptionImages?: string[] | null;
+  aspects?: Record<string, string[]>;
+  condition?: string;
+}
 
 // Whether the account's description template shows the listing's photos (the Showcase layouts do; Classic doesn't).
 export interface DescriptionTemplatePhotos {
@@ -2833,8 +2870,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(template),
     }),
-  previewDraftDescription: (listingId: string) =>
-    request<{ html: string }>(`/api/listings/${listingId}/description-preview`),
+  // The branded description: the saved draft, or (with `view`) what the editor shows, unsaved changes included.
+  previewDraftDescription: (listingId: string, view?: DescriptionPreviewView) =>
+    view
+      ? request<{ html: string }>(`/api/listings/${listingId}/description-preview`, { method: "POST", body: JSON.stringify(view) })
+      : request<{ html: string }>(`/api/listings/${listingId}/description-preview`),
   previewDraftListing: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<DraftPreview>(`/api/connections/${connectionId}/listings/drafts/preview`, {
       method: "POST",
@@ -2854,6 +2894,10 @@ export const api = {
   // Ends a live eBay listing now. It moves to Inactive; eBay keeps it under Unsold.
   endLiveListing: (connectionId: string, itemId: string) =>
     request<{ itemId: string; endTime: string | null; warnings: string[] }>(`/api/connections/${connectionId}/listings/${itemId}/end`, { method: "POST" }),
+  // A live listing's price and stock only: read (1 trimmed eBay read), then changed on eBay.
+  getListingStock: (connectionId: string, itemId: string) => request<ListingStock>(`/api/connections/${connectionId}/listings/${itemId}/stock`),
+  updateListingStock: (connectionId: string, itemId: string, changes: { key: string; price?: string; quantity?: number }[]) =>
+    request<ListingStockResult>(`/api/connections/${connectionId}/listings/${itemId}/stock`, { method: "POST", body: JSON.stringify({ changes }) }),
 
   // Opens a live eBay listing in the editor; returns the transient working copy.
   // `inactive`: opened from the Inactive tab to relist it.

@@ -8,6 +8,7 @@ import {
   ApiError,
   AspectSchemaEntry,
   ConnectionPolicies,
+  DescriptionPreviewView,
   DescriptionTemplatePhotos,
   DraftCategoryInfo,
   DraftContent,
@@ -1897,30 +1898,30 @@ export default function DraftEditorPage() {
     setPkg(packageFields(c.package));
   }, []);
 
-  // The branded eBay render of the description. Rebuilt whenever the stored
-  // draft changes (initial load, save) — called from those places rather
-  // than an effect, so the loading flag isn't set mid-render.
-  const loadDescriptionPreview = useCallback(async (listingId: string) => {
+  // The branded eBay render of the description, built from what the editor
+  // shows (unsaved changes included: a live listing's edit has nothing else
+  // until it's published). A newer request wins over an older one still out.
+  const previewSeq = useRef(0);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const loadDescriptionPreview = useCallback(async (listingId: string, view: DescriptionPreviewView) => {
+    const seq = ++previewSeq.current;
     setLoadingPreview(true);
     try {
-      const { html } = await api.previewDraftDescription(listingId);
-      setDescriptionPreview(html);
+      const { html } = await api.previewDraftDescription(listingId, view);
+      if (seq === previewSeq.current) setDescriptionPreview(html);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't build the description preview.");
+      if (seq === previewSeq.current) setError(err instanceof ApiError ? err.message : "Couldn't build the description preview.");
     } finally {
-      setLoadingPreview(false);
+      if (seq === previewSeq.current) setLoadingPreview(false);
     }
   }, []);
 
-  // The branded preview is built only when the seller switches to it, and
-  // again after a save while it is showing.
   function switchDescMode(mode: "text" | "edit" | "preview") {
     setDescMode(mode);
-    if (mode === "preview" && descriptionPreview === null && listing && !loadingPreview) loadDescriptionPreview(listing.id);
   }
-  function previewOutdated(listingId: string) {
-    setDescriptionPreview(null);
-    if (descMode === "preview") loadDescriptionPreview(listingId);
+  // Something changed on the server (an upload, a save, a rewrite): the preview is built again if it's showing.
+  function previewOutdated() {
+    setPreviewNonce((n) => n + 1);
   }
 
   const loadStoreCategories = useCallback(
@@ -1994,6 +1995,19 @@ export default function DraftEditorPage() {
   // which must not read as an edit.
   const stableAspects = (a: Record<string, string[]>) => JSON.stringify(Object.keys(a).sort().map((k) => [k, a[k]]));
   const aspectsChanged = stableAspects(editedAspects) !== stableAspects(originalAspects);
+
+  // The eBay preview follows the editor as it stands (the photos' order
+  // included), rebuilt a moment after a change while it's showing.
+  const previewView = useMemo<DescriptionPreviewView>(
+    () => ({ title, description, imageUrls: images, descriptionImages: descImages, aspects: editedAspects, condition }),
+    [title, description, images, descImages, editedAspects, condition]
+  );
+  const previewListingId = listing?.id;
+  useEffect(() => {
+    if (descMode !== "preview" || !previewListingId) return;
+    const t = setTimeout(() => void loadDescriptionPreview(previewListingId, previewView), 400);
+    return () => clearTimeout(t);
+  }, [descMode, previewListingId, previewView, previewNonce, loadDescriptionPreview]);
 
   // All three or none: a blank one (a draft made before the account had
   // defaults) is shown as "Choose…" and only counts as a change, and is
@@ -2124,7 +2138,7 @@ export default function DraftEditorPage() {
       setCategoryInfo(detail.category);
       setImageCheck(data.imageCheck);
       resetFrom(detail.listing);
-      previewOutdated(detail.listing.id);
+      previewOutdated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't change the category. Try again.");
     } finally {
@@ -2167,7 +2181,7 @@ export default function DraftEditorPage() {
       setImageCheck(data.imageCheck);
       setFixes(null);
       resetFrom(detail.listing);
-      previewOutdated(detail.listing.id);
+      previewOutdated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't switch the category. Try again.");
     } finally {
@@ -2225,7 +2239,7 @@ export default function DraftEditorPage() {
       setPriceOverrides({});
       setQuantityOverrides({});
       setImageOverrides({});
-      previewOutdated(data.listing.id);
+      previewOutdated();
       return true;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save your changes. Try again.");
@@ -2279,7 +2293,7 @@ export default function DraftEditorPage() {
       const result = await api.fixDraftPolicyWords(listing.id);
       setListing(result.listing);
       resetFrom(result.listing);
-      previewOutdated(result.listing.id);
+      previewOutdated();
       setPolicyFixNote(
         result.remaining.length
           ? `Reworded, but ${result.remaining.join("; ")} still need${result.remaining.length === 1 ? "s" : ""} a manual edit.`
@@ -2403,7 +2417,7 @@ export default function DraftEditorPage() {
       }
       setListing(latest);
       // Saved already, so nothing is left to save: the eBay preview is rebuilt here.
-      previewOutdated(latest.id);
+      previewOutdated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't upload that image.");
     } finally {
@@ -2420,7 +2434,7 @@ export default function DraftEditorPage() {
       const data = await api.uploadDraftImage(listing.id, file, { forDescription: true });
       setDescImages((d) => [...(d ?? images.slice(0, DESCRIPTION_PHOTOS)).filter((u) => u !== data.imageUrl), data.imageUrl].slice(0, DESCRIPTION_PHOTOS));
       setListing(data.listing);
-      previewOutdated(data.listing.id);
+      previewOutdated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't upload that image.");
     } finally {
@@ -2713,7 +2727,7 @@ export default function DraftEditorPage() {
       setImages((imgs) => imgs.map((u) => (u === imageProposalTarget ? data.imageUrl : u)));
       setDescImages((d) => d && d.map((u) => (u === imageProposalTarget ? data.imageUrl : u)));
       setListing(data.listing);
-      previewOutdated(data.listing.id);
+      previewOutdated();
       setImageProposal(null);
       setImageProposalTarget(null);
     } catch (err) {
@@ -3333,14 +3347,20 @@ export default function DraftEditorPage() {
                 {descMode === "preview" && (
                   <div className="mt-2">
                     <p className="mb-1.5 text-[11.5px] text-[var(--color-muted)]">
-                      {loadingPreview ? "Building the preview…" : dirty ? "Shows the last saved version — save to refresh it." : "As buyers will see it on eBay, in this account's template."}
+                      {loadingPreview
+                        ? "Updating the preview…"
+                        : dirty
+                          ? isLiveEdit
+                            ? "As buyers will see it once you publish these changes, in this account's template."
+                            : "As buyers will see it with your changes (not saved yet), in this account's template."
+                          : "As buyers will see it on eBay, in this account's template."}
                     </p>
                     {descriptionPreview !== null ? (
                       <iframe
                         title="Description preview"
                         sandbox=""
                         srcDoc={`<!doctype html><meta name="viewport" content="width=device-width"><body style="margin:0;padding:12px;background:#f3f3f3">${descriptionPreview}</body>`}
-                        className={`h-[32rem] w-full rounded-xl border border-[var(--color-line)] bg-white ${dirty ? "opacity-60" : ""}`}
+                        className={`h-[32rem] w-full rounded-xl border border-[var(--color-line)] bg-white transition-opacity ${loadingPreview ? "opacity-60" : ""}`}
                       />
                     ) : (
                       <div className="h-[32rem] w-full animate-pulse rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)]" />

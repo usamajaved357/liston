@@ -63,6 +63,9 @@ router.post('/:id/store-categories', requireAuth, requireFeature('listings'), co
 router.get('/:id/listings/drafts', requireAuth, requireFeature('listings'), listingController.listDrafts);
 router.post('/:id/listings/:itemId/edit', requireAuth, requireFeature('listings'), listingController.startLiveEdit);
 router.post('/:id/listings/:itemId/end', requireAuth, requireFeature('listings'), listingController.endLive);
+// A live listing's price and stock only (eBay's light revise; nothing else on the listing is sent).
+router.get('/:id/listings/:itemId/stock', requireAuth, requireFeature('listings'), listingController.getStock);
+router.post('/:id/listings/:itemId/stock', requireAuth, requireFeature('listings'), listingController.updateStock);
 router.delete('/:id/listings/:itemId', requireAuth, requireOwner, listingController.removeInactive);
 // Step one of drafting: read both listings so the seller can pick which
 // variations to list, before anything is generated or paid for.
