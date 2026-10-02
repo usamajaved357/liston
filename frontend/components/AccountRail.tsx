@@ -13,10 +13,11 @@ import { landingPathForConnection, sectionAllowed } from "@/lib/permissions";
 
 // The account rail: a slim column to the left of the sidebar, the way Slack
 // shows workspaces. At the top the team this tab is in, which opens the
-// switch to the person's other workspaces (with their unread); under it
-// Home (the workspace's Overview, or a member's Dashboard), each eBay
-// account in the team with its name, site and unread messages, and for an
-// owner a tile to connect another. One click goes anywhere; an account keeps
+// switch to the person's other workspaces (with their unread); under it the
+// Dashboard (the workspace's Overview, or a member's Dashboard), then each
+// eBay account in the workspace with its name, site and unread messages (the
+// only part that scrolls, so a workspace with many accounts keeps the rest in
+// place), and for an owner Add at the foot to connect another. One click goes anywhere; an account keeps
 // the section you're in (Orders stays Orders) where you can open it. Shown or
 // hidden from the button at the top of the sidebar; the account finder
 // (Ctrl/Cmd+K, "Find an account" in the sidebar) searches them by name.
@@ -223,7 +224,6 @@ function TeamSwitch() {
           </span>
         </span>
         <span className="line-clamp-2 w-full text-center text-[11px] font-semibold leading-[13px] text-[var(--color-ink)] [overflow-wrap:anywhere]">{team.name}</span>
-        <span className="-mt-1 w-full truncate text-center text-[10px] font-medium text-[var(--color-muted)]">Workspace</span>
       </button>
 
       {at &&
@@ -289,28 +289,58 @@ function TeamSwitch() {
   );
 }
 
+// Whether a list scrolls on past its top or bottom edge, for the fades that say so.
+function useScrollEdges() {
+  const scroller = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ top: false, bottom: false });
+  const measure = () => {
+    const el = scroller.current;
+    if (!el) return;
+    const next = { top: el.scrollTop > 2, bottom: el.scrollTop + el.clientHeight < el.scrollHeight - 2 };
+    setEdges((e) => (e.top === next.top && e.bottom === next.bottom ? e : next));
+  };
+  useEffect(() => {
+    // Measured when the list or the window changes size (accounts arriving, say).
+    const watch = new ResizeObserver(() => measure());
+    if (scroller.current) watch.observe(scroller.current);
+    if (content.current) watch.observe(content.current);
+    return () => watch.disconnect();
+  }, []);
+  return { scroller, content, edges, measure };
+}
+
+export const DASHBOARD_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
+    <rect x="3.5" y="3.5" width="7" height="8" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+    <rect x="13.5" y="3.5" width="7" height="5" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+    <rect x="13.5" y="11.5" width="7" height="9" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+    <rect x="3.5" y="14.5" width="7" height="6" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
+  </svg>
+);
+
 export function AccountRail() {
   const { team } = useCurrentTeam();
   const connections = useConnections();
   const unread = useAccountsUnread();
   const { here, openAccount, connectAccount, home } = useRailActions();
   const { bind, node, hide } = useTip();
+  const { scroller, content, edges, measure } = useScrollEdges();
   const role = team?.role;
 
   return (
     <nav aria-label="Workspaces and accounts" className="flex h-full w-[76px] flex-shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-paper)]">
-      {/* The team this tab is in, switching to the person's other teams. */}
+      {/* The workspace this tab is in, switching to the person's other workspaces. */}
       <TeamSwitch />
 
-      <div className="flex w-full flex-1 flex-col items-center gap-3 overflow-y-auto overscroll-contain pb-4 pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {/* Home: the workspace's Overview of every account (a member's Dashboard). */}
-        <p className={`${CAPTION} -mb-1`}>Accounts</p>
+      {/* The Dashboard: the workspace's Overview of every account (a member's Dashboard). */}
+      <div className="flex-shrink-0 border-b border-[var(--color-line)] py-3">
         <Link
           href={home}
           onClick={hide}
-          aria-label="Home"
+          aria-label="Dashboard"
           aria-current={!here ? "page" : undefined}
-          {...bind("Home", role === "member" ? `Your accounts in ${team?.name || "this workspace"}` : `Every account in ${team?.name || "this workspace"}`)}
+          {...bind("Dashboard", role === "member" ? `Your accounts in ${team?.name || "this workspace"}` : `Every account in ${team?.name || "this workspace"}`)}
           className={ITEM}
         >
           <Here on={!here} />
@@ -321,44 +351,56 @@ export function AccountRail() {
                 : "bg-[var(--color-panel)] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)] group-hover:text-[var(--color-ink)] group-hover:ring-[var(--color-line-strong)]"
             }`}
           >
-            <svg viewBox="0 0 24 24" fill="none" className="h-[19px] w-[19px]" aria-hidden>
-              <path d="M4 10.5L12 4l8 6.5V19a1.5 1.5 0 01-1.5 1.5H15v-5.5a1 1 0 00-1-1h-4a1 1 0 00-1 1v5.5H5.5A1.5 1.5 0 014 19v-8.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-            </svg>
+            {DASHBOARD_ICON}
           </span>
-          <span className={NAME(!here)}>Home</span>
+          <span className={NAME(!here)}>Dashboard</span>
         </Link>
+      </div>
 
-        {/* The team's eBay accounts (a member's, the ones they work on). */}
-        {connections.map((c) => {
-          const current = c.id === here;
-          const n = unread[c.id] || 0;
-          const site = c.marketplace?.label;
-          const sub = [c.marketplace?.name || c.platform_name, n ? `${n} unread` : null, c.status !== "active" ? "Needs reconnecting" : null].filter(Boolean).join(" · ");
-          return (
-            <button
-              key={c.id}
-              type="button"
-              data-nav
-              onClick={() => {
-                hide();
-                openAccount(c);
-              }}
-              aria-label={`${c.label}${site ? `, eBay ${site}` : ""}${n ? `, ${n} unread` : ""}`}
-              aria-current={current ? "page" : undefined}
-              {...bind(c.label, sub)}
-              className={ITEM}
-            >
-              <Here on={current} />
-              <span className={`relative rounded-xl transition-all ${current ? "ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--color-paper)]" : "group-hover:-translate-y-px"}`}>
-                <AccountTile connection={c} />
-                <Badge n={n} />
-              </span>
-              <span className={NAME(current)}>{c.label}</span>
-            </button>
-          );
-        })}
+      {/* The workspace's eBay accounts (a member's, the ones they work on): the only part that scrolls. */}
+      <p className={`${CAPTION} flex-shrink-0 pb-1 pt-3`}>Accounts</p>
+      <div className="relative min-h-0 flex-1">
+        <div ref={scroller} onScroll={measure} className="h-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div ref={content} className="flex flex-col items-center gap-3 pb-3 pt-2">
+            {connections.map((c) => {
+              const current = c.id === here;
+              const n = unread[c.id] || 0;
+              const site = c.marketplace?.label;
+              const sub = [c.marketplace?.name || c.platform_name, n ? `${n} unread` : null, c.status !== "active" ? "Needs reconnecting" : null].filter(Boolean).join(" · ");
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  data-nav
+                  onClick={() => {
+                    hide();
+                    openAccount(c);
+                  }}
+                  aria-label={`${c.label}${site ? `, eBay ${site}` : ""}${n ? `, ${n} unread` : ""}`}
+                  aria-current={current ? "page" : undefined}
+                  {...bind(c.label, sub)}
+                  className={ITEM}
+                >
+                  <Here on={current} />
+                  <span className={`relative rounded-xl transition-all ${current ? "ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--color-paper)]" : "group-hover:-translate-y-px"}`}>
+                    <AccountTile connection={c} />
+                    <Badge n={n} />
+                  </span>
+                  <span className={NAME(current)}>{c.label}</span>
+                </button>
+              );
+            })}
+            {team && connections.length === 0 && <p className="px-2 text-center text-[10.5px] leading-[13px] text-[var(--color-muted)]">None yet</p>}
+          </div>
+        </div>
+        {/* More above or below: a fade at that edge. */}
+        <div aria-hidden className={`pointer-events-none absolute inset-x-0 top-0 h-6 bg-gradient-to-b from-[var(--color-paper)] to-transparent transition-opacity ${edges.top ? "opacity-100" : "opacity-0"}`} />
+        <div aria-hidden className={`pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[var(--color-paper)] to-transparent transition-opacity ${edges.bottom ? "opacity-100" : "opacity-0"}`} />
+      </div>
 
-        {role && role !== "member" && (
+      {/* Connect another eBay account: always in reach, however long the list. */}
+      {role && role !== "member" && (
+        <div className="flex-shrink-0 border-t border-[var(--color-line)] py-3">
           <button
             type="button"
             data-nav
@@ -377,8 +419,8 @@ export function AccountRail() {
             </span>
             <span className={NAME(false)}>Add</span>
           </button>
-        )}
-      </div>
+        </div>
+      )}
       {node}
     </nav>
   );

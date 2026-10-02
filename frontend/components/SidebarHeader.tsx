@@ -82,7 +82,7 @@ export function SidebarHeader({ account }: { account?: { id: string; label: stri
       <div>
         <div className="flex min-h-[44px] items-start gap-2">
           <div className="min-w-0 flex-1 pl-2.5">
-            <Link href={homeFor(team.role)} title={`${team.name}: Home`} className="block truncate text-[11.5px] font-semibold leading-4 text-[var(--color-muted)] hover:text-[var(--color-primary)]">
+            <Link href={homeFor(team.role)} title={`${team.name}: Dashboard`} className="block truncate text-[11.5px] font-semibold leading-4 text-[var(--color-muted)] hover:text-[var(--color-primary)]">
               {team.name}
             </Link>
             <p className={`mt-0.5 ${title}`} title={account.label}>
