@@ -884,6 +884,121 @@ async function reviseLiveListing(credentials, itemId, payload) {
   return { ...result, credentialsChanged, credentials: refreshedCredentials };
 }
 
+// ---- price and stock only (the Listings tab's quick edit) ----------------
+//
+// The two light ways eBay offers to change a live listing's price and stock
+// without revising anything else, as Seller Hub's own quick edit does:
+// Trading's ReviseInventoryStatus for listings made outside the Inventory
+// API (up to 4 listings or variations a call; a variation needs its SKU),
+// and the Inventory API's bulkUpdatePriceQuantity for listings made through
+// it, Liston's own included (up to 25 SKUs a call). A variation with no SKU
+// can only be reached through ReviseFixedPriceItem, sent with the
+// variations alone (every one, at its current values, the changed ones
+// changed): no title, photos, description or specifics.
+
+/** A live listing's price and stock, and each variation's (1 trimmed GetItem). */
+async function getListingStock(credentials, connectionId, itemId) {
+  const { accessToken, siteId } = await ensureValidAccessToken(credentials);
+  return governor.withContext({ connectionId: String(connectionId), priority: 'user' }, () => ebayTrading.getItemStock(accessToken, itemId, { siteId }));
+}
+
+/**
+ * ReviseInventoryStatus in batches of 4. `statuses`: [{ key, itemId, sku?,
+ * price?, quantity? }]. Resolves to [{ key, ok, error?, warnings }], one per
+ * status; a batch eBay refuses fails its own rows only.
+ */
+async function reviseStockTrading(credentials, connectionId, statuses) {
+  const { accessToken, siteId, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const results = [];
+  for (let i = 0; i < statuses.length; i += ebayTrading.INVENTORY_STATUS_MAX) {
+    const batch = statuses.slice(i, i + ebayTrading.INVENTORY_STATUS_MAX);
+    try {
+      const out = await governor.withContext({ connectionId: String(connectionId), priority: 'user' }, () => ebayTrading.reviseInventoryStatus(accessToken, batch, { siteId }));
+      for (const s of batch) results.push({ key: s.key, ok: true, warnings: out.warnings });
+    } catch (err) {
+      for (const s of batch) results.push({ key: s.key, ok: false, error: err.message, inventoryManaged: isInventoryManagedError(err) });
+    }
+  }
+  return { results, credentialsChanged, credentials: refreshedCredentials };
+}
+
+/** A variation listing's options through ReviseFixedPriceItem, with nothing but the variations (see above). */
+async function reviseVariationsTrading(credentials, connectionId, itemId, { variations, variationSpecificsSet }) {
+  const { accessToken, siteId, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const out = await governor.withContext({ connectionId: String(connectionId), priority: 'user' }, () => ebayTrading.reviseListing(accessToken, itemId, { variations, variationSpecificsSet }, { siteId }));
+  return { warnings: out.warnings, credentialsChanged, credentials: refreshedCredentials };
+}
+
+/**
+ * bulkUpdatePriceQuantity for listings made through the Inventory API.
+ * `rows`: [{ key, sku, price?, quantity? }]: each SKU's live offer on the
+ * site is looked up, then up to 25 SKUs go per call; a quantity sets both
+ * the offer's and the item's (eBay shows the smaller). Resolves to
+ * [{ key, ok, error? }].
+ */
+async function reviseStockInventory(credentials, rows, marketplaceId) {
+  const { accessToken, credentials: refreshedCredentials, credentialsChanged } = await ensureValidAccessToken(credentials);
+  const results = [];
+  const ready = [];
+  for (const row of rows) {
+    const offer = await publishedOfferFor(accessToken, row.sku, marketplaceId);
+    if (!offer?.offerId) results.push({ key: row.key, ok: false, error: `eBay has no live offer for SKU ${row.sku}.` });
+    else ready.push({ row, offerId: offer.offerId });
+  }
+  for (let i = 0; i < ready.length; i += 25) {
+    const batch = ready.slice(i, i + 25);
+    const requests = batch.map(({ row, offerId }) => ({
+      sku: row.sku,
+      ...(row.quantity !== undefined ? { shipToLocationAvailability: { quantity: row.quantity } } : {}),
+      offers: [
+        {
+          offerId,
+          ...(row.quantity !== undefined ? { availableQuantity: row.quantity } : {}),
+          ...(row.price ? { price: { value: Number(row.price.amount).toFixed(2), currency: row.price.currency } } : {}),
+        },
+      ],
+    }));
+    try {
+      const out = await ebayClient.bulkUpdatePriceQuantity(accessToken, requests, marketplaceId);
+      const bySku = new Map();
+      for (const r of out?.responses || []) {
+        const prev = bySku.get(r.sku);
+        // One SKU answers for its item and its offer: it went if neither failed.
+        const failed = Number(r.statusCode) >= 300 || (r.errors || []).length > 0;
+        bySku.set(r.sku, { failed: Boolean(prev?.failed) || failed, error: prev?.error || (failed ? (r.errors || [])[0]?.message || `eBay answered ${r.statusCode}` : null) });
+      }
+      for (const { row } of batch) {
+        const answer = bySku.get(row.sku);
+        results.push(answer && !answer.failed ? { key: row.key, ok: true } : { key: row.key, ok: false, error: answer?.error || "eBay didn't confirm this change." });
+      }
+    } catch (err) {
+      for (const { row } of batch) results.push({ key: row.key, ok: false, error: err.message });
+    }
+  }
+  return { results, credentialsChanged, credentials: refreshedCredentials };
+}
+
+/**
+ * The Listings tab's copy of one listing after its price or stock changed
+ * (no eBay call): `price` the lowest, `available` what's left, `sold`.
+ * Open pages are told.
+ */
+async function patchListingStock(connectionId, itemId, { price, available, sold }) {
+  const id = String(connectionId);
+  await listingsCache.patchStored(listingsKey(id, 'active'), (items) =>
+    items.map((item) =>
+      item.itemId !== String(itemId)
+        ? item
+        : {
+            ...item,
+            ...(price ? { price: { ...(item.price || {}), ...price } } : {}),
+            ...(available !== undefined ? { quantityAvailable: available, quantity: available + (sold ?? item.quantitySold ?? 0) } : {}),
+          }
+    )
+  );
+  accountEvents.emitUpdated(id, 'listings');
+}
+
 // Where a listing another tool made through the Inventory API lives, from
 // its SKUs: a variation's group (the inventory item names it in groupIds),
 // or a single listing's SKU. Null when eBay has no inventory item for them.
@@ -2735,6 +2850,11 @@ module.exports = {
   deleteInventoryObjects,
   findLiveListingForSku,
   reviseLiveListing,
+  getListingStock,
+  reviseStockTrading,
+  reviseVariationsTrading,
+  reviseStockInventory,
+  patchListingStock,
   reviseInventoryListing,
   isInventoryManagedError,
   conditionIdFor,

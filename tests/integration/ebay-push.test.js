@@ -129,6 +129,38 @@ test('a signed new-order push puts the order on the list within seconds, with on
   assert.strictEqual(ebay.orderPush.subscriptionId, 's-1', 'without dropping the subscription');
 });
 
+test('a new order with the welcome switched on: the buyer gets it once, signed by the store, even when eBay delivers the push twice at once', async () => {
+  const { userId, connectionId, seller } = await fixture({ orderPush: { subscriptionId: 's-1' } });
+  // The account's token allows messaging; the welcome was switched on yesterday, signed "Garden Co".
+  const full = await connectionService.getConnectionWithDecryptedCredentials(connectionId, userId);
+  await connectionService.updateConnectionCredentials(connectionId, { ...full.credentials, scopes: [...SCOPES, 'https://api.ebay.com/oauth/api_scope/commerce.message'] });
+  await connectionService.updateConnectionSettings(connectionId, userId, {
+    messages: { placed: { enabled: true, text: null, enabledAt: new Date(Date.now() - 86400000).toISOString() } },
+    template: { storeName: 'Garden Co' },
+  });
+  const orderId = `12-${Date.now()}`;
+  const calls = mockEbay({
+    '/sell/fulfillment/v1/order/': { reply: () => ({ body: fulfillmentOrder(orderId) }) },
+    '/commerce/message/v1/send_message': { method: 'POST', reply: () => ({ body: { messageId: 'm-1', conversationId: 'conv-1' } }) },
+  });
+  const sign = signer();
+
+  // eBay retries a push it isn't sure arrived: the same order, twice, at the same moment.
+  const body = JSON.stringify(orderPushPayload(seller, orderId));
+  const post = () => realFetch(`${baseUrl}/api/ebay/commerce-notifications`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-EBAY-SIGNATURE': sign(body) }, body });
+  assert.deepStrictEqual((await Promise.all([post(), post()])).map((r) => r.status), [204, 204]);
+
+  const row = await until(async () => (await pool.query("SELECT status, buyer, text FROM order_messages WHERE connection_id = $1 AND order_id = $2 AND kind = 'placed' AND status <> 'sending'", [connectionId, orderId])).rows[0]);
+  assert.ok(row, 'the welcome is recorded');
+  assert.deepStrictEqual([row.status, row.buyer], ['sent', 'buyer_1']);
+  await new Promise((r) => setTimeout(r, 300)); // the second push has had every chance to send too
+  const sends = calls.filter((c) => c.url.includes('/send_message'));
+  assert.strictEqual(sends.length, 1, 'one message to the buyer, not two');
+  assert.deepStrictEqual([sends[0].body.otherPartyUsername, sends[0].body.reference], ['buyer_1', { referenceId: '4071', referenceType: 'LISTING' }]);
+  assert.match(sends[0].body.messageText, /^Hi Ann,\n\nThank you so much for your order of Garden light![\s\S]*Best regards,\nGarden Co$/);
+  assert.ok(!calls.some((c) => c.url.includes('/ws/api.dll')), 'no Trading call');
+});
+
 test('an unsigned or tampered push is refused and changes nothing', async () => {
   const { connectionId, seller } = await fixture({ orderPush: { subscriptionId: 's-1' } });
   const calls = mockEbay({});

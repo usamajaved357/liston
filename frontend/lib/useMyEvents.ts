@@ -138,14 +138,16 @@ export function useViewing(view: string | null) {
 
 // ---- unread, for the sidebar --------------------------------------------------------
 
-type Unread = { unread: number; mentions: number };
-let unread: Unread = { unread: 0, mentions: 0 };
+// Team chat's unread: messages in conversations, those that are mentions, and new replies in threads they follow.
+type Unread = { unread: number; mentions: number; threads: number };
+let unread: Unread = { unread: 0, mentions: 0, threads: 0 };
 const unreadListeners = new Set<() => void>();
 
 /** Sets the person's unread team chat (the Inbox refreshes it as it reads). */
-export function setChatUnread(next: Unread) {
-  if (next.unread === unread.unread && next.mentions === unread.mentions) return;
-  unread = next;
+export function setChatUnread(next: { unread: number; mentions: number; threads?: number }) {
+  const value = { unread: next.unread, mentions: next.mentions, threads: next.threads ?? 0 };
+  if (value.unread === unread.unread && value.mentions === unread.mentions && value.threads === unread.threads) return;
+  unread = value;
   unreadListeners.forEach((fn) => fn());
 }
 

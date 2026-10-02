@@ -52,14 +52,18 @@ function setView(userId, tabId, { view = null, focused = false } = {}) {
   if (!tabs.size) views.delete(userId);
 }
 
-/** Whether the person is reading this conversation right now, in a tab in front. */
+/**
+ * Whether the person is reading this conversation right now, in a tab in
+ * front. A tab may show more than one at once, space-separated (a team
+ * chat conversation and a thread open beside it).
+ */
 function isViewing(userId, view) {
   const tabs = views.get(userId);
   if (!tabs) return false;
   const now = Date.now();
   for (const [tabId, t] of tabs) {
     if (now - t.at > VIEW_TTL_MS) tabs.delete(tabId);
-    else if (t.view === view && t.focused) return true;
+    else if (t.focused && String(t.view).split(' ').includes(view)) return true;
   }
   return false;
 }

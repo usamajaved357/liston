@@ -8,6 +8,8 @@ const referencesService = require('../references/references.service');
 const { detect } = require('../references/reference-detect');
 const userEvents = require('../realtime/user-events');
 const notificationsService = require('../notifications/notifications.service');
+const linkPreview = require('./link-preview');
+const config = require('../../config');
 const logger = require('../../utils/logger');
 
 // Team chat: the owner and their team in direct messages (one per pair),
@@ -16,9 +18,16 @@ const logger = require('../../utils/logger');
 // channels"; public ones anyone in the team can join). A message can carry
 // text with @mentions, files, and Liston cards (orders, listings, drafts,
 // hunted products from any account, each shown only as far as the viewer's
-// access reaches). Every change reaches the people in the conversation on
-// their live channel at once; a new message is pushed to their devices
-// unless they're reading it, muted it, or it's their quiet hours.
+// access reaches, and buyers' eBay conversations: "Discuss with team"),
+// a voice note, and previews of links to other sites (read once, after
+// sending). Any message can start a thread, as Slack's: its replies sit
+// beside the conversation (one can also be sent to it), the first message
+// shows how many there are and who replied, and the people following it
+// (its author, anyone who replied or was mentioned there) are told of new
+// replies and see them under Threads. Every change reaches the people in
+// the conversation on their live channel at once; a new message is pushed
+// to their devices unless they're reading it, muted it, or it's their
+// quiet hours.
 
 class ChatError extends Error {
   constructor(message, statusCode = 400) {
@@ -101,7 +110,10 @@ function conversationShape(row, members, viewerId, { canManage, accounts }) {
           at: row.last_at,
           kind: row.last_kind,
           author: row.last_author ? { id: row.last_author, name: lastAuthor ? rules.nameOf(lastAuthor) : 'Someone' } : null,
-          text: row.last_kind === 'system' ? null : rules.previewOf({ body: row.last_body, fileCount: row.last_files, cards: (row.last_ref_list || []).map((r) => ({ kind: r.kind })), deleted: Boolean(row.last_deleted) }),
+          text:
+            row.last_kind === 'system'
+              ? null
+              : rules.previewOf({ body: row.last_body, fileCount: row.last_files, cards: (row.last_ref_list || []).map((r) => ({ kind: r.kind })), deleted: Boolean(row.last_deleted), voiceMs: row.last_voice_ms === null || row.last_voice_ms === undefined ? null : Number(row.last_voice_ms) }),
         }
       : null,
     lastMessageAt: row.last_message_at,
@@ -115,13 +127,14 @@ function conversationShape(row, members, viewerId, { canManage, accounts }) {
   };
 }
 
-/** Messages as one viewer sees them: cards resolved for their access, files with fresh links. */
+/** Messages as one viewer sees them: cards resolved for their access, files with fresh links, who's in each thread. */
 async function shapeMessages(viewer, rows) {
   const live = rows.filter((r) => !r.deleted_at);
   const refs = live.flatMap((r) => r.refs || []);
   const cards = refs.length ? await referencesService.resolve(viewer, refs) : [];
   const fileIds = [...new Set(live.flatMap((r) => r.file_ids || []))];
-  const files = new Map((await filesRepository.findByIds(fileIds)).map((f) => [f.id, filesService.shape(f)]));
+  const [fileRows, threadPeople] = await Promise.all([filesRepository.findByIds(fileIds), chatRepository.threadPeople(rows.filter((r) => r.reply_count > 0).map((r) => r.id))]);
+  const files = new Map(fileRows.map((f) => [f.id, filesService.shape(f)]));
   let at = 0;
   const cardsFor = new Map();
   for (const r of live) {
@@ -129,11 +142,14 @@ async function shapeMessages(viewer, rows) {
     cardsFor.set(r.id, cards.slice(at, at + n));
     at += n;
   }
-  return rows.map((r) => messageShape(r, cardsFor.get(r.id) || [], files));
+  return rows.map((r) => messageShape(r, cardsFor.get(r.id) || [], files, threadPeople));
 }
 
-function messageShape(r, cards, files) {
+function messageShape(r, cards, files, threadPeople = new Map()) {
   const deleted = Boolean(r.deleted_at);
+  // A voice note's file plays in the bubble, so it isn't among the files too.
+  const voice = !deleted && r.detail?.voice ? r.detail.voice : null;
+  const voiceFile = voice ? files.get(voice.fileId) : null;
   return {
     id: r.id,
     conversationId: r.conversation_id,
@@ -147,15 +163,20 @@ function messageShape(r, cards, files) {
       ? {
           id: r.reply_to_id,
           author: r.reply_author ? { id: r.reply_author, name: rules.nameOf({ name: r.reply_author_name, email: r.reply_author_email }) } : null,
-          text: rules.previewOf({ body: r.reply_body, fileCount: r.reply_files || 0, deleted: Boolean(r.reply_deleted) }),
+          text: rules.previewOf({ body: r.reply_body, fileCount: r.reply_files || 0, deleted: Boolean(r.reply_deleted), voiceMs: r.reply_voice_ms === null || r.reply_voice_ms === undefined ? null : Number(r.reply_voice_ms) }),
         }
       : null,
     // A card no longer in Liston shows as gone, with none of its details.
     cards: deleted ? [] : (r.refs || []).map((ref, i) => cards[i] || { kind: ref.kind, id: String(ref.id), key: `${ref.kind}:gone:${ref.id}`, gone: true }),
-    files: deleted ? [] : (r.file_ids || []).map((id) => files.get(id)).filter(Boolean),
+    files: deleted ? [] : (r.file_ids || []).filter((id) => !voice || id !== voice.fileId).map((id) => files.get(id)).filter(Boolean),
+    voice: voice && voiceFile ? { fileId: voice.fileId, url: voiceFile.url, mime: voiceFile.mime, size: voiceFile.size, durationMs: voice.durationMs, peaks: voice.peaks || [] } : null,
     links: deleted ? [] : r.links || [],
     mentions: r.mentions || [],
     mentionAll: r.mention_all,
+    // A thread reply names its thread; a first message with replies says how many, when the last came and who replied.
+    threadId: r.thread_id || null,
+    alsoInConversation: Boolean(r.also_in_conversation),
+    thread: r.reply_count > 0 ? { replyCount: r.reply_count, lastReplyAt: r.last_reply_at, people: (threadPeople.get(r.id) || []).map((p) => ({ id: p.id, name: rules.nameOf(p), avatarUrl: p.avatar_url || null })) } : null,
     detail: r.kind === 'system' ? r.detail || {} : {},
   };
 }
@@ -447,19 +468,35 @@ async function sendableFiles(auth, fileIds) {
 /**
  * Sends a message: text (with @mentions: the people's ids in `mentions`,
  * "@channel" for everyone), files uploaded first, Liston cards found in the
- * text or dropped in (`refs`), and the message it replies to.
+ * text or dropped in (`refs`), the message it quotes (`replyToId`), a voice
+ * note (`voice`: { fileId, durationMs, peaks } for one of its files), and
+ * the thread it's a reply in (`threadId`: the thread's first message; with
+ * `alsoInConversation` the conversation shows it too).
  */
-async function send(auth, id, { body = '', mentions = [], fileIds = [], refs = [], replyToId = null }) {
+async function send(auth, id, { body = '', mentions = [], fileIds = [], refs = [], replyToId = null, threadId = null, alsoInConversation = false, voice = null }) {
   const { conversation } = await requireMember(auth, id);
   if (conversation.archived_at) refuse('This channel is archived.', 400);
   const text = String(body || '').replace(/\r\n/g, '\n').trim();
   if (text.length > rules.MAX_BODY) refuse(`A message is up to ${rules.MAX_BODY.toLocaleString('en-GB')} characters.`, 400);
   const files = await sendableFiles(auth, fileIds);
   const cards = await cardsFor(auth, text, refs);
+  let voiceNote = null;
+  if (voice) {
+    const [file] = files.includes(String(voice.fileId)) ? await filesRepository.findByIds([String(voice.fileId)]) : [];
+    voiceNote = rules.voiceOf(voice, file);
+    if (!voiceNote) refuse("That voice message didn't record properly. Try again.", 400);
+  }
   if (!text && !files.length && !cards.length) refuse('Write something, or attach a file.', 400);
   if (replyToId) {
     const original = await chatRepository.findMessage(replyToId);
     if (!original || original.conversation_id !== id) refuse("That message isn't in this conversation.", 400);
+  }
+  let root = null;
+  if (threadId) {
+    root = await chatRepository.findMessage(threadId);
+    if (!root || root.conversation_id !== id) refuse("That thread isn't in this conversation.", 400);
+    if (root.thread_id) refuse('Reply in the thread itself.', 400);
+    if (root.kind !== 'text') refuse("A thread can't start there.", 400);
   }
   const members = await chatRepository.membersOf([id]);
   const inIt = new Set(members.map((m) => String(m.user_id)));
@@ -474,21 +511,37 @@ async function send(auth, id, { body = '', mentions = [], fileIds = [], refs = [
     fileIds: files,
     mentions: mentioned,
     mentionAll: everyone,
-    detail: { explicitRefs: (refs || []).slice(0, MAX_REFS) },
+    threadId: root ? root.id : null,
+    alsoInConversation: Boolean(root && alsoInConversation),
+    detail: { explicitRefs: (refs || []).slice(0, MAX_REFS), ...(voiceNote ? { voice: voiceNote } : {}) },
   });
+  if (root) {
+    // Following it from now: whoever started it (they keep their place if they had one), whoever's mentioned.
+    if (root.author_user_id && inIt.has(String(root.author_user_id))) await chatRepository.addThreadFollowers(root.id, [String(root.author_user_id)]);
+    for (const u of everyone ? [...inIt].filter((u) => u !== String(auth.userId)) : mentioned) await chatRepository.setFollowing(root.id, u, true);
+  }
   const row = await chatRepository.findMessage(saved.id);
   const [mine] = await shapeMessages(auth, [row]);
   // Everyone in it sees it at once (each with cards as far as their access reaches); then the pushes.
-  deliver(auth, conversation, members, row).catch((err) => logger.warn('Chat: message not delivered to everyone', { conversationId: id, error: err.message }));
+  deliver(auth, conversation, members, row, root).catch((err) => logger.warn('Chat: message not delivered to everyone', { conversationId: id, error: err.message }));
+  if (text) previewLinks(auth, row).catch((err) => logger.warn('Chat: link previews not read', { conversationId: id, error: err.message }));
   return mine;
 }
 
-async function deliver(auth, conversation, members, row) {
+/**
+ * Who hears about a message: everyone in the conversation gets it on their
+ * live channel; then the pushes. A thread reply (not also sent to the
+ * conversation) goes to its followers and anyone mentioned; the first
+ * message's reply count moves for everyone.
+ */
+async function deliver(auth, conversation, members, row, root = null) {
   const everyone = await team(auth);
   const settings = new Map((await chatRepository.settingsForMany(members.map((m) => String(m.user_id)))).map((s) => [String(s.user_id), s]));
   const accounts = await accountsById(auth.ownerId);
   const author = everyone.get(String(auth.userId));
   const authorName = rules.nameOf(author);
+  const followers = root ? new Set((await chatRepository.threadFollowers(root.id)).map((f) => String(f.user_id))) : null;
+  const threadOnly = Boolean(root && !row.also_in_conversation);
   for (const m of members) {
     const userId = String(m.user_id);
     const p = everyone.get(userId);
@@ -496,14 +549,25 @@ async function deliver(auth, conversation, members, row) {
     const viewer = authOf(p, auth.ownerId);
     const [message] = await shapeMessages(viewer, [row]);
     userEvents.emit(userId, { type: 'chat.message', conversationId: conversation.id, message });
+    if (root && followers.has(userId)) userEvents.emit(userId, { type: 'chat.thread', conversationId: conversation.id, rootId: root.id });
     if (userId === String(auth.userId) || p.deactivated_at) continue;
-    if (!rules.wantsPush({ member: m, settings: settings.get(userId), conversation, message: row })) continue;
-    // Reading it right now: nothing to tell them.
-    if (userEvents.isViewing(userId, `chat:${conversation.id}`)) continue;
     const s = settings.get(userId);
+    const follower = Boolean(followers?.has(userId));
+    const wants = threadOnly ? rules.wantsThreadPush({ member: m, follower, settings: s, message: row }) : rules.wantsPush({ member: m, settings: s, conversation, message: row }) || (root && rules.wantsThreadPush({ member: m, follower, settings: s, message: row }));
+    if (!wants) continue;
+    // Reading it right now (the thread for a reply, the conversation otherwise): nothing to tell them.
+    if (userEvents.isViewing(userId, threadOnly ? `chat:${conversation.id}:${root.id}` : `chat:${conversation.id}`)) continue;
     const where = conversation.kind === 'channel' ? `#${conversation.name}` : conversation.kind === 'group' ? rules.titleOf(conversation, members, userId) : null;
-    const title = where ? `${authorName} in ${where}` : authorName;
-    const preview = rules.previewOf({ body: row.body, fileCount: message.files.length, imageCount: message.files.filter((f) => f.image).length, cards: message.cards.filter((c) => !c.locked && !c.gone) });
+    // Named in it (not just @channel): "Sara mentioned you in a thread in #orders".
+    const named = (row.mentions || []).map(String).includes(userId);
+    const title = root
+      ? `${authorName} ${named ? 'mentioned you' : 'replied'} in a thread${where ? ` in ${where}` : ''}`
+      : named && where
+        ? `${authorName} mentioned you in ${where}`
+        : where
+          ? `${authorName} in ${where}`
+          : authorName;
+    const preview = rules.previewOf({ body: row.body, fileCount: message.files.length, imageCount: message.files.filter((f) => f.image).length, cards: message.cards.filter((c) => !c.locked && !c.gone), voiceMs: message.voice?.durationMs ?? null });
     const shown = s?.hide_text ? `New message from ${authorName}` : preview;
     const quiet = rules.inQuietHours(s);
     await notificationsService.notifyGrouped({
@@ -512,13 +576,28 @@ async function deliver(auth, conversation, members, row) {
       kind: 'chat.message',
       title,
       body: shown,
-      url: `/inbox?c=${conversation.id}`,
+      // Straight to the message: in its thread for a reply (sent to the conversation too or not), else in the conversation.
+      url: `/inbox?c=${conversation.id}${root ? `&t=${root.id}` : ''}&m=${row.id}`,
       subjectType: 'chat',
-      subjectId: conversation.id,
-      detail: { conversation: where || authorName, account: conversation.connection_id ? accounts.get(conversation.connection_id)?.label || null : null },
-      push: quiet ? null : { title, body: shown, tag: `chat-${conversation.id}` },
+      subjectId: threadOnly ? `thread:${root.id}` : conversation.id,
+      detail: { conversation: where || authorName, account: conversation.connection_id ? accounts.get(conversation.connection_id)?.label || null : null, ...(root ? { thread: true } : {}) },
+      push: quiet ? null : { title, body: shown, tag: threadOnly ? `chat-thread-${root.id}` : `chat-${conversation.id}` },
     });
   }
+  // The first message's line under it (how many replies, who) for everyone looking at the conversation.
+  if (root) await broadcastUpdate(auth, root);
+}
+
+/** Previews of the links to other sites in a message, read once after it's sent, then shown to everyone in it. */
+async function previewLinks(auth, row) {
+  let skip = [];
+  try {
+    skip = [new URL(config.frontendUrl).hostname, new URL(config.apiUrl).hostname];
+  } catch {}
+  const links = await linkPreview.previewsFor(row.body, { skipHosts: skip });
+  if (!links.length && !(row.links || []).length) return;
+  await chatRepository.updateMessage(row.id, { links: JSON.stringify(links) });
+  await broadcastUpdate(auth, row);
 }
 
 async function ownMessage(auth, messageId, { allowOwner = false } = {}) {
@@ -563,7 +642,9 @@ async function edit(auth, messageId, { body, mentions = [] }) {
     edited_at: new Date(),
   });
   await broadcastUpdate(auth, row);
-  const [shaped] = await shapeMessages(auth, [await chatRepository.findMessage(messageId)]);
+  const fresh = await chatRepository.findMessage(messageId);
+  if (text !== row.body) previewLinks(auth, fresh).catch((err) => logger.warn('Chat: link previews not read', { messageId, error: err.message }));
+  const [shaped] = await shapeMessages(auth, [fresh]);
   return shaped;
 }
 
@@ -585,14 +666,99 @@ async function markRead(auth, id, { messageId = null } = {}) {
   return { readAt, unread: await chatRepository.unreadTotals(auth.userId, auth.ownerId) };
 }
 
+// ---- threads ------------------------------------------------------------------------
+
+/** A thread's first message, for someone in its conversation. */
+async function requireThread(auth, rootId) {
+  const root = await chatRepository.findMessage(rootId);
+  if (!root || root.thread_id) refuse('Thread not found.', 404);
+  const { conversation } = await requireMember(auth, root.conversation_id);
+  return { root, conversation };
+}
+
+/** A thread: its first message, every reply, whether this person follows it and how far they'd read. */
+async function thread(auth, rootId) {
+  const { root } = await requireThread(auth, rootId);
+  const [rows, place] = await Promise.all([chatRepository.threadMessages(root.id), chatRepository.threadMembership(root.id, auth.userId)]);
+  const shaped = await shapeMessages(auth, rows);
+  return { root: shaped[0], replies: shaped.slice(1), following: Boolean(place?.following), readAt: place?.last_read_at || null };
+}
+
+/** Reads a thread up to a reply (or now): its count under Threads drops, its bell line clears. */
+async function threadRead(auth, rootId, { messageId = null } = {}) {
+  const { root } = await requireThread(auth, rootId);
+  const readAt = await chatRepository.markThreadRead(root.id, auth.userId, { messageId });
+  await notificationsService.readSubject(auth.userId, 'chat.message', `thread:${root.id}`);
+  userEvents.emit(String(auth.userId), { type: 'chat.thread', conversationId: root.conversation_id, rootId: root.id, read: true });
+  return { readAt, unread: await chatRepository.unreadTotals(auth.userId, auth.ownerId) };
+}
+
+/** Follows a thread (told of its replies) or stops. */
+async function follow(auth, rootId, following) {
+  const { root } = await requireThread(auth, rootId);
+  await chatRepository.setFollowing(root.id, auth.userId, following);
+  userEvents.emit(String(auth.userId), { type: 'chat.thread', conversationId: root.conversation_id, rootId: root.id });
+  return { following: Boolean(following) };
+}
+
+/**
+ * Threads, as Slack's view: the ones this person follows, the latest reply
+ * first, each with its conversation, its first message, how many replies
+ * are new to them and the last two replies.
+ */
+async function threads(auth) {
+  const rows = await chatRepository.threadsFor(auth.userId, auth.ownerId);
+  if (!rows.length) return { threads: [], unread: await chatRepository.unreadTotals(auth.userId, auth.ownerId) };
+  const ids = rows.map((r) => r.id);
+  const [latest, members] = await Promise.all([chatRepository.latestReplies(ids, 2), chatRepository.membersOf([...new Set(rows.map((r) => r.conversation_id))])]);
+  const replyRows = [...latest.values()].flat();
+  const shaped = await shapeMessages(auth, [...rows, ...replyRows]);
+  const byId = new Map(shaped.map((m) => [m.id, m]));
+  return {
+    threads: rows.map((r) => ({
+      conversation: { id: r.conversation_id, kind: r.conversation_kind, title: rules.titleOf({ kind: r.conversation_kind, name: r.conversation_name }, members.filter((m) => m.conversation_id === r.conversation_id), auth.userId) },
+      root: byId.get(r.id),
+      unread: r.thread_unread,
+      lastReplyAt: r.last_reply_at,
+      latest: (latest.get(r.id) || []).map((x) => byId.get(x.id)).filter(Boolean),
+    })),
+    unread: await chatRepository.unreadTotals(auth.userId, auth.ownerId),
+  };
+}
+
+/**
+ * One conversation's threads (its header's Threads), the latest reply first:
+ * each first message with whether you follow it, how many replies are new
+ * to you and when the last came.
+ */
+async function conversationThreads(auth, id) {
+  await requireMember(auth, id);
+  const rows = await chatRepository.threadsIn(id, auth.userId);
+  const shaped = await shapeMessages(auth, rows);
+  return {
+    threads: rows.map((r, i) => ({ root: shaped[i], following: Boolean(r.thread_following), unread: r.thread_unread, lastReplyAt: r.last_reply_at })),
+  };
+}
+
+/**
+ * A conversation's "Files and links": what's been shared in it, newest
+ * first, each message with its files (photos and documents) and its links'
+ * previews, so the page can list them and go back to where they were said.
+ */
+async function conversationFiles(auth, id) {
+  await requireMember(auth, id);
+  const rows = await chatRepository.sharedIn(id);
+  return { messages: await shapeMessages(auth, rows) };
+}
+
 /** "Sara is typing…" for everyone else in it. */
-async function typing(auth, id) {
+async function typing(auth, id, { threadId = null } = {}) {
   const { conversation } = await requireMember(auth, id);
   const members = await chatRepository.membersOf([id]);
   const me = members.find((m) => String(m.user_id) === String(auth.userId));
   userEvents.emitMany(
     members.map((m) => String(m.user_id)).filter((u) => u !== String(auth.userId)),
-    { type: 'chat.typing', conversationId: conversation.id, user: { id: String(auth.userId), name: rules.nameOf(me) } }
+    { type: 'chat.typing', conversationId: conversation.id, threadId: threadId || null, user: { id: String(auth.userId), name: rules.nameOf(me) } }
   );
 }
 
@@ -659,6 +825,12 @@ module.exports = {
   deleteMessage,
   markRead,
   typing,
+  thread,
+  threadRead,
+  follow,
+  threads,
+  conversationThreads,
+  conversationFiles,
   search,
   unread,
   getSettings,

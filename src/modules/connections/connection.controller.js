@@ -560,8 +560,11 @@ async function logoPalette(req, res, next) {
   }
 }
 
-// ---- Messages Liston sends buyers by itself (the delivered thank-you) ----
-const messagesSchema = z.object({ delivered: z.object({ enabled: z.boolean(), text: z.string().max(2000, 'Keep the message under 2,000 characters.').nullable().optional() }) });
+// ---- Messages Liston sends buyers by itself (order placed, delivered) ----
+const messageSchema = z.object({ enabled: z.boolean(), text: z.string().max(2000, 'Keep the message under 2,000 characters.').nullable().optional() });
+const messagesSchema = z
+  .object({ placed: messageSchema.optional(), delivered: messageSchema.optional() })
+  .refine((m) => m.placed || m.delivered, 'Say which message to change.');
 
 async function getMessages(req, res, next) {
   try {
@@ -575,7 +578,7 @@ async function updateMessages(req, res, next) {
   try {
     const parsed = messagesSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
-    res.status(200).json(await require('../orders/order-messages.service').updateSettings(req.params.id, req.ownerId, parsed.data.delivered));
+    res.status(200).json(await require('../orders/order-messages.service').updateSettings(req.params.id, req.ownerId, parsed.data));
   } catch (err) {
     next(err);
   }

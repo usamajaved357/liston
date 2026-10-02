@@ -2,14 +2,15 @@
 
 import { ListonCard, ListonCardFact, ListonCardKind } from "@/lib/api";
 
-// A Liston card: an order, a live listing, a draft or a hunted product from
-// any of the owner's accounts, as a message shows it. It names its account
+// A Liston card: an order, a live listing, a draft, a hunted product or a
+// buyer's eBay conversation ("Discuss with team") from any of the owner's
+// accounts, as a message shows it. It names its account
 // and opens that page there in a new tab (the conversation stays where it
 // was), whichever account the viewer was working in. A locked card (an
 // account or area the viewer can't open) and a gone one show none of the
 // thing's details.
 
-export const KIND_LABEL: Record<ListonCardKind, string> = { order: "Order", listing: "Listing", draft: "Draft", hunt: "Hunted product" };
+export const KIND_LABEL: Record<ListonCardKind, string> = { order: "Order", listing: "Listing", draft: "Draft", hunt: "Hunted product", conversation: "eBay conversation" };
 
 const TONE: Record<string, string> = {
   good: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -32,6 +33,12 @@ export function KindIcon({ kind, className = "h-4 w-4" }: { kind: ListonCardKind
       <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
         <circle cx="12" cy="12" r="7.5" stroke="currentColor" strokeWidth="1.8" />
         <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+      </svg>
+    );
+  if (kind === "conversation")
+    return (
+      <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+        <path d="M4.5 6.5A2.5 2.5 0 017 4h10a2.5 2.5 0 012.5 2.5v7A2.5 2.5 0 0117 16h-6.5l-4 3.5V16H7a2.5 2.5 0 01-2.5-2.5v-7z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
       </svg>
     );
   if (kind === "draft")
@@ -127,10 +134,18 @@ export function ListonCardView({ card, compact = false, onRemove, tone = "light"
           )}
         </span>
         <span className={`mt-0.5 block font-medium leading-snug text-[var(--color-ink)] group-hover/card:text-[var(--color-primary)] ${compact ? "truncate text-[12.5px]" : "line-clamp-2 text-[13px]"}`}>{card.title}</span>
-        <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-[var(--color-muted)]">
-          {card.status && <span className={`inline-flex h-[18px] items-center rounded px-1.5 text-[10.5px] font-semibold ring-1 ring-inset ${TONE[card.status.tone] || TONE.muted}`}>{card.status.label}</span>}
-          <span className="min-w-0 truncate">{facts.join(" · ")}</span>
-        </span>
+        {card.kind === "conversation" ? (
+          // The item it's about, then its last message.
+          <>
+            {facts[0] && <span className="mt-0.5 block truncate text-[11.5px] text-[var(--color-muted)]">{facts[0]}</span>}
+            {facts[1] && <span className="mt-0.5 block truncate text-[11.5px] italic text-[var(--color-muted)]">&ldquo;{facts[1]}&rdquo;</span>}
+          </>
+        ) : (
+          <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11.5px] text-[var(--color-muted)]">
+            {card.status && <span className={`inline-flex h-[18px] items-center rounded px-1.5 text-[10.5px] font-semibold ring-1 ring-inset ${TONE[card.status.tone] || TONE.muted}`}>{card.status.label}</span>}
+            <span className="min-w-0 truncate">{facts.join(" · ")}</span>
+          </span>
+        )}
       </span>
       {remove}
     </a>

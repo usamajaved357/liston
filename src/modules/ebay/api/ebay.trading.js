@@ -713,6 +713,82 @@ async function relistListing(accessToken, itemId, fields, { siteId } = {}) {
   return { itemId: String(res.ItemID), relistedFrom: String(itemId), warnings: res._warnings || [] };
 }
 
+// ---- price and stock only (the Listings tab's quick edit) ----------------
+//
+// What Seller Hub's own "Edit price / quantity" changes, and nothing else:
+// the title, photos, description and specifics are never sent, so eBay
+// treats it as a price/stock update, not a revision of the listing.
+
+// A live listing's price and stock, and each variation's: GetItem trimmed
+// to those fields. `quantity` here is what's left to buy (eBay's Quantity
+// counts what has sold too).
+const STOCK_FIELDS = [
+  'Item.ItemID',
+  'Item.SKU',
+  'Item.Title',
+  'Item.ListingType',
+  'Item.StartPrice',
+  'Item.Quantity',
+  'Item.SellingStatus.QuantitySold',
+  'Item.SellingStatus.ListingStatus',
+  'Item.PictureDetails.GalleryURL',
+  'Item.Variations.VariationSpecificsSet',
+  'Item.Variations.Variation.SKU',
+  'Item.Variations.Variation.StartPrice',
+  'Item.Variations.Variation.Quantity',
+  'Item.Variations.Variation.SellingStatus.QuantitySold',
+  'Item.Variations.Variation.VariationSpecifics',
+];
+async function getItemStock(accessToken, itemId, { siteId } = {}) {
+  const body = `<ItemID>${xmlEscape(String(itemId))}</ItemID>` + STOCK_FIELDS.map((f) => `<OutputSelector>${f}</OutputSelector>`).join('');
+  const res = await tradingRequest(accessToken, 'GetItem', body, siteId);
+  const item = res.Item || {};
+  const left = (quantity, sold) => Math.max(0, Number(quantity ?? 0) - Number(sold ?? 0));
+  return {
+    itemId: String(item.ItemID || itemId),
+    sku: item.SKU !== undefined && item.SKU !== null && item.SKU !== '' ? String(item.SKU) : null,
+    title: String(item.Title ?? ''),
+    listingType: item.ListingType || null,
+    active: (item.SellingStatus?.ListingStatus || 'Active') === 'Active',
+    imageUrl: item.PictureDetails?.GalleryURL || null,
+    price: money(item.StartPrice),
+    available: left(item.Quantity, item.SellingStatus?.QuantitySold),
+    sold: Number(item.SellingStatus?.QuantitySold ?? 0),
+    variationSpecificsSet: specificsFrom(item.Variations?.VariationSpecificsSet),
+    variations: toArray(item.Variations?.Variation).map((v) => ({
+      sku: v.SKU !== undefined && v.SKU !== null && v.SKU !== '' ? String(v.SKU) : null,
+      price: money(v.StartPrice),
+      available: left(v.Quantity, v.SellingStatus?.QuantitySold),
+      sold: Number(v.SellingStatus?.QuantitySold ?? 0),
+      specifics: specificsFrom(v.VariationSpecifics),
+    })),
+  };
+}
+
+// The most InventoryStatus entries eBay takes in one ReviseInventoryStatus.
+const INVENTORY_STATUS_MAX = 4;
+
+/**
+ * ReviseInventoryStatus: the price and/or the quantity left to buy of up to
+ * four listings or variations, nothing else. `statuses`: [{ itemId, sku
+ * (a variation's, required for one), price: { amount, currency }?,
+ * quantity? }]. eBay adds what has sold to the quantity given.
+ */
+async function reviseInventoryStatus(accessToken, statuses, { siteId } = {}) {
+  if (!statuses.length || statuses.length > INVENTORY_STATUS_MAX) throw new Error(`ReviseInventoryStatus takes 1 to ${INVENTORY_STATUS_MAX} changes`);
+  const body = statuses
+    .map((s) => {
+      let xml = `<InventoryStatus><ItemID>${xmlEscape(String(s.itemId))}</ItemID>`;
+      if (s.sku) xml += `<SKU>${xmlEscape(s.sku)}</SKU>`;
+      if (s.price) xml += `<StartPrice currencyID="${xmlEscape(s.price.currency)}">${Number(s.price.amount).toFixed(2)}</StartPrice>`;
+      if (s.quantity !== undefined) xml += `<Quantity>${Math.max(0, Math.floor(Number(s.quantity) || 0))}</Quantity>`;
+      return `${xml}</InventoryStatus>`;
+    })
+    .join('');
+  const res = await tradingRequest(accessToken, 'ReviseInventoryStatus', body, siteId);
+  return { warnings: res._warnings || [] };
+}
+
 // The <Item> with only the fields given: shared by revise and relist.
 function itemChangesXml(itemId, { title, descriptionHtml, price, quantity, conditionId, imageUrls, specifics, variations, variationSpecificsSet, variationPictures }) {
   let body = `<Item><ItemID>${itemId}</ItemID>`;
@@ -792,6 +868,9 @@ async function getMemberFeedback(accessToken, userId, siteId = 0) {
 
 module.exports = {
   EbayTradingError,
+  getItemStock,
+  reviseInventoryStatus,
+  INVENTORY_STATUS_MAX,
   getItemSales,
   relistListing,
   getUserProfile,

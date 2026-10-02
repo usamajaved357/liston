@@ -57,6 +57,7 @@ router.delete(
 const editGuard = [requireAuth, requireFeature('listings', { resolveConnectionId: resolveConnectionIdFromListing })];
 
 router.get('/:listingId/description-preview', ...editGuard, listingController.descriptionPreview);
+router.post('/:listingId/description-preview', ...editGuard, listingController.descriptionPreview);
 router.post('/:listingId/variants/:index/split', ...editGuard, recordDraftWork, listingController.splitVariant);
 router.get('/:listingId/variation-fixes', ...editGuard, listingController.variationFixes);
 router.post('/:listingId/variation-fixes', ...editGuard, recordDraftWork, listingController.applyVariationFix);

@@ -23,16 +23,52 @@ async function findByIdForUser(id, userId) {
   return result.rows[0] || null;
 }
 
+// The Drafts tab: each draft with where it came from — the hunted product
+// it was drafted from (who hunted it, who approved it, found in Discover or
+// Product research), who drafted it (or that it drafted itself on
+// approval), and who last worked on it and when (member_activity).
 async function findPendingByConnection(connectionId, userId) {
   const result = await query(
-    `SELECT l.*
+    `SELECT l.*,
+            h.id AS hunt_id, h.added_from AS hunt_added_from,
+            hu.name AS hunter_name, hu.email AS hunter_email,
+            rv.name AS reviewer_name, rv.email AS reviewer_email,
+            d.actor_name AS drafted_by_name, d.actor_email AS drafted_by_email, d.automatic AS drafted_automatically,
+            w.actor_name AS edited_by_name, w.actor_email AS edited_by_email, w.created_at AS edited_at
      FROM listings l
      JOIN connections c ON c.id = l.connection_id
+     LEFT JOIN LATERAL (SELECT * FROM hunted_products hp WHERE hp.listing_id = l.id ORDER BY hp.created_at DESC LIMIT 1) h ON true
+     LEFT JOIN users hu ON hu.id = h.hunter_user_id
+     LEFT JOIN users rv ON rv.id = h.reviewer_user_id
+     LEFT JOIN LATERAL (
+       SELECT u.name AS actor_name, u.email AS actor_email, COALESCE((ma.detail->>'automatic')::boolean, false) AS automatic
+       FROM member_activity ma LEFT JOIN users u ON u.id = ma.actor_user_id
+       WHERE ma.subject_type = 'draft' AND ma.subject_id = l.id::text AND ma.kind = 'listing.drafted'
+       ORDER BY ma.created_at LIMIT 1
+     ) d ON true
+     LEFT JOIN LATERAL (
+       SELECT u.name AS actor_name, u.email AS actor_email, ma.created_at
+       FROM member_activity ma LEFT JOIN users u ON u.id = ma.actor_user_id
+       WHERE ma.subject_type = 'draft' AND ma.subject_id = l.id::text AND ma.kind = 'listing.draft_edited'
+       ORDER BY ma.created_at DESC LIMIT 1
+     ) w ON true
      WHERE l.connection_id = $1 AND c.user_id = $2 AND l.status = 'pending_review' AND l.edit_of_item_id IS NULL
      ORDER BY l.created_at DESC`,
     [connectionId, userId]
   );
-  return result.rows;
+  const person = (name, email) => (name || email ? { name: name || String(email).split('@')[0], email: email || null } : null);
+  return result.rows.map((r) => {
+    const { hunt_id, hunt_added_from, hunter_name, hunter_email, reviewer_name, reviewer_email, drafted_by_name, drafted_by_email, drafted_automatically, edited_by_name, edited_by_email, edited_at, ...listing } = r;
+    return {
+      ...listing,
+      origin: {
+        hunt: hunt_id ? { id: hunt_id, addedFrom: hunt_added_from || null, hunter: person(hunter_name, hunter_email), reviewer: person(reviewer_name, reviewer_email) } : null,
+        draftedBy: person(drafted_by_name, drafted_by_email),
+        draftedAutomatically: Boolean(drafted_automatically),
+        lastEdit: edited_at ? { by: person(edited_by_name, edited_by_email), at: new Date(edited_at).toISOString() } : null,
+      },
+    };
+  });
 }
 
 // The in-progress edit of a live listing, if there is one, so reopening

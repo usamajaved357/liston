@@ -224,6 +224,15 @@ function publishOfferByInventoryItemGroup(accessToken, inventoryItemGroupKey, ma
   );
 }
 
+// The price and/or quantity of up to 25 inventory items and their live
+// offers, nothing else: a published offer's listing changes at once.
+// `requests`: [{ sku, shipToLocationAvailability?: { quantity }, offers:
+// [{ offerId, availableQuantity?, price?: { value, currency } }] }].
+// Resolves to eBay's { responses: [{ sku, offerId, statusCode, errors }] }.
+function bulkUpdatePriceQuantity(accessToken, requests, marketplaceId) {
+  return request(accessToken, 'POST', '/sell/inventory/v1/bulk_update_price_quantity', { requests }, marketplaceId);
+}
+
 function withdrawOffer(accessToken, offerId) {
   return request(accessToken, 'POST', `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/withdraw`);
 }
@@ -272,6 +281,7 @@ function getReturnPolicies(accessToken, marketplaceId) {
 module.exports = {
   EbayApiError,
   request,
+  bulkUpdatePriceQuantity,
   createOrReplaceInventoryItem,
   createOrReplaceInventoryItemGroup,
   getInventoryItemGroup,

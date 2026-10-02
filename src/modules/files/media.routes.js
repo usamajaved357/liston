@@ -16,7 +16,7 @@ router.get('/f/:id/:variant', async (req, res, next) => {
     }
     const file = await filesRepository.findById(id);
     if (!file) return res.status(404).json({ error: 'Not found' });
-    await filesService.send(res, file, variant);
+    await filesService.send(res, file, variant, { range: req.headers.range });
   } catch (err) {
     next(err);
   }

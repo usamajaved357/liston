@@ -6,6 +6,7 @@ import { api, NotificationList } from "@/lib/api";
 import { disablePush, enablePush, pushState, PushState, refreshPush } from "@/lib/push";
 import { ago } from "@/components/hunting/HuntBits";
 import { useMyEvents } from "@/lib/useMyEvents";
+import { useVoicePopupOpen } from "@/lib/voicePlayback";
 
 // The bell in the page header: what Liston has told this person (a reviewer
 // approved, rejected, sent back or removed one of their hunted products),
@@ -177,10 +178,20 @@ function PushControl({ state, busy, testing, onEnable, onDisable, onTest }: { st
   );
 }
 
+/** What the card's button opens: a hunted product, a chat thread or conversation, else just "Open". */
+function openLabel(toast: Toast): string {
+  if (toast.kind?.startsWith("hunt.")) return "Open the product";
+  if (toast.kind === "chat.message") return toast.url?.includes("&t=") ? "Open the thread" : "Open the conversation";
+  if (toast.kind?.includes("message")) return "Open the conversation";
+  return "Open";
+}
+
 function ToastCard({ toast, onOpen, onClose }: { toast: Toast; onOpen: () => void; onClose: () => void }) {
   const k = kindOf(toast.kind);
+  // Under the voice note playing, when its pop-up is up there.
+  const below = useVoicePopupOpen();
   return (
-    <div role="status" aria-live="polite" className="fixed right-4 top-[68px] z-[70] w-[min(380px,calc(100vw-32px))] animate-[fadeIn_200ms_ease-out] overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-[0_22px_56px_-14px_rgba(15,23,42,0.35)]">
+    <div role="status" aria-live="polite" className={`fixed right-4 ${below ? "top-[162px]" : "top-[68px]"} z-[70] w-[min(380px,calc(100vw-32px))] animate-[fadeIn_200ms_ease-out] overflow-hidden rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] shadow-[0_22px_56px_-14px_rgba(15,23,42,0.35)]`}>
       <div className="flex gap-3 p-4">
         <span className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full ring-1 ring-inset ${k.ring}`}>
           <svg viewBox="0 0 20 20" fill="none" className="h-[18px] w-[18px]" aria-hidden>
@@ -200,7 +211,7 @@ function ToastCard({ toast, onOpen, onClose }: { toast: Toast; onOpen: () => voi
       </div>
       {toast.url && (
         <button type="button" onClick={onOpen} className="w-full border-t border-[var(--color-line)] py-2 text-[12.5px] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-paper)]">
-          Open the product
+          {openLabel(toast)}
         </button>
       )}
     </div>

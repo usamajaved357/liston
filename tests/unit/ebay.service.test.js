@@ -1050,3 +1050,56 @@ test("an order is cancelled only when the cancellation went through: a buyer's r
   assert.strictEqual(ebayService.classifyOrderStatus({ checkoutStatus: 'Incomplete', cancelStatus: 'CancelClosedForCommitment', status: 'Cancelled' }), 'cancelled', "eBay's own order status says so");
   assert.ok(ebayService.CANCEL_REQUESTED_STATUSES.has('CancelPending'));
 });
+
+// ---- price and stock only ----------------------------------------------------
+
+const stockCredentials = () => ({ accessToken: 't', refreshToken: 'r', accessTokenExpiresAt: Date.now() + 3600e3, marketplaceId: 'EBAY_GB' });
+
+test('reviseStockTrading sends four at a time; a batch eBay refuses fails its own rows only', async () => {
+  const batches = [];
+  mock.method(ebayTrading, 'reviseInventoryStatus', async (token, batch) => {
+    batches.push(batch.map((s) => s.key));
+    if (batch.some((s) => s.key === 'f')) throw new Error('Invalid SKU f.');
+    return { warnings: [] };
+  });
+  try {
+    const statuses = ['a', 'b', 'c', 'd', 'e', 'f'].map((key) => ({ key, itemId: '1', sku: key, quantity: 2 }));
+    const { results } = await ebayService.reviseStockTrading(stockCredentials(), 'conn-1', statuses);
+    assert.deepStrictEqual(batches, [['a', 'b', 'c', 'd'], ['e', 'f']]);
+    assert.deepStrictEqual(results.map((r) => [r.key, r.ok]), [['a', true], ['b', true], ['c', true], ['d', true], ['e', false], ['f', false]]);
+    assert.match(results[5].error, /Invalid SKU/);
+  } finally {
+    mock.restoreAll();
+  }
+});
+
+test('reviseStockInventory updates each SKU\'s live offer with bulkUpdatePriceQuantity, setting both quantities, and says which SKU eBay refused', async () => {
+  mock.method(ebayClient, 'getOffersBySku', async (token, sku) => (sku === 'gone' ? { offers: [] } : { offers: [{ offerId: `o-${sku}`, status: 'PUBLISHED' }] }));
+  const sent = [];
+  mock.method(ebayClient, 'bulkUpdatePriceQuantity', async (token, requests) => {
+    sent.push(...requests);
+    return { responses: [{ sku: 'A-1', offerId: 'o-A-1', statusCode: 200 }, { sku: 'A-2', offerId: 'o-A-2', statusCode: 400, errors: [{ message: 'Price too low.' }] }] };
+  });
+  try {
+    const { results } = await ebayService.reviseStockInventory(
+      stockCredentials(),
+      [
+        { key: 'sku:A-1', sku: 'A-1', quantity: 4 },
+        { key: 'sku:A-2', sku: 'A-2', price: { amount: 0.5, currency: 'GBP' } },
+        { key: 'sku:gone', sku: 'gone', quantity: 1 },
+      ],
+      'EBAY_GB'
+    );
+    assert.deepStrictEqual(sent, [
+      { sku: 'A-1', shipToLocationAvailability: { quantity: 4 }, offers: [{ offerId: 'o-A-1', availableQuantity: 4 }] },
+      { sku: 'A-2', offers: [{ offerId: 'o-A-2', price: { value: '0.50', currency: 'GBP' } }] },
+    ]);
+    assert.deepStrictEqual(results.map((r) => [r.key, r.ok, r.error || null]), [
+      ['sku:gone', false, 'eBay has no live offer for SKU gone.'],
+      ['sku:A-1', true, null],
+      ['sku:A-2', false, 'Price too low.'],
+    ]);
+  } finally {
+    mock.restoreAll();
+  }
+});

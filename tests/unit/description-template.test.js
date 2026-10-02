@@ -343,3 +343,11 @@ test('the card layouts carry no emoji, not even the ones the drafted features le
     assert.match(html, /Metallic Paint Finish/, `${id}: the feature itself stays`);
   }
 });
+
+test('which templates show the listing photos: the Showcase layouts, not Classic or a seller\'s own HTML', () => {
+  const { templatePhotos } = require('../../src/modules/listings/description-template');
+  assert.deepStrictEqual(templatePhotos({ layout: 'showcase' }, 'EBAY_GB'), { layout: 'showcase', name: 'Showcase', photos: true });
+  assert.strictEqual(templatePhotos({ layout: 'boutique' }, 'EBAY_GB').photos, true);
+  assert.deepStrictEqual(templatePhotos({ layout: 'classic' }, 'EBAY_GB'), { layout: 'classic', name: 'Classic', photos: false });
+  assert.strictEqual(templatePhotos({ layout: 'showcase', customHtml: '<div>{{description}}</div>' }, 'EBAY_GB').photos, false);
+});

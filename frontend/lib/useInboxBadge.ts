@@ -6,7 +6,8 @@ import { ebayInboxApi, inboxApi } from "@/lib/api";
 import { setChatUnread, useChatUnreadValue, useMyEvents } from "@/lib/useMyEvents";
 
 // The Inbox item's count in the sidebar: unread team chat (muted
-// conversations left out), kept current from the live channel.
+// conversations left out) and new replies in threads the person follows,
+// kept current from the live channel.
 export function useInboxBadge(): number {
   const value = useChatUnreadValue();
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -23,9 +24,9 @@ export function useInboxBadge(): number {
     };
   }, []);
   useMyEvents((e) => {
-    if (e.type === "chat.message" || e.type === "chat.read" || e.type === "chat.conversation" || e.type === "chat.updated") refresh();
+    if (e.type === "chat.message" || e.type === "chat.read" || e.type === "chat.conversation" || e.type === "chat.updated" || e.type === "chat.thread") refresh();
   }, refresh);
-  return value.unread;
+  return value.unread + value.threads;
 }
 
 // An account's Inbox item: how many of its buyers' and eBay's conversations

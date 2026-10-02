@@ -81,6 +81,25 @@ async function read(key) {
 }
 
 /** The whole file as a Buffer, or null. */
+/**
+ * Part of a stored file, for a browser asking for a range (audio and video
+ * seek, and Safari plays nothing without it): { stream, start, end, size }
+ * or null. Local files only: R2 answers ranges on its own links.
+ */
+async function readRange(key, start, end) {
+  if (driver() === 'r2') return null;
+  const file = localPath(key);
+  try {
+    const { size } = await fsp.stat(file);
+    if (start >= size) return { stream: null, start, end: size - 1, size };
+    const last = Math.min(end ?? size - 1, size - 1);
+    return { stream: fs.createReadStream(file, { start, end: last }), start, end: last, size };
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
 async function readBuffer(key) {
   const found = await read(key);
   if (!found) return null;
@@ -122,4 +141,4 @@ function useClient(fake) {
   client = fake;
 }
 
-module.exports = { put, read, readBuffer, remove, directUrl, driver, r2Configured, useClient, localPath };
+module.exports = { put, read, readRange, readBuffer, remove, directUrl, driver, r2Configured, useClient, localPath };

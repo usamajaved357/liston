@@ -1963,3 +1963,243 @@ test('publish leaves a draft with a weight alone, and turns eBay\'s missing-weig
   await assert.rejects(() => listingService.publish('listing-1', USER_ID), (err) => err.statusCode === 400 && /Enter the weight under Package in the draft/.test(err.message));
   assert.match(status.mock.calls.at(-1).arguments[2].errorMessage, /^eBay needs this listing's package weight/);
 });
+
+// --- the description template's own photos ------------------------------------
+
+test("updateDraft keeps the photos chosen for the description: the draft's own, in order, up to 8; null goes back to the listing's", async () => {
+  const row = pendingDraft({
+    imageUrls: ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'],
+    variants: [{ imageUrls: ['https://i.ebayimg.com/v.jpg'] }],
+    descriptionImages: ['https://i.ebayimg.com/d.jpg'],
+  });
+  mock.method(listingRepository, 'findByIdForUser', async () => row);
+  mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data }));
+
+  const chosen = await listingService.updateDraft('listing-1', USER_ID, { descriptionImages: ['https://i.ebayimg.com/v.jpg', 'https://i.ebayimg.com/d.jpg', 'https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/a.jpg'] });
+  assert.deepStrictEqual(chosen.listing.generated_data.descriptionImages, ['https://i.ebayimg.com/v.jpg', 'https://i.ebayimg.com/d.jpg', 'https://i.ebayimg.com/a.jpg'], 'a variation photo, an earlier pick and a gallery photo; no repeats');
+  assert.deepStrictEqual(chosen.listing.generated_data.imageUrls, ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'], "the listing's photos untouched");
+
+  await assert.rejects(() => listingService.updateDraft('listing-1', USER_ID, { descriptionImages: ['https://elsewhere.example.com/x.jpg'] }), /listing's own photos/);
+
+  const back = await listingService.updateDraft('listing-1', USER_ID, { descriptionImages: null });
+  assert.ok(!('descriptionImages' in back.listing.generated_data));
+});
+
+test("uploadDraftImage for the description adds it there only (starting from the listing's photos), and a replaced photo is replaced there too", async () => {
+  const data = { imageUrls: ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'], marketplaceId: 'EBAY_GB' };
+  mock.method(listingRepository, 'findByIdForUser', async () => ({ id: 'listing-1', status: 'pending_review', connection_id: CONNECTION_ID, generated_data: data }));
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
+  mock.method(eps, 'upload', async () => 'https://i.ebayimg.com/new.jpg');
+  mock.method(listingRepository, 'updateGeneratedData', async (id, d) => ({ id, generated_data: d }));
+
+  const added = await listingService.uploadDraftImage('listing-1', USER_ID, { dataUrl: await dataUrl(800, 800), forDescription: true });
+  assert.deepStrictEqual(added.listing.generated_data.descriptionImages, ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg', 'https://i.ebayimg.com/new.jpg']);
+  assert.deepStrictEqual(added.listing.generated_data.imageUrls, ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'], 'not added to the listing');
+
+  data.descriptionImages = ['https://i.ebayimg.com/b.jpg'];
+  const replaced = await listingService.uploadDraftImage('listing-1', USER_ID, { dataUrl: await dataUrl(800, 800), replaces: 'https://i.ebayimg.com/b.jpg' });
+  assert.deepStrictEqual(replaced.listing.generated_data.descriptionImages, ['https://i.ebayimg.com/new.jpg']);
+  assert.deepStrictEqual(replaced.listing.generated_data.imageUrls, ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/new.jpg']);
+
+  data.descriptionImages = Array.from({ length: 8 }, (_, i) => `https://i.ebayimg.com/${i}.jpg`);
+  const photo = await dataUrl(800, 800);
+  await assert.rejects(() => listingService.uploadDraftImage('listing-1', USER_ID, { dataUrl: photo, forDescription: true }), /up to 8 photos/);
+});
+
+test("the description's gallery shows the photos chosen for it, else the listing's", async () => {
+  const showcase = ebayConnection({ label: 'Store', settings: { ...ebayConnection().settings, template: { layout: 'showcase' } } });
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, showcase));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'bestSellingListings', async () => ({ items: [] }));
+  const listing = (extra) => pendingDraft({ description: 'Copy', imageUrls: ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'], ...extra });
+
+  const following = await listingService.renderDraftDescription(listing({}), USER_ID);
+  assert.match(following, /a\.jpg/);
+  assert.match(following, /b\.jpg/);
+  const chosen = await listingService.renderDraftDescription(listing({ descriptionImages: ['https://i.ebayimg.com/c.jpg'] }), USER_ID);
+  assert.match(chosen, /c\.jpg/);
+  assert.doesNotMatch(chosen, /a\.jpg|b\.jpg/, "only the chosen photo, not the listing's");
+});
+
+test("publishing a live edit puts the template's photos on eBay and draws the description with them, not the supplier's", async () => {
+  mock.method(listingRepository, 'findByIdForUser', async () => liveEditRow({ imageUrls: ['https://ae01.alicdn.com/supplier.jpg'], descriptionImages: ['https://ae01.alicdn.com/supplier.jpg'] }));
+  mock.method(listingRepository, 'findPublishedByItemId', async () => null);
+  const showcase = ebayConnection({ settings: { ...ebayConnection().settings, template: { layout: 'showcase' } } });
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, showcase));
+  mock.method(ebayService, 'ensureValidAccessToken', async () => ({ accessToken: 'token' }));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'bestSellingListings', async () => ({ items: [] }));
+  mock.method(eps, 'hostUrl', async () => 'https://i.ebayimg.com/hosted.jpg');
+  const saved = mock.method(listingRepository, 'updateGeneratedData', async (id, d) => ({ id, generated_data: d }));
+  const revise = mock.method(ebayService, 'reviseLiveListing', async (credentials, itemId, payload) => ({ itemId, payload }));
+  mock.method(listingRepository, 'deleteById', async () => {});
+
+  await listingService.publish('edit-1', USER_ID);
+
+  const payload = revise.mock.calls[0].arguments[2];
+  assert.deepStrictEqual(payload.imageUrls, ['https://i.ebayimg.com/hosted.jpg']);
+  assert.match(payload.descriptionHtml, /i\.ebayimg\.com\/hosted\.jpg/);
+  assert.doesNotMatch(payload.descriptionHtml, /alicdn/, "the description is drawn from the photos as they went to eBay");
+  assert.deepStrictEqual(saved.mock.calls[0].arguments[1].descriptionImages, ['https://i.ebayimg.com/hosted.jpg']);
+});
+
+// --- a live listing's price and stock only (the Listings tab's quick edit) ------------
+
+const variationStock = (itemId, over = {}) => ({
+  itemId,
+  sku: null,
+  title: 'Lamp',
+  listingType: 'FixedPriceItem',
+  active: true,
+  imageUrl: null,
+  price: { amount: 9.99, currency: 'GBP' },
+  available: 7,
+  sold: 5,
+  variationSpecificsSet: { Colour: ['Black', 'White'] },
+  variations: [
+    { sku: 'L-1', price: { amount: 9.99, currency: 'GBP' }, available: 6, sold: 4, specifics: { Colour: ['Black'] } },
+    { sku: 'L-2', price: { amount: 11.5, currency: 'GBP' }, available: 1, sold: 1, specifics: { Colour: ['White'] } },
+  ],
+  ...over,
+});
+
+function stockMocks(stock, { own = null, workingCopy = null } = {}) {
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, ebayConnection()));
+  mock.method(ebayService, 'getListingStock', async () => stock);
+  mock.method(listingRepository, 'findPublishedByItemId', async () => own);
+  mock.method(listingRepository, 'findLiveEdit', async () => workingCopy);
+  return {
+    patch: mock.method(ebayService, 'patchListingStock', async () => {}),
+    record: mock.method(listingRepository, 'recordListingChange', async () => {}),
+    saveDraft: mock.method(listingRepository, 'updateGeneratedData', async (id, data) => ({ id, generated_data: data })),
+    full: mock.method(ebayService, 'reviseLiveListing', async () => {
+      throw new Error('a full revise must never be used');
+    }),
+    inventoryFull: mock.method(ebayService, 'reviseInventoryListing', async () => {
+      throw new Error('a full revise must never be used');
+    }),
+  };
+}
+
+test("getListingStock: one row per variation keyed by its SKU (or its options without one), what's left and what's sold", async () => {
+  stockMocks(variationStock('400000000101', { variations: [...variationStock('x').variations, { sku: null, price: { amount: 12, currency: 'GBP' }, available: 0, sold: 0, specifics: { Colour: ['Red'] } }] }));
+  const view = await listingService.getListingStock(CONNECTION_ID, USER_ID, '400000000101');
+  assert.strictEqual(view.variation, true);
+  assert.strictEqual(view.currency, 'GBP');
+  assert.deepStrictEqual(view.rows.map((r) => [r.key, r.label, r.available, r.sold]), [
+    ['sku:L-1', 'Black', 6, 4],
+    ['sku:L-2', 'White', 1, 1],
+    ['opt:[["Colour",["Red"]]]', 'Red', 0, 0],
+  ]);
+
+  stockMocks(variationStock('400000000102', { variations: [], variationSpecificsSet: {}, sku: 'SOLO' }));
+  const single = await listingService.getListingStock(CONNECTION_ID, USER_ID, '400000000102');
+  assert.deepStrictEqual(single.rows.map((r) => [r.key, r.price.amount, r.available]), [['item', 9.99, 7]]);
+
+  stockMocks(variationStock('400000000103', { active: false }));
+  await assert.rejects(() => listingService.getListingStock(CONNECTION_ID, USER_ID, '400000000103'), /ended/);
+});
+
+test('a price and stock change goes by ReviseInventoryStatus with only what changed: no full revise, the Listings tab, before/after and Liston\'s copies follow', async () => {
+  const workingCopy = { id: 'edit-9', generated_data: { commonTitle: 'Lamp', variants: [{ sku: 'L-1', price: { value: '9.99', currency: 'GBP' }, quantity: 6, aspects: { Colour: ['Black'] } }, { sku: 'L-2', price: { value: '11.50', currency: 'GBP' }, quantity: 1, aspects: { Colour: ['White'] } }] } };
+  const m = stockMocks(variationStock('400000000201'), { workingCopy });
+  const revise = mock.method(ebayService, 'reviseStockTrading', async (credentials, connectionId, statuses) => ({ results: statuses.map((s) => ({ key: s.key, ok: true, warnings: [] })) }));
+
+  const out = await listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000201', [
+    { key: 'sku:L-1', price: '8.49', quantity: 6 },
+    { key: 'sku:L-2', price: '11.50', quantity: 10 },
+  ]);
+
+  assert.deepStrictEqual(revise.mock.calls[0].arguments[2], [
+    { key: 'sku:L-1', itemId: '400000000201', sku: 'L-1', price: { amount: 8.49, currency: 'GBP' } },
+    { key: 'sku:L-2', itemId: '400000000201', sku: 'L-2', quantity: 10 },
+  ], 'only what differs from eBay: L-1 price, L-2 stock');
+  assert.strictEqual(m.full.mock.calls.length + m.inventoryFull.mock.calls.length, 0);
+  assert.deepStrictEqual(out.results, [{ key: 'sku:L-1', ok: true }, { key: 'sku:L-2', ok: true }]);
+  assert.deepStrictEqual(out.listing.rows.map((r) => [r.price.amount, r.available]), [[8.49, 6], [11.5, 10]]);
+  assert.deepStrictEqual(m.patch.mock.calls[0].arguments[2], { price: { amount: 8.49, currency: 'GBP' }, available: 16, sold: 5 });
+  assert.deepStrictEqual(out.changed, { fields: ['price', 'quantity'], before: { price: 9.99, quantity: 7 }, after: { price: 8.49, quantity: 16 } });
+  assert.strictEqual(m.record.mock.calls.length, 1);
+  const saved = m.saveDraft.mock.calls.find((c) => c.arguments[0] === 'edit-9').arguments[1];
+  assert.deepStrictEqual(saved.variants.map((v) => [v.price.value, v.quantity]), [['8.49', 6], ['11.50', 10]], 'an edit left open follows');
+
+  // Saving the same again: nothing to send.
+  await assert.rejects(() => listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000201', [{ key: 'sku:L-1', price: '8.49' }]), /Nothing to change/);
+  await assert.rejects(() => listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000201', [{ key: 'sku:L-1', price: '0' }]), /above 0/);
+  await assert.rejects(() => listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000201', [{ key: 'sku:L-1', quantity: 2.5 }]), /whole number/);
+  await assert.rejects(() => listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000201', [{ key: 'sku:NOPE', quantity: 2 }]), /no longer on the listing/);
+});
+
+test('a listing Liston published goes by the Inventory API\'s bulkUpdatePriceQuantity; one eBay refused leaves the rest in place', async () => {
+  const own = { id: 'own-1', platform_group_key: 'G1', generated_data: { variants: [{ sku: 'L-1', price: { value: '9.99', currency: 'GBP' }, quantity: 6 }] } };
+  const m = stockMocks(variationStock('400000000301'), { own });
+  const trading = mock.method(ebayService, 'reviseStockTrading', async () => ({ results: [] }));
+  const inventory = mock.method(ebayService, 'reviseStockInventory', async (credentials, rows) => ({ results: rows.map((r) => (r.sku === 'L-2' ? { key: r.key, ok: false, error: 'Price too low.' } : { key: r.key, ok: true })) }));
+
+  const out = await listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000301', [
+    { key: 'sku:L-1', quantity: 0 },
+    { key: 'sku:L-2', price: '0.10' },
+  ]);
+
+  assert.strictEqual(trading.mock.calls.length, 0);
+  assert.deepStrictEqual(inventory.mock.calls[0].arguments[1].map((r) => [r.sku, r.price?.amount ?? null, r.quantity ?? null]), [['L-1', null, 0], ['L-2', 0.1, null]]);
+  assert.deepStrictEqual(inventory.mock.calls[0].arguments[2], 'EBAY_GB');
+  assert.deepStrictEqual(out.results.map((r) => [r.key, r.ok]), [['sku:L-1', true], ['sku:L-2', false]]);
+  assert.deepStrictEqual(out.listing.rows.map((r) => [r.price.amount, r.available]), [[9.99, 0], [11.5, 1]], 'only what went');
+  assert.deepStrictEqual(out.changed.fields, ['quantity']);
+  assert.deepStrictEqual(m.saveDraft.mock.calls[0].arguments[1].variants[0].quantity, 0);
+});
+
+test('a changed variation with no SKU goes with the variations alone (every one at its values), never the title, photos or description', async () => {
+  const stock = variationStock('400000000401', { variations: [variationStock('x').variations[0], { sku: null, price: { amount: 12, currency: 'GBP' }, available: 3, sold: 2, specifics: { Colour: ['White'] } }] });
+  const m = stockMocks(stock);
+  const fixed = mock.method(ebayService, 'reviseVariationsTrading', async () => ({ warnings: [] }));
+  const out = await listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000401', [{ key: 'opt:[["Colour",["White"]]]', quantity: 8 }]);
+  const sent = fixed.mock.calls[0].arguments[3];
+  assert.deepStrictEqual(Object.keys(sent).sort(), ['variationSpecificsSet', 'variations']);
+  assert.deepStrictEqual(sent.variations.map((v) => [v.sku || null, v.price.amount, v.quantity, v.specifics.Colour[0]]), [['L-1', 9.99, 6, 'Black'], [null, 12, 8, 'White']]);
+  assert.deepStrictEqual(out.results, [{ key: 'opt:[["Colour",["White"]]]', ok: true }]);
+  assert.strictEqual(m.full.mock.calls.length, 0);
+});
+
+test("another tool's Inventory API listing, refused by ReviseInventoryStatus, is changed through the Inventory API by its SKUs", async () => {
+  stockMocks(variationStock('400000000501', { variations: [], variationSpecificsSet: {}, sku: 'TOOL-9' }));
+  mock.method(ebayService, 'reviseStockTrading', async (c, id, statuses) => ({ results: statuses.map((s) => ({ key: s.key, ok: false, error: 'Inventory-based listing management is not currently supported by this tool.', inventoryManaged: true })) }));
+  const inventory = mock.method(ebayService, 'reviseStockInventory', async (credentials, rows) => ({ results: rows.map((r) => ({ key: r.key, ok: true })) }));
+  const out = await listingService.updateListingStock(CONNECTION_ID, USER_ID, '400000000501', [{ key: 'item', price: '7' }]);
+  assert.deepStrictEqual(inventory.mock.calls[0].arguments[1], [{ key: 'item', sku: 'TOOL-9', price: { amount: 7, currency: 'GBP' }, quantity: undefined }]);
+  assert.deepStrictEqual(out.results, [{ key: 'item', ok: true }]);
+});
+
+// --- the editor's preview: what's on screen, unsaved ------------------------------
+
+test("the preview draws what the editor shows, unsaved: the photos' new order, title, text and specifics, nothing saved", async () => {
+  const showcase = ebayConnection({ label: 'Store', settings: { ...ebayConnection().settings, template: { layout: 'showcase' } } });
+  mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action({ accessToken: 'token' }, showcase));
+  mock.method(ebayService, 'getStoreProfile', async () => ({ storeName: 'Store' }));
+  mock.method(ebayService, 'bestSellingListings', async () => ({ items: [] }));
+  // A live listing's edit: nothing saved since it was opened.
+  mock.method(listingRepository, 'findByIdForUser', async () => liveEditRow({ imageUrls: ['https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg', 'https://i.ebayimg.com/c.jpg'] }));
+  const save = mock.method(listingRepository, 'updateGeneratedData', async () => ({}));
+  const order = (html) => [...html.matchAll(/sx-slide sx-s\d+"><label[^>]*><span class="sx-fill" style="background-image:url\('https:\/\/i\.ebayimg\.com\/(\w)\.jpg'\)/g)].map((m) => m[1]);
+
+  const saved = await listingService.previewDescription('edit-1', USER_ID);
+  assert.deepStrictEqual(order(saved), ['a', 'b', 'c']);
+  const onScreen = await listingService.previewDescription('edit-1', USER_ID, {
+    title: 'Brighter lamp',
+    imageUrls: ['https://i.ebayimg.com/c.jpg', 'https://i.ebayimg.com/a.jpg', 'https://i.ebayimg.com/b.jpg'],
+    aspects: { Brand: ['Lumo'] },
+  });
+  assert.deepStrictEqual(order(onScreen), ['c', 'a', 'b'], 'the gallery in the order the editor shows');
+  assert.match(onScreen, /Brighter lamp/);
+  assert.match(onScreen, /Lumo/);
+  assert.strictEqual(save.mock.calls.length, 0, 'a preview saves nothing');
+});
+
+test('draftWithView lays the editor over a variation draft too: its shared title, text, specifics and the first row\'s condition', () => {
+  const draft = { commonTitle: 'Old', commonDescription: 'Old text', imageUrls: ['a'], descriptionImages: ['a'], variesBy: { aspects: { Brand: ['X'] }, specifications: [] }, variants: [{ condition: 'NEW' }, { condition: 'NEW' }] };
+  const next = listingService.draftWithView(draft, { title: 'New', description: 'New text', imageUrls: ['b', 'a'], descriptionImages: null, aspects: { Brand: ['Y'] }, condition: 'USED_GOOD' });
+  assert.deepStrictEqual([next.commonTitle, next.commonDescription, next.imageUrls, 'descriptionImages' in next, next.variesBy.aspects.Brand[0], next.variants[0].condition], ['New', 'New text', ['b', 'a'], false, 'Y', 'USED_GOOD']);
+  assert.strictEqual(draft.commonTitle, 'Old', 'the stored draft untouched');
+});

@@ -767,6 +767,33 @@ export interface Listing {
   lastEditedAt?: string | null; // its latest edit from Liston
 }
 
+// A live listing's price and stock, and each variation's, for the Listings
+// tab's quick edit (changed on eBay without revising anything else).
+export interface ListingStockRow {
+  key: string; // "item", a variation's "sku:…", or "opt:…" for one with no SKU
+  sku: string | null;
+  label: string | null; // the variation's options ("Black / M"); null for a single listing
+  specifics: Record<string, string[]> | null;
+  price: Money | null;
+  available: number; // left to buy
+  sold: number;
+}
+export interface ListingStock {
+  itemId: string;
+  title: string;
+  imageUrl: string | null;
+  currency: string | null;
+  variation: boolean;
+  axes: string[];
+  rows: ListingStockRow[];
+}
+export interface ListingStockResult {
+  results: { key: string; ok: boolean; error?: string }[];
+  listing: ListingStock;
+  changed: { fields: string[]; before: { price: number | null; quantity: number }; after: { price: number | null; quantity: number } } | null;
+  warnings: string[];
+}
+
 // The Orders page's orders (backend orders/order-sort.js). Left unset, the
 // backend picks: the nearest dispatch deadline on Awaiting dispatch, else newest.
 export type OrderSort = "newest" | "oldest" | "dispatch_soonest" | "total_high";
@@ -1002,16 +1029,28 @@ export interface OrderEvent {
 
 // A message Liston sent the buyer by itself (the delivered thank-you).
 export interface OrderMessage {
-  kind: "delivered";
-  status: "sent" | "failed";
+  kind: "placed" | "delivered";
+  status: "sending" | "sent" | "failed" | "skipped";
   error: string | null;
   sentAt: string;
 }
 // The account's buyer-message settings (Settings → Messages).
+export type BuyerMessageKind = "placed" | "delivered";
+export interface BuyerMessageSetting {
+  enabled: boolean;
+  text: string | null; // null: Liston's wording (defaultText)
+  enabledAt: string | null;
+  defaultText: string;
+}
 export interface BuyerMessageSettings {
-  delivered: { enabled: boolean; text: string | null; enabledAt: string | null; defaultText: string };
+  placed: BuyerMessageSetting; // the welcome, as soon as a buyer orders
+  delivered: BuyerMessageSetting; // the thank-you once eBay shows it delivered
+  store: string; // what {store} signs off with
   canMessage: boolean; // the eBay sign-in allows messaging (an older one needs a reconnect)
-  recent: { items: { orderId: string; kind: string; status: "sent" | "failed"; buyer: string | null; error: string | null; sentAt: string }[]; last30: { sent: number; failed: number } };
+  recent: {
+    items: { orderId: string; kind: BuyerMessageKind; status: "sent" | "failed" | "skipped"; buyer: string | null; error: string | null; sentAt: string }[];
+    last30: { sent: number; failed: number; byKind: Partial<Record<BuyerMessageKind, { sent: number; failed: number; skipped: number }>> };
+  };
 }
 
 export interface OrderDetailResponse {
@@ -1209,6 +1248,8 @@ export interface SingleDraftContent {
   title: string;
   description: string;
   imageUrls: string[];
+  // The photos the description template's gallery shows (up to 8); absent: the listing's.
+  descriptionImages?: string[];
   aspects?: Record<string, string[]>;
   condition?: string;
   quantity: number;
@@ -1244,6 +1285,8 @@ export interface VariationDraftContent {
   commonTitle: string;
   commonDescription: string;
   imageUrls: string[];
+  // The photos the description template's gallery shows (up to 8); absent: the listing's.
+  descriptionImages?: string[];
   variesBy: {
     aspects: Record<string, string[]>;
     aspectsImageVariesBy: string[];
@@ -1267,6 +1310,23 @@ export interface VariationDraftContent {
 }
 
 export type DraftContent = SingleDraftContent | VariationDraftContent;
+
+// What the editor shows, for previewing the description before it's saved.
+export interface DescriptionPreviewView {
+  title?: string;
+  description?: string;
+  imageUrls?: string[];
+  descriptionImages?: string[] | null;
+  aspects?: Record<string, string[]>;
+  condition?: string;
+}
+
+// Whether the account's description template shows the listing's photos (the Showcase layouts do; Classic doesn't).
+export interface DescriptionTemplatePhotos {
+  layout: string;
+  name: string;
+  photos: boolean;
+}
 
 export function isVariationDraft(content: DraftContent): content is VariationDraftContent {
   return "variants" in content;
@@ -1398,6 +1458,8 @@ export interface PriceBreakdown {
 // Only what changed. Variants are keyed by index (a local draft has no SKUs
 // yet); removals are expressed as such rather than as a replacement array.
 export interface DraftPatch {
+  // The description template's photos; null: the listing's own.
+  descriptionImages?: string[] | null;
   title?: string;
   commonTitle?: string;
   description?: string;
@@ -1501,6 +1563,20 @@ export interface DraftListing {
   edit_of_item_id?: string | null;
   // `ended`: the listing had ended when opened, so publishing relists it.
   source_data?: { ended?: boolean } | null;
+  // On the Drafts tab: where the draft came from and who has worked on it.
+  origin?: DraftOrigin;
+}
+
+export interface DraftPerson {
+  name: string;
+  email: string | null;
+}
+export interface DraftOrigin {
+  // The hunted product it was drafted from: who hunted and approved it, and where it was found.
+  hunt: { id: string; addedFrom: "discover" | "research" | null; hunter: DraftPerson | null; reviewer: DraftPerson | null } | null;
+  draftedBy: DraftPerson | null;
+  draftedAutomatically: boolean; // drafted itself when its hunted product was approved
+  lastEdit: { by: DraftPerson | null; at: string } | null;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
@@ -2801,15 +2877,18 @@ export const api = {
     ),
 
   getConnectionMessages: (id: string) => request<BuyerMessageSettings>(`/api/connections/${id}/messages`),
-  updateConnectionMessages: (id: string, delivered: { enabled: boolean; text: string | null }) =>
-    request<BuyerMessageSettings>(`/api/connections/${id}/messages`, { method: "PUT", body: JSON.stringify({ delivered }) }),
+  updateConnectionMessages: (id: string, changes: Partial<Record<BuyerMessageKind, { enabled: boolean; text?: string | null }>>) =>
+    request<BuyerMessageSettings>(`/api/connections/${id}/messages`, { method: "PUT", body: JSON.stringify(changes) }),
   updateConnectionTemplate: (id: string, template: DescriptionTemplate) =>
     request<{ settings: { template: DescriptionTemplate } }>(`/api/connections/${id}/template`, {
       method: "PUT",
       body: JSON.stringify(template),
     }),
-  previewDraftDescription: (listingId: string) =>
-    request<{ html: string }>(`/api/listings/${listingId}/description-preview`),
+  // The branded description: the saved draft, or (with `view`) what the editor shows, unsaved changes included.
+  previewDraftDescription: (listingId: string, view?: DescriptionPreviewView) =>
+    view
+      ? request<{ html: string }>(`/api/listings/${listingId}/description-preview`, { method: "POST", body: JSON.stringify(view) })
+      : request<{ html: string }>(`/api/listings/${listingId}/description-preview`),
   previewDraftListing: (connectionId: string, input: { competitorUrl?: string; sourceUrl: string }) =>
     request<DraftPreview>(`/api/connections/${connectionId}/listings/drafts/preview`, {
       method: "POST",
@@ -2829,6 +2908,10 @@ export const api = {
   // Ends a live eBay listing now. It moves to Inactive; eBay keeps it under Unsold.
   endLiveListing: (connectionId: string, itemId: string) =>
     request<{ itemId: string; endTime: string | null; warnings: string[] }>(`/api/connections/${connectionId}/listings/${itemId}/end`, { method: "POST" }),
+  // A live listing's price and stock only: read (1 trimmed eBay read), then changed on eBay.
+  getListingStock: (connectionId: string, itemId: string) => request<ListingStock>(`/api/connections/${connectionId}/listings/${itemId}/stock`),
+  updateListingStock: (connectionId: string, itemId: string, changes: { key: string; price?: string; quantity?: number }[]) =>
+    request<ListingStockResult>(`/api/connections/${connectionId}/listings/${itemId}/stock`, { method: "POST", body: JSON.stringify({ changes }) }),
 
   // Opens a live eBay listing in the editor; returns the transient working copy.
   // `inactive`: opened from the Inactive tab to relist it.
@@ -2839,7 +2922,7 @@ export const api = {
     request<{ drafts: DraftListing[] }>(`/api/connections/${connectionId}/listings/drafts`),
 
   getDraftListing: (listingId: string) =>
-    request<{ listing: DraftListing; policies: ConnectionPolicies | null; category: DraftCategoryInfo | null; policyWords?: string[]; canPublish?: boolean }>(`/api/listings/${listingId}`),
+    request<{ listing: DraftListing; policies: ConnectionPolicies | null; template?: DescriptionTemplatePhotos | null; category: DraftCategoryInfo | null; policyWords?: string[]; canPublish?: boolean }>(`/api/listings/${listingId}`),
 
   // Ways out when eBay refuses the draft's variation attribute in its category.
   getVariationFixes: (listingId: string) => request<VariationFixes>(`/api/listings/${listingId}/variation-fixes`),
@@ -2902,8 +2985,9 @@ export const api = {
     }),
   // The seller's own photo, sent as a data: URL. `replaces` swaps an existing
   // image wherever it appears; `variantIndex` sets a variation's photo;
-  // neither appends to the gallery.
-  uploadDraftImage: (listingId: string, file: File, target: { replaces?: string; variantIndex?: number } = {}) =>
+  // `forDescription` adds it to the description template's photos only;
+  // none of them appends to the gallery.
+  uploadDraftImage: (listingId: string, file: File, target: { replaces?: string; variantIndex?: number; forDescription?: boolean } = {}) =>
     new Promise<{ listing: DraftListing; imageUrl: string }>((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(new ApiError("Couldn't read that file.", 400));
@@ -3004,7 +3088,7 @@ export interface SharedFile {
   createdAt: string;
 }
 
-export type ListonCardKind = "order" | "listing" | "draft" | "hunt";
+export type ListonCardKind = "order" | "listing" | "draft" | "hunt" | "conversation";
 export type ListonCardFact = { kind: "money"; amount: number; currency: string; label?: string } | { kind: "text"; text: string } | { kind: "date"; at: string };
 // A preview of something in Liston, from any account: `url` opens it in that
 // account. `locked`: it's in an account (or area) the viewer can't open;
@@ -3080,17 +3164,47 @@ export interface ChatMessage {
   replyTo: { id: string; author: { id: string; name: string } | null; text: string } | null;
   cards: ListonCard[];
   files: SharedFile[];
+  // Previews of links to other sites, read after it was sent.
   links: { url: string; title: string | null; description: string | null; image: string | null; site: string | null }[];
   mentions: string[];
   mentionAll: boolean;
+  // A voice note: its audio, length and the shape of its sound (bars from 0 to 1).
+  voice: { fileId: string; url: string; mime: string; size: number; durationMs: number; peaks: number[] } | null;
+  // A reply in a thread names its thread's first message; one also sent to the conversation shows there too.
+  threadId: string | null;
+  alsoInConversation: boolean;
+  // A first message with replies: how many, when the last came, who replied (latest first).
+  thread: { replyCount: number; lastReplyAt: string | null; people: { id: string; name: string; avatarUrl: string | null }[] } | null;
   // A system line: what happened ("added", "renamed"…), by whom, to whom.
   detail: { action?: string; by?: string | null; userIds?: string[]; from?: string | null; to?: string | null };
 }
+export type ChatUnread = { unread: number; mentions: number; threads: number };
 export interface ChatList {
   conversations: ChatConversation[];
   openChannels: ChatOpenChannel[];
   canManageChannels: boolean;
-  unread: { unread: number; mentions: number };
+  unread: ChatUnread;
+}
+// A thread as Threads lists it: its conversation, first message, new replies and the last two.
+export interface ChatThreadSummary {
+  conversation: { id: string; kind: "dm" | "group" | "channel"; title: string };
+  root: ChatMessage;
+  unread: number;
+  lastReplyAt: string | null;
+  latest: ChatMessage[];
+}
+// A conversation's thread, under its header's Threads: whether you follow it and how many replies are new to you.
+export interface ChatConversationThread {
+  root: ChatMessage;
+  following: boolean;
+  unread: number;
+  lastReplyAt: string | null;
+}
+export interface ChatThreadDetail {
+  root: ChatMessage;
+  replies: ChatMessage[];
+  following: boolean;
+  readAt: string | null;
 }
 export interface NotificationSettings {
   chat: ChatNotify;
@@ -3138,7 +3252,7 @@ export const inboxApi = {
   // Team chat
   chatPeople: () => request<{ people: ChatPerson[] }>(`/api/chat/people`),
   chatList: () => request<ChatList>(`/api/chat/conversations`),
-  chatUnread: () => request<{ unread: number; mentions: number }>(`/api/chat/unread`),
+  chatUnread: () => request<ChatUnread>(`/api/chat/unread`),
   chatGet: (id: string) => request<ChatConversation>(`/api/chat/conversations/${id}`),
   chatOpenDm: (userId: string) => request<ChatConversation>(`/api/chat/dm`, { method: "POST", body: JSON.stringify({ userId }) }),
   chatCreateGroup: (userIds: string[], name?: string | null) => request<ChatConversation>(`/api/chat/groups`, { method: "POST", body: JSON.stringify({ userIds, name: name || null }) }),
@@ -3158,11 +3272,22 @@ export const inboxApi = {
     if (page.limit) q.set("limit", String(page.limit));
     return request<{ messages: ChatMessage[]; hasMore: boolean }>(`/api/chat/conversations/${id}/messages${q.toString() ? `?${q}` : ""}`);
   },
-  chatSend: (id: string, input: { body?: string; mentions?: string[]; fileIds?: string[]; refs?: ListonRef[]; replyToId?: string | null }) =>
-    request<ChatMessage>(`/api/chat/conversations/${id}/messages`, { method: "POST", body: JSON.stringify(input) }),
+  chatSend: (
+    id: string,
+    input: { body?: string; mentions?: string[]; fileIds?: string[]; refs?: ListonRef[]; replyToId?: string | null; threadId?: string | null; alsoInConversation?: boolean; voice?: { fileId: string; durationMs: number; peaks: number[] } | null }
+  ) => request<ChatMessage>(`/api/chat/conversations/${id}/messages`, { method: "POST", body: JSON.stringify(input) }),
   chatRead: (id: string, messageId?: string | null) =>
-    request<{ readAt: string; unread: { unread: number; mentions: number } }>(`/api/chat/conversations/${id}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
-  chatTyping: (id: string) => request<void>(`/api/chat/conversations/${id}/typing`, { method: "POST" }),
+    request<{ readAt: string; unread: ChatUnread }>(`/api/chat/conversations/${id}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
+  chatTyping: (id: string, threadId?: string | null) => request<void>(`/api/chat/conversations/${id}/typing`, { method: "POST", body: JSON.stringify({ threadId: threadId || null }) }),
+  // Threads: the ones this person follows, one thread, reading it, following it.
+  chatThreads: () => request<{ threads: ChatThreadSummary[]; unread: ChatUnread }>(`/api/chat/threads`),
+  chatConversationThreads: (conversationId: string) => request<{ threads: ChatConversationThread[] }>(`/api/chat/conversations/${conversationId}/threads`),
+  // What's been shared in a conversation (files, photos, links), newest first, as the messages that carry them.
+  chatConversationFiles: (conversationId: string) => request<{ messages: ChatMessage[] }>(`/api/chat/conversations/${conversationId}/files`),
+  chatThread: (rootId: string) => request<ChatThreadDetail>(`/api/chat/threads/${rootId}`),
+  chatThreadRead: (rootId: string, messageId?: string | null) =>
+    request<{ readAt: string; unread: ChatUnread }>(`/api/chat/threads/${rootId}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
+  chatFollow: (rootId: string, following: boolean) => request<{ following: boolean }>(`/api/chat/threads/${rootId}/follow`, { method: "PUT", body: JSON.stringify({ following }) }),
   chatEdit: (messageId: string, body: string, mentions: string[] = []) => request<ChatMessage>(`/api/chat/messages/${messageId}`, { method: "PATCH", body: JSON.stringify({ body, mentions }) }),
   chatDeleteMessage: (messageId: string) => request<void>(`/api/chat/messages/${messageId}`, { method: "DELETE" }),
   chatSearch: (q: string) => request<{ results: { message: ChatMessage; conversation: { id: string; kind: string; title: string } }[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`),

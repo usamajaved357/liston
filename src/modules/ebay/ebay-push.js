@@ -5,7 +5,9 @@
 //   ORDER_CONFIRMATION  a buyer checked out → that order, read on its own
 //                       from the Fulfillment API (no Trading call), joins the
 //                       list; the listing's stock drops from the
-//                       notification's quantities (no call)
+//                       notification's quantities (no call); the buyer gets
+//                       the account's order-placed welcome, if it's on
+//                       (order-messages.service, 1 Message API call)
 //   LISTING             a listing was CREATED, UPDATED or ENDED → ended ones
 //                       leave the list (no call); a change caused by a sale
 //                       was already applied (no call); any other is read on
@@ -190,6 +192,9 @@ async function handle(payload) {
     if (n.topic === 'ORDER_CONFIRMATION' && n.orderId) {
       connectionService
         .withDecryptedCredentials(row.id, row.user_id, (credentials) => ebayService.applyNewOrder(credentials, row.id, { orderId: n.orderId, lineItems: n.lineItems }))
+        // The account's order-placed welcome, if it sends one (once per order, never twice: order-messages.service).
+        // Required here, not at the top: it needs ebay.service too.
+        .then((out) => out?.order && require('../orders/order-messages.service').welcomeOrder(row.id, row.user_id, out.order))
         .catch((err) => logger.warn('New order from eBay push not read', { connectionId: row.id, orderId: n.orderId, error: err.message }));
     } else if (n.topic === 'LISTING' && n.listingId && n.reason) {
       queueListingChange(row, n.listingId, n.reason);

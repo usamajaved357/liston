@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const listingRepository = require('./listing.repository');
 const connectionService = require('../connections/connection.service');
+const connectionRepository = require('../connections/connection.repository');
 const ebayService = require('../ebay/ebay.service');
 const marketplaces = require('../ebay/marketplaces');
 const orchestrator = require('../ai-generation/generation.orchestrator');
@@ -414,9 +415,15 @@ async function getDraftDetail(id, userId) {
     }
   }
 
+  // Whether the account's description template shows photos, for the
+  // editor's "Photos in the description" (Classic doesn't).
+  const connection = listing.connection_id ? await connectionRepository.findByIdForUser(listing.connection_id, userId).catch(() => null) : null;
+  const template = connection ? descriptionTemplate.templatePhotos(connection.settings?.template, connection.settings?.ebay?.marketplaceId) : null;
+
   return {
     listing,
     policies,
+    template,
     category: await categoryInfoFor(listing.generated_data || {}),
     // Words eBay's hazardous-materials filter blocks, for the editor to
     // flag as the seller types (see policy-words.js).
@@ -667,6 +674,18 @@ async function updateDraft(id, userId, patch) {
   for (const field of ['title', 'description', 'commonTitle', 'commonDescription', 'condition', 'imageUrls', 'sku', 'storeCategoryNames']) {
     if (patch[field] !== undefined) draft[field] = patch[field];
   }
+  // The description's own photos: only the draft's photos (a new one comes
+  // through the upload); null goes back to the listing's.
+  if (patch.descriptionImages !== undefined) {
+    if (patch.descriptionImages === null) {
+      delete draft.descriptionImages;
+    } else {
+      const known = new Set([...imagePipeline.draftImages(listing.generated_data || {}), ...imagePipeline.draftImages(draft)]);
+      const chosen = [...new Set(patch.descriptionImages)];
+      if (chosen.some((url) => !known.has(url))) throw new ListingError("Only this listing's own photos can go in its description. Upload a new one from the description's photos.", 400);
+      draft.descriptionImages = chosen.slice(0, DESCRIPTION_PHOTOS);
+    }
+  }
   if (patch.secondaryCategoryId !== undefined) draft.secondaryCategoryId = patch.secondaryCategoryId || null;
 
   // Moving category: the path comes from eBay's tree (never typed), and the
@@ -865,7 +884,7 @@ async function proposeImageRevision(id, userId, { imageUrl, instruction }) {
 
   // Only an image already on this draft can be revised — otherwise this
   // endpoint would happily process any URL the caller supplied.
-  const known = [...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])];
+  const known = imagePipeline.draftImages(draft);
   if (!known.includes(imageUrl)) {
     throw new ListingError("That image isn't part of this draft", 400);
   }
@@ -893,14 +912,21 @@ async function acceptImageRevision(id, userId, { proposalId, replaces }) {
     return eps.upload(accessToken, proposal.buffer, { marketplaceId, account: listing.connection_id });
   });
 
-  draft.imageUrls = (draft.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url));
-  draft.variants = (draft.variants || []).map((variant) => ({
-    ...variant,
-    imageUrls: (variant.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url)),
-  }));
+  Object.assign(draft, replacePhoto(draft, replaces, hostedUrl));
 
   const updated = await listingRepository.updateGeneratedData(id, draft);
   return { listing: updated, imageUrl: hostedUrl };
+}
+
+// One photo swapped for another wherever it appears: the gallery, the
+// variations and the description's own choice.
+function replacePhoto(draft, from, to) {
+  const swap = (urls) => (urls || []).map((url) => (url === from ? to : url));
+  return {
+    imageUrls: swap(draft.imageUrls),
+    variants: (draft.variants || []).map((variant) => ({ ...variant, imageUrls: swap(variant.imageUrls) })),
+    ...(Array.isArray(draft.descriptionImages) ? { descriptionImages: swap(draft.descriptionImages) } : {}),
+  };
 }
 
 // The seller's own photo, from their computer, hosted on eBay and put into
@@ -912,9 +938,12 @@ function uploadDraftImage(id, userId, input) {
   return governor.withContext({ priority: 'user' }, () => uploadDraftImageNow(id, userId, input));
 }
 
-async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex }) {
+async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex, forDescription = false }) {
   const listing = await loadEditableDraft(id, userId);
   const draft = { ...(listing.generated_data || {}) };
+  if (forDescription && !replaces && descriptionImagesOf(draft).slice(0, DESCRIPTION_PHOTOS).length >= DESCRIPTION_PHOTOS) {
+    throw new ListingError(`The description shows up to ${DESCRIPTION_PHOTOS} photos. Take one out first.`, 400);
+  }
 
   // Whatever the browser labelled it — AI tools save .avif, .jfif, .webp, or
   // a file with no type at all — the bytes decide: anything that reads as a
@@ -938,11 +967,10 @@ async function uploadDraftImageNow(id, userId, { dataUrl, replaces, variantIndex
   });
 
   if (replaces) {
-    draft.imageUrls = (draft.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url));
-    draft.variants = (draft.variants || []).map((variant) => ({
-      ...variant,
-      imageUrls: (variant.imageUrls || []).map((url) => (url === replaces ? hostedUrl : url)),
-    }));
+    Object.assign(draft, replacePhoto(draft, replaces, hostedUrl));
+  } else if (forDescription) {
+    // The description's gallery only; following the listing's photos until now, it starts from them.
+    draft.descriptionImages = [...descriptionImagesOf(draft).slice(0, DESCRIPTION_PHOTOS - 1), hostedUrl];
   } else if (variantIndex !== undefined && Array.isArray(draft.variants)) {
     if (!draft.variants[variantIndex]) throw new ListingError('That variation no longer exists.', 400);
     draft.variants = draft.variants.map((variant, i) => (i === variantIndex ? { ...variant, imageUrls: [hostedUrl] } : variant));
@@ -963,7 +991,7 @@ async function fetchDraftImage(id, userId, url) {
   const listing = await listingRepository.findByIdForUser(id, userId);
   if (!listing) throw new ListingError('Listing not found', 404);
   const draft = listing.generated_data || {};
-  const known = new Set([...(draft.imageUrls || []), ...(draft.variants || []).flatMap((v) => v.imageUrls || [])]);
+  const known = new Set(imagePipeline.draftImages(draft));
   if (!known.has(url)) throw new ListingError("That image isn't part of this listing.", 404);
 
   const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
@@ -1117,8 +1145,18 @@ async function recommendedListings(credentials, connection, { exclude, count, se
   }
 }
 
+// The most photos a description template's gallery shows.
+const DESCRIPTION_PHOTOS = 8;
+
+// The photos a description template's gallery shows: the ones chosen for
+// it in the editor, else the listing's own (the template shows up to 8).
+function descriptionImagesOf(draft) {
+  return Array.isArray(draft.descriptionImages) ? draft.descriptionImages : draft.imageUrls || [];
+}
+
 // The branded description for a draft: the AI copy inside this account's
 // template, with this account's live listings recommended underneath.
+// `listing` carries the draft as it will go (its photos already on eBay).
 async function renderDraftDescription(listing, userId) {
   const draft = listing.generated_data || {};
   const isVariation = Array.isArray(draft.variants) && draft.variants.length > 0;
@@ -1127,8 +1165,9 @@ async function renderDraftDescription(listing, userId) {
     productName: isVariation ? draft.commonTitle : draft.title,
     description: isVariation ? draft.commonDescription : draft.description,
     condition: (isVariation ? draft.variants[0]?.condition : draft.condition) || 'NEW',
-    // The card layouts show the listing's photos and item specifics.
-    images: draft.imageUrls || [],
+    // The card layouts show the listing's photos (or the ones chosen for the
+    // description) and item specifics.
+    images: descriptionImagesOf(draft),
     specifics: (isVariation ? draft.variesBy?.aspects : draft.aspects) || {},
     exclude: listing.external_product_id || listing.edit_of_item_id,
     // The listing's own mix of best sellers, stable across preview and publish.
@@ -1183,10 +1222,39 @@ async function renderWithTemplate(connectionId, userId, { template: override, pr
   });
 }
 
-async function previewDescription(id, userId) {
+/**
+ * The stored draft with what the editor shows laid over it, unsaved: its
+ * title, description, photos (their order too), the description's own
+ * photos, specifics and condition. Nothing is saved.
+ */
+function draftWithView(draft, view = {}) {
+  const variation = Array.isArray(draft.variants) && draft.variants.length > 0;
+  const next = { ...draft };
+  if (typeof view.title === 'string') next[variation ? 'commonTitle' : 'title'] = view.title;
+  if (typeof view.description === 'string') next[variation ? 'commonDescription' : 'description'] = view.description;
+  if (Array.isArray(view.imageUrls)) next.imageUrls = view.imageUrls;
+  if (view.descriptionImages === null) delete next.descriptionImages;
+  else if (Array.isArray(view.descriptionImages)) next.descriptionImages = view.descriptionImages.slice(0, DESCRIPTION_PHOTOS);
+  if (view.aspects) {
+    if (variation && next.variesBy) next.variesBy = { ...next.variesBy, aspects: view.aspects };
+    else next.aspects = view.aspects;
+  }
+  if (typeof view.condition === 'string') {
+    if (variation) next.variants = next.variants.map((v, i) => (i === 0 ? { ...v, condition: view.condition } : v));
+    else next.condition = view.condition;
+  }
+  return next;
+}
+
+/**
+ * The branded description the editor previews: the saved draft, or (with
+ * `view`) what's on screen, unsaved changes included, which is all a live
+ * listing's edit has until it's published.
+ */
+async function previewDescription(id, userId, view = null) {
   const listing = await listingRepository.findByIdForUser(id, userId);
   if (!listing) throw new ListingError('Listing not found', 404);
-  return renderDraftDescription(listing, userId);
+  return renderDraftDescription(view ? { ...listing, generated_data: draftWithView(listing.generated_data || {}, view) } : listing, userId);
 }
 
 // ---- Editing a listing that is already live on eBay ----
@@ -1418,7 +1486,8 @@ async function publishLiveEdit(listing, userId) {
     if (stock <= 0) throw new ListingError('Set the quantity above 0 before relisting: eBay won’t relist a listing with no stock.', 400);
   }
 
-  const html = await renderDraftDescription(listing, userId);
+  // From the draft as it goes, its photos now on eBay (the copy loaded above predates that).
+  const html = await renderDraftDescription({ ...listing, generated_data: draft }, userId);
   // Same readiness rules as a new publish (no axis in the shared set,
   // identifiers marked "Does Not Apply").
   const readied = await readyAspectsForPublish(draft);
@@ -1590,6 +1659,223 @@ function guessInventoryRef(draft, listing) {
   }
   const sku = draft.sku || listing.sku;
   return sku ? { sku } : null;
+}
+
+// ---- A live listing's price and stock only (the Listings tab's quick edit) ----
+//
+// Seller Hub's "Edit price / quantity": the price and the quantity left to
+// buy of a live listing, or of each of its variations, changed on eBay
+// without revising anything else (ebay.service: ReviseInventoryStatus, or
+// bulkUpdatePriceQuantity for a listing made through the Inventory API). A
+// full edit sends the title, photos, description and specifics again; this
+// sends none of them. What was read when the dialog opened is kept a while,
+// so saving costs no second read.
+
+const STOCK_READ_MS = 15 * 60 * 1000;
+const stockReads = new Map(); // `${connectionId}:${itemId}` -> { at, stock }
+const MAX_PRICE = 1000000;
+const MAX_QUANTITY = 100000;
+
+const optionsKey = (specifics) =>
+  JSON.stringify(
+    Object.keys(specifics || {})
+      .sort()
+      .map((name) => [name, specifics[name]])
+  );
+/** A row's key: the item, a variation's SKU, or (with none) its options. */
+const stockRowKey = (variation) => (variation ? (variation.sku ? `sku:${variation.sku}` : `opt:${optionsKey(variation.specifics)}`) : 'item');
+
+function stockRows(stock) {
+  if (!stock.variations.length) return [{ key: 'item', sku: stock.sku, label: null, specifics: null, price: stock.price, available: stock.available, sold: stock.sold }];
+  return stock.variations.map((v) => ({
+    key: stockRowKey(v),
+    sku: v.sku,
+    label: Object.values(v.specifics || {})
+      .map((values) => (values || []).join(', '))
+      .join(' / '),
+    specifics: v.specifics,
+    price: v.price,
+    available: v.available,
+    sold: v.sold,
+  }));
+}
+
+function stockView(stock, extra = {}) {
+  const rows = stockRows(stock);
+  return {
+    itemId: stock.itemId,
+    title: stock.title,
+    imageUrl: stock.imageUrl,
+    currency: rows.find((r) => r.price?.currency)?.price.currency || null,
+    variation: stock.variations.length > 0,
+    axes: Object.keys(stock.variationSpecificsSet || {}),
+    rows,
+    ...extra,
+  };
+}
+
+/** The listing as the Listings tab shows it: the lowest price, everything left, everything sold. */
+function stockTotals(stock) {
+  const rows = stockRows(stock);
+  const prices = rows.map((r) => r.price).filter((p) => p && Number.isFinite(p.amount));
+  const lowest = prices.length ? prices.reduce((a, b) => (b.amount < a.amount ? b : a)) : null;
+  return { price: lowest, available: rows.reduce((n, r) => n + r.available, 0), sold: rows.reduce((n, r) => n + r.sold, 0) };
+}
+
+async function readStock(connectionId, userId, itemId) {
+  const stock = await connectionService.withDecryptedCredentials(connectionId, userId, (credentials) => ebayService.getListingStock(credentials, connectionId, itemId));
+  if (!stock.active) throw new ListingError('This listing has ended on eBay. Relist it from the Inactive tab to change it.', 409);
+  if (stock.listingType && stock.listingType !== 'FixedPriceItem') throw new ListingError('Only fixed-price listings can have their price and stock changed here.', 400);
+  stockReads.set(`${connectionId}:${itemId}`, { at: Date.now(), stock });
+  return stock;
+}
+
+/** A live listing's price and stock, and each variation's, for the quick edit (1 trimmed GetItem). */
+async function getListingStock(connectionId, userId, itemId) {
+  return stockView(await readStock(connectionId, userId, itemId));
+}
+
+/** The changes asked for, checked against what's live: [{ row, price?, quantity? }], only what differs. */
+function stockChanges(stock, changes) {
+  const rows = new Map(stockRows(stock).map((r) => [r.key, r]));
+  const out = [];
+  for (const change of changes || []) {
+    const row = rows.get(change.key);
+    if (!row) throw new ListingError('That option is no longer on the listing. Close this and open it again.', 409);
+    const next = {};
+    if (change.price !== undefined && change.price !== null && change.price !== '') {
+      const amount = Number(change.price);
+      if (!/^\d+(\.\d{1,2})?$/.test(String(change.price).trim()) || !(amount > 0) || amount >= MAX_PRICE) throw new ListingError(`Enter a price above 0 with at most two decimals${row.label ? ` for ${row.label}` : ''}.`, 400);
+      if (!row.price || Math.abs(row.price.amount - amount) >= 0.005) next.price = { amount: Math.round(amount * 100) / 100, currency: row.price?.currency || stockView(stock).currency };
+    }
+    if (change.quantity !== undefined && change.quantity !== null && change.quantity !== '') {
+      const quantity = Number(change.quantity);
+      if (!Number.isInteger(quantity) || quantity < 0 || quantity > MAX_QUANTITY) throw new ListingError(`Enter a whole number of 0 or more for the stock${row.label ? ` of ${row.label}` : ''}.`, 400);
+      if (quantity !== row.available) next.quantity = quantity;
+    }
+    if (next.price || next.quantity !== undefined) out.push({ row, ...next });
+  }
+  return out;
+}
+
+/** The stock with the changes that went applied. */
+function withStockChanges(stock, applied) {
+  const byKey = new Map(applied.map((c) => [c.row.key, c]));
+  const apply = (fields, key) => {
+    const c = byKey.get(key);
+    if (!c) return fields;
+    return { ...fields, ...(c.price ? { price: c.price } : {}), ...(c.quantity !== undefined ? { available: c.quantity } : {}) };
+  };
+  if (!stock.variations.length) return apply(stock, 'item');
+  return { ...stock, variations: stock.variations.map((v) => apply(v, stockRowKey(v))) };
+}
+
+/** Liston's own copy of the listing (its published record, an edit left open) follows a change that went. */
+function draftWithStock(draft, applied) {
+  if (!draft) return null;
+  if (Array.isArray(draft.variants) && draft.variants.length) {
+    let touched = false;
+    const variants = draft.variants.map((v) => {
+      const c = applied.find((a) => (a.row.sku ? a.row.sku === v.sku : optionsKey(a.row.specifics) === optionsKey(v.aspects)));
+      if (!c) return v;
+      touched = true;
+      return { ...v, ...(c.price ? { price: { value: c.price.amount.toFixed(2), currency: c.price.currency } } : {}), ...(c.quantity !== undefined ? { quantity: c.quantity } : {}) };
+    });
+    return touched ? { ...draft, variants } : null;
+  }
+  const c = applied.find((a) => a.row.key === 'item');
+  if (!c) return null;
+  return { ...draft, ...(c.price ? { price: { value: c.price.amount.toFixed(2), currency: c.price.currency } } : {}), ...(c.quantity !== undefined ? { quantity: c.quantity } : {}) };
+}
+
+/**
+ * Changes a live listing's price and/or stock on eBay and nothing else.
+ * `changes`: [{ key (a row's, from getListingStock), price?, quantity? }],
+ * quantity being what's left to buy. Resolves to { results: [{ key, ok,
+ * error? }], listing (as it now is), changed: { fields, before, after } |
+ * null, warnings }; a change eBay refused leaves the others in place.
+ */
+async function updateListingStock(connectionId, userId, itemId, changes) {
+  const known = stockReads.get(`${connectionId}:${itemId}`);
+  const stock = known && Date.now() - known.at < STOCK_READ_MS ? known.stock : await readStock(connectionId, userId, itemId);
+  const wanted = stockChanges(stock, changes);
+  if (!wanted.length) throw new ListingError('Nothing to change: the price and stock are already as given.', 400);
+
+  const own = await listingRepository.findPublishedByItemId(connectionId, itemId);
+  const variation = stock.variations.length > 0;
+  const warnings = [];
+  let results = [];
+
+  await connectionService.withDecryptedCredentials(connectionId, userId, async (credentials, connection) => {
+    const marketplaceId = connection.settings?.ebay?.marketplaceId || 'EBAY_GB';
+    // A token refreshed on the way is handed back to be saved.
+    let refreshed = {};
+    const viaInventory = async () => {
+      const rows = wanted.map((c) => ({ key: c.row.key, sku: c.row.key === 'item' ? own?.sku || own?.generated_data?.sku || stock.sku : c.row.sku, price: c.price, quantity: c.quantity }));
+      const missing = rows.filter((r) => !r.sku);
+      const out = await ebayService.reviseStockInventory(credentials, rows.filter((r) => r.sku), marketplaceId);
+      if (out.credentialsChanged) refreshed = out;
+      return [...out.results, ...missing.map((r) => ({ key: r.key, ok: false, error: 'eBay holds this listing by SKU, and it has none.' }))];
+    };
+
+    // Made through the Inventory API (Liston's own publishes): only that API can change it.
+    if (own && (own.platform_offer_id || own.platform_group_key)) {
+      results = await viaInventory();
+      return refreshed;
+    }
+    // A changed variation without a SKU: the variations alone, every one at its values.
+    if (variation && wanted.some((c) => !c.row.sku)) {
+      const byKey = new Map(wanted.map((c) => [c.row.key, c]));
+      const variations = stock.variations.map((v) => {
+        const c = byKey.get(stockRowKey(v));
+        return { sku: v.sku || undefined, price: c?.price || v.price, quantity: c?.quantity ?? v.available, specifics: v.specifics };
+      });
+      try {
+        const out = await ebayService.reviseVariationsTrading(credentials, connectionId, itemId, { variations, variationSpecificsSet: stock.variationSpecificsSet });
+        warnings.push(...(out.warnings || []));
+        results = wanted.map((c) => ({ key: c.row.key, ok: true }));
+        return out;
+      } catch (err) {
+        results = wanted.map((c) => ({ key: c.row.key, ok: false, error: err.message }));
+        return {};
+      }
+    }
+    const statuses = wanted.map((c) => ({ key: c.row.key, itemId, ...(variation ? { sku: c.row.sku } : {}), ...(c.price ? { price: c.price } : {}), ...(c.quantity !== undefined ? { quantity: c.quantity } : {}) }));
+    const out = await ebayService.reviseStockTrading(credentials, connectionId, statuses);
+    if (out.credentialsChanged) refreshed = out;
+    // Another tool's Inventory API listing, which Trading can't change: that API, by its SKUs.
+    if (out.results.length && out.results.every((r) => !r.ok && r.inventoryManaged)) {
+      results = await viaInventory();
+    } else {
+      for (const r of out.results) warnings.push(...(r.warnings || []));
+      results = out.results.map(({ key, ok, error }) => (ok ? { key, ok } : { key, ok, error }));
+    }
+    return refreshed;
+  });
+
+  const okKeys = new Set(results.filter((r) => r.ok).map((r) => r.key));
+  const applied = wanted.filter((c) => okKeys.has(c.row.key));
+  const after = withStockChanges(stock, applied);
+  stockReads.set(`${connectionId}:${itemId}`, { at: Date.now(), stock: after });
+  let changed = null;
+  if (applied.length) {
+    const before = stockTotals(stock);
+    const now = stockTotals(after);
+    await ebayService.patchListingStock(connectionId, itemId, { price: now.price, available: now.available, sold: now.sold }).catch(() => {});
+    const fields = [...(before.price?.amount !== now.price?.amount ? ['price'] : []), ...(before.available !== now.available ? ['quantity'] : [])];
+    if (fields.length) {
+      changed = { fields, before: { price: before.price?.amount ?? null, quantity: before.available }, after: { price: now.price?.amount ?? null, quantity: now.available } };
+      await listingRepository
+        .recordListingChange(connectionId, itemId, changed)
+        .catch((err) => logger.warn('Listing change not recorded', { itemId, error: err.message }));
+    }
+    // Liston's copies follow, so a later full edit starts from these values.
+    for (const row of [own, await listingRepository.findLiveEdit(connectionId, userId, itemId).catch(() => null)]) {
+      const next = row && draftWithStock(row.generated_data, applied);
+      if (next) await listingRepository.updateGeneratedData(row.id, next).catch(() => {});
+    }
+  }
+  return { results, listing: stockView(after), changed, warnings: [...new Set(warnings)] };
 }
 
 // Ends a live listing on eBay now. A working copy opened for editing it is
@@ -1821,7 +2107,8 @@ async function publishNow(listing, id, userId) {
       // suffix each attempt sidesteps that entirely.
       // The branded HTML is the offer's listingDescription; the plain text
       // stays as the inventory item's (4,000-char) description.
-      const html = await renderDraftDescription(listing, userId);
+      // From the draft as it goes, its photos now on eBay (the copy loaded at the start predates that).
+      const html = await renderDraftDescription({ ...listing, generated_data: draft }, userId);
       const branded = {
         ...readyDraft,
         identifiers,
@@ -2219,6 +2506,9 @@ function withSkus(draft, connectionId) {
 }
 
 module.exports = {
+  draftWithView,
+  getListingStock,
+  updateListingStock,
   storeLinkFor,
   pageOfListings,
   editSnapshot,

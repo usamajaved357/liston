@@ -1,6 +1,8 @@
-// Sends the delivered thank-you (order-messages.service) every hour, to the
-// accounts that switched it on. Progress lives in order_messages, so a
-// restart neither repeats a message nor skips one. ORDER_MESSAGES=off stops it.
+// Sends the messages Liston sends buyers by itself (order-messages.service)
+// every hour, to the accounts that switched them on: the delivered
+// thank-you, and any order-placed welcome eBay's push didn't bring. Progress
+// lives in order_messages, so a restart never repeats a message (one cut
+// off mid-send is closed as failed, not resent). ORDER_MESSAGES=off stops it.
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const service = require('./order-messages.service');

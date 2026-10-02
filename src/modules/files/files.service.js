@@ -160,11 +160,11 @@ async function get(auth, id) {
 }
 
 /** Sends a file's bytes (or the browser to R2): the /media routes. */
-async function send(res, file, variant) {
+async function send(res, file, variant, { range = null } = {}) {
   const key = variant === 'thumb' ? file.thumb_key : file.storage_key;
   if (!key) return res.status(404).json({ error: 'Not found' });
   const mime = variant === 'thumb' ? 'image/webp' : file.mime;
-  const inline = INLINE.has(mime);
+  const inline = INLINE.has(mime) || /^audio\//.test(mime);
   // The frontend is another origin: it may show these; nothing in them may run.
   res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
@@ -174,6 +174,25 @@ async function send(res, file, variant) {
   // An eBay attachment's bytes come from here, never a redirect: eBay fetches the link itself, and a stored link that runs out would break.
   const direct = file.purpose === 'ebay' ? null : await storage.directUrl(key, { seconds: 600, filename: inline ? file.name : null, contentType: mime }).catch(() => null);
   if (direct) return res.redirect(302, direct);
+  res.setHeader('Accept-Ranges', 'bytes');
+  // Part of it (a voice note seeking, Safari starting one): local files answer ranges here.
+  const wanted = /^bytes=(\d*)-(\d*)$/.exec(String(range || ''));
+  if (wanted && (wanted[1] || wanted[2])) {
+    const part = wanted[1] ? await storage.readRange(key, Number(wanted[1]), wanted[2] ? Number(wanted[2]) : null) : null;
+    if (part) {
+      if (!part.stream) {
+        res.setHeader('Content-Range', `bytes */${part.size}`);
+        return res.status(416).end();
+      }
+      res.status(206);
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Content-Disposition', disposition);
+      res.setHeader('Content-Range', `bytes ${part.start}-${part.end}/${part.size}`);
+      res.setHeader('Content-Length', String(part.end - part.start + 1));
+      part.stream.on('error', () => res.destroy());
+      return part.stream.pipe(res);
+    }
+  }
   const found = await storage.read(key);
   if (!found) return res.status(404).json({ error: 'Not found' });
   res.setHeader('Content-Type', mime);

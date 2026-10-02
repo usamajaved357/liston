@@ -2,42 +2,70 @@
 
 import { DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, VirtuosoHandle } from "react-virtuoso";
-import { ApiError, ChatConversation, ChatMessage, ChatPerson, inboxApi, ListonRef } from "@/lib/api";
+import { ApiError, ChatConversation, ChatMessage, ChatPerson, inboxApi } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { MessageBubble, SystemLine } from "./MessageBubble";
-import { DayChip, LatestButton } from "./ChatBubble";
-import { Composer, ComposerHandle, LISTON_REF_TYPE } from "./Composer";
+import { PillTabs } from "@/components/PillTabs";
+import { messageIcons, snippetOf } from "./MessageParts";
+import { DayDivider, FlatMessage, NewDivider, SystemRow } from "./FlatMessage";
+import { HeaderButton, LatestButton, MenuItem, PopMenu } from "./ChatBubble";
+import { Composer, ComposerHandle, ComposerSend, LISTON_REF_TYPE } from "./Composer";
+import { ConversationThreads } from "./ConversationThreads";
+import { ConversationFiles } from "./ConversationFiles";
 import { PersonAvatar } from "./PersonAvatar";
 import { dayLabel } from "./inbox-format";
 import { MyEvent, useMyEvents } from "@/lib/useMyEvents";
+import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 
-// One team chat conversation: its messages as WhatsApp bubbles on the chat
-// wallpaper (a long thread stays at the bottom as messages arrive and loads
-// older ones above without jumping), an "Unread messages" band where you
-// left off, a round jump-to-latest button once you've scrolled up, "Sara is
-// typing…" in the header, and the composer. Files and
-// Liston rows (orders, listings, hunted products) dropped anywhere on it are
-// shared. It's read once you're at the bottom with the tab in front.
+// One team chat conversation, as Slack draws a channel or a direct
+// message: its name (the person's picture, "#" or a lock) opening its
+// details, the people in it, notifications on or off, details and "…";
+// then tabs: Messages, Threads (every thread in it) and Files and links
+// (everything shared). Messages are flat on white (FlatMessage: picture,
+// name and time, a run from one person grouped), days marked by a rule
+// with the day in a pill (the day on screen floating at the top while
+// scrolling), a red "New" line where you left off, a round jump-to-latest
+// button once you've scrolled up, and the composer, who's typing under
+// it. A long conversation stays at the bottom as messages arrive and loads
+// older ones above without jumping. Any message can start a thread
+// (onOpenThread): its replies stay in the thread, the message showing how
+// many there are and who replied; a reply also sent here says so. Files
+// and Liston rows dropped anywhere on it are shared. It's read once you're
+// at the bottom with the tab in front.
 
 const START = 1_000_000;
 const RUN_MS = 5 * 60 * 1000;
 
-type Row = { type: "day"; key: string; label: string } | { type: "new"; key: string } | { type: "message"; key: string; message: ChatMessage; first: boolean };
+type Row = { type: "intro"; key: string } | { type: "day"; key: string; label: string } | { type: "new"; key: string } | { type: "message"; key: string; message: ChatMessage; first: boolean };
 
 export function ChatThread({
   conversation,
   me,
   people,
   isOwner,
+  detailsOpen = false,
   onOpenDetails,
   onBack,
+  onOpenThread,
+  onNotify,
+  activeThread = null,
+  focusId = null,
+  onFocused,
 }: {
   conversation: ChatConversation;
   me: string;
   people: Map<string, ChatPerson>;
   isOwner: boolean;
+  detailsOpen?: boolean;
   onOpenDetails: () => void;
+  // The thread open beside it (marked in the Threads tab).
+  activeThread?: string | null;
+  // A message to scroll to and light up (a notification's), and what's told once it's shown.
+  focusId?: string | null;
+  onFocused?: () => void;
   onBack?: () => void;
+  onOpenThread: (rootId: string) => void;
+  // Mutes the conversation or turns its notifications back on.
+  onNotify: (notify: ChatConversation["notify"]) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -58,9 +86,22 @@ export function ChatThread({
   const [dragging, setDragging] = useState(false);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [members, setMembers] = useState(conversation.members);
+  // The "…" menu's button while it's open; the day floating at the top while scrolling.
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [floatingDay, setFloatingDay] = useState<string | null>(null);
+  const [scrolling, setScrolling] = useState(false);
   // Where "New messages" goes: the first message after where you'd read to when you opened it.
   const [newFrom, setNewFrom] = useState<string | null>(null);
+  const [tab, setTab] = useState<"messages" | "threads" | "files">("messages");
+  // A message to go to from the Files tab ("Show"), as a notification's would be.
+  const [jump, setJump] = useState<string | null>(null);
   const list = useRef<VirtuosoHandle>(null);
+  // Until when the list keeps going to the end: just after you send, so your
+  // message ends up fully in view once it's been drawn and measured (a voice
+  // note or photos are taller than the list guesses before then).
+  const toEndUntil = useRef(0);
+  // Its scrollbar shows only while someone is scrolling, as the eBay Inbox's does.
+  const quietScroll = useQuietScrollbar<HTMLElement>();
   const composer = useRef<ComposerHandle>(null);
   const readTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRead = useRef<string | null>(null);
@@ -86,8 +127,8 @@ export function ChatThread({
         setHasMore(r.hasMore);
         const firstNew = r.messages.find((m) => m.kind === "text" && m.author?.id !== me && (!myRead || new Date(m.createdAt) > new Date(myRead)));
         setNewFrom(firstNew ? firstNew.id : null);
-        // The first message's row: after its day line (and "New messages" when it's the first new one).
-        if (r.messages[0]) setAnchor({ key: r.messages[0].id, offset: firstNew?.id === r.messages[0].id ? 2 : 1 });
+        // The first message's row: after the beginning's intro (when there's nothing older), its day line, and "New" when it's the first new one.
+        if (r.messages[0]) setAnchor({ key: r.messages[0].id, offset: (r.hasMore ? 0 : 1) + (firstNew?.id === r.messages[0].id ? 2 : 1) });
       })
       .catch((err) => !cancelled && setError(err instanceof ApiError ? err.message : "Couldn't open this conversation."));
     return () => {
@@ -139,6 +180,8 @@ export function ChatThread({
       if (e.conversationId !== id) return;
       if (e.type === "chat.message") {
         const message = e.message as ChatMessage;
+        // A thread reply stays in its thread (the message it started from says how many there are now).
+        if (message.threadId && !message.alsoInConversation) return;
         setMessages((cur) => (cur && !cur.some((m) => m.id === message.id) ? [...cur, message] : cur));
         setTyping((t) => {
           if (!message.author || !t.has(message.author.id)) return t;
@@ -152,7 +195,7 @@ export function ChatThread({
         setMessages((cur) => cur && cur.map((m) => (m.id === message.id ? message : m)));
       } else if (e.type === "chat.read") {
         setMembers((ms) => ms.map((m) => (m.id === e.userId ? { ...m, lastReadAt: String(e.at) } : m)));
-      } else if (e.type === "chat.typing") {
+      } else if (e.type === "chat.typing" && !e.threadId) {
         const user = e.user as { id: string; name: string };
         if (user.id !== me) setTyping((t) => new Map(t).set(user.id, { name: user.name, until: Date.now() + 5000 }));
       }
@@ -194,10 +237,11 @@ export function ChatThread({
     }
   }, [hasMore, loadingOlder, messages, id]);
 
-  // Rows: day chips, "Unread messages", and each message knowing whether it starts a run.
+  // Rows: the beginning's intro (once there's nothing older), day lines, "New", and each message knowing whether it starts a run.
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     const all = messages || [];
+    if (all.length && !hasMore) out.push({ type: "intro", key: "intro" });
     all.forEach((m, i) => {
       const prev = all[i - 1];
       const day = new Date(m.createdAt).toDateString();
@@ -208,7 +252,7 @@ export function ChatThread({
       out.push({ type: "message", key: m.id, message: m, first: !joins(prev, m) });
     });
     return out;
-  }, [messages, newFrom]);
+  }, [messages, newFrom, hasMore]);
 
   const firstIndex = useMemo(() => {
     if (!anchor) return START;
@@ -216,9 +260,41 @@ export function ChatThread({
     return i < 0 ? START : START - (i - anchor.offset);
   }, [rows, anchor]);
 
-  // Your messages' ticks: blue once everyone else in it (still in the team) has read that far.
-  const readers = useMemo(() => members.filter((m) => m.id !== me && !m.removed).map((m) => (m.lastReadAt ? new Date(m.lastReadAt).getTime() : 0)), [members, me]);
-  const readByAll = (m: ChatMessage) => (readers.length ? readers.every((at) => at >= new Date(m.createdAt).getTime()) : null);
+  // A notification's message: scrolled to the middle and lit up once it's loaded (one too old to be loaded is left).
+  const focused = useRef<string | null>(null);
+  const target = focusId || jump;
+  useEffect(() => {
+    if (!target || focused.current === target || tab !== "messages") return;
+    const index = rows.findIndex((r) => r.type === "message" && r.message.id === target);
+    if (index < 0) return;
+    focused.current = target;
+    const frame = requestAnimationFrame(() => {
+      list.current?.scrollToIndex({ index, align: "center" });
+      setHighlight(target);
+      setTimeout(() => setHighlight((h) => (h === target ? null : h)), 2500);
+      if (target === focusId) onFocused?.();
+      else setJump(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [target, focusId, rows, tab, onFocused]);
+
+  // "Show" from the Files tab: a thread reply in its thread, anything else here.
+  function showShared(m: ChatMessage) {
+    if (m.threadId && !m.alsoInConversation) {
+      onOpenThread(m.threadId);
+      return;
+    }
+    focused.current = null;
+    setJump(m.id);
+    setTab("messages");
+  }
+
+  // A thread's first message in a line, for a reply also sent here ("Replied to a thread: …"); null when it isn't loaded.
+  const messagesById = useMemo(() => new Map((messages || []).map((m) => [m.id, m])), [messages]);
+  const rootText = (id: string) => {
+    const root = messagesById.get(id);
+    return root ? snippetOf(root) || null : null;
+  };
 
   function jumpTo(messageId: string) {
     const index = rows.findIndex((r) => r.type === "message" && r.message.id === messageId);
@@ -228,11 +304,16 @@ export function ChatThread({
     setTimeout(() => setHighlight(null), 2500);
   }
 
-  async function send(input: { body: string; mentions: string[]; fileIds: string[]; refs: ListonRef[]; replyToId: string | null }) {
+  async function send(input: ComposerSend) {
     const sent = await inboxApi.chatSend(id, input);
     setMessages((cur) => (cur && !cur.some((m) => m.id === sent.id) ? [...cur, sent] : cur));
     setNewFrom(null);
-    requestAnimationFrame(() => list.current?.scrollToIndex({ index: "LAST", behavior: "smooth" }));
+    toEndUntil.current = Date.now() + 1500;
+    requestAnimationFrame(toEnd);
+  }
+
+  function toEnd() {
+    list.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "smooth" });
   }
 
   async function saveEdit(messageId: string, body: string, mentions: string[]) {
@@ -276,20 +357,38 @@ export function ChatThread({
   }
 
   const others = members.filter((m) => m.id !== me);
-  const subtitle =
-    conversation.kind === "channel"
-      ? conversation.topic || `${members.length} ${members.length === 1 ? "person" : "people"}`
-      : conversation.kind === "dm"
-        ? others[0]?.online
-          ? "Online"
-          : others[0]?.removed
-            ? "No longer in the team"
-            : others[0]?.email || ""
-        : `${members.length} people`;
-  const typingNames = [...typing.values()].map((t) => t.name);
-  // Someone typing takes the header's second line, as WhatsApp has it.
+  const name = conversation.kind === "channel" ? conversation.title.slice(1) : conversation.title;
+  const typingNames = [...typing.values()].map((t) => t.name.split(" ")[0]);
+  // Who's typing, under the composer as Slack has it.
   const typingText =
-    typingNames.length === 0 ? null : conversation.kind === "dm" ? "typing…" : typingNames.length === 1 ? `${typingNames[0].split(" ")[0]} is typing…` : `${typingNames.slice(0, 2).map((n) => n.split(" ")[0]).join(" and ")}${typingNames.length > 2 ? " and others" : ""} are typing…`;
+    typingNames.length === 0 ? null : typingNames.length === 1 ? `${typingNames[0]} is typing…` : typingNames.length === 2 ? `${typingNames[0]} and ${typingNames[1]} are typing…` : "Several people are typing…";
+  const muted = conversation.notify === "none";
+
+  // The very beginning of it (above the first message, once there's nothing older), as Slack opens one.
+  const intro = (
+    <div className="px-5 pb-2 pt-8">
+      {conversation.kind === "dm" ? (
+        <PersonAvatar id={others[0]?.id} name={others[0]?.name} avatarUrl={others[0]?.avatarUrl} size={64} square />
+      ) : (
+        <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--color-primary-soft)] text-[26px] font-bold text-[var(--color-primary)]">
+          {conversation.kind === "channel" ? conversation.private ? <LockIcon className="h-7 w-7" /> : "#" : members.length}
+        </span>
+      )}
+      <p className="mt-3 text-[18px] font-bold text-[var(--color-ink)]">{conversation.kind === "dm" ? others[0]?.name || conversation.title : conversation.title}</p>
+      <p className="mt-1 max-w-xl text-[13.5px] leading-relaxed text-[var(--color-muted)]">
+        {conversation.kind === "dm"
+          ? `This is the very beginning of your direct messages with ${others[0]?.name || conversation.title}. Only the two of you are in this conversation.`
+          : conversation.kind === "channel"
+            ? `This is the very beginning of the ${conversation.title} channel.${conversation.topic ? ` ${conversation.topic}` : ""}`
+            : `This is the very beginning of your group with ${others.map((m) => m.name.split(" ")[0]).join(", ")}.`}
+      </p>
+    </div>
+  );
+
+  const menu: MenuItem[] = [
+    { label: detailsOpen ? "Hide details" : "Details", onSelect: onOpenDetails },
+    muted ? { label: "Turn notifications back on", onSelect: () => onNotify("all") } : { label: "Mute this conversation", onSelect: () => onNotify("none") },
+  ];
 
   return (
     <section
@@ -306,143 +405,207 @@ export function ChatThread({
       }}
       onDrop={onDrop}
     >
-      <header className="flex items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-panel)] px-4 py-2.5">
+      <header className="flex h-[52px] flex-shrink-0 items-center gap-1 pl-2 pr-2 sm:pl-4">
         {onBack && (
-          <button type="button" onClick={onBack} aria-label="Back to conversations" className="-ml-1 flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] lg:hidden">
+          <button type="button" onClick={onBack} aria-label="Back to conversations" className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] lg:hidden">
             <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden>
               <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
         )}
-        {conversation.kind === "dm" ? (
-          <PersonAvatar id={others[0]?.id} name={others[0]?.name} avatarUrl={others[0]?.avatarUrl} size={36} online={others[0]?.online} />
-        ) : (
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[15px] font-bold text-[var(--color-primary)]">{conversation.kind === "channel" ? (conversation.private ? <LockIcon /> : "#") : members.length}</span>
-        )}
-        <button type="button" onClick={onOpenDetails} className="min-w-0 flex-1 text-left">
-          <p className="flex items-center gap-2 truncate text-[14.5px] font-semibold text-[var(--color-ink)]">
-            <span className="truncate">{conversation.title}</span>
-            {conversation.account && <span className="chip flex-shrink-0 text-[10.5px]">{conversation.account.label}</span>}
-            {conversation.archived && <span className="chip flex-shrink-0 text-[10.5px] text-[var(--color-muted)]">Archived</span>}
-          </p>
-          <p className={`truncate text-[12px] ${typingText ? "font-medium text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`} aria-live="polite">
-            {typingText || subtitle}
-          </p>
-        </button>
-        {conversation.kind !== "dm" && (
-          <button type="button" onClick={onOpenDetails} className="hidden items-center -space-x-2 sm:flex" aria-label="People in it">
-            {members.slice(0, 4).map((m) => (
-              <span key={m.id} className="rounded-full ring-2 ring-[var(--color-panel)]">
-                <PersonAvatar id={m.id} name={m.name} avatarUrl={m.avatarUrl} size={26} />
-              </span>
-            ))}
-            {members.length > 4 && <span className="flex h-[26px] w-[26px] items-center justify-center rounded-full bg-[var(--color-paper)] text-[10.5px] font-semibold text-[var(--color-muted)] ring-2 ring-[var(--color-panel)]">+{members.length - 4}</span>}
-          </button>
-        )}
-        <button type="button" onClick={onOpenDetails} title="Details" aria-label="Details" className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
-          <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
-            <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
-            <path d="M12 11v5M12 8h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        <button type="button" onClick={onOpenDetails} className="flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-[var(--color-paper)]" title="Details">
+          {conversation.kind === "dm" ? (
+            <PersonAvatar id={others[0]?.id} name={others[0]?.name} avatarUrl={others[0]?.avatarUrl} size={26} online={others[0]?.online} square />
+          ) : conversation.kind === "channel" ? (
+            <span className="flex h-[26px] w-[18px] flex-shrink-0 items-center justify-center text-[18px] font-semibold text-[var(--color-ink)]/70">{conversation.private ? <LockIcon className="h-[17px] w-[17px]" /> : "#"}</span>
+          ) : (
+            <span className="flex h-[26px] w-[26px] flex-shrink-0 items-center justify-center rounded-[6px] bg-[var(--color-primary-soft)] text-[12px] font-bold text-[var(--color-primary)]">{members.length}</span>
+          )}
+          <span className="truncate text-[16px] font-bold leading-6 text-[var(--color-ink)]">{name}</span>
+          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>
+            <path d="M5.5 8l4.5 4.5L14.5 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
+        {conversation.account && <span className="hidden flex-shrink-0 rounded-[4px] bg-[var(--color-primary-soft)] px-1.5 text-[10.5px] font-semibold leading-4 text-[var(--color-primary)] sm:inline">{conversation.account.label}</span>}
+        {conversation.archived && <span className="flex-shrink-0 rounded-[4px] bg-[var(--color-paper)] px-1.5 text-[10.5px] font-semibold leading-4 text-[var(--color-muted)]">Archived</span>}
+        <span className="min-w-0 flex-1" />
+        {conversation.kind !== "dm" && (
+          <button type="button" onClick={onOpenDetails} className="mr-1 hidden h-8 items-center gap-1.5 rounded-lg border border-[var(--color-line)] pl-1 pr-2 transition-colors hover:bg-[var(--color-paper)] md:flex" aria-label={`${members.length} people in it`} title="People in it">
+            <span className="flex -space-x-1.5">
+              {members.slice(0, 3).map((m) => (
+                <span key={m.id} className="rounded-[6px] ring-2 ring-[var(--color-panel)]">
+                  <PersonAvatar id={m.id} name={m.name} avatarUrl={m.avatarUrl} size={22} square />
+                </span>
+              ))}
+            </span>
+            <span className="text-[12.5px] font-semibold tabular-nums text-[var(--color-ink)]/80">{members.length}</span>
+          </button>
+        )}
+        <HeaderButton label={muted ? "Muted: turn notifications back on" : "Mute this conversation"} onClick={() => onNotify(muted ? "all" : "none")} active={muted}>
+          {muted ? messageIcons.bellOff : messageIcons.bell}
+        </HeaderButton>
+        <HeaderButton label={detailsOpen ? "Hide details" : "Details"} onClick={onOpenDetails} active={detailsOpen}>
+          <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M14.5 4.5v15" stroke="currentColor" strokeWidth="1.7" />
+          </svg>
+        </HeaderButton>
+        <HeaderButton label="More" onClick={(e) => setMenuAnchor(menuAnchor ? null : e.currentTarget)} active={Boolean(menuAnchor)}>
+          <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
+            <circle cx="12" cy="5.5" r="1.7" fill="currentColor" />
+            <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+            <circle cx="12" cy="18.5" r="1.7" fill="currentColor" />
+          </svg>
+        </HeaderButton>
+        {menuAnchor && <PopMenu anchor={menuAnchor} items={menu} onClose={() => setMenuAnchor(null)} />}
       </header>
-
-      <div className="chat-wallpaper relative min-h-0 flex-1">
-        {error ? (
-          <div className="flex h-full items-center justify-center p-6 text-center text-[13px] text-[var(--color-muted)]">{error}</div>
-        ) : !messages ? (
-          <div className="flex h-full items-center justify-center">
-            <span className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--color-primary)]/25 border-t-[var(--color-primary)]" aria-label="Loading" />
-          </div>
-        ) : rows.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center p-6 text-center">
-            <p className="text-[14px] font-semibold text-[var(--color-ink)]">{conversation.kind === "dm" ? `This is the start of your messages with ${conversation.title}` : `This is the start of ${conversation.title}`}</p>
-            <p className="mt-1 max-w-sm text-[12.5px] text-[var(--color-muted)]">Share an order, listing or hunted product by pasting its number or link, or drop files here.</p>
-          </div>
-        ) : (
-          <Virtuoso
-            ref={list}
-            className="h-full"
-            data={rows}
-            firstItemIndex={firstIndex}
-            initialTopMostItemIndex={Math.max(0, rows.findIndex((r) => r.type === "new") >= 0 ? rows.findIndex((r) => r.type === "new") : rows.length - 1)}
-            startReached={loadOlder}
-            followOutput={(bottom) => (bottom ? "smooth" : false)}
-            atBottomStateChange={(bottom) => {
-              setAtBottom(bottom);
-              if (latestTimer.current) clearTimeout(latestTimer.current);
-              if (bottom) {
-                setUnreadBelow(0);
-                setShowLatest(false);
-              } else latestTimer.current = setTimeout(() => setShowLatest(true), 600);
-            }}
-            atBottomThreshold={80}
-            increaseViewportBy={{ top: 600, bottom: 300 }}
-            computeItemKey={(_, row) => row.key}
-            components={{
-              Header: () => (hasMore ? <div className="py-3 text-center text-[11.5px] text-[var(--color-muted)]">{loadingOlder ? "Loading earlier messages…" : ""}</div> : <div className="h-2" />),
-              Footer: () => <div className="h-3" />,
-            }}
-            itemContent={(_, row) => {
-              if (row.type === "day") return <DayChip label={row.label} />;
-              if (row.type === "new")
-                return (
-                  <div className="my-2 flex justify-center bg-[var(--color-panel)]/45 py-1.5">
-                    <span className="rounded-full bg-[var(--color-panel)] px-3 py-1 text-[11.5px] font-medium text-[var(--color-primary)] shadow-[var(--shadow-bubble)]">Unread messages</span>
-                  </div>
-                );
-              const m = row.message;
-              if (m.kind === "system") return <SystemLine message={m} people={people} />;
-              const mine = m.author?.id === me;
-              return (
-                <MessageBubble
-                  message={m}
-                  mine={mine}
-                  first={row.first}
-                  people={people}
-                  showAuthorName={conversation.kind !== "dm"}
-                  me={me}
-                  read={mine ? readByAll(m) : null}
-                  canDelete={mine || isOwner}
-                  highlight={highlight === m.id}
-                  onReply={() => {
-                    setEditing(null);
-                    setReplyTo(m);
-                  }}
-                  onEdit={() => {
-                    setReplyTo(null);
-                    setEditing(m);
-                  }}
-                  onDelete={() => setDeleting(m)}
-                  onJumpTo={jumpTo}
-                />
-              );
-            }}
-          />
-        )}
-        {showLatest && !atBottom && messages && messages.length > 0 && <LatestButton count={unreadBelow} onClick={() => list.current?.scrollToIndex({ index: "LAST", behavior: "smooth" })} />}
-        {dragging && (
-          <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-[var(--color-primary)] bg-[var(--color-primary-soft)]/85">
-            <p className="text-[14px] font-semibold text-[var(--color-primary)]">Drop to share in {conversation.title}</p>
-          </div>
-        )}
+      <div className="flex-shrink-0 overflow-x-auto border-b border-[var(--color-line)] px-3 pb-2 sm:px-5">
+        <PillTabs
+          label="Show"
+          value={tab}
+          onChange={setTab}
+          tabs={[
+            { key: "messages", label: "Messages" },
+            { key: "threads", label: "Threads" },
+            { key: "files", label: "Files and links" },
+          ]}
+        />
       </div>
 
-      <Composer
-        ref={composer}
-        conversationId={id}
-        kind={conversation.kind}
-        members={members}
-        meId={me}
-        replyTo={replyTo}
-        onCancelReply={() => setReplyTo(null)}
-        editing={editing}
-        onCancelEdit={() => setEditing(null)}
-        onSend={send}
-        onEditSave={saveEdit}
-        onTyping={() => inboxApi.chatTyping(id).catch(() => {})}
-        disabledReason={conversation.archived ? "This channel is archived. Nothing new can be said in it." : null}
-      />
+      {tab === "threads" ? (
+        <ConversationThreads conversation={conversation} me={me} activeThread={activeThread} onOpen={onOpenThread} />
+      ) : tab === "files" ? (
+        <ConversationFiles conversation={conversation} me={me} onShow={showShared} />
+      ) : (
+        <>
+          <div className="relative min-h-0 flex-1 bg-[var(--color-panel)]">
+            {error ? (
+              <div className="flex h-full items-center justify-center p-6 text-center text-[13px] text-[var(--color-muted)]">{error}</div>
+            ) : !messages ? (
+              <div className="flex h-full items-center justify-center">
+                <span className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--color-primary)]/25 border-t-[var(--color-primary)]" aria-label="Loading" />
+              </div>
+            ) : rows.length === 0 ? (
+              <div className="flex h-full flex-col items-start justify-end px-5 pb-6">
+                <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[20px] font-bold text-[var(--color-primary)]">
+                  {conversation.kind === "dm" ? <PersonAvatar id={others[0]?.id} name={others[0]?.name} avatarUrl={others[0]?.avatarUrl} size={48} square /> : conversation.kind === "channel" ? conversation.private ? <LockIcon className="h-5 w-5" /> : "#" : members.length}
+                </span>
+                <p className="mt-3 text-[18px] font-bold text-[var(--color-ink)]">{conversation.kind === "dm" ? `This is the start of your messages with ${conversation.title}` : `This is the very beginning of ${conversation.title}`}</p>
+                <p className="mt-1 max-w-lg text-[13.5px] text-[var(--color-muted)]">{conversation.topic || "Share an order, listing or hunted product by pasting its number or link, or drop files here."}</p>
+              </div>
+            ) : (
+              <Virtuoso
+                ref={list}
+                className="scroll-quiet h-full"
+                scrollerRef={(el) => quietScroll(el instanceof HTMLElement ? el : null)}
+                data={rows}
+                firstItemIndex={firstIndex}
+                // Opened at "New" (at the top), else with the latest message at the bottom.
+                initialTopMostItemIndex={rows.some((r) => r.type === "new") ? { index: rows.findIndex((r) => r.type === "new"), align: "start" } : { index: Math.max(0, rows.length - 1), align: "end" }}
+                startReached={loadOlder}
+                followOutput={(bottom) => (bottom ? "smooth" : false)}
+                atBottomStateChange={(bottom) => {
+                  setAtBottom(bottom);
+                  if (latestTimer.current) clearTimeout(latestTimer.current);
+                  if (bottom) {
+                    setUnreadBelow(0);
+                    setShowLatest(false);
+                  } else latestTimer.current = setTimeout(() => setShowLatest(true), 600);
+                }}
+                atBottomThreshold={80}
+                // Measured now (the message you sent among them): aim at the end again with its real height.
+                totalListHeightChanged={() => {
+                  if (Date.now() < toEndUntil.current) toEnd();
+                }}
+                isScrolling={(on) => setScrolling(on)}
+                rangeChanged={({ startIndex }) => {
+                  // The day of the top message on screen, for the pill floating there while scrolling.
+                  const at = startIndex - firstIndex;
+                  for (let i = Math.min(at, rows.length - 1); i >= 0; i--) {
+                    const r = rows[i];
+                    if (r?.type === "day") {
+                      setFloatingDay(r.label);
+                      return;
+                    }
+                    if (r?.type === "message") {
+                      setFloatingDay(dayLabel(r.message.createdAt));
+                      return;
+                    }
+                  }
+                }}
+                increaseViewportBy={{ top: 600, bottom: 300 }}
+                // A short conversation sits at the foot, just above the composer, as Slack's does.
+                alignToBottom
+                computeItemKey={(_, row) => row.key}
+                components={{
+                  Header: () => (hasMore ? <div className="py-3 text-center text-[11.5px] text-[var(--color-muted)]">{loadingOlder ? "Loading earlier messages…" : ""}</div> : <div className="h-2" />),
+                  Footer: () => <div className="h-2" />,
+                }}
+                itemContent={(_, row) => {
+                  if (row.type === "intro") return intro;
+                  if (row.type === "day") return <DayDivider label={row.label} />;
+                  if (row.type === "new") return <NewDivider />;
+                  const m = row.message;
+                  if (m.kind === "system") return <SystemRow message={m} people={people} />;
+                  const mine = m.author?.id === me;
+                  return (
+                    <FlatMessage
+                      message={m}
+                      me={me}
+                      people={people}
+                      compact={!row.first}
+                      canDelete={mine || isOwner}
+                      place={conversation}
+                      highlight={highlight === m.id}
+                      threadRootText={m.threadId && m.alsoInConversation ? rootText(m.threadId) : null}
+                      onOpenThread={onOpenThread}
+                      onQuote={() => {
+                        setEditing(null);
+                        setReplyTo(m);
+                      }}
+                      onJumpTo={jumpTo}
+                      onEdit={() => {
+                        setReplyTo(null);
+                        setEditing(m);
+                      }}
+                      onDelete={() => setDeleting(m)}
+                    />
+                  );
+                }}
+              />
+            )}
+            {floatingDay && rows.length > 0 && (
+              <div className={`pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center transition-opacity duration-300 ${scrolling ? "opacity-100" : "opacity-0"}`} aria-hidden>
+                <span className="rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3.5 py-1 text-[12px] font-semibold text-[var(--color-ink)]/80 shadow-[0_2px_8px_-4px_rgba(15,23,42,0.25)]">{floatingDay}</span>
+              </div>
+            )}
+            {showLatest && !atBottom && messages && messages.length > 0 && <LatestButton count={unreadBelow} onClick={() => list.current?.scrollToIndex({ index: "LAST", behavior: "smooth" })} />}
+            {dragging && (
+              <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-2xl border-2 border-dashed border-[var(--color-primary)] bg-[var(--color-primary-soft)]/85">
+                <p className="text-[14px] font-semibold text-[var(--color-primary)]">Drop to share in {conversation.title}</p>
+              </div>
+            )}
+          </div>
+
+          <Composer
+            ref={composer}
+            conversationId={id}
+            kind={conversation.kind}
+            members={members}
+            meId={me}
+            replyTo={replyTo}
+            onCancelReply={() => setReplyTo(null)}
+            editing={editing}
+            onCancelEdit={() => setEditing(null)}
+            onSend={send}
+            onEditSave={saveEdit}
+            onTyping={() => inboxApi.chatTyping(id).catch(() => {})}
+            disabledReason={conversation.archived ? "This channel is archived. Nothing new can be said in it." : null}
+            placeholder={`Message ${conversation.title}`}
+            typing={typingText}
+          />
+        </>
+      )}
       <ConfirmDialog
         open={Boolean(deleting)}
         title="Delete this message?"

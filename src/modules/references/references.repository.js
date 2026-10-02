@@ -2,7 +2,8 @@ const { query } = require('../../db/client');
 
 // What a Liston card shows, read from the mirrors Liston already keeps:
 // orders (ebay_orders), live listings (the listings:active snapshot),
-// drafts (listings) and hunted products. Every read is limited to the
+// drafts (listings), hunted products and eBay conversations
+// (ebay_conversations, "Discuss with team"). Every read is limited to the
 // accounts it's given, which the service has checked the viewer may open.
 
 /** Orders by eBay order number: [{ connectionId, data }]. */
@@ -45,6 +46,15 @@ async function huntsByIds(connectionIds, ids) {
   return rows;
 }
 
+const CONVERSATION_COLUMNS = `connection_id, conversation_id, type, other_party, title, reference_id, latest_preview, latest_at, latest_from_seller`;
+
+/** eBay conversations by their eBay id: [{ connection_id, conversation_id, other_party, title, reference_id, latest_preview, latest_at }]. */
+async function conversationsByIds(connectionIds, ids) {
+  if (!connectionIds.length || !ids.length) return [];
+  const { rows } = await query(`SELECT ${CONVERSATION_COLUMNS} FROM ebay_conversations WHERE connection_id = ANY($1::uuid[]) AND conversation_id = ANY($2)`, [connectionIds, ids]);
+  return rows;
+}
+
 /** Item photos Liston has read before (order rows' pictures), by item number. */
 async function itemImages(itemIds) {
   if (!itemIds.length) return new Map();
@@ -61,6 +71,7 @@ async function existsIn(connectionIds, kind, id) {
                WHERE s.connection_id = ANY($1::uuid[]) AND s.kind = 'listings:active' AND item->>'itemId' = $2 LIMIT 1`,
     draft: `SELECT 1 FROM listings WHERE connection_id = ANY($1::uuid[]) AND id::text = $2 LIMIT 1`,
     hunt: `SELECT 1 FROM hunted_products WHERE connection_id = ANY($1::uuid[]) AND id::text = $2 LIMIT 1`,
+    conversation: `SELECT 1 FROM ebay_conversations WHERE connection_id = ANY($1::uuid[]) AND conversation_id = $2 LIMIT 1`,
   }[kind];
   if (!sql) return false;
   const { rows } = await query(sql, [connectionIds, String(id)]);
@@ -120,4 +131,16 @@ async function searchHunts(connectionIds, q, limit = 5) {
   return rows;
 }
 
-module.exports = { ordersByIds, listingsByItemIds, draftsByIds, huntsByIds, itemImages, existsIn, searchOrders, searchListings, searchDrafts, searchHunts };
+async function searchConversations(connectionIds, q, limit = 5) {
+  if (!connectionIds.length) return [];
+  const { rows } = await query(
+    `SELECT ${CONVERSATION_COLUMNS} FROM ebay_conversations
+      WHERE connection_id = ANY($1::uuid[]) AND type = 'FROM_MEMBERS' AND status <> 'DELETE'
+        AND (other_party ILIKE $2 OR title ILIKE $2 OR reference_id = $3)
+      ORDER BY latest_at DESC NULLS LAST LIMIT $4`,
+    [connectionIds, like(q), String(q).trim(), limit]
+  );
+  return rows;
+}
+
+module.exports = { ordersByIds, listingsByItemIds, draftsByIds, huntsByIds, conversationsByIds, itemImages, existsIn, searchOrders, searchListings, searchDrafts, searchHunts, searchConversations };

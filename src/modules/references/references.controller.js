@@ -3,7 +3,7 @@ const referencesService = require('./references.service');
 
 // Liston cards: resolving references, finding them in text, and the "/" picker.
 
-const kind = z.enum(['order', 'listing', 'draft', 'hunt']);
+const kind = z.enum(['order', 'listing', 'draft', 'hunt', 'conversation']);
 const resolveSchema = z.object({
   refs: z.array(z.object({ kind, id: z.string().min(1).max(64), connectionId: z.string().uuid().optional() })).max(20),
 });

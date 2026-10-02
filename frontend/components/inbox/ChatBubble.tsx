@@ -1,7 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useLayoutEffect, useRef } from "react";
-import { createPortal } from "react-dom";
+import { ReactNode } from "react";
 
 // Chat bubbles the way WhatsApp draws them, shared by team chat and eBay
 // messages: theirs white on the left, yours tinted on the right, the first
@@ -9,8 +8,9 @@ import { createPortal } from "react-dom";
 // apart. The time sits inside the bubble's bottom corner; the text keeps
 // room for it on its last line (an invisible copy of the time at the end
 // of the text), so a short message stays one line and a long one wraps
-// around it. Also the day chip, the round "to the latest" button and the
-// small menu a bubble's chevron opens.
+// around it. Also the day chip, the round "to the latest" button, a
+// conversation header's round buttons and the small menu a bubble's
+// chevron opens.
 
 // A bubble's widest: most of a phone's width, about two thirds of a chat pane, never a wall of text.
 export const BUBBLE_MAX = "max-w-[85%] sm:max-w-[min(65%,440px)]";
@@ -23,7 +23,8 @@ export const BUBBLE_MAX = "max-w-[85%] sm:max-w-[min(65%,440px)]";
  * 10px and wider margins.
  */
 export function BubbleRow({ mine, first, roomy = false, children, className = "", ...rest }: { mine: boolean; first: boolean; roomy?: boolean; children: ReactNode; className?: string } & React.HTMLAttributes<HTMLDivElement>) {
-  const gap = roomy ? (first ? "mt-4" : "mt-2") : first ? "mt-2.5" : "mt-0.5";
+  // Space above as padding, not margin: team chat's list measures each row's box, and a margin falls outside it.
+  const gap = roomy ? (first ? "pt-4" : "pt-2") : first ? "pt-2.5" : "pt-0.5";
   const sides = roomy ? "px-[clamp(12px,1.5%,20px)]" : "px-[clamp(14px,4%,48px)]";
   return (
     <div className={`flex ${sides} ${mine ? "justify-end" : "justify-start"} ${gap} ${className}`} {...rest}>
@@ -130,71 +131,21 @@ export function LatestButton({ onClick, count = 0 }: { onClick: () => void; coun
   );
 }
 
-export type MenuItem = { label: string; onSelect: () => void; danger?: boolean; icon?: ReactNode };
-
-/**
- * A small menu opened from a button (a bubble's chevron, a header's "…"),
- * drawn at the end of the page so no scrolling list clips it, below the
- * button or above it when there's no room, and closed by a pick, a click
- * elsewhere, Escape or scrolling.
- */
-export function PopMenu({ anchor, items, onClose, align = "right" }: { anchor: HTMLElement | null; items: MenuItem[]; onClose: () => void; align?: "left" | "right" }) {
-  const menu = useRef<HTMLDivElement>(null);
-
-  // Placed once it's measured (drawn off-screen first).
-  useLayoutEffect(() => {
-    const el = menu.current;
-    if (!anchor || !el) return;
-    const a = anchor.getBoundingClientRect();
-    const m = el.getBoundingClientRect();
-    const below = a.bottom + 4 + m.height <= window.innerHeight - 8;
-    el.style.top = `${below ? a.bottom + 4 : Math.max(8, a.top - 4 - m.height)}px`;
-    el.style.left = `${Math.min(Math.max(8, align === "right" ? a.right - m.width : a.left), window.innerWidth - m.width - 8)}px`;
-  }, [anchor, align]);
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (menu.current?.contains(e.target as Node) || anchor?.contains(e.target as Node)) return;
-      onClose();
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    const onScroll = (e: Event) => !menu.current?.contains(e.target as Node) && onClose();
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onClose);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onClose);
-    };
-  }, [anchor, onClose]);
-
-  if (typeof document === "undefined") return null;
-  return createPortal(
-    <div
-      ref={menu}
-      role="menu"
-      className="fixed z-[70] min-w-[176px] rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] py-1.5 shadow-[var(--shadow-pop)]"
-      style={{ top: -9999, left: -9999 }}
+/** A round button in a conversation's header (details, "…"), tinted while what it opens is open. */
+export function HeaderButton({ label, onClick, active = false, children }: { label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; active?: boolean; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      aria-pressed={active || undefined}
+      className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors ${active ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)]" : "text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"}`}
     >
-      {items.map((item) => (
-        <button
-          key={item.label}
-          type="button"
-          role="menuitem"
-          onClick={() => {
-            onClose();
-            item.onSelect();
-          }}
-          className={`flex w-full items-center gap-2.5 px-3.5 py-2 text-left text-[13px] transition-colors hover:bg-[var(--color-paper)] ${item.danger ? "text-rose-600" : "text-[var(--color-ink)]"}`}
-        >
-          {item.icon && <span className={`flex h-4 w-4 items-center justify-center ${item.danger ? "" : "text-[var(--color-muted)]"}`}>{item.icon}</span>}
-          {item.label}
-        </button>
-      ))}
-    </div>,
-    document.body
+      {children}
+    </button>
   );
 }
+
+// The small "…" menu now lives in components/PopMenu (shared with the Listings tab).
+export { PopMenu, type MenuItem } from "@/components/PopMenu";

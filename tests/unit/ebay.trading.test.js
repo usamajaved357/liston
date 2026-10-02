@@ -343,3 +343,61 @@ test("what became of another seller's listing: live, ended the normal way, or de
   reply('<Ack>Failure</Ack><Errors><ShortMessage>Invalid token.</ShortMessage><ErrorCode>931</ErrorCode></Errors>');
   await assert.rejects(ebayTrading.getListingState('t', '1', { siteId: 3 }));
 });
+
+// ---- price and stock only ----------------------------------------------------
+
+test('getItemStock reads only price and stock: what is left to buy (quantity less sold) for the listing and each variation', async () => {
+  const trading = require('../../src/modules/ebay/api/ebay.trading');
+  const xml =
+    `<?xml version="1.0"?><GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack><Item><ItemID>4071</ItemID><Title>Lamp</Title><ListingType>FixedPriceItem</ListingType>` +
+    `<StartPrice currencyID="GBP">9.99</StartPrice><Quantity>12</Quantity><SellingStatus><QuantitySold>5</QuantitySold><ListingStatus>Active</ListingStatus></SellingStatus>` +
+    `<Variations><VariationSpecificsSet><NameValueList><Name>Colour</Name><Value>Black</Value><Value>White</Value></NameValueList></VariationSpecificsSet>` +
+    `<Variation><SKU>L-1</SKU><StartPrice currencyID="GBP">9.99</StartPrice><Quantity>10</Quantity><SellingStatus><QuantitySold>4</QuantitySold></SellingStatus><VariationSpecifics><NameValueList><Name>Colour</Name><Value>Black</Value></NameValueList></VariationSpecifics></Variation>` +
+    `<Variation><StartPrice currencyID="GBP">11.50</StartPrice><Quantity>2</Quantity><SellingStatus><QuantitySold>1</QuantitySold></SellingStatus><VariationSpecifics><NameValueList><Name>Colour</Name><Value>White</Value></NameValueList></VariationSpecifics></Variation>` +
+    `</Variations></Item></GetItemResponse>`;
+  let sent = '';
+  const fetchMock = mock.method(global, 'fetch', async (url, init) => {
+    sent = String(init.body);
+    return { status: 200, text: async () => xml };
+  });
+  try {
+    const stock = await trading.getItemStock('t', '4071', { siteId: 3 });
+    assert.match(sent, /<OutputSelector>Item\.Variations\.Variation\.SKU<\/OutputSelector>/, 'trimmed to the fields it needs');
+    assert.doesNotMatch(sent, /ReturnAll|Description/);
+    assert.deepStrictEqual([stock.available, stock.sold, stock.active], [7, 5, true]);
+    assert.deepStrictEqual(
+      stock.variations.map((v) => [v.sku, v.price.amount, v.available, v.sold, v.specifics.Colour[0]]),
+      [
+        ['L-1', 9.99, 6, 4, 'Black'],
+        [null, 11.5, 1, 1, 'White'],
+      ]
+    );
+    assert.deepStrictEqual(stock.variationSpecificsSet, { Colour: ['Black', 'White'] });
+  } finally {
+    fetchMock.mock.restore();
+  }
+});
+
+test('reviseInventoryStatus sends price and quantity alone, a variation by its SKU, at most four at once', async () => {
+  const trading = require('../../src/modules/ebay/api/ebay.trading');
+  let sent = '';
+  let call = '';
+  const fetchMock = mock.method(global, 'fetch', async (url, init) => {
+    sent = String(init.body);
+    call = init.headers['X-EBAY-API-CALL-NAME'];
+    return { status: 200, text: async () => '<?xml version="1.0"?><ReviseInventoryStatusResponse xmlns="urn:ebay:apis:eBLBaseComponents"><Ack>Success</Ack></ReviseInventoryStatusResponse>' };
+  });
+  try {
+    await trading.reviseInventoryStatus('t', [
+      { itemId: '4071', sku: 'L-1', price: { amount: 8.5, currency: 'GBP' } },
+      { itemId: '4072', quantity: 3 },
+    ]);
+    assert.strictEqual(call, 'ReviseInventoryStatus');
+    assert.match(sent, /<InventoryStatus><ItemID>4071<\/ItemID><SKU>L-1<\/SKU><StartPrice currencyID="GBP">8\.50<\/StartPrice><\/InventoryStatus>/);
+    assert.match(sent, /<InventoryStatus><ItemID>4072<\/ItemID><Quantity>3<\/Quantity><\/InventoryStatus>/);
+    assert.doesNotMatch(sent, /<Title>|<Description>|<PictureDetails>|<ItemSpecifics>/);
+    await assert.rejects(() => trading.reviseInventoryStatus('t', Array.from({ length: 5 }, (_, i) => ({ itemId: String(i), quantity: 1 }))), /1 to 4/);
+  } finally {
+    fetchMock.mock.restore();
+  }
+});

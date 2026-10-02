@@ -405,14 +405,21 @@ export default function OrderDetailPage() {
                       </p>
                     )}
                     {(data?.messages || [])
-                      .filter((m) => m.kind === "delivered")
-                      .map((m) => (
-                        <p key={m.kind} className={`mt-0.5 text-[12.5px] ${m.status === "sent" ? "text-emerald-700" : "text-[var(--color-danger)]"}`}>
-                          {m.status === "sent"
-                            ? `Delivered message sent to the buyer ${formatDayMonthYear(m.sentAt, siteTz)}: asked for feedback and invited them to reply with any problem.`
-                            : `The delivered message wasn't sent: ${m.error || "eBay refused it"}.`}
-                        </p>
-                      ))}
+                      .filter((m) => m.status !== "sending")
+                      .map((m) => {
+                        const name = m.kind === "placed" ? "Order confirmation" : "Delivered message";
+                        return (
+                          <p key={m.kind} className={`mt-0.5 text-[12.5px] ${m.status === "sent" ? "text-emerald-700" : m.status === "skipped" ? "text-[var(--color-muted)]" : "text-[var(--color-danger)]"}`}>
+                            {m.status === "sent"
+                              ? m.kind === "placed"
+                                ? `Order confirmation sent to the buyer ${formatDayMonthYear(m.sentAt, siteTz)}: thanked them and invited them to reply with any problem.`
+                                : `Delivered message sent to the buyer ${formatDayMonthYear(m.sentAt, siteTz)}: asked for feedback and invited them to reply with any problem.`
+                              : m.status === "skipped"
+                                ? `${name} not sent: ${m.error || "the buyer already had one today"}.`
+                                : `The ${name.toLowerCase()} wasn't sent: ${m.error || "eBay refused it"}.`}
+                          </p>
+                        );
+                      })}
                     {!cancelled && !dispatched && daysLeft !== null && (
                       <p className={`mt-0.5 text-[13px] font-semibold ${daysLeft < 0 ? "text-[var(--color-danger)]" : daysLeft <= 1 ? "text-amber-800" : "text-[var(--color-ink)]"}`}>
                         {daysLeft < 0 ? `${-daysLeft} day${-daysLeft === 1 ? "" : "s"} late` : daysLeft === 0 ? "Due today" : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`}
