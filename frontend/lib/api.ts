@@ -1563,6 +1563,20 @@ export interface DraftListing {
   edit_of_item_id?: string | null;
   // `ended`: the listing had ended when opened, so publishing relists it.
   source_data?: { ended?: boolean } | null;
+  // On the Drafts tab: where the draft came from and who has worked on it.
+  origin?: DraftOrigin;
+}
+
+export interface DraftPerson {
+  name: string;
+  email: string | null;
+}
+export interface DraftOrigin {
+  // The hunted product it was drafted from: who hunted and approved it, and where it was found.
+  hunt: { id: string; addedFrom: "discover" | "research" | null; hunter: DraftPerson | null; reviewer: DraftPerson | null } | null;
+  draftedBy: DraftPerson | null;
+  draftedAutomatically: boolean; // drafted itself when its hunted product was approved
+  lastEdit: { by: DraftPerson | null; at: string } | null;
 }
 
 export type ListingStatusFilter = "active" | "inactive";
