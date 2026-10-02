@@ -117,9 +117,10 @@ function clockOf(ms) {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
 
-/** Text with its formatting marks taken off (**bold**, _italic_, ~struck~, `code`), for a one-line preview. */
+/** Text with its formatting marks taken off ([words](link), **bold**, _italic_, ~struck~, `code`), for a one-line preview. */
 function plainOf(text) {
   return String(text || '')
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '$1')
     .replace(/\*\*([^*\n]+)\*\*/g, '$1')
     .replace(/`([^`\n]+)`/g, '$1')
     .replace(/(^|[^\w*])_([^_\n]+)_(?!\w)/g, '$1$2')

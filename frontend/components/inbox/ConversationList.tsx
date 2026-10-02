@@ -1,157 +1,129 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChatConversation, ChatList, ChatMessage, ChatThreadSummary, inboxApi } from "@/lib/api";
-import { PillTabs } from "@/components/PillTabs";
+import { ChatConversation, ChatList, ChatMessage, inboxApi } from "@/lib/api";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { PersonAvatar } from "./PersonAvatar";
 import { MenuItem, PopMenu } from "./ChatBubble";
-import { listTime, plainOf } from "./inbox-format";
+import { messageIcons } from "./MessageParts";
+import { listTime } from "./inbox-format";
 import { LockIcon } from "./ChatThread";
 
-// Team chat's list, laid out as the eBay Inbox's: search and the "+" (a
-// new message or group, a new channel for the owner or Manage channels,
-// browsing the public channels to join) at the top (the views' tabs, in
-// the page's header, sit under the search on a phone), then the
-// conversations newest first: who or which channel, when, the last line
-// and what's unread ("@" when it's for you). Views: All, Unread, Threads
-// (the threads you follow, newest reply first, with what's new in each),
-// Channels and Direct messages. Typing narrows the list by name; Enter
-// searches every message.
+// Team chat's sidebar, as Slack's: "Team chat" with a new-message button,
+// "Find a conversation…" (names as you type; Enter searches every
+// message), Threads (the ones you follow, with how many replies are new),
+// then Channels (by name) and Direct messages (the latest first), each a
+// section that folds away and can add to itself: a channel shows "#" (a
+// lock when private), a person their picture, a group how many are in it.
+// What's unread is bold, with a red count where it's for you (a direct
+// message, a mention); a muted one is greyed. The open one is filled.
 
-export type ChatView = "all" | "unread" | "threads" | "channels" | "direct";
+const FOLD_KEY = "liston.chatSections";
 
-/** The views, as tabs (in the page's header; under the search on a phone). */
-export function ChatViewTabs({ view, unread, onView }: { view: ChatView; unread: ChatList["unread"] | undefined; onView: (v: ChatView) => void }) {
-  return (
-    <PillTabs
-      tabs={[
-        { key: "all" as const, label: "All" },
-        { key: "unread" as const, label: "Unread", count: unread?.unread || undefined, countTone: unread?.mentions ? "alert" : "default" },
-        { key: "threads" as const, label: "Threads", count: unread?.threads || undefined, countTone: "alert", title: "Threads you follow: ones you started, replied in or were mentioned in" },
-        { key: "channels" as const, label: "Channels" },
-        { key: "direct" as const, label: "Direct" },
-      ]}
-      value={view}
-      onChange={onView}
-      label="Show"
-    />
-  );
-}
-
-function ConversationAvatar({ c, me, size = 40 }: { c: Pick<ChatConversation, "kind" | "private" | "members" | "title">; me: string; size?: number }) {
-  if (c.kind === "dm") {
-    const other = c.members.find((m) => m.id !== me) || c.members[0];
-    return <PersonAvatar id={other?.id} name={other?.name || c.title} avatarUrl={other?.avatarUrl} size={size} online={other?.online} />;
+function readFolded(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(FOLD_KEY) || "{}");
+  } catch {
+    return {};
   }
-  return (
-    <span className="flex flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-soft)] font-bold text-[var(--color-primary)]" style={{ width: size, height: size, fontSize: Math.round(size * 0.38) }}>
-      {c.kind === "channel" ? c.private ? <LockIcon className="h-4 w-4" /> : "#" : c.members.length}
-    </span>
-  );
 }
-
-const muteIcon = (
-  <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-muted)]" aria-label="Muted">
-    <path d="M6 9h3l4-4v14l-4-4H6V9zM17 9l4 6M21 9l-4 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
 
 function Row({ c, me, active, onOpen }: { c: ChatConversation; me: string; active: boolean; onOpen: () => void }) {
-  const last = c.lastMessage;
-  const who = last?.author ? (last.author.id === me ? "You: " : c.kind === "dm" ? "" : `${last.author.name.split(" ")[0]}: `) : "";
-  const unread = c.unread > 0 && c.notify !== "none";
-  const title = c.kind === "channel" ? c.title.slice(1) : c.title;
+  const muted = c.notify === "none";
+  const unread = c.unread > 0 && !muted;
+  const forYou = unread && (c.kind === "dm" || c.unreadMentions > 0);
+  const other = c.kind === "dm" ? c.members.find((m) => m.id !== me) || c.members[0] : null;
+  const name = c.kind === "channel" ? c.title.slice(1) : c.title;
+  const tone = active ? "text-white" : unread ? "font-bold text-[var(--color-ink)]" : muted ? "text-[var(--color-muted)]/70" : "text-[var(--color-ink)]/75";
   return (
     <button
       type="button"
       onClick={onOpen}
       aria-current={active ? "true" : undefined}
-      className={`group flex w-full items-center gap-2.5 rounded-xl pl-2.5 text-left transition-colors ${active ? "bg-[var(--color-primary-soft)]" : "hover:bg-[var(--color-paper)]"}`}
+      title={c.account ? `${c.title} · ${c.account.label}` : c.title}
+      className={`group flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[14px] transition-colors ${active ? "bg-[var(--color-primary)]" : "hover:bg-black/[0.05]"}`}
     >
-      <ConversationAvatar c={c} me={me} />
-      <span className={`min-w-0 flex-1 border-b py-[9px] pr-2.5 transition-colors ${active ? "border-transparent" : "border-[var(--color-line)]/60 group-hover:border-transparent"}`}>
-        <span className="flex items-baseline gap-2">
-          <span className={`min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-[var(--color-ink)] ${unread ? "font-semibold" : "font-medium"}`}>
-            {c.kind === "channel" && <span className="mr-0.5 text-[var(--color-muted)]">#</span>}
-            {title}
-          </span>
-          {last && <span className={`flex-shrink-0 text-[11px] tabular-nums ${unread ? "font-semibold text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`}>{listTime(last.at)}</span>}
-        </span>
-        <span className="mt-px flex items-center gap-2">
-          <span className={`min-w-0 flex-1 truncate text-[12px] leading-[18px] ${unread ? "font-medium text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>
-            {c.account && <span className="font-medium text-[var(--color-ink)]/70">{c.account.label} · </span>}
-            {last ? (last.kind === "system" ? (c.topic || "") : `${who}${last.text || ""}`) : c.kind === "channel" ? c.topic || "No messages yet" : "No messages yet"}
-          </span>
-          {c.notify === "none" && muteIcon}
-          {unread && (
-            <span className={`flex h-[18px] min-w-[18px] flex-shrink-0 items-center justify-center rounded-full px-1 text-[10.5px] font-semibold text-white ${c.unreadMentions > 0 || c.kind === "dm" ? "bg-rose-500" : "bg-[var(--color-primary)]"}`}>
-              {c.unreadMentions > 0 && c.kind !== "dm" ? "@" : c.unread > 99 ? "99+" : c.unread}
-            </span>
-          )}
-        </span>
+      <span className={`flex w-5 flex-shrink-0 items-center justify-center ${active ? "text-white" : "text-[var(--color-ink)]/55"}`}>
+        {c.kind === "channel" ? (
+          c.private ? (
+            <LockIcon className="h-[15px] w-[15px]" />
+          ) : (
+            <span className="text-[16px] font-medium leading-none">#</span>
+          )
+        ) : c.kind === "dm" ? (
+          <PersonAvatar id={other?.id} name={other?.name || c.title} avatarUrl={other?.avatarUrl} size={20} online={other?.online} square />
+        ) : (
+          <span className={`flex h-5 w-5 items-center justify-center rounded-[5px] text-[10.5px] font-bold ${active ? "bg-white/25 text-white" : "bg-[var(--color-primary-soft)] text-[var(--color-primary)]"}`}>{c.members.length}</span>
+        )}
       </span>
+      <span className={`min-w-0 flex-1 truncate ${tone}`}>{name}</span>
+      {c.account && !active && <span className="hidden flex-shrink-0 text-[11px] text-[var(--color-muted)] group-hover:inline">{c.account.label}</span>}
+      {muted && <span className={active ? "text-white/80" : "text-[var(--color-muted)]/70"}>{messageIcons.bellOff}</span>}
+      {forYou && (
+        <span className={`flex h-[18px] min-w-[18px] flex-shrink-0 items-center justify-center rounded-full px-1.5 text-[11px] font-bold ${active ? "bg-white text-[var(--color-primary)]" : "bg-rose-500 text-white"}`}>
+          {c.kind === "dm" ? (c.unread > 99 ? "99+" : c.unread) : c.unreadMentions > 99 ? "99+" : c.unreadMentions}
+        </span>
+      )}
     </button>
   );
 }
 
-/** A thread you follow: its conversation, the message it started from, how many replies and what's new. */
-function ThreadRow({ t, me, conversation, active, onOpen }: { t: ChatThreadSummary; me: string; conversation: ChatConversation | undefined; active: boolean; onOpen: () => void }) {
-  const root = t.root;
-  const starter = root.author?.id === me ? "You" : root.author?.name.split(" ")[0] || "Someone";
-  const text = root.deleted ? "Message deleted" : plainOf(root.body) || (root.voice ? "Voice message" : root.files.length ? "A file" : root.cards.length ? "A card" : "");
-  const replies = root.thread?.replyCount || 0;
+function Section({ id, title, folded, onFold, action, children }: { id: string; title: string; folded: boolean; onFold: (id: string) => void; action?: { label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void }; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-current={active ? "true" : undefined}
-      className={`group flex w-full items-start gap-2.5 rounded-xl pl-2.5 text-left transition-colors ${active ? "bg-[var(--color-primary-soft)]" : "hover:bg-[var(--color-paper)]"}`}
-    >
-      <span className="pt-[9px]">{conversation ? <ConversationAvatar c={conversation} me={me} /> : <PersonAvatar id={root.author?.id} name={root.author?.name} avatarUrl={root.author?.avatarUrl} size={40} />}</span>
-      <span className={`min-w-0 flex-1 border-b py-[9px] pr-2.5 transition-colors ${active ? "border-transparent" : "border-[var(--color-line)]/60 group-hover:border-transparent"}`}>
-        <span className="flex items-baseline gap-2">
-          <span className={`min-w-0 flex-1 truncate text-[13.5px] leading-[18px] text-[var(--color-ink)] ${t.unread ? "font-semibold" : "font-medium"}`}>{t.conversation.title}</span>
-          {t.lastReplyAt && <span className={`flex-shrink-0 text-[11px] tabular-nums ${t.unread ? "font-semibold text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`}>{listTime(t.lastReplyAt)}</span>}
-        </span>
-        <span className="mt-px block truncate text-[12px] leading-[18px] text-[var(--color-muted)]">
-          <span className="font-medium text-[var(--color-ink)]/80">{starter}:</span> {text}
-        </span>
-        <span className="mt-0.5 flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-[var(--color-primary)]">
-            {replies} {replies === 1 ? "reply" : "replies"}
-          </span>
-          {t.unread > 0 && <span className="flex h-[18px] min-w-[18px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary)] px-1 text-[10.5px] font-semibold text-white">{t.unread > 99 ? "99+" : t.unread}</span>}
-        </span>
+    <section className="mt-4">
+      <div className="group flex h-7 items-center gap-1 pr-1">
+        <button type="button" onClick={() => onFold(id)} aria-expanded={!folded} className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-0.5 text-left text-[13.5px] font-semibold text-[var(--color-ink)]/70 hover:bg-black/[0.05]">
+          <svg viewBox="0 0 20 20" fill="none" className={`h-3.5 w-3.5 flex-shrink-0 transition-transform ${folded ? "-rotate-90" : ""}`} aria-hidden>
+            <path d="M5.5 8l4.5 4.5L14.5 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {title}
+        </button>
+        {action && (
+          <button type="button" onClick={action.onClick} title={action.label} aria-label={action.label} className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--color-muted)] opacity-0 transition-opacity hover:bg-black/[0.06] hover:text-[var(--color-ink)] focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+            <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+              <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
+      {!folded && <div className="mt-0.5 space-y-px">{children}</div>}
+    </section>
+  );
+}
+
+/** A quiet row at a section's end: "Add channels", "New message". */
+function AddRow({ label, onClick }: { label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[14px] text-[var(--color-ink)]/60 transition-colors hover:bg-black/[0.05] hover:text-[var(--color-ink)]">
+      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-[5px] bg-black/[0.06]">
+        <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3" aria-hidden>
+          <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
       </span>
+      {label}
     </button>
   );
 }
 
 export function ConversationList({
   data,
-  threads,
   me,
-  view,
-  onView,
   activeId,
-  activeThread,
+  threadsActive,
   onOpen,
-  onOpenThread,
+  onShowThreads,
   onNewChat,
   onNewChannel,
   onBrowse,
   onOpenResult,
 }: {
   data: ChatList | null;
-  threads: ChatThreadSummary[] | null;
   me: string;
-  view: ChatView;
-  onView: (v: ChatView) => void;
   activeId: string | null;
-  activeThread: string | null;
+  // The Threads page is what's open.
+  threadsActive: boolean;
   onOpen: (id: string) => void;
-  onOpenThread: (conversationId: string, rootId: string) => void;
+  onShowThreads: () => void;
   onNewChat: () => void;
   onNewChannel: () => void;
   onBrowse: () => void;
@@ -160,19 +132,35 @@ export function ConversationList({
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ message: ChatMessage; conversation: { id: string; title: string } }[] | null>(null);
   const [searching, setSearching] = useState(false);
-  const [newAnchor, setNewAnchor] = useState<HTMLElement | null>(null);
+  const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null);
+  const [folded, setFolded] = useState<Record<string, boolean>>(readFolded);
   const quietScroll = useQuietScrollbar<HTMLDivElement>();
   const words = q.trim().toLowerCase();
 
-  const shown = useMemo(() => {
-    const all = (data?.conversations || []).filter((c) => !words || c.title.toLowerCase().includes(words) || c.members.some((m) => m.name.toLowerCase().includes(words)));
-    if (view === "unread") return all.filter((c) => c.unread > 0 && c.notify !== "none");
-    if (view === "channels") return all.filter((c) => c.kind === "channel");
-    if (view === "direct") return all.filter((c) => c.kind !== "channel");
-    return all;
-  }, [data, words, view]);
-  const byId = useMemo(() => new Map((data?.conversations || []).map((c) => [c.id, c])), [data]);
-  const shownThreads = useMemo(() => (threads || []).filter((t) => !words || t.conversation.title.toLowerCase().includes(words) || (t.root.body || "").toLowerCase().includes(words)), [threads, words]);
+  const matches = (c: ChatConversation) => !words || c.title.toLowerCase().includes(words) || c.members.some((m) => m.name.toLowerCase().includes(words));
+  const channels = useMemo(
+    () => (data?.conversations || []).filter((c) => c.kind === "channel" && matches(c)).sort((a, b) => a.title.localeCompare(b.title)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, words]
+  );
+  const direct = useMemo(
+    () =>
+      (data?.conversations || [])
+        .filter((c) => c.kind !== "channel" && matches(c))
+        .sort((a, b) => new Date(b.lastMessage?.at || 0).getTime() - new Date(a.lastMessage?.at || 0).getTime()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data, words]
+  );
+
+  function fold(id: string) {
+    setFolded((f) => {
+      const next = { ...f, [id]: !f[id] };
+      try {
+        localStorage.setItem(FOLD_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }
 
   async function searchMessages() {
     if (words.length < 2) return;
@@ -186,106 +174,76 @@ export function ConversationList({
     }
   }
 
-  const newItems: MenuItem[] = [
-    { label: "New message or group", onSelect: onNewChat },
-    ...(data?.canManageChannels ? [{ label: "New channel", onSelect: onNewChannel }] : []),
+  const addItems: MenuItem[] = [
+    ...(data?.canManageChannels ? [{ label: "Create a channel", onSelect: onNewChannel }] : []),
     ...(data && (data.openChannels.length > 0 || data.canManageChannels) ? [{ label: data.openChannels.length ? `Browse channels (${data.openChannels.length} to join)` : "Browse channels", onSelect: onBrowse }] : []),
   ];
-
-  const empty =
-    view === "threads"
-      ? words
-        ? "No thread matches."
-        : "No threads yet. Reply in a thread on any message, and the threads you start, reply in or are mentioned in show here."
-      : words
-        ? "Nothing matches. Press Enter to search every message."
-        : {
-            all: "Message anyone in your team with +.",
-            unread: "You're all caught up.",
-            channels: data?.canManageChannels ? "No channels yet. Make one for a team or an account with +." : data?.openChannels.length ? "Join a channel with + to see it here." : "No channels yet.",
-            direct: "Message anyone in your team with +.",
-          }[view];
+  const threadsNew = data?.unread.threads || 0;
 
   return (
-    <aside className="flex min-h-0 w-full flex-col border-r border-[var(--color-line)] bg-[var(--color-panel)] lg:w-[300px] lg:flex-shrink-0">
-      <div className="flex-shrink-0 space-y-2 px-3 pb-2 pt-3">
-        <div className="flex items-center gap-2">
-          <label className="flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-full bg-[var(--color-paper)] px-3.5 ring-1 ring-transparent transition-shadow focus-within:bg-[var(--color-panel)] focus-within:ring-[var(--color-primary)]/50">
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>
-              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.9" />
-              <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
-            </svg>
-            <input
-              value={q}
-              onChange={(e) => {
-                setQ(e.target.value);
+    <aside className="flex min-h-0 w-full flex-col border-r border-[var(--color-line)] bg-[var(--color-paper)] lg:w-[268px] lg:flex-shrink-0">
+      <div className="flex h-[52px] flex-shrink-0 items-center gap-2 pl-4 pr-3">
+        <h2 className="min-w-0 flex-1 truncate text-[16px] font-bold text-[var(--color-ink)]">Team chat</h2>
+        <button type="button" onClick={onNewChat} title="New message" aria-label="New message" className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)]/75 transition-colors hover:border-[var(--color-primary)]/40 hover:text-[var(--color-primary)]">
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+            <path d="M12 5H6.5A2.5 2.5 0 004 7.5v10A2.5 2.5 0 006.5 20h10a2.5 2.5 0 002.5-2.5V12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M17.5 3.5l3 3L12 15l-4 1 1-4 8.5-8.5z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
+      <div className="flex-shrink-0 px-3 pb-2">
+        <label className="flex h-8 items-center gap-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-2.5 transition-shadow focus-within:border-[var(--color-primary)]/50 focus-within:shadow-[0_0_0_3px_var(--color-primary-soft)]">
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)]" aria-hidden>
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.9" />
+            <path d="M16 16l4 4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+          </svg>
+          <input
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setResults(null);
+            }}
+            onKeyDown={(e) => e.key === "Enter" && searchMessages()}
+            placeholder="Find a conversation…"
+            className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--color-muted)]"
+            aria-label="Find a conversation, or press Enter to search every message"
+          />
+          {q && (
+            <button
+              type="button"
+              onClick={() => {
+                setQ("");
                 setResults(null);
               }}
-              onKeyDown={(e) => e.key === "Enter" && searchMessages()}
-              placeholder="Search people, channels, messages"
-              className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-[var(--color-muted)]"
-              aria-label="Search people, channels and messages"
-            />
-            {q && (
-              <button
-                type="button"
-                onClick={() => {
-                  setQ("");
-                  setResults(null);
-                }}
-                aria-label="Clear search"
-                className="flex h-5 w-5 items-center justify-center rounded-full text-[var(--color-muted)] hover:text-[var(--color-ink)]"
-              >
-                <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
-                  <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              </button>
-            )}
-          </label>
-          <button
-            type="button"
-            onClick={(e) => setNewAnchor(newAnchor ? null : e.currentTarget)}
-            title="New message, group or channel"
-            aria-label="New message, group or channel"
-            aria-haspopup="menu"
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary)] text-white transition-colors hover:bg-[var(--color-primary-hover)]"
-          >
-            <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
-              <path d="M10 4.5v11M4.5 10h11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          </button>
-          {newAnchor && <PopMenu anchor={newAnchor} items={newItems} onClose={() => setNewAnchor(null)} />}
-        </div>
-        {/* On a phone the header has no room for the views: they sit here. */}
-        <div className="overflow-x-auto sm:hidden">
-          <ChatViewTabs view={view} unread={data?.unread} onView={onView} />
-        </div>
+              aria-label="Clear"
+              className="flex h-5 w-5 items-center justify-center rounded-full text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+                <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </label>
       </div>
 
-      <div ref={quietScroll} className="scroll-quiet min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
+      <div ref={quietScroll} className="scroll-quiet min-h-0 flex-1 overflow-y-auto px-2.5 pb-4">
         {!data ? (
-          <div className="space-y-1 p-1.5">
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="flex items-center gap-3 px-1.5 py-2.5">
-                <span className="h-10 w-10 animate-pulse rounded-full bg-[var(--color-paper)]" />
-                <span className="flex-1 space-y-1.5">
-                  <span className="block h-3 w-1/2 animate-pulse rounded bg-[var(--color-paper)]" />
-                  <span className="block h-2.5 w-4/5 animate-pulse rounded bg-[var(--color-paper)]" />
-                </span>
-              </div>
+          <div className="space-y-2 px-2 pt-2">
+            {[70, 55, 80, 60, 45, 75].map((w, i) => (
+              <span key={i} className="block h-4 animate-pulse rounded bg-black/[0.06]" style={{ width: `${w}%` }} />
             ))}
           </div>
         ) : results ? (
           <div>
-            <div className="flex items-center justify-between px-2.5 pb-1 pt-1">
+            <div className="flex items-center justify-between px-2 pb-1 pt-1">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Messages with &ldquo;{q.trim()}&rdquo;</p>
               <button type="button" onClick={() => setResults(null)} className="text-[11.5px] font-medium text-[var(--color-primary)]">
                 Back
               </button>
             </div>
-            {results.length === 0 && <p className="px-2.5 py-2 text-[12.5px] text-[var(--color-muted)]">No messages match.</p>}
+            {results.length === 0 && <p className="px-2 py-2 text-[12.5px] text-[var(--color-muted)]">No messages match.</p>}
             {results.map((r) => (
-              <button key={r.message.id} type="button" onClick={() => onOpenResult(r.conversation.id, r.message)} className="block w-full rounded-xl px-2.5 py-2 text-left hover:bg-[var(--color-paper)]">
+              <button key={r.message.id} type="button" onClick={() => onOpenResult(r.conversation.id, r.message)} className="block w-full rounded-lg px-2 py-2 text-left hover:bg-black/[0.05]">
                 <span className="flex items-baseline gap-2 text-[11.5px] text-[var(--color-muted)]">
                   <span className="min-w-0 flex-1 truncate font-semibold text-[var(--color-ink)]">
                     {r.conversation.title}
@@ -299,36 +257,46 @@ export function ConversationList({
               </button>
             ))}
           </div>
-        ) : view === "threads" ? (
-          !threads ? (
-            <p className="p-6 text-center text-[12.5px] text-[var(--color-muted)]">Loading your threads…</p>
-          ) : shownThreads.length === 0 ? (
-            <div className="flex min-h-[200px] items-center justify-center p-8 text-center text-[12.5px] leading-relaxed text-[var(--color-muted)]">{empty}</div>
-          ) : (
-            shownThreads.map((t) => <ThreadRow key={t.root.id} t={t} me={me} conversation={byId.get(t.conversation.id)} active={activeThread === t.root.id} onOpen={() => onOpenThread(t.conversation.id, t.root.id)} />)
-          )
         ) : (
           <>
-            {view === "channels" && !words && data.openChannels.length > 0 && (
-              <button type="button" onClick={onBrowse} className="flex w-full items-center gap-2.5 rounded-xl py-2 pl-2.5 pr-2.5 text-left transition-colors hover:bg-[var(--color-paper)]">
-                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-dashed border-[var(--color-primary)]/50 text-[var(--color-primary)]">#</span>
-                <span className="flex-1 text-[13px] font-medium text-[var(--color-ink)]">Browse channels</span>
-                <span className="text-[12px] tabular-nums text-[var(--color-muted)]">{data.openChannels.length} to join</span>
+            {!words && (
+              <button
+                type="button"
+                onClick={onShowThreads}
+                aria-current={threadsActive ? "page" : undefined}
+                className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[14px] transition-colors ${threadsActive ? "bg-[var(--color-primary)] text-white" : threadsNew ? "font-bold text-[var(--color-ink)] hover:bg-black/[0.05]" : "text-[var(--color-ink)]/75 hover:bg-black/[0.05]"}`}
+              >
+                <span className={`flex w-5 justify-center ${threadsActive ? "text-white" : "text-[var(--color-ink)]/60"}`}>{messageIcons.thread}</span>
+                <span className="flex-1">Threads</span>
+                {threadsNew > 0 && <span className={`flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[11px] font-bold ${threadsActive ? "bg-white text-[var(--color-primary)]" : "bg-rose-500 text-white"}`}>{threadsNew > 99 ? "99+" : threadsNew}</span>}
               </button>
             )}
-            {shown.length === 0 ? (
-              <div className="flex min-h-[200px] items-center justify-center p-8 text-center text-[12.5px] leading-relaxed text-[var(--color-muted)]">{empty}</div>
-            ) : (
-              shown.map((c) => <Row key={c.id} c={c} me={me} active={c.id === activeId} onOpen={() => onOpen(c.id)} />)
-            )}
+
+            <Section id="channels" title="Channels" folded={Boolean(folded.channels) && !words} onFold={fold} action={addItems.length ? { label: "Add channels", onClick: (e) => setAddAnchor(addAnchor ? null : e.currentTarget) } : undefined}>
+              {channels.map((c) => (
+                <Row key={c.id} c={c} me={me} active={c.id === activeId} onOpen={() => onOpen(c.id)} />
+              ))}
+              {!words && addItems.length > 0 && <AddRow label="Add channels" onClick={(e) => setAddAnchor(addAnchor ? null : e.currentTarget)} />}
+              {!words && channels.length === 0 && addItems.length === 0 && <p className="px-2 py-1 text-[12.5px] text-[var(--color-muted)]">No channels yet.</p>}
+            </Section>
+
+            <Section id="direct" title="Direct messages" folded={Boolean(folded.direct) && !words} onFold={fold} action={{ label: "New message", onClick: onNewChat }}>
+              {direct.map((c) => (
+                <Row key={c.id} c={c} me={me} active={c.id === activeId} onOpen={() => onOpen(c.id)} />
+              ))}
+              {!words && <AddRow label="New message" onClick={onNewChat} />}
+            </Section>
+
+            {words && channels.length + direct.length === 0 && <p className="px-2 pt-4 text-[12.5px] text-[var(--color-muted)]">No conversation by that name.</p>}
             {words.length >= 2 && (
-              <button type="button" onClick={searchMessages} disabled={searching} className="mt-2 w-full rounded-xl border border-dashed border-[var(--color-line)] px-3 py-2 text-left text-[12.5px] text-[var(--color-primary)] hover:bg-[var(--color-primary-soft)]">
+              <button type="button" onClick={searchMessages} disabled={searching} className="mt-3 w-full rounded-lg border border-dashed border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-left text-[12.5px] text-[var(--color-primary)] hover:border-[var(--color-primary)]/40">
                 {searching ? "Searching…" : `Search every message for “${q.trim()}”`}
               </button>
             )}
           </>
         )}
       </div>
+      {addAnchor && <PopMenu anchor={addAnchor} items={addItems} onClose={() => setAddAnchor(null)} align="left" />}
     </aside>
   );
 }

@@ -3,7 +3,7 @@
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { EbayMessage, EbayNote, EbayThread } from "@/lib/api";
 import { FileRow, PhotoGrid } from "../MessageFiles";
-import { RichText } from "../MessageBubble";
+import { RichText } from "../MessageParts";
 import { BUBBLE_MAX, Bubble, BubbleRow, BubbleText, DayChip, HeaderButton, LatestButton, MenuItem, Meta, PopMenu } from "../ChatBubble";
 import { colorFor, dayLabel, initialOf, timeLabel } from "../inbox-format";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";

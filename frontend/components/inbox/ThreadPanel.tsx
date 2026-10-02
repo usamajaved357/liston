@@ -5,15 +5,20 @@ import { ApiError, ChatConversation, ChatMessage, ChatPerson, ChatThreadDetail, 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useQuietScrollbar } from "@/lib/useQuietScrollbar";
 import { MyEvent, useMyEvents } from "@/lib/useMyEvents";
-import { MessageBubble } from "./MessageBubble";
+import { FlatMessage, NewDivider } from "./FlatMessage";
+import { HeaderButton, PopMenu } from "./ChatBubble";
 import { Composer, ComposerHandle, ComposerSend, LISTON_REF_TYPE } from "./Composer";
 
-// A thread, as Slack opens one: beside the conversation (over it on a
-// smaller screen), the message it started from at the top, then every
-// reply, and a composer whose reply can also be sent to the conversation.
-// Its header follows or stops following it (followers are told of new
-// replies and see it under Threads). It's read up to the latest while it's
-// open with the tab in front. Files dropped on it go into the reply.
+// A thread, as Slack opens one: a panel beside the conversation (over it on
+// a smaller screen), flat on white rather than bubbles. "Thread" and where
+// it is (#orders, a person) at the top with a "…" menu (follow or stop
+// following, copy its link) and close; the message it started from, a
+// "2 replies" rule, the replies (FlatMessage: a run from one person
+// grouped, a "New" line above the ones that came since you last looked if
+// you follow it), then "Reply…" with "Also send to #orders". Followers are
+// told of new replies and see it under Threads. It's read up to the latest
+// while it's open with the tab in front. Files dropped on it go into the
+// reply.
 
 const RUN_MS = 5 * 60 * 1000;
 
@@ -23,6 +28,8 @@ export function ThreadPanel({
   me,
   people,
   isOwner,
+  focusId = null,
+  onFocused,
   onClose,
 }: {
   rootId: string;
@@ -30,6 +37,9 @@ export function ThreadPanel({
   me: string;
   people: Map<string, ChatPerson>;
   isOwner: boolean;
+  // A reply to scroll to and light up (a notification's), and what's told once it's shown.
+  focusId?: string | null;
+  onFocused?: () => void;
   onClose: () => void;
 }) {
   const [data, setData] = useState<ChatThreadDetail | null>(null);
@@ -38,6 +48,12 @@ export function ThreadPanel({
   const [deleting, setDeleting] = useState<ChatMessage | null>(null);
   const [typing, setTyping] = useState<Map<string, { name: string; until: number }>>(new Map());
   const [dragging, setDragging] = useState(false);
+  // The first reply that came since you last read it (as it was when opened): "New" goes above it.
+  const [newFrom, setNewFrom] = useState<string | null>(null);
+  const [menu, setMenu] = useState<HTMLElement | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [highlight, setHighlight] = useState<string | null>(null);
+  const focused = useRef<string | null>(null);
   const scroller = useRef<HTMLDivElement | null>(null);
   const scrollRef = useQuietScrollbar(scroller);
   const composer = useRef<ComposerHandle>(null);
@@ -47,12 +63,18 @@ export function ThreadPanel({
     let live = true;
     inboxApi
       .chatThread(rootId)
-      .then((d) => live && setData(d))
+      .then((d) => {
+        if (!live) return;
+        setData(d);
+        const since = d.readAt ? new Date(d.readAt).getTime() : 0;
+        const first = d.following ? d.replies.find((r) => r.author?.id !== me && new Date(r.createdAt).getTime() > since) : undefined;
+        setNewFrom(first?.id || null);
+      })
       .catch((err) => live && setError(err instanceof ApiError ? err.message : "Couldn't open this thread."));
     return () => {
       live = false;
     };
-  }, [rootId]);
+  }, [rootId, me]);
 
   const replies = useMemo(() => data?.replies || [], [data]);
   const latestId = replies.length ? replies[replies.length - 1].id : data?.root.id;
@@ -62,6 +84,21 @@ export function ThreadPanel({
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [replies.length, data?.root.id]);
+
+  // A notification's reply (or the first message): scrolled to the middle and lit up, once.
+  useEffect(() => {
+    if (!data || !focusId || focused.current === focusId) return;
+    const el = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${focusId}"]`);
+    if (!el) return;
+    focused.current = focusId;
+    const frame = requestAnimationFrame(() => {
+      el.scrollIntoView({ block: "center" });
+      setHighlight(focusId);
+      setTimeout(() => setHighlight((h) => (h === focusId ? null : h)), 2500);
+      onFocused?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [data, focusId, onFocused]);
 
   // Read up to the latest while it's open and the tab is in front.
   const markRead = useCallback(() => {
@@ -123,6 +160,7 @@ export function ThreadPanel({
 
   async function send(input: ComposerSend) {
     const sent = await inboxApi.chatSend(conversation.id, { ...input, threadId: rootId });
+    setNewFrom(null);
     setData((d) => (d && !d.replies.some((r) => r.id === sent.id) ? { ...d, replies: [...d.replies, sent], following: true } : d));
   }
 
@@ -165,33 +203,44 @@ export function ThreadPanel({
   }
 
   const typingNames = [...typing.values()].map((t) => t.name.split(" ")[0]);
-  const where = conversation.kind === "channel" ? conversation.title : conversation.kind === "dm" ? `With ${conversation.title}` : conversation.title;
-  const joins = (a: ChatMessage | undefined, b: ChatMessage) => Boolean(a && a.author?.id === b.author?.id && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) < RUN_MS);
-  const bubble = (m: ChatMessage, first: boolean) => {
+  // Where it is: "#orders" (a channel's title has its "#"), the person, the group; and how a reply sent there too says it.
+  const where = conversation.title;
+  const alsoTo = conversation.kind === "dm" ? "the conversation" : where;
+  const joins = (a: ChatMessage | undefined, b: ChatMessage) => Boolean(a && !a.deleted && a.author?.id === b.author?.id && !a.alsoInConversation && Math.abs(new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) < RUN_MS);
+  const row = (m: ChatMessage, compact: boolean) => {
     const mine = m.author?.id === me;
     return (
-      <MessageBubble
+      <FlatMessage
         key={m.id}
         message={m}
         me={me}
-        mine={mine}
-        first={first}
         people={people}
-        showAuthorName={conversation.kind !== "dm"}
+        compact={compact}
         canDelete={mine || isOwner}
-        inThread
         place={conversation}
-        onReply={() => {}}
+        inThread
+        alsoSentTo={m.threadId && m.alsoInConversation ? alsoTo : null}
+        highlight={highlight === m.id}
         onEdit={() => setEditing(m)}
         onDelete={() => setDeleting(m)}
-        onJumpTo={() => {}}
       />
     );
   };
 
+  function copyLink() {
+    const url = `${window.location.origin}/inbox?c=${conversation.id}&t=${rootId}`;
+    navigator.clipboard
+      ?.writeText(url)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  }
+
   return (
     <aside
-      className="absolute inset-0 z-30 flex min-h-0 flex-col bg-[var(--color-panel)] sm:left-auto sm:w-[400px] sm:border-l sm:border-[var(--color-line)] sm:shadow-[var(--shadow-pop)] xl:static xl:z-auto xl:flex-shrink-0 xl:shadow-none"
+      className="absolute inset-0 z-30 flex min-h-0 flex-col bg-[var(--color-panel)] sm:left-auto sm:w-[420px] sm:border-l sm:border-[var(--color-line)] sm:shadow-[var(--shadow-pop)] xl:static xl:z-auto xl:flex-shrink-0 xl:shadow-none"
       aria-label="Thread"
       onDragOver={(e) => {
         const t = e.dataTransfer.types;
@@ -205,36 +254,58 @@ export function ThreadPanel({
       }}
       onDrop={onDrop}
     >
-      <header className="flex h-[60px] flex-shrink-0 items-center gap-2 border-b border-[var(--color-line)] px-3">
-        <button type="button" onClick={onClose} aria-label="Close the thread" className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]">
-          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
-            <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
-        </button>
+      <header className="flex h-[52px] flex-shrink-0 items-center gap-1 border-b border-[var(--color-line)] pl-4 pr-2">
         <div className="min-w-0 flex-1">
-          <h3 className="text-[14.5px] font-semibold leading-5 text-[var(--color-ink)]">Thread</h3>
+          <h3 className="text-[15px] font-bold leading-5 text-[var(--color-ink)]">Thread</h3>
           <p className={`truncate text-[12px] leading-4 ${typingNames.length ? "font-medium text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`} aria-live="polite">
-            {typingNames.length ? `${typingNames.slice(0, 2).join(" and ")} ${typingNames.length === 1 ? "is" : "are"} typing…` : where}
+            {typingNames.length ? `${typingNames.slice(0, 2).join(" and ")} ${typingNames.length === 1 ? "is" : "are"} typing…` : copied ? "Link copied" : where}
           </p>
         </div>
         {data && (
-          <button
-            type="button"
-            onClick={toggleFollow}
-            title={data.following ? "You're told about new replies. Stop following" : "Get told about new replies"}
-            className={`flex h-8 flex-shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${data.following ? "border-[var(--color-line)] text-[var(--color-ink)] hover:bg-[var(--color-paper)]" : "border-[var(--color-primary)]/40 text-[var(--color-primary)] hover:bg-[var(--color-primary-soft)]"}`}
-          >
-            <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
-              <path d="M6 16.5V11a6 6 0 1112 0v5.5l1.5 2h-15l1.5-2zM10 20.5a2 2 0 004 0" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-              {data.following ? null : <path d="M4 4l16 16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />}
+          <HeaderButton label="More" onClick={(e) => setMenu(menu ? null : e.currentTarget)} active={Boolean(menu)}>
+            <svg viewBox="0 0 20 20" className="h-[18px] w-[18px]" aria-hidden>
+              <circle cx="4.5" cy="10" r="1.6" fill="currentColor" />
+              <circle cx="10" cy="10" r="1.6" fill="currentColor" />
+              <circle cx="15.5" cy="10" r="1.6" fill="currentColor" />
             </svg>
-            {data.following ? "Following" : "Follow"}
-          </button>
+          </HeaderButton>
+        )}
+        <HeaderButton label="Close the thread" onClick={onClose}>
+          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+            <path d="M6 6l8 8M14 6l-8 8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </HeaderButton>
+        {menu && data && (
+          <PopMenu
+            anchor={menu}
+            onClose={() => setMenu(null)}
+            items={[
+              {
+                label: data.following ? "Turn off notifications for replies" : "Get notified about new replies",
+                onSelect: toggleFollow,
+                icon: (
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+                    <path d="M6 16.5V11a6 6 0 1112 0v5.5l1.5 2h-15l1.5-2zM10 20.5a2 2 0 004 0" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                    {data.following && <path d="M4 4l16 16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />}
+                  </svg>
+                ),
+              },
+              {
+                label: "Copy link to thread",
+                onSelect: copyLink,
+                icon: (
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
+                    <path d="M10 14a4 4 0 005.66 0l3-3a4 4 0 00-5.66-5.66l-1 1M14 10a4 4 0 00-5.66 0l-3 3a4 4 0 005.66 5.66l1-1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                ),
+              },
+            ]}
+          />
         )}
       </header>
 
-      <div className="chat-wallpaper relative min-h-0 flex-1">
-        <div ref={scrollRef} className="scroll-quiet h-full overflow-y-auto pb-3">
+      <div className="relative min-h-0 flex-1 bg-[var(--color-panel)]">
+        <div ref={scrollRef} className="scroll-quiet h-full overflow-y-auto pb-4 pt-3">
           {error ? (
             <p className="px-6 py-10 text-center text-[12.5px] text-[var(--color-muted)]">{error}</p>
           ) : !data ? (
@@ -243,18 +314,16 @@ export function ThreadPanel({
             </div>
           ) : (
             <>
-              <div className="pt-2">{bubble(data.root, true)}</div>
-              <div className="my-3 flex items-center gap-3 px-4" role="separator">
-                <span className="h-px flex-1 bg-[var(--color-line)]" />
-                <span className="rounded-full bg-[var(--color-panel)] px-2.5 py-0.5 text-[11.5px] font-medium text-[var(--color-muted)] shadow-[var(--shadow-bubble)]">
-                  {replies.length === 0 ? "No replies yet" : `${replies.length} ${replies.length === 1 ? "reply" : "replies"}`}
-                </span>
+              {row(data.root, false)}
+              <div className="flex items-center gap-3 px-5 pb-1 pt-3" role="separator">
+                <span className="flex-shrink-0 text-[12px] font-medium text-[var(--color-muted)]">{replies.length === 0 ? "No replies yet" : `${replies.length} ${replies.length === 1 ? "reply" : "replies"}`}</span>
                 <span className="h-px flex-1 bg-[var(--color-line)]" />
               </div>
+              {replies.length === 0 && <p className="px-5 pt-1 text-[12px] leading-5 text-[var(--color-muted)]">Replies stay in this thread unless you also send them to {alsoTo}.</p>}
               {replies.map((m, i) => (
                 <div key={m.id}>
-                  {m.alsoInConversation && <p className={`mt-2 px-[clamp(12px,1.5%,20px)] text-[10.5px] text-[var(--color-muted)] ${m.author?.id === me ? "text-right" : "text-left"}`}>Also sent to {conversation.kind === "channel" ? conversation.title : "the conversation"}</p>}
-                  {bubble(m, !joins(replies[i - 1], m) || m.alsoInConversation)}
+                  {m.id === newFrom && <NewDivider />}
+                  {row(m, m.id !== newFrom && joins(replies[i - 1], m))}
                 </div>
               ))}
             </>
@@ -283,8 +352,8 @@ export function ThreadPanel({
           onTyping={() => inboxApi.chatTyping(conversation.id, rootId).catch(() => {})}
           disabledReason={conversation.archived ? "This channel is archived." : null}
           threadId={rootId}
-          alsoLabel={`Also send to ${conversation.kind === "channel" ? conversation.title : "the conversation"}`}
-          placeholder="Reply in thread"
+          alsoLabel={`Also send to ${alsoTo}`}
+          placeholder="Reply…"
         />
       )}
       <ConfirmDialog open={Boolean(deleting)} title="Delete this message?" description="It shows as deleted for everyone, its text and files gone." confirmLabel="Delete" danger onConfirm={confirmDelete} onCancel={() => setDeleting(null)} />

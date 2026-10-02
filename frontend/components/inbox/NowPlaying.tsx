@@ -21,8 +21,8 @@ function whereOf(track: VoiceTrack): string {
   if (!track.place) return "Voice message";
   const { kind, title } = track.place;
   if (kind === "dm") return track.mine ? `To ${title}` : "Direct message";
-  const name = kind === "channel" ? `#${title}` : title;
-  return track.threadId ? `Thread in ${name}` : `In ${name}`;
+  // A channel's title has its "#".
+  return track.threadId ? `Thread in ${title}` : `In ${title}`;
 }
 
 export function NowPlaying() {

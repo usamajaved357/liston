@@ -80,4 +80,5 @@ test('a thread reply pushes its followers and whoever it mentions, never the aut
 
 test("a preview drops the formatting marks but keeps words with underscores", () => {
   assert.strictEqual(rules.previewOf({ body: 'Who has the **refund** on _FlipX_? ~old~ `SKU-1` snake_case_name' }), 'Who has the refund on FlipX? old SKU-1 snake_case_name');
+  assert.strictEqual(rules.previewOf({ body: 'See [the packing guide](https://example.com/guide) first' }), 'See the packing guide first', 'a link written with words shows the words');
 });

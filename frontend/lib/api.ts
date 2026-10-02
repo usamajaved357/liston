@@ -3109,6 +3109,13 @@ export interface ChatThreadSummary {
   lastReplyAt: string | null;
   latest: ChatMessage[];
 }
+// A conversation's thread, under its header's Threads: whether you follow it and how many replies are new to you.
+export interface ChatConversationThread {
+  root: ChatMessage;
+  following: boolean;
+  unread: number;
+  lastReplyAt: string | null;
+}
 export interface ChatThreadDetail {
   root: ChatMessage;
   replies: ChatMessage[];
@@ -3190,6 +3197,9 @@ export const inboxApi = {
   chatTyping: (id: string, threadId?: string | null) => request<void>(`/api/chat/conversations/${id}/typing`, { method: "POST", body: JSON.stringify({ threadId: threadId || null }) }),
   // Threads: the ones this person follows, one thread, reading it, following it.
   chatThreads: () => request<{ threads: ChatThreadSummary[]; unread: ChatUnread }>(`/api/chat/threads`),
+  chatConversationThreads: (conversationId: string) => request<{ threads: ChatConversationThread[] }>(`/api/chat/conversations/${conversationId}/threads`),
+  // What's been shared in a conversation (files, photos, links), newest first, as the messages that carry them.
+  chatConversationFiles: (conversationId: string) => request<{ messages: ChatMessage[] }>(`/api/chat/conversations/${conversationId}/files`),
   chatThread: (rootId: string) => request<ChatThreadDetail>(`/api/chat/threads/${rootId}`),
   chatThreadRead: (rootId: string, messageId?: string | null) =>
     request<{ readAt: string; unread: ChatUnread }>(`/api/chat/threads/${rootId}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),

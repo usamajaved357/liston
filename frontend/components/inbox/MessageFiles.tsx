@@ -96,7 +96,7 @@ export function PhotoGrid({ photos, width = 280, overlay }: { photos: ViewablePh
   );
 }
 
-function FileIcon({ mime }: { mime: string }) {
+export function FileIcon({ mime }: { mime: string }) {
   const pdf = mime === "application/pdf";
   return (
     <span className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${pdf ? "bg-rose-50 text-rose-600" : "bg-[var(--color-primary-soft)] text-[var(--color-primary)]"}`}>

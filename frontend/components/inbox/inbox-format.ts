@@ -25,15 +25,31 @@ export function listTime(iso: string, now = new Date()): string {
   return dayLabel(iso, now);
 }
 
+/** How long ago, as Slack says it under a thread: "just now", "5 minutes ago", "today at 14:05", "yesterday at 09:12", "3 days ago", "on 23 Sep". */
+export function whenAgo(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const mins = Math.floor((now.getTime() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  if (sameDay(d, now)) return `today at ${timeLabel(iso)}`;
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  if (sameDay(d, y)) return `yesterday at ${timeLabel(iso)}`;
+  const days = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (days < 7) return `${Math.max(2, days)} days ago`;
+  return `on ${dayLabel(iso, now)}`;
+}
+
 export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-/** Text with its formatting marks taken off (**bold**, _italic_, ~struck~, `code`), for a one-line preview. */
+/** Text with its formatting marks taken off ([words](link), **bold**, _italic_, ~struck~, `code`), for a one-line preview. */
 export function plainOf(text: string): string {
   return text
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1")
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
     .replace(/`([^`\n]+)`/g, "$1")
     .replace(/(^|[^\w*])_([^_\n]+)_(?!\w)/g, "$1$2")

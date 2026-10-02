@@ -153,7 +153,7 @@ export function useVoiceRecorder({ onLimit }: { onLimit?: () => void } = {}) {
 export function RecordingBar({ elapsed, recent, sending, onCancel, onSend }: { elapsed: number; recent: number[]; sending: boolean; onCancel: () => void; onSend: () => void }) {
   const bars = [...Array(Math.max(0, 40 - recent.length)).fill(0), ...recent];
   return (
-    <div className="flex items-center gap-2 rounded-[22px] border border-[var(--color-line)] bg-[var(--color-panel)] py-1 pl-1.5 pr-1">
+    <div className="flex min-h-[52px] items-center gap-2 rounded-xl border border-[var(--color-ink)]/30 bg-[var(--color-panel)] px-2 py-2 shadow-[0_1px_6px_-1px_rgba(15,23,42,0.12)]">
       <button type="button" onClick={onCancel} disabled={sending} title="Throw it away" aria-label="Throw the recording away" className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40">
         <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
           <path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
@@ -310,13 +310,15 @@ export function VoiceAvatar({ author, size, ring }: { author: VoiceTrack["author
  * bubble scrolls away or you change page; the bubble tells it whether it's
  * on screen, for the pop-up that shows when it isn't.
  */
-export function VoicePlayer({ track, meta }: { track: VoiceTrack; meta?: ReactNode }) {
+export function VoicePlayer({ track, meta, tone }: { track: VoiceTrack; meta?: ReactNode; tone?: "mine" | "theirs" }) {
   const root = useRef<HTMLDivElement>(null);
   const v = useVoice(track.id);
   const durationS = track.durationMs / 1000;
   const share = durationS ? Math.min(1, v.at / durationS) : 0;
   const started = v.current && (v.playing || v.at > 0);
-  const bubble = track.mine ? "var(--color-bubble-out)" : "var(--color-panel)";
+  // What it sits on: your tinted bubble, else white (theirs, or a thread's flat row).
+  const look = tone ?? (track.mine ? "mine" : "theirs");
+  const bubble = look === "mine" ? "var(--color-bubble-out)" : "var(--color-panel)";
 
   // Whether this bubble is on screen (and not, once it's gone).
   useEffect(() => {
@@ -357,7 +359,7 @@ export function VoicePlayer({ track, meta }: { track: VoiceTrack; meta?: ReactNo
               Can&apos;t play here. Download it
             </a>
           ) : (
-            <Waveform peaks={track.peaks} share={share} durationS={durationS} tone={track.mine ? "mine" : "theirs"} ring={bubble} onSeek={(s) => seekVoice(track, s * durationS)} onStep={(d) => seekVoice(track, v.at + d)} />
+            <Waveform peaks={track.peaks} share={share} durationS={durationS} tone={look} ring={bubble} onSeek={(s) => seekVoice(track, s * durationS)} onStep={(d) => seekVoice(track, v.at + d)} />
           )}
         </div>
         <div className="flex h-4 items-center justify-between gap-2 pl-[38px]">

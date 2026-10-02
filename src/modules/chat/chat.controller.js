@@ -141,6 +141,8 @@ module.exports = {
     res.status(204).end();
   }),
   threads: handle(async (req, res) => res.json(await chatService.threads(auth(req)))),
+  conversationThreads: handle(async (req, res) => res.json(await chatService.conversationThreads(auth(req), req.params.id))),
+  conversationFiles: handle(async (req, res) => res.json(await chatService.conversationFiles(auth(req), req.params.id))),
   thread: handle(async (req, res) => res.json(await chatService.thread(auth(req), req.params.rootId))),
   threadRead: handle(async (req, res) => {
     const input = parse(schemas.read, req.body, res);

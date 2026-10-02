@@ -24,6 +24,8 @@ router.get('/conversations/:id/messages', c.messages);
 router.post('/conversations/:id/messages', c.send);
 router.post('/conversations/:id/read', c.read);
 router.post('/conversations/:id/typing', c.typing);
+router.get('/conversations/:id/threads', c.conversationThreads);
+router.get('/conversations/:id/files', c.conversationFiles);
 // Threads: the ones this person follows, one thread, reading it, following it.
 router.get('/threads', c.threads);
 router.get('/threads/:rootId', c.thread);

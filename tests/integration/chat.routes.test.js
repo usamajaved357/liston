@@ -225,10 +225,14 @@ test('pushes: everyone in it but the sender, not while reading it, never when mu
     // Her open bell hears each change on her live stream: a line added, a line read.
     const bellEvents = [];
     const stopBell = userEvents.subscribe(t.sara.id, (e) => e.type === 'notifications.changed' && bellEvents.push(e));
-    await request('POST', `/api/chat/conversations/${channel.id}/messages`, { body: '@Sara can you look?', mentions: [t.sara.id] }, t.o.token);
+    const look = (await request('POST', `/api/chat/conversations/${channel.id}/messages`, { body: '@Sara can you look?', mentions: [t.sara.id] }, t.o.token)).data;
     assert.ok(await until(() => calls.length === 1));
     assert.ok(await until(() => bellEvents.length === 1), 'the bell is told a line was added');
-    assert.deepStrictEqual([calls[0].userId, calls[0].title, calls[0].body, calls[0].url, calls[0].push.tag], [t.sara.id, `Owen in #${channel.name}`, '@Sara can you look?', `/inbox?c=${channel.id}`, `chat-${channel.id}`]);
+    // Named in it: says so, and opens the conversation at that message.
+    assert.deepStrictEqual(
+      [calls[0].userId, calls[0].title, calls[0].body, calls[0].url, calls[0].push.tag],
+      [t.sara.id, `Owen mentioned you in #${channel.name}`, '@Sara can you look?', `/inbox?c=${channel.id}&m=${look.id}`, `chat-${channel.id}`]
+    );
 
     // Her lock screen shows no text once she hides it; quiet hours keep the bell but send nothing.
     await request('PUT', '/api/chat/settings', { chat: 'all', hideText: true, quietFrom: 0, quietTo: 1439, timeZone: 'Europe/London' }, t.sara.token);
@@ -281,13 +285,21 @@ test("threads, as Slack's: replies beside the conversation (one can also go to i
 
     // The owner started it, so follows it: told (the thread's own link), and it's under his Threads.
     assert.ok(await until(() => calls.length === 1));
-    assert.deepStrictEqual([calls[0].userId, calls[0].title, calls[0].url, calls[0].subjectId], [t.o.id, `Sara replied in a thread in #${channel.name}`, `/inbox?c=${channel.id}&t=${root.id}`, `thread:${root.id}`]);
+    assert.deepStrictEqual(
+      [calls[0].userId, calls[0].title, calls[0].url, calls[0].subjectId],
+      [t.o.id, `Sara replied in a thread in #${channel.name}`, `/inbox?c=${channel.id}&t=${root.id}&m=${reply.data.id}`, `thread:${root.id}`]
+    );
     const mine = (await request('GET', '/api/chat/threads', undefined, t.o.token)).data;
     assert.deepStrictEqual([mine.threads.length, mine.threads[0].root.id, mine.threads[0].unread, mine.threads[0].latest.map((m) => m.body), mine.unread.threads], [1, root.id, 1, ['I do, every morning'], 1]);
 
     // A reply also sent to the conversation, mentioning Tom: everyone sees it there, and Tom follows the thread now.
+    calls.length = 0;
     const loud = await request('POST', `${base}/messages`, { body: '@Tom can you cover Friday?', mentions: [t.tom.id], threadId: root.id, alsoInConversation: true }, t.sara.token);
     assert.strictEqual(loud.status, 201);
+    // Tom's notification says he was mentioned in a thread and opens the thread at that reply, though it's in the conversation too.
+    assert.ok(await until(() => calls.some((c) => c.userId === t.tom.id)));
+    const toTom = calls.find((c) => c.userId === t.tom.id);
+    assert.deepStrictEqual([toTom.title, toTom.url], [`Sara mentioned you in a thread in #${channel.name}`, `/inbox?c=${channel.id}&t=${root.id}&m=${loud.data.id}`]);
     assert.ok((await request('GET', `${base}/messages`, undefined, t.tom.token)).data.messages.some((m) => m.id === loud.data.id && m.alsoInConversation));
     const tomThreads = (await request('GET', '/api/chat/threads', undefined, t.tom.token)).data;
     assert.deepStrictEqual([tomThreads.threads.length, tomThreads.threads[0].unread], [1, 2]);
@@ -302,10 +314,28 @@ test("threads, as Slack's: replies beside the conversation (one can also go to i
     const private_ = (await request('POST', `/api/chat/conversations/${group.id}/messages`, { body: 'just us' }, t.o.token)).data;
     assert.strictEqual((await request('GET', `/api/chat/threads/${private_.id}`, undefined, t.ali.token)).status, 404);
 
-    // Tom stops following: off his Threads, no more counts.
+    // The conversation's own Threads (its header): every thread in it, followed or not, the latest reply first.
+    const second = (await request('POST', `${base}/messages`, { body: 'Packing tape order?' }, t.o.token)).data;
+    await request('POST', `${base}/messages`, { body: 'Ordered', threadId: second.id }, t.tom.token);
+    const inChannel = (await request('GET', `${base}/threads`, undefined, t.tom.token)).data;
+    assert.deepStrictEqual(
+      inChannel.threads.map((x) => [x.root.id, x.root.thread.replyCount, x.following, x.unread]),
+      [
+        [second.id, 1, true, 0],
+        [root.id, 2, true, 2],
+      ],
+      'his own reply is no news to him; the other has two he has not read'
+    );
+    const aliView = await request('GET', `${base}/threads`, undefined, t.ali.token);
+    assert.strictEqual(aliView.status, 403, 'not in the channel (a public one: join it first), so no threads');
+    assert.deepStrictEqual((await request('GET', `/api/chat/conversations/${group.id}/threads`, undefined, t.o.token)).data.threads, [], 'a conversation without threads');
+
+    // Tom stops following: off his Threads (the one he replied to stays), no more counts.
     await request('PUT', `/api/chat/threads/${root.id}/follow`, { following: false }, t.tom.token);
     const after = (await request('GET', '/api/chat/threads', undefined, t.tom.token)).data;
-    assert.deepStrictEqual([after.threads.length, after.unread.threads], [0, 0]);
+    assert.deepStrictEqual([after.threads.map((x) => x.root.id), after.unread.threads], [[second.id], 0]);
+    const unfollowed = (await request('GET', `${base}/threads`, undefined, t.tom.token)).data.threads.find((x) => x.root.id === root.id);
+    assert.deepStrictEqual([unfollowed.following, unfollowed.unread], [false, 0], 'still listed in the channel, just not followed');
   } finally {
     mock.restoreAll();
   }
@@ -350,6 +380,25 @@ test('links to other sites get a preview after sending, shown to everyone in it;
       })()
     );
     assert.deepStrictEqual(shown.links.map((l) => [l.title, l.site]), [['Packing guide', 'example.com']]);
+
+    // "Files and links": what was shared, newest first (a file, then the link), not a voice note or plain words; members only.
+    const upload = async (type, name) =>
+      (await fetch(`${baseUrl}/api/files?purpose=chat`, { method: 'POST', headers: { Authorization: `Bearer ${t.o.token}`, 'Content-Type': type, 'X-File-Name': name }, body: crypto.randomBytes(1024) })).json();
+    const doc = await upload('application/pdf', 'Invoice.pdf');
+    const withFile = (await request('POST', `/api/chat/conversations/${dm.id}/messages`, { body: 'The invoice', fileIds: [doc.id] }, t.o.token)).data;
+    const audio = await upload('audio/webm', 'Voice message.webm');
+    await request('POST', `/api/chat/conversations/${dm.id}/messages`, { fileIds: [audio.id], voice: { fileId: audio.id, durationMs: 2000, peaks: [0.5] } }, t.o.token);
+    await request('POST', `/api/chat/conversations/${dm.id}/messages`, { body: 'Just words' }, t.o.token);
+    const shared = await request('GET', `/api/chat/conversations/${dm.id}/files`, undefined, t.sara.token);
+    assert.strictEqual(shared.status, 200);
+    assert.deepStrictEqual(
+      shared.data.messages.map((m) => [m.id, m.files.map((f) => f.name), m.links.length]),
+      [
+        [withFile.id, ['Invoice.pdf'], 0],
+        [sent.id, [], 1],
+      ]
+    );
+    assert.strictEqual((await request('GET', `/api/chat/conversations/${dm.id}/files`, undefined, t.ali.token)).status, 404, 'not in it, nothing shown');
   } finally {
     mock.restoreAll();
   }

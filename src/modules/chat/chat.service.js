@@ -558,7 +558,15 @@ async function deliver(auth, conversation, members, row, root = null) {
     // Reading it right now (the thread for a reply, the conversation otherwise): nothing to tell them.
     if (userEvents.isViewing(userId, threadOnly ? `chat:${conversation.id}:${root.id}` : `chat:${conversation.id}`)) continue;
     const where = conversation.kind === 'channel' ? `#${conversation.name}` : conversation.kind === 'group' ? rules.titleOf(conversation, members, userId) : null;
-    const title = root ? `${authorName} replied in a thread${where ? ` in ${where}` : ''}` : where ? `${authorName} in ${where}` : authorName;
+    // Named in it (not just @channel): "Sara mentioned you in a thread in #orders".
+    const named = (row.mentions || []).map(String).includes(userId);
+    const title = root
+      ? `${authorName} ${named ? 'mentioned you' : 'replied'} in a thread${where ? ` in ${where}` : ''}`
+      : named && where
+        ? `${authorName} mentioned you in ${where}`
+        : where
+          ? `${authorName} in ${where}`
+          : authorName;
     const preview = rules.previewOf({ body: row.body, fileCount: message.files.length, imageCount: message.files.filter((f) => f.image).length, cards: message.cards.filter((c) => !c.locked && !c.gone), voiceMs: message.voice?.durationMs ?? null });
     const shown = s?.hide_text ? `New message from ${authorName}` : preview;
     const quiet = rules.inQuietHours(s);
@@ -568,7 +576,8 @@ async function deliver(auth, conversation, members, row, root = null) {
       kind: 'chat.message',
       title,
       body: shown,
-      url: threadOnly ? `/inbox?c=${conversation.id}&t=${root.id}` : `/inbox?c=${conversation.id}`,
+      // Straight to the message: in its thread for a reply (sent to the conversation too or not), else in the conversation.
+      url: `/inbox?c=${conversation.id}${root ? `&t=${root.id}` : ''}&m=${row.id}`,
       subjectType: 'chat',
       subjectId: threadOnly ? `thread:${root.id}` : conversation.id,
       detail: { conversation: where || authorName, account: conversation.connection_id ? accounts.get(conversation.connection_id)?.label || null : null, ...(root ? { thread: true } : {}) },
@@ -717,6 +726,31 @@ async function threads(auth) {
   };
 }
 
+/**
+ * One conversation's threads (its header's Threads), the latest reply first:
+ * each first message with whether you follow it, how many replies are new
+ * to you and when the last came.
+ */
+async function conversationThreads(auth, id) {
+  await requireMember(auth, id);
+  const rows = await chatRepository.threadsIn(id, auth.userId);
+  const shaped = await shapeMessages(auth, rows);
+  return {
+    threads: rows.map((r, i) => ({ root: shaped[i], following: Boolean(r.thread_following), unread: r.thread_unread, lastReplyAt: r.last_reply_at })),
+  };
+}
+
+/**
+ * A conversation's "Files and links": what's been shared in it, newest
+ * first, each message with its files (photos and documents) and its links'
+ * previews, so the page can list them and go back to where they were said.
+ */
+async function conversationFiles(auth, id) {
+  await requireMember(auth, id);
+  const rows = await chatRepository.sharedIn(id);
+  return { messages: await shapeMessages(auth, rows) };
+}
+
 /** "Sara is typing…" for everyone else in it. */
 async function typing(auth, id, { threadId = null } = {}) {
   const { conversation } = await requireMember(auth, id);
@@ -795,6 +829,8 @@ module.exports = {
   threadRead,
   follow,
   threads,
+  conversationThreads,
+  conversationFiles,
   search,
   unread,
   getSettings,

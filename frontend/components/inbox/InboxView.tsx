@@ -44,12 +44,18 @@ export function AccountInboxView({ connectionId, isOwner, syncSlot }: { connecti
 // The Dashboard's Inbox shows team chat only until the all-accounts eBay view is picked up again.
 const SHOW_EBAY_MODE = false;
 
-export function InboxView({ me, isOwner, canSeeEbay = true, tabsSlot = null }: { me: string; isOwner: boolean; canSeeEbay?: boolean; tabsSlot?: HTMLElement | null }) {
+export function InboxView({ me, isOwner, canSeeEbay = true }: { me: string; isOwner: boolean; canSeeEbay?: boolean }) {
   const { search, go } = useInboxAddress();
   const mode: InboxMode = search.get("mode") === "ebay" && canSeeEbay ? "ebay" : "team";
   const activeId = search.get("c");
   const threadId = activeId ? search.get("t") : null;
-  const openChat = useCallback((c: string | null, t: string | null = null) => go({ c, t: c ? t : null }), [go]);
+  // A notification's message to go to (?m=): shown once, then dropped from the address.
+  const focusId = activeId ? search.get("m") : null;
+  // The Threads page (?v=threads), when no conversation is open.
+  const showThreads = !activeId && search.get("v") === "threads";
+  const openChat = useCallback((c: string | null, t: string | null = null) => go({ c, t: c ? t : null, m: null, v: null }), [go]);
+  const openThreads = useCallback(() => go({ c: null, t: null, m: null, v: "threads" }), [go]);
+  const focused = useCallback(() => go({ m: null }), [go]);
   const unread = useChatUnreadValue();
 
   const modeSwitch = (
@@ -70,7 +76,7 @@ export function InboxView({ me, isOwner, canSeeEbay = true, tabsSlot = null }: {
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       {SHOW_EBAY_MODE && <div className="flex flex-wrap items-center gap-3">{modeSwitch}</div>}
       <div className="card flex min-h-0 flex-1 overflow-hidden">
-        <TeamChat me={me} isOwner={isOwner} activeId={activeId} threadId={threadId} onOpen={openChat} tabsSlot={tabsSlot} />
+        <TeamChat me={me} isOwner={isOwner} activeId={activeId} threadId={threadId} showThreads={showThreads} focusId={focusId} onFocused={focused} onOpen={openChat} onShowThreads={openThreads} />
       </div>
     </div>
   );

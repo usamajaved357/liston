@@ -178,6 +178,14 @@ function PushControl({ state, busy, testing, onEnable, onDisable, onTest }: { st
   );
 }
 
+/** What the card's button opens: a hunted product, a chat thread or conversation, else just "Open". */
+function openLabel(toast: Toast): string {
+  if (toast.kind?.startsWith("hunt.")) return "Open the product";
+  if (toast.kind === "chat.message") return toast.url?.includes("&t=") ? "Open the thread" : "Open the conversation";
+  if (toast.kind?.includes("message")) return "Open the conversation";
+  return "Open";
+}
+
 function ToastCard({ toast, onOpen, onClose }: { toast: Toast; onOpen: () => void; onClose: () => void }) {
   const k = kindOf(toast.kind);
   // Under the voice note playing, when its pop-up is up there.
@@ -203,7 +211,7 @@ function ToastCard({ toast, onOpen, onClose }: { toast: Toast; onOpen: () => voi
       </div>
       {toast.url && (
         <button type="button" onClick={onOpen} className="w-full border-t border-[var(--color-line)] py-2 text-[12.5px] font-semibold text-[var(--color-primary)] hover:bg-[var(--color-paper)]">
-          Open the product
+          {openLabel(toast)}
         </button>
       )}
     </div>

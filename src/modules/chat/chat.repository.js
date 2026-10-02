@@ -435,6 +435,47 @@ async function threadsFor(userId, ownerId, limit = 50) {
   return rows;
 }
 
+/**
+ * A conversation's threads, the latest reply first: each first message (as
+ * messages come) with whether this person follows it and, if so, how many
+ * replies are new to them (`thread_following`, `thread_unread`).
+ */
+async function threadsIn(conversationId, userId, limit = 100) {
+  const { rows } = await query(
+    `SELECT ${MESSAGE_COLUMNS}, coalesce(tm.following, false) AS thread_following,
+            (CASE WHEN tm.following THEN
+              (SELECT count(*) FROM chat_messages y
+                WHERE y.thread_id = x.id AND y.deleted_at IS NULL AND y.author_user_id IS DISTINCT FROM $2
+                  AND (tm.last_read_at IS NULL OR y.created_at > tm.last_read_at))
+             ELSE 0 END)::int AS thread_unread
+       FROM chat_messages x
+       LEFT JOIN chat_thread_members tm ON tm.root_id = x.id AND tm.user_id = $2
+       ${MESSAGE_JOINS}
+      WHERE x.conversation_id = $1 AND x.thread_id IS NULL AND x.reply_count > 0
+      ORDER BY x.last_reply_at DESC NULLS LAST LIMIT $3`,
+    [conversationId, userId, limit]
+  );
+  return rows;
+}
+
+/**
+ * What's been shared in a conversation, newest first: its messages (thread
+ * replies too) that carry files or links to other sites, not deleted, as
+ * messages come. Voice notes are left out (they're messages, not files).
+ */
+async function sharedIn(conversationId, limit = 200) {
+  const { rows } = await query(
+    `SELECT ${MESSAGE_COLUMNS}
+       FROM chat_messages x
+       ${MESSAGE_JOINS}
+      WHERE x.conversation_id = $1 AND x.deleted_at IS NULL AND x.kind = 'text'
+        AND ((cardinality(x.file_ids) > 0 AND x.detail->'voice' IS NULL) OR jsonb_array_length(x.links) > 0)
+      ORDER BY x.created_at DESC LIMIT $2`,
+    [conversationId, limit]
+  );
+  return rows;
+}
+
 /** New replies, not theirs, in the threads a person follows (in conversations they're in and haven't muted). */
 async function threadUnreadTotal(userId, ownerId) {
   const { rows } = await query(
@@ -505,6 +546,8 @@ module.exports = {
   threadMembership,
   threadFollowers,
   threadsFor,
+  threadsIn,
+  sharedIn,
   threadUnreadTotal,
   settingsFor,
   settingsForMany,
