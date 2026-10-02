@@ -8,6 +8,9 @@ const addMemberSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters'),
 });
 
+// The person asking, for what they may change on the team (team.service manageable).
+const actorOf = (req) => ({ userId: req.userId, coOwner: Boolean(req.coOwner) });
+
 const updatePermissionsSchema = z.object({
   permissions: z
     .array(
@@ -51,7 +54,7 @@ async function setMemberPassword(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
-    await teamService.setMemberPassword(req.params.id, req.ownerId, parsed.data.password);
+    await teamService.setMemberPassword(req.params.id, req.ownerId, parsed.data.password, actorOf(req));
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -60,7 +63,7 @@ async function setMemberPassword(req, res, next) {
 
 async function removeMember(req, res, next) {
   try {
-    await teamService.removeMember(req.params.id, req.ownerId);
+    await teamService.removeMember(req.params.id, req.ownerId, actorOf(req));
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -69,7 +72,7 @@ async function removeMember(req, res, next) {
 
 async function restoreMember(req, res, next) {
   try {
-    await teamService.restoreMember(req.params.id, req.ownerId);
+    await teamService.restoreMember(req.params.id, req.ownerId, actorOf(req));
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -128,8 +131,22 @@ async function clock(req, res, next) {
   try {
     const parsed = clockSchema.safeParse(req.body || {});
     if (!parsed.success) return res.status(400).json({ error: parsed.error.errors[0].message });
-    await teamService.clock({ role: req.role, userId: req.userId, ownerId: req.ownerId }, parsed.data);
+    await teamService.clock({ role: req.role, coOwner: Boolean(req.coOwner), userId: req.userId, ownerId: req.ownerId }, parsed.data);
     res.status(204).end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+const ownerAccessSchema = z.object({ ownerAccess: z.boolean() });
+
+// Gives a member owner access or takes it away (the owner only).
+async function setOwnerAccess(req, res, next) {
+  try {
+    const parsed = ownerAccessSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Say whether they should have owner access.' });
+    const member = await teamService.setOwnerAccess(req.params.id, req.ownerId, parsed.data.ownerAccess, actorOf(req));
+    res.status(200).json({ member });
   } catch (err) {
     next(err);
   }
@@ -150,11 +167,11 @@ async function updateMemberPermissions(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.errors[0].message });
     }
-    const permissions = await teamService.updateMemberPermissions(req.params.id, req.ownerId, parsed.data.permissions);
+    const permissions = await teamService.updateMemberPermissions(req.params.id, req.ownerId, parsed.data.permissions, actorOf(req));
     res.status(200).json({ permissions });
   } catch (err) {
     next(err);
   }
 }
 
-module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity, getMemberTime, clock };
+module.exports = { listMembers, addMember, removeMember, restoreMember, setMemberPassword, setOwnerAccess, getMemberPermissions, updateMemberPermissions, getMemberOverview, getOwnWork, getMemberActivity, getMemberTime, clock };

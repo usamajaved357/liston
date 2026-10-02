@@ -42,7 +42,12 @@ async function requireAuth(req, res, next) {
     if (payload.iat && Date.now() - payload.iat * 1000 > RENEW_AFTER_MS) res.setHeader('X-Liston-Token', authService.issueToken(user));
     req.userId = user.id;
     req.userEmail = user.email;
-    req.role = user.role;
+    // A member the owner gave owner access (migration 050) is the owner
+    // everywhere, on the owner's data; req.coOwner keeps them apart where
+    // only the owner may act (their own login and others with owner
+    // access, on the Team page).
+    req.coOwner = user.role === 'member' && Boolean(user.owner_access_at);
+    req.role = req.coOwner ? 'owner' : user.role;
     req.ownerId = user.role === 'member' ? user.parent_user_id : user.id;
     // Members ride on their owner's approval; the owner row holds the status.
     req.accessStatus = user.role === 'member' ? (await userRepository.findRoleInfo(user.parent_user_id))?.access_status || 'active' : user.access_status;

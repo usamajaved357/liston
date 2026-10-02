@@ -18,10 +18,32 @@ async function getCurrentUser(userId) {
     throw new UserError('User not found', 404);
   }
   // Lets the frontend show the "Access requests" admin page to the right people.
-  return { ...user, is_admin: config.adminEmails.includes(String(user.email).toLowerCase()) };
+  const me = { ...user, is_admin: config.adminEmails.includes(String(user.email).toLowerCase()) };
+  if (user.role !== 'member' || !user.owner_access_at) return me;
+  // A member with owner access is the owner on every page: the owner's
+  // plan and accounts, and who the owner is.
+  const owner = await userRepository.findByIdWithPlan(user.parent_user_id);
+  return {
+    ...me,
+    role: 'owner',
+    owner_access: true,
+    owner: owner ? { name: owner.name, email: owner.email } : null,
+    plan_id: owner?.plan_id ?? me.plan_id,
+    plan_name: owner?.plan_name ?? me.plan_name,
+    max_connections: owner?.max_connections ?? me.max_connections,
+    listings_included_per_month: owner?.listings_included_per_month ?? me.listings_included_per_month,
+    listings_used_this_month: owner?.listings_used_this_month ?? me.listings_used_this_month,
+    connections_used: owner?.connections_used ?? me.connections_used,
+    access_status: owner?.access_status ?? me.access_status,
+  };
 }
 
+// A login with owner access is the owner's to remove, from the Team page.
 async function deleteAccount(userId) {
+  const user = await userRepository.findRoleInfo(userId);
+  if (user?.role === 'member' && user.owner_access_at) {
+    throw new UserError('Your login has owner access, so only the account owner can remove it, from their Team page.', 403);
+  }
   await userRepository.deleteById(userId);
 }
 

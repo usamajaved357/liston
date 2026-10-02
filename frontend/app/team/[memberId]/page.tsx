@@ -12,7 +12,7 @@ import { dayRangeLabel } from "@/components/charts/chart-format";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { downloadCsv, toCsv } from "@/lib/csv";
-import { AccessGrid, LoginDetails, MemberAvatar, ResetPasswordDialog, Switch, timeAgo } from "@/components/team/team-shared";
+import { AccessGrid, LoginDetails, MemberAvatar, OwnerAccessBadge, OwnerAccessCard, ResetPasswordDialog, Switch, YouBadge, canManageMember, timeAgo } from "@/components/team/team-shared";
 import { MemberPerformance } from "@/components/team/MemberPerformance";
 import { MemberTimeView } from "@/components/team/MemberTime";
 import { waitText } from "@/components/team/time-format";
@@ -21,8 +21,10 @@ import { waitText } from "@/components/team/time-format";
 // period before, day by day and per eBay account), their time in Liston
 // (working and idle, day by day, where it went), the full activity log with
 // a CSV for pay (each buyer conversation opening that chat), and their
-// access. Everything counts in the owner's days; an order line or listing
-// counts once per range.
+// access: owner access (the owner gives or takes it away) above what they
+// can use. Someone with owner access sees every member's page; their own,
+// and another's with owner access, only to read. Everything counts in the
+// owner's days; an order line or listing counts once per range.
 
 type Tab = "performance" | "time" | "activity" | "access";
 
@@ -484,6 +486,11 @@ function MemberPageBody() {
     setData((d) => (d ? { ...d, permissions, member: { ...d.member, permissions } } : d));
   }
 
+  async function changeOwnerAccess(on: boolean) {
+    const { member: changed } = await api.setOwnerAccess(memberId, on);
+    setData((d) => (d ? { ...d, member: { ...d.member, owner_access_at: changed.owner_access_at ?? null } } : d));
+  }
+
   async function setRemoved(removed: boolean) {
     setBusy(true);
     try {
@@ -510,6 +517,10 @@ function MemberPageBody() {
   const removed = Boolean(member?.deactivated_at);
   const name = member ? member.name || member.email : "";
   const memberForGrid: TeamMember | null = member && data ? { ...member, permissions: data.permissions } : null;
+  // Their login and access are the viewer's to change (canManageMember); owner access is the owner's alone.
+  const manage = Boolean(member && canManageMember(user, member));
+  const isOwner = user.role === "owner" && !user.owner_access;
+  const ownerName = user.owner?.name || user.owner?.email || "the account owner";
 
   return (
     <AppShell
@@ -533,7 +544,9 @@ function MemberPageBody() {
           {member && <MemberAvatar member={member} size={46} />}
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 truncate text-lg font-semibold text-[var(--color-ink)]">
-              {name || "Team member"}
+              <span className="truncate">{name || "Team member"}</span>
+              {member?.id === user.id && <YouBadge />}
+              {member?.owner_access_at && <OwnerAccessBadge size="md" />}
               {removed && <span className="chip text-[11px] font-medium text-[var(--color-muted)]">Removed {formatShortDate(member!.deactivated_at!)}</span>}
             </h1>
             {member && (
@@ -563,7 +576,7 @@ function MemberPageBody() {
           <>
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <Tabs value={tab} onChange={(t) => setQuery({ tab: t === "performance" ? null : t })} />
-              <div className="flex items-center gap-1.5 max-sm:ml-auto">
+              <div className={`flex items-center gap-1.5 max-sm:ml-auto ${manage ? "" : "hidden"}`}>
                 {!removed && (
                   <button type="button" onClick={() => setResetOpen(true)} className="btn btn-secondary btn-sm !h-8 gap-1.5 !px-3 !text-[12.5px]">
                     <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
@@ -614,7 +627,16 @@ function MemberPageBody() {
             {tab === "activity" && (
               <ActivityLog recordingSince={data.recordingSince} memberId={memberId} name={name} range={range} custom={custom} connections={data.connections} metrics={data.metrics} kind={kind} onKind={(k) => setQuery({ kind: k || null })} />
             )}
-            {tab === "access" && memberForGrid && (
+            {tab === "access" && memberForGrid && (isOwner || memberForGrid.owner_access_at) && (
+              <OwnerAccessCard member={memberForGrid} canChange={isOwner} ownerName={ownerName} onChange={changeOwnerAccess} />
+            )}
+            {tab === "access" && memberForGrid?.owner_access_at && (
+              <p className="px-1 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+                {`With owner access, ${member!.id === user.id ? "you" : member!.name || "they"} can use every area on every account and team chat's channels.`}
+                {isOwner && " The access set for them before is kept, and applies again if you take owner access away."}
+              </p>
+            )}
+            {tab === "access" && memberForGrid && !memberForGrid.owner_access_at && manage && (
               <div className="card overflow-hidden">
                 <div className="px-5 py-4">
                   <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">What {member!.name || "they"} can use</h2>
@@ -647,7 +669,7 @@ function MemberPageBody() {
       <ConfirmDialog
         open={confirmRemove}
         title={`Remove ${name}'s access?`}
-        description="They're signed out and can't log in from now on. Their work stays on record here, and you can restore them any time."
+        description={`They're signed out and can't log in from now on. Their work stays on record here, and you can restore them any time${member?.owner_access_at ? ", with their owner access" : ""}.`}
         confirmLabel="Remove access"
         danger
         loading={busy}

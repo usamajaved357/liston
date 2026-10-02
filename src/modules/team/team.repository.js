@@ -12,7 +12,7 @@ const KNOWN_FEATURES = ['orders', 'listings', 'listings_publish', 'analytics', '
 
 async function listMembers(ownerId) {
   const result = await query(
-    `SELECT id, email, name, created_at, last_login_at, deactivated_at
+    `SELECT id, email, name, created_at, last_login_at, deactivated_at, owner_access_at
      FROM users WHERE parent_user_id = $1 AND role = 'member'
      ORDER BY created_at ASC`,
     [ownerId]
@@ -32,7 +32,7 @@ async function createMember({ ownerId, email, name, passwordHash }) {
 
 async function findMemberForOwner(id, ownerId) {
   const result = await query(
-    `SELECT id, email, name, created_at, last_login_at, deactivated_at
+    `SELECT id, email, name, created_at, last_login_at, deactivated_at, owner_access_at
      FROM users WHERE id = $1 AND parent_user_id = $2 AND role = 'member'`,
     [id, ownerId]
   );
@@ -66,6 +66,19 @@ async function setMemberDeactivated(id, ownerId, deactivated) {
     [id, ownerId]
   );
   return result.rowCount > 0;
+}
+
+// Owner access (migration 050): everything the owner has. Given keeps the
+// first time it was given; taken away clears it, and the member's own
+// access settings apply again.
+async function setOwnerAccess(id, ownerId, on) {
+  const result = await query(
+    `UPDATE users SET owner_access_at = ${on ? 'COALESCE(owner_access_at, now())' : 'NULL'}, updated_at = now()
+     WHERE id = $1 AND parent_user_id = $2 AND role = 'member'
+     RETURNING id, email, name, owner_access_at, deactivated_at`,
+    [id, ownerId]
+  );
+  return result.rows[0] || null;
 }
 
 async function getPermissions(memberId) {
@@ -116,24 +129,21 @@ async function clearPermission({ memberId, connectionId, feature }) {
   );
 }
 
-// Deny-by-default resolution: a connection-scoped row wins if present,
-// otherwise the member's global default for this feature, otherwise denied.
+// Deny-by-default resolution: a member with owner access has everything;
+// otherwise a connection-scoped row wins if present, then the member's
+// global default for this feature, otherwise denied. One query.
 async function resolvePermission(memberId, connectionId, feature) {
-  if (connectionId) {
-    const scoped = await query(
-      `SELECT allowed FROM member_permissions
-       WHERE member_user_id = $1 AND connection_id = $2 AND feature = $3`,
-      [memberId, connectionId, feature]
-    );
-    if (scoped.rows.length > 0) return scoped.rows[0].allowed;
-  }
-
-  const global = await query(
-    `SELECT allowed FROM member_permissions
-     WHERE member_user_id = $1 AND connection_id IS NULL AND feature = $2`,
-    [memberId, feature]
+  const { rows } = await query(
+    `SELECT u.owner_access_at IS NOT NULL AS owner_access,
+            (SELECT allowed FROM member_permissions WHERE member_user_id = u.id AND connection_id = $2 AND feature = $3) AS scoped,
+            (SELECT allowed FROM member_permissions WHERE member_user_id = u.id AND connection_id IS NULL AND feature = $3) AS global
+       FROM users u WHERE u.id = $1`,
+    [memberId, connectionId || null, feature]
   );
-  return global.rows.length > 0 ? global.rows[0].allowed : false;
+  const row = rows[0];
+  if (!row) return false;
+  if (row.owner_access) return true;
+  return row.scoped ?? row.global ?? false;
 }
 
 // True if the member has at least one of the given features on this
@@ -171,6 +181,7 @@ module.exports = {
   createMember,
   findMemberForOwner,
   setMemberDeactivated,
+  setOwnerAccess,
   findRemovedMemberByEmail,
   setMemberPassword,
   getPermissions,

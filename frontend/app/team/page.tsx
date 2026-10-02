@@ -8,13 +8,15 @@ import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatShortDate } from "@/lib/format";
-import { LoginDetails, MemberAvatar, accessSummary, timeAgo } from "@/components/team/team-shared";
+import { LoginDetails, MemberAvatar, OwnerAccessBadge, YouBadge, accessSummary, timeAgo } from "@/components/team/team-shared";
 import { minutesText } from "@/components/team/time-format";
 
 // The Team page: one compact card per member (who, what they can reach,
 // when they were last active, what they've done today and their time in
 // Liston today, working and idle, with a dot while they're in it now). A
 // card opens the member's page, where their work, time and access live.
+// Members with owner access are marked; someone with it sees the page as
+// the owner does, their own card marked You.
 
 // Today's figures in a line, the non-zero ones in this order.
 const TODAY_WORDS: [TeamMetricKey, string, string][] = [
@@ -38,7 +40,7 @@ function todayLine(member: TeamMember): string | null {
   return parts.length ? parts.slice(0, 3).join(" · ") : null;
 }
 
-function MemberCard({ member, connections, knownFeatures }: { member: TeamMember; connections: Connection[]; knownFeatures: string[] }) {
+function MemberCard({ member, connections, knownFeatures, me }: { member: TeamMember; connections: Connection[]; knownFeatures: string[]; me: string }) {
   const removed = Boolean(member.deactivated_at);
   const today = todayLine(member);
   return (
@@ -50,6 +52,8 @@ function MemberCard({ member, connections, knownFeatures }: { member: TeamMember
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="truncate text-[14px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{member.name || member.email}</p>
+          {member.id === me && <YouBadge />}
+          {member.owner_access_at && <OwnerAccessBadge />}
           {!removed && member.time?.inListon && (
             <span className="flex flex-shrink-0 items-center gap-1 text-[10.5px] font-medium text-emerald-700" title="A Liston tab of theirs is open now">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
@@ -197,7 +201,9 @@ export default function TeamPage() {
       router.replace("/login");
       return;
     }
-    loadAll();
+    // After this render, as the member page does.
+    const t = setTimeout(loadAll, 0);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
@@ -223,7 +229,9 @@ export default function TeamPage() {
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Team</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Teammates get their own login and see only what you allow. Open one to see their work and change their access.</p>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
+            {`Teammates get their own login and see only what ${user.owner_access ? "they're allowed" : "you allow"}. Open one to see their work and change their access.`}
+          </p>
         </div>
       }
     >
@@ -234,6 +242,15 @@ export default function TeamPage() {
           {error && (
             <div className="notice notice-danger mb-4">
               <span className="flex-1">{error}</span>
+            </div>
+          )}
+
+          {user.owner_access && (
+            <div className="mb-4 flex items-start gap-3 rounded-xl border border-[var(--color-primary)]/20 bg-[var(--color-primary-soft)]/60 px-4 py-3">
+              <OwnerAccessBadge size="md" />
+              <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-[var(--color-ink)]">
+                {`${user.owner?.name || user.owner?.email || "The account owner"} gave you owner access, so you run the team. Your own login and anyone else's with owner access are ${user.owner?.name || "the owner"}'s to change.`}
+              </p>
             </div>
           )}
 
@@ -285,7 +302,7 @@ export default function TeamPage() {
               ) : (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {active.map((member) => (
-                    <MemberCard key={member.id} member={member} connections={connections} knownFeatures={knownFeatures} />
+                    <MemberCard key={member.id} member={member} connections={connections} knownFeatures={knownFeatures} me={user.id} />
                   ))}
                 </div>
               )}
@@ -303,7 +320,7 @@ export default function TeamPage() {
                       <p className="mt-1 text-[12px] text-[var(--color-muted)]">They can&apos;t log in. Their work stays on record, and they can be restored from their page.</p>
                       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                         {former.map((member) => (
-                          <MemberCard key={member.id} member={member} connections={connections} knownFeatures={knownFeatures} />
+                          <MemberCard key={member.id} member={member} connections={connections} knownFeatures={knownFeatures} me={user.id} />
                         ))}
                       </div>
                     </>

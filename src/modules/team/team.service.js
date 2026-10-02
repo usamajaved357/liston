@@ -8,6 +8,8 @@ const huntingService = require('../hunting/hunting.service');
 const huntingRepository = require('../hunting/hunting.repository');
 const workTime = require('./work-time');
 const workTimeRepository = require('./work-time.repository');
+const userRepository = require('../users/user.repository');
+const notificationsService = require('../notifications/notifications.service');
 
 const SALT_ROUNDS = 12;
 
@@ -201,10 +203,10 @@ async function ownedAccountIds(ownerId) {
 /**
  * A minute of a team member's time in Liston, from one of their tabs:
  * working or idle, the area and the eBay account they were in. Members
- * only (the owner's time isn't kept). { kept }.
+ * only, those with owner access too (the owner's own time isn't kept). { kept }.
  */
 async function clock(auth, { working, area, connectionId = null }) {
-  if (auth.role !== 'member') return { kept: false };
+  if (auth.role !== 'member' && !auth.coOwner) return { kept: false };
   const account = connectionId && (await ownedAccountIds(auth.ownerId)).has(String(connectionId)) ? connectionId : null;
   await workTimeRepository.recordMinute({ userId: auth.userId, ownerId: auth.ownerId, working: Boolean(working), area: workTime.areaKey(area), connectionId: account });
   return { kept: true };
@@ -301,9 +303,24 @@ async function addMember(ownerId, { email, name, password }) {
   }
 }
 
+// Who may change a member (`actor`: { userId, coOwner }, the person asking):
+// the owner, anyone on the team; someone with owner access, the rest of the
+// team, but never their own login or another with owner access: those are
+// the owner's alone.
+async function manageable(actor, memberId, ownerId) {
+  const member = await teamRepository.findMemberForOwner(memberId, ownerId);
+  if (!member) throw new TeamError('Team member not found', 404);
+  if (actor?.coOwner) {
+    if (String(member.id) === String(actor.userId)) throw new TeamError('Your own login and access are managed by the account owner.', 403);
+    if (member.owner_access_at) throw new TeamError(`${member.name || member.email} has owner access, so only the account owner can change their login or access.`, 403);
+  }
+  return member;
+}
+
 // Owners hand out member logins, so they can also reset one — the member's
 // old password stops working immediately.
-async function setMemberPassword(memberId, ownerId, password) {
+async function setMemberPassword(memberId, ownerId, password, actor) {
+  await manageable(actor, memberId, ownerId);
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   const updated = await teamRepository.setMemberPassword(memberId, ownerId, passwordHash);
   if (!updated) {
@@ -312,19 +329,56 @@ async function setMemberPassword(memberId, ownerId, password) {
 }
 
 // Removing a member signs them out and refuses their login from then on;
-// their record and activity stay. Restoring gives the same access back.
-async function removeMember(memberId, ownerId) {
+// their record and activity stay. Restoring gives the same access back
+// (owner access too, which only the owner can restore).
+async function removeMember(memberId, ownerId, actor) {
+  await manageable(actor, memberId, ownerId);
   const done = await teamRepository.setMemberDeactivated(memberId, ownerId, true);
   if (!done) {
     throw new TeamError('Team member not found', 404);
   }
 }
 
-async function restoreMember(memberId, ownerId) {
+async function restoreMember(memberId, ownerId, actor) {
+  await manageable(actor, memberId, ownerId);
   const done = await teamRepository.setMemberDeactivated(memberId, ownerId, false);
   if (!done) {
     throw new TeamError('Team member not found', 404);
   }
+}
+
+/**
+ * Gives a member owner access, or takes it away: everything the owner can
+ * see and do, the rest of the team to run, until the owner says otherwise.
+ * The owner only (the route lets no one else in; checked here as well).
+ * The member is told, and their next click in Liston is under the new
+ * access. Returns the member.
+ */
+async function setOwnerAccess(memberId, ownerId, on, actor) {
+  if (actor?.coOwner) throw new TeamError('Only the account owner can give or take away owner access.', 403);
+  const member = await teamRepository.findMemberForOwner(memberId, ownerId);
+  if (!member) throw new TeamError('Team member not found', 404);
+  if (on && member.deactivated_at) throw new TeamError(`${member.name || member.email} was removed. Restore them first.`, 409);
+  if (Boolean(member.owner_access_at) === on) return member;
+  const updated = await teamRepository.setOwnerAccess(memberId, ownerId, on);
+  if (!updated) throw new TeamError('Team member not found', 404);
+  if (!member.deactivated_at) {
+    const owner = await userRepository.findByIdWithPlan(ownerId);
+    const ownerName = owner?.name || owner?.email || 'The account owner';
+    await notificationsService.notify({
+      userId: memberId,
+      actorUserId: actor?.userId || ownerId,
+      kind: on ? 'team.owner_access_given' : 'team.owner_access_removed',
+      title: on ? `${ownerName} gave you owner access` : `${ownerName} took away your owner access`,
+      body: on
+        ? 'You can now see and do everything the owner can: every eBay account, settings, and the rest of the team.'
+        : "You're back to the access set for you on the team. Reload Liston to see it.",
+      url: on ? '/dashboard' : '/connections',
+      subjectType: 'member',
+      subjectId: memberId,
+    });
+  }
+  return { ...member, owner_access_at: updated.owner_access_at };
 }
 
 async function getMemberPermissions(memberId, ownerId) {
@@ -344,11 +398,8 @@ async function getMemberPermissions(memberId, ownerId) {
 // `false` would be indistinguishable from once written. Every connectionId
 // is verified to belong to this owner before being written, so an admin can
 // never grant a member access to someone else's connection.
-async function updateMemberPermissions(memberId, ownerId, permissions) {
-  const member = await teamRepository.findMemberForOwner(memberId, ownerId);
-  if (!member) {
-    throw new TeamError('Team member not found', 404);
-  }
+async function updateMemberPermissions(memberId, ownerId, permissions, actor) {
+  await manageable(actor, memberId, ownerId);
 
   for (const { connectionId, feature, allowed } of permissions) {
     if (connectionId) {
@@ -385,6 +436,7 @@ module.exports = {
   getMemberTime,
   clock,
   setMemberPassword,
+  setOwnerAccess,
   getMemberPermissions,
   updateMemberPermissions,
   TeamError,

@@ -77,8 +77,8 @@ async function canManageChannels(auth) {
   return teamRepository.resolvePermission(auth.userId, null, 'chat_manage');
 }
 
-// The same auth another person would have, for resolving cards as they'd see them.
-const authOf = (p, ownerId) => ({ userId: String(p.id), ownerId, role: p.role === 'member' ? 'member' : 'owner' });
+// The same auth another person would have, for resolving cards as they'd see them (owner access as the owner).
+const authOf = (p, ownerId) => ({ userId: String(p.id), ownerId, role: p.role === 'member' && !p.owner_access_at ? 'member' : 'owner' });
 
 // ---- shaping ------------------------------------------------------------------------
 

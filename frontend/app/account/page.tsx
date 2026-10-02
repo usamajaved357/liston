@@ -301,7 +301,7 @@ export default function AccountPage() {
               <p className="truncate text-[12.5px] text-[var(--color-muted)]">{user.email}</p>
               <div className="mt-2.5 flex flex-wrap gap-1.5">
                 <Badge tone="indigo" icon="shield">
-                  {isOwner ? (user.is_admin ? "Admin" : "Owner") : "Team member"}
+                  {user.owner_access ? "Owner access" : isOwner ? (user.is_admin ? "Admin" : "Owner") : "Team member"}
                 </Badge>
                 {user.email_verified_at ? (
                   <Badge tone="emerald" icon="check">
@@ -359,6 +359,18 @@ export default function AccountPage() {
           </SettingRow>
         </div>
 
+        {user.owner_access ? (
+          // A login with owner access is the owner's to remove (the API refuses it here too).
+          <div className="card">
+            <SettingRow
+              title="Your login"
+              description={`${user.owner?.name || user.owner?.email || "The account owner"} gave you owner access, so only they can change or remove this login, from their Team page.`}
+              last
+            >
+              <p className="text-[13px] text-[var(--color-muted)]">{`Ask ${user.owner?.name || "the owner"} if it needs to go.`}</p>
+            </SettingRow>
+          </div>
+        ) : (
         <div className="card border-rose-200">
           <SettingRow
             title="Delete account"
@@ -377,6 +389,7 @@ export default function AccountPage() {
             </div>
           </SettingRow>
         </div>
+        )}
       </div>
 
       <ConfirmDialog

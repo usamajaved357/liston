@@ -13,7 +13,7 @@ const IN_TIMELINE = `(x.thread_id IS NULL OR x.also_in_conversation)`;
 /** The owner and their team as chat sees them (removed members included, marked). */
 async function people(ownerId) {
   const { rows } = await query(
-    `SELECT id, name, email, avatar_url, role, deactivated_at FROM users
+    `SELECT id, name, email, avatar_url, role, deactivated_at, owner_access_at FROM users
       WHERE id = $1 OR (parent_user_id = $1 AND role = 'member')
       ORDER BY (id = $1) DESC, lower(coalesce(name, email))`,
     [ownerId]

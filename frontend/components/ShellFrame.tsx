@@ -4,18 +4,21 @@ import { useEffect, useState } from "react";
 import { Logo } from "@/components/Logo";
 import { useWorkClock } from "@/lib/useWorkClock";
 import { NowPlaying } from "@/components/inbox/NowPlaying";
+import { useCachedUser } from "@/lib/session";
 
 // The frame both shells share: the sidebar beside the page on a laptop; on a
 // phone or a portrait tablet (below lg) a slim bar with the logo and a menu
 // button instead, the same sidebar sliding in over the page when it's
 // opened. Following a link in it closes it. Every signed-in page is in it,
 // so it also keeps a team member's time in Liston (useWorkClock; `member`
-// from the shell, which knows who's signed in), and shows a team chat voice
+// from the shell, which knows who's signed in; a member with owner access
+// is shown the owner's pages and still clocked), and shows a team chat voice
 // note playing on while you're away from it (NowPlaying, at the top right).
 
 export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false, children }: { sidebar: React.ReactNode; sidebarClassName?: string; member?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
-  useWorkClock(member);
+  const me = useCachedUser();
+  useWorkClock(member || Boolean(me?.owner_access));
 
   useEffect(() => {
     if (!open) return;

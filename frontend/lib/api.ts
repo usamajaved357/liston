@@ -565,6 +565,10 @@ export interface User {
   avatar_url?: string | null;
   access_status?: "pending" | "active" | "rejected";
   is_admin?: boolean;
+  // A team member the owner gave owner access: `role` is "owner" for them,
+  // on the owner's plan and accounts; `owner` is who the owner is.
+  owner_access?: boolean;
+  owner?: { name: string | null; email: string } | null;
   created_at: string;
 }
 
@@ -621,6 +625,8 @@ export interface TeamMember {
   created_at: string;
   last_login_at?: string | null;
   deactivated_at?: string | null; // removed: no login, history kept
+  // Since when they have owner access (everything the owner has); null without it.
+  owner_access_at?: string | null;
   lastActiveAt?: string | null; // their last recorded action
   today?: TeamMetrics; // what they've done today (Team page cards)
   // Their time in Liston today (minutes), and whether a tab of theirs is open now.
@@ -3061,6 +3067,9 @@ export const api = {
     }
     return request<MemberTime>(`/api/team/members/${id}/time?${q.toString()}`);
   },
+  // Owner access: the owner only gives it or takes it away.
+  setOwnerAccess: (id: string, ownerAccess: boolean) =>
+    request<{ member: TeamMember }>(`/api/team/members/${id}/owner-access`, { method: "PUT", body: JSON.stringify({ ownerAccess }) }),
   setTeamMemberPassword: (id: string, password: string) =>
     request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 

@@ -47,6 +47,31 @@ const KIND: Record<string, Kind> = {
     note: "border-slate-300",
     icon: <path d="M5 6.5h10M8.5 6.5V5h3v1.5M6.5 6.5l.6 8.5h5.8l.6-8.5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />,
   },
+  // The owner gave you owner access, or took it away.
+  "team.owner_access_given": {
+    label: "Owner access",
+    ring: "bg-indigo-50 text-indigo-600 ring-indigo-200",
+    chip: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+    note: "border-indigo-300",
+    icon: (
+      <>
+        <circle cx="7" cy="7.5" r="3.6" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9.6 10.1L16.5 17M13.6 14.1l1.7-1.7M15.2 15.7l1.4-1.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </>
+    ),
+  },
+  "team.owner_access_removed": {
+    label: "Access changed",
+    ring: "bg-slate-100 text-slate-500 ring-slate-200",
+    chip: "bg-slate-100 text-slate-600 ring-slate-200",
+    note: "border-slate-300",
+    icon: (
+      <>
+        <circle cx="7" cy="7.5" r="3.6" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M9.6 10.1L16.5 17M13.6 14.1l1.7-1.7M15.2 15.7l1.4-1.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </>
+    ),
+  },
   // A buyer's new eBay message, and a conversation given to you.
   "inbox.message": {
     label: "Buyer message",
@@ -183,6 +208,7 @@ function openLabel(toast: Toast): string {
   if (toast.kind?.startsWith("hunt.")) return "Open the product";
   if (toast.kind === "chat.message") return toast.url?.includes("&t=") ? "Open the thread" : "Open the conversation";
   if (toast.kind?.includes("message")) return "Open the conversation";
+  if (toast.kind?.startsWith("team.owner_access")) return "Reload Liston";
   return "Open";
 }
 
@@ -308,11 +334,13 @@ export function NotificationBell() {
     };
   }, [open]);
 
-  function openOne(id: string, url: string | null, read: boolean) {
+  function openOne(id: string, url: string | null, read: boolean, kind?: string | null) {
     setOpen(false);
     setToast(null);
     if (!read) api.notificationsRead([id]).then(setData).catch(() => {});
-    if (url) router.push(url);
+    // Owner access given or taken away: the whole app loads again under it.
+    if (url && kind?.startsWith("team.owner_access")) window.location.assign(url);
+    else if (url) router.push(url);
   }
 
   async function readAll() {
@@ -498,7 +526,7 @@ export function NotificationBell() {
                         <li key={n.id} className="group relative">
                           <button
                             type="button"
-                            onClick={() => openOne(n.id, n.url, Boolean(n.readAt))}
+                            onClick={() => openOne(n.id, n.url, Boolean(n.readAt), n.kind)}
                             className={`relative flex w-full gap-2.5 py-2.5 pl-3.5 pr-9 text-left transition-colors hover:bg-[var(--color-paper)] ${n.readAt ? "" : "bg-[var(--color-primary-soft)]/30"}`}
                           >
                             {!n.readAt && <span className="absolute bottom-2.5 left-0 top-2.5 w-[3px] rounded-r-full bg-[var(--color-primary)]" aria-label="Unread" />}
@@ -561,7 +589,7 @@ export function NotificationBell() {
         </div>
       )}
 
-      {toast && <ToastCard toast={toast} onOpen={() => openOne(toast.id, toast.url, false)} onClose={() => setToast(null)} />}
+      {toast && <ToastCard toast={toast} onOpen={() => openOne(toast.id, toast.url, false, toast.kind)} onClose={() => setToast(null)} />}
     </div>
   );
 }
