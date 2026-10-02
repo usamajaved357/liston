@@ -104,7 +104,7 @@ const switchTeamSchema = z.object({ id: z.string().uuid() });
 async function switchTeam(req, res, next) {
   try {
     const parsed = switchTeamSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: 'Pick a team.' });
+    if (!parsed.success) return res.status(400).json({ error: 'Pick a workspace.' });
     res.status(200).json({ team: await userService.switchTeam({ userId: req.userId, teams: req.teams }, parsed.data.id) });
   } catch (err) {
     next(err);

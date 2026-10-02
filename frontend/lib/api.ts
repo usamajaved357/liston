@@ -3511,6 +3511,8 @@ export const ebayInboxApi = {
   refresh: (connectionId: string) => request<{ changed: number }>(`/api/connections/${connectionId}/inbox/refresh`, { method: "POST" }),
   // Unread conversations (buyers' and eBay's) for the sidebar; never reads eBay.
   unread: (connectionId: string) => request<{ unread: number }>(`/api/connections/${connectionId}/inbox/unread`),
+  // Every account's unread conversations at once (the account rail), an account with none left out.
+  unreadByAccount: () => request<{ accounts: Record<string, number> }>(`/api/inbox/unread`),
   quickReplies: (connectionId: string) => request<QuickReplyList>(`/api/connections/${connectionId}/inbox/quick-replies`),
   addQuickReply: (connectionId: string, input: { name: string; body: string }) => request<QuickReply>(`/api/connections/${connectionId}/inbox/quick-replies`, { method: "POST", body: JSON.stringify(input) }),
   saveQuickReply: (connectionId: string, id: string, input: { name: string; body: string }) =>

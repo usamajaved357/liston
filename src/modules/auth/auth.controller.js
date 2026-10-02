@@ -10,7 +10,7 @@ const signupSchema = z.object({
   // "Tell us about your business" — shown to the admin reviewing the request.
   accessNote: z.string().trim().max(500).optional(),
   // The team's name ("Talha's team" when left out).
-  teamName: z.string().trim().max(60, 'Keep the team name under 60 characters.').optional(),
+  teamName: z.string().trim().max(60, 'Keep the workspace name under 60 characters.').optional(),
 });
 
 // Login only needs a password to be present — enforcing today's minimum

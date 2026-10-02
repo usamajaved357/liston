@@ -64,6 +64,7 @@ module.exports = {
   }),
   refresh: handle(async (req, res) => res.json(await inboxService.refresh(auth(req), req.params.id))),
   unread: handle(async (req, res) => res.json(await inboxService.unread(auth(req), req.params.id))),
+  unreadAll: handle(async (req, res) => res.json(await inboxService.unreadByAccount(auth(req)))),
   quickReplies: handle(async (req, res) => res.json(await quickRepliesService.list(auth(req), req.params.id))),
   addQuickReply: handle(async (req, res) => {
     const input = parse(quickReplySchema, req.body, res);

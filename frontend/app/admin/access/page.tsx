@@ -34,7 +34,7 @@ function Person({ r, size = "md" }: { r: AccessRequest; size?: "md" | "sm" }) {
         <a href={`mailto:${r.email}`} className="block truncate text-[13px] text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:underline">
           {r.email}
         </a>
-        {r.team_name && <p className="truncate text-[12px] text-[var(--color-muted)]">{`Team: ${r.team_name}`}</p>}
+        {r.team_name && <p className="truncate text-[12px] text-[var(--color-muted)]">{`Workspace: ${r.team_name}`}</p>}
       </div>
     </div>
   );
@@ -278,7 +278,7 @@ export default function AccessRequestsPage() {
         title={confirmReject?.access_status === "active" ? `Revoke access for ${confirmReject?.name || confirmReject?.email}?` : `Reject ${confirmReject?.name || confirmReject?.email}?`}
         description={
           confirmReject?.access_status === "active"
-            ? "They'll be locked out immediately and emailed. Their connections, listings and team are kept, and you can restore access from here."
+            ? "They'll be locked out immediately and emailed. Their connections, listings and workspace are kept, and you can restore access from here."
             : "They'll be emailed that access isn't available, and their sign-up will be deleted. They can sign up again later."
         }
         confirmLabel={confirmReject?.access_status === "active" ? "Revoke access" : "Reject"}

@@ -205,7 +205,7 @@ function TeamTitle({ name, canRename, onRenamed }: { name: string; canRename: bo
       onRenamed(team.name);
       setEditing(false);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't rename the team. Try again.");
+      setError(err instanceof ApiError ? err.message : "Couldn't rename the workspace. Try again.");
     } finally {
       setSaving(false);
     }
@@ -221,7 +221,7 @@ function TeamTitle({ name, canRename, onRenamed }: { name: string; canRename: bo
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === "Escape" && setEditing(false)}
           maxLength={60}
-          aria-label="Team name"
+          aria-label="Workspace name"
           className="input h-9 w-[min(320px,70vw)] text-[15px] font-semibold"
         />
         <button type="submit" disabled={saving || !value.trim() || value.trim() === name} className="btn btn-primary btn-sm">
@@ -245,8 +245,8 @@ function TeamTitle({ name, canRename, onRenamed }: { name: string; canRename: bo
             setEditing(true);
           }}
           className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-paper)] hover:text-[var(--color-ink)]"
-          aria-label="Rename the team"
-          title="Rename the team"
+          aria-label="Rename the workspace"
+          title="Rename the workspace"
         >
           <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
             <path d="M12.8 4.2l3 3L7.5 15.5H4.5v-3l8.3-8.3z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
@@ -331,7 +331,7 @@ export default function TeamPage() {
         <div>
           <TeamTitle
             key={user.team?.name || "team"}
-            name={user.team?.name || "Team"}
+            name={user.team?.name || "Workspace"}
             canRename={user.role === "owner" && !user.owner_access}
             onRenamed={(teamName) => {
               const next = { ...user, team: user.team ? { ...user.team, name: teamName } : user.team, teams: user.teams?.map((t) => (t.id === user.team?.id ? { ...t, name: teamName } : t)) };
@@ -406,7 +406,7 @@ export default function TeamPage() {
               )}
               {joined && (
                 <div className="mb-6">
-                  <JoinedWithOwnLogin who={joined} team={user.team?.name || "your team"} onDismiss={() => setJoined(null)} />
+                  <JoinedWithOwnLogin who={joined} team={user.team?.name || "your workspace"} onDismiss={() => setJoined(null)} />
                 </div>
               )}
 

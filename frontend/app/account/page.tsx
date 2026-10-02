@@ -378,8 +378,8 @@ export default function AccountPage() {
             title="Delete account"
             description={
               user.owns_team
-                ? "Permanently deletes your account and your team: every connected marketplace, all listing data, and the logins of members in no other team."
-                : "Permanently deletes your login: you leave every team you're in and can't log in again. The eBay accounts you worked on stay with their teams."
+                ? "Permanently deletes your account and your workspace: every connected marketplace, all listing data, and the logins of members in no other workspace."
+                : "Permanently deletes your login: you leave every workspace you're in and can't log in again. The eBay accounts you worked on stay with their workspaces."
             }
             last
           >
@@ -407,8 +407,8 @@ export default function AccountPage() {
         title="Delete your account?"
         description={
           user.owns_team
-            ? "This permanently deletes your account and your team: connections, listing data, and members' logins that are in no other team. This action cannot be undone."
-            : "This permanently deletes your login: you leave every team you're in and won't be able to log in again. This action cannot be undone."
+            ? "This permanently deletes your account and your workspace: connections, listing data, and members' logins that are in no other workspace. This action cannot be undone."
+            : "This permanently deletes your login: you leave every workspace you're in and won't be able to log in again. This action cannot be undone."
         }
         confirmLabel="Delete account"
         danger

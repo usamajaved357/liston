@@ -127,10 +127,10 @@ function MemberHome({ user, connections, loading }: { user: User; connections: C
             <h1 className="text-lg font-semibold text-[var(--color-ink)]">{first ? `Hi, ${first}` : "Welcome back"}</h1>
             <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
               {loading
-                ? "Your team accounts."
+                ? "Your workspace's accounts."
                 : connections.length
-                  ? `You work on ${connections.length} account${connections.length === 1 ? "" : "s"} in ${user.team?.name || "your team"}. Pick one to get started.`
-                  : `Accounts in ${user.team?.name || "your team"} show here once you're given access.`}
+                  ? `You work on ${connections.length} account${connections.length === 1 ? "" : "s"} in ${user.team?.name || "your workspace"}. Pick one to get started.`
+                  : `Accounts in ${user.team?.name || "your workspace"} show here once you're given access.`}
             </p>
           </div>
           {/* Profile and Log out live in the sidebar. */}
@@ -168,7 +168,7 @@ function MemberHome({ user, connections, loading }: { user: User; connections: C
           summary={
             attention > 0 ? (
               <span className="font-medium text-amber-700">
-                {attention} account{attention === 1 ? " needs" : "s need"} reconnecting by your team owner
+                {attention} account{attention === 1 ? " needs" : "s need"} reconnecting by the workspace owner
               </span>
             ) : undefined
           }
@@ -211,6 +211,8 @@ export default function ConnectionsPage() {
       cacheUser(meData.user);
       setConnections(connectionsData.connections);
       setPlatforms(platformsData.platforms);
+      // The rail's "Connect an eBay account" opens the panel here.
+      if (new URLSearchParams(window.location.search).get("add") === "1") setAdding(true);
       setLoading(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -234,6 +236,13 @@ export default function ConnectionsPage() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
+
+  // The rail's "Connect an eBay account" while already on this page.
+  useEffect(() => {
+    const onAdd = () => setAdding(true);
+    window.addEventListener("liston:add-account", onAdd);
+    return () => window.removeEventListener("liston:add-account", onAdd);
+  }, []);
 
   function handleLogout() {
     localStorage.removeItem("token");

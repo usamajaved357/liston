@@ -634,7 +634,7 @@ function MemberPageBody() {
                   <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
                   <path d="M10 9v4.5M10 6.5v.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                 </svg>
-                <span>{`${member.name || member.email} signs in to another team on Liston with this login too, so only they can change its password. What they can use here is this team's alone.`}</span>
+                <span>{`${member.name || member.email} signs in to another workspace on Liston with this login too, so only they can change its password. What they can use here is this workspace's alone.`}</span>
               </p>
             )}
             {tab === "access" && memberForGrid && (isOwner || memberForGrid.owner_access_at) && (

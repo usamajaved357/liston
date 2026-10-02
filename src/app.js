@@ -85,6 +85,8 @@ function createApp() {
   app.use('/api/chat', requireAuth, requireAccess, require('./modules/chat/chat.routes'));
   // Every account's eBay messages the person may read (the Inbox outside an account).
   app.get('/api/inbox', requireAuth, requireAccess, require('./modules/inbox/inbox.controller').listAll);
+  // How many unread conversations each of those accounts has (the account rail's counts).
+  app.get('/api/inbox/unread', requireAuth, requireAccess, require('./modules/inbox/inbox.controller').unreadAll);
   // The bytes of shared files, by signed or unguessable link (an <img> sends no sign-in).
   app.use('/media', require('./modules/files/media.routes'));
 

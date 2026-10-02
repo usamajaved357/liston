@@ -619,6 +619,12 @@ async function unread(auth, connectionId) {
   return { unread: counts.buyers + counts.ebay };
 }
 
+/** Each account's unread conversations, for every account whose messages the person may read (the account rail's counts). */
+async function unreadByAccount(auth) {
+  const accounts = await accountsFor(auth);
+  return { accounts: await inboxRepository.unreadByAccount(accounts.map((a) => a.id)) };
+}
+
 /** Marks a conversation read or unread, here and on eBay. */
 async function setRead(auth, connectionId, conversationId, read) {
   await requireAccount(auth, connectionId);
@@ -823,6 +829,7 @@ module.exports = {
   list,
   thread,
   unread,
+  unreadByAccount,
   setRead,
   setStatus,
   reply,

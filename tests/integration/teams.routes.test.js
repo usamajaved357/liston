@@ -70,9 +70,9 @@ test('a team is named at sign-up, or after its owner', async () => {
   const talha = await owner('Talha');
   assert.strictEqual(usama.signup.user.team.name, 'Usama Retail');
   assert.strictEqual((await me(usama.token)).data.user.team.name, 'Usama Retail');
-  assert.strictEqual((await me(talha.token)).data.user.team.name, "Talha's team");
+  assert.strictEqual((await me(talha.token)).data.user.team.name, "Talha's workspace");
   const { rows } = await pool.query(`SELECT name FROM workspaces WHERE owner_user_id = $1`, [talha.id]);
-  assert.strictEqual(rows[0].name, "Talha's team");
+  assert.strictEqual(rows[0].name, "Talha's workspace");
 });
 
 test('one login joins a second team with the same email and password, and is told', async () => {
@@ -84,7 +84,7 @@ test('one login joins a second team with the same email and password, and is tol
   const profile = (await me(bilal.token, usama.id)).data.user;
   assert.deepStrictEqual(profile.teams.map((t) => [t.id, t.name, t.role]), [
     [usama.id, 'Usama Retail', 'member'],
-    [talha.id, "Talha's team", 'member'],
+    [talha.id, "Talha's workspace", 'member'],
   ]);
   assert.strictEqual(profile.owns_team, false);
   // Told in Talha's team (not in Usama's bell), and counted on Talha's team in the menu.

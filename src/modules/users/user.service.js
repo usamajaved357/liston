@@ -68,7 +68,7 @@ async function deleteAccount(userId) {
   const user = await userRepository.findRoleInfo(userId);
   if (!user) throw new UserError('User not found', 404);
   if (await userRepository.hasOwnerAccessAnywhere(userId)) {
-    throw new UserError('Your login has owner access in a team, so only that team\'s owner can remove it, from their Team page.', 403);
+    throw new UserError('Your login has owner access in a workspace, so only that workspace\'s owner can remove it, from their Team page.', 403);
   }
   if (user.role === 'owner') await userRepository.deleteLoginsOnlyIn(userId);
   await userRepository.deleteById(userId);
@@ -77,7 +77,7 @@ async function deleteAccount(userId) {
 /** The team the person opens in next time (they switched to it). */
 async function switchTeam(ctx, teamId) {
   const team = (ctx.teams || []).find((t) => String(t.ownerId) === String(teamId));
-  if (!team) throw new UserError("You're not in that team.", 404);
+  if (!team) throw new UserError("You're not in that workspace.", 404);
   await workspaceRepository.setLast(ctx.userId, team.ownerId);
   return { id: team.ownerId, ...teams.roleIn(team) };
 }

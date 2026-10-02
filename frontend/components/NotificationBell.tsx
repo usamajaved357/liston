@@ -73,9 +73,9 @@ const KIND: Record<string, Kind> = {
       </>
     ),
   },
-  // Another owner added you to their team.
+  // Another owner added you to their workspace.
   "team.added": {
-    label: "New team",
+    label: "New workspace",
     ring: "bg-teal-50 text-teal-600 ring-teal-200",
     chip: "bg-teal-50 text-teal-700 ring-teal-200",
     note: "border-teal-300",
@@ -222,7 +222,7 @@ function openLabel(toast: Toast): string {
   if (toast.kind?.startsWith("hunt.")) return "Open the product";
   if (toast.kind === "chat.message") return toast.url?.includes("&t=") ? "Open the thread" : "Open the conversation";
   if (toast.kind?.includes("message")) return "Open the conversation";
-  if (toast.kind === "team.added") return "Open the team";
+  if (toast.kind === "team.added") return "Open the workspace";
   if (toast.kind?.startsWith("team.owner_access")) return "Reload Liston";
   return "Open";
 }

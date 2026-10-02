@@ -19,7 +19,7 @@ export default function SignupPage() {
   const [accessNote, setAccessNote] = useState("");
   const [teamName, setTeamName] = useState("");
   // What the team is called if they leave it blank (the server's default too).
-  const defaultTeam = `${name.trim().split(/\s+/)[0] || email.split("@")[0] || "Your"}'s team`;
+  const defaultTeam = `${name.trim().split(/\s+/)[0] || email.split("@")[0] || "Your"}'s workspace`;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -75,7 +75,7 @@ export default function SignupPage() {
         />
         <div>
           <label className="block text-[13px] font-medium text-[var(--color-ink)]" htmlFor="team-name">
-            Team name <span className="font-normal text-[var(--color-muted)]">(optional)</span>
+            Workspace name <span className="font-normal text-[var(--color-muted)]">(optional)</span>
           </label>
           <input
             id="team-name"
@@ -87,7 +87,7 @@ export default function SignupPage() {
             maxLength={60}
             autoComplete="organization"
           />
-          <p className="mt-1 text-[12px] text-[var(--color-muted)]">{`What your team sees at the top of Liston. Left blank, it's ${defaultTeam}; you can rename it later.`}</p>
+          <p className="mt-1 text-[12px] text-[var(--color-muted)]">{`What everyone in it sees at the top of Liston. Left blank, it's ${defaultTeam}; you can rename it later.`}</p>
         </div>
         <div>
           <label className="block text-[13px] font-medium text-[var(--color-ink)]">About your business <span className="font-normal text-[var(--color-muted)]">(optional)</span></label>

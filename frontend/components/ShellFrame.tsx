@@ -5,6 +5,9 @@ import { Logo } from "@/components/Logo";
 import { useWorkClock } from "@/lib/useWorkClock";
 import { NowPlaying } from "@/components/inbox/NowPlaying";
 import { useCurrentTeam } from "@/lib/useCurrentTeam";
+import { AccountRail } from "@/components/AccountRail";
+import { AccountFinder } from "@/components/AccountFinder";
+import { useRailShown } from "@/lib/rail";
 
 // The frame both shells share: the sidebar beside the page on a laptop; on a
 // phone or a portrait tablet (below lg) a slim bar with the logo and a menu
@@ -14,10 +17,14 @@ import { useCurrentTeam } from "@/lib/useCurrentTeam";
 // from the shell, which knows who's signed in; a member with owner access
 // is shown the owner's pages and still clocked), and shows a team chat voice
 // note playing on while you're away from it (NowPlaying, at the top right).
+// The account rail (teams and accounts, AccountRail) sits to the sidebar's
+// left on every page when shown, and inside the phone's menu too; the
+// account finder (AccountFinder, Ctrl/Cmd+K) is on every page.
 
 export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false, children }: { sidebar: React.ReactNode; sidebarClassName?: string; member?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const { team } = useCurrentTeam();
+  const rail = useRailShown();
   useWorkClock(member || team?.role === "owner_access");
 
   useEffect(() => {
@@ -30,6 +37,11 @@ export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false
   const panel = `bg-[var(--color-panel)] p-4 flex flex-col ${sidebarClassName}`;
   return (
     <div className="flex h-[100dvh] flex-col overflow-hidden lg:flex-row">
+      {rail && (
+        <div className="hidden h-full lg:flex">
+          <AccountRail />
+        </div>
+      )}
       <aside className={`hidden lg:flex w-[220px] flex-shrink-0 h-full overflow-y-auto overscroll-contain border-r border-[var(--color-line)] ${panel}`}>{sidebar}</aside>
 
       <div className="flex h-14 flex-shrink-0 items-center gap-2 border-b border-[var(--color-line)] bg-[var(--color-panel)] px-2 lg:hidden">
@@ -49,17 +61,20 @@ export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false
       </div>
 
       <NowPlaying />
+      <AccountFinder />
 
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">
           <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
-          {/* The sidebar's first row (the team menu) stops short of the close button. */}
-          <aside
-            className={`absolute inset-y-0 left-0 w-[272px] max-w-[85vw] overflow-y-auto overscroll-contain shadow-xl [&>:nth-child(2)]:mr-10 ${panel}`}
+          {/* The rail, when shown, beside the sidebar; the sidebar's first row (where you are) stops short of the close button. */}
+          <div
+            className="absolute inset-y-0 left-0 flex max-w-[92vw] shadow-xl"
             onClick={(e) => {
-              if ((e.target as HTMLElement).closest("a")) setOpen(false);
+              if ((e.target as HTMLElement).closest("a, [data-nav]")) setOpen(false);
             }}
           >
+          {rail && <AccountRail />}
+          <aside className={`relative w-[260px] min-w-0 overflow-y-auto overscroll-contain [&>:nth-child(2)>:first-child]:mr-10 ${panel}`}>
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -72,6 +87,7 @@ export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false
             </button>
             {sidebar}
           </aside>
+          </div>
         </div>
       )}
 

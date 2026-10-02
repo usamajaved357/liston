@@ -140,7 +140,7 @@ async function clock(req, res, next) {
   }
 }
 
-const teamNameSchema = z.object({ name: z.string().trim().min(1, 'Give the team a name.').max(60, 'Keep the team name under 60 characters.') });
+const teamNameSchema = z.object({ name: z.string().trim().min(1, 'Give the workspace a name.').max(60, 'Keep the workspace name under 60 characters.') });
 
 // Renames the team (its owner only).
 async function renameTeam(req, res, next) {

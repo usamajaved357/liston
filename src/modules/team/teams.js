@@ -4,10 +4,10 @@
 
 const NAME_MAX = 60;
 
-/** "Usama's team": the owner's first name, else their email's name part. */
+/** "Usama's workspace": the owner's first name, else their email's name part. */
 function defaultTeamName({ name, email }) {
   const first = String(name || '').trim().split(/\s+/)[0] || String(email || '').split('@')[0] || 'My';
-  return `${first.slice(0, NAME_MAX - 7)}'s team`;
+  return `${first.slice(0, NAME_MAX - 12)}'s workspace`;
 }
 
 /** A team name as typed, tidied; null when there's nothing to it. */

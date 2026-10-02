@@ -5,8 +5,8 @@ const teams = require('../../src/modules/team/teams');
 // Teams (migration 051): their names, and which team a request is in.
 
 test("a team is named after its owner's first name, else their email's name", () => {
-  assert.strictEqual(teams.defaultTeamName({ name: 'Talha Ubaid', email: 't@example.com' }), "Talha's team");
-  assert.strictEqual(teams.defaultTeamName({ name: '  ', email: 'usama.j@example.com' }), "usama.j's team");
+  assert.strictEqual(teams.defaultTeamName({ name: 'Talha Ubaid', email: 't@example.com' }), "Talha's workspace");
+  assert.strictEqual(teams.defaultTeamName({ name: '  ', email: 'usama.j@example.com' }), "usama.j's workspace");
   assert.ok(teams.defaultTeamName({ name: 'x'.repeat(200) }).length <= teams.NAME_MAX);
 });
 

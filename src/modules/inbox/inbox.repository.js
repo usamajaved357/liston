@@ -115,6 +115,19 @@ async function counts(connectionIds) {
   return rows[0];
 }
 
+/** Unread conversations (buyers' and eBay's, not archived) on each of these accounts: { [connectionId]: n }, an account with none left out. */
+async function unreadByAccount(connectionIds) {
+  if (!connectionIds.length) return {};
+  const { rows } = await query(
+    `SELECT connection_id, count(*)::int AS unread
+     FROM ebay_conversations
+     WHERE connection_id = ANY($1::uuid[]) AND status = 'ACTIVE' AND unread_count > 0
+     GROUP BY connection_id`,
+    [connectionIds]
+  );
+  return Object.fromEntries(rows.map((r) => [r.connection_id, r.unread]));
+}
+
 async function findConversation(connectionId, conversationId) {
   const { rows } = await query(
     `SELECT c.* FROM ebay_conversations c WHERE c.connection_id = $1 AND c.conversation_id = $2`,
@@ -383,6 +396,7 @@ module.exports = {
   orderFactsByBuyers,
   markReadHere,
   markUnreadHere,
+  unreadByAccount,
   upsertConversations,
   latestIds,
   upsertMessages,

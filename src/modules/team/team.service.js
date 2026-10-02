@@ -303,11 +303,11 @@ async function getMemberActivity(ownerId, memberId, { range, from, to, timeZone 
 async function addMember(ownerId, { email, name, password }, actor = null) {
   const existing = await teamRepository.findLoginByEmail(email);
   if (existing) {
-    if (String(existing.id) === String(ownerId)) throw new TeamError("That's the team owner's own login.", 400);
+    if (String(existing.id) === String(ownerId)) throw new TeamError("That's the workspace owner's own login.", 400);
     const already = await teamRepository.findMemberForOwner(existing.id, ownerId);
     if (already) {
       const who = already.name || already.email;
-      throw new TeamError(already.deactivated_at ? `${who} was removed earlier. Restore them from Former members on the Team page instead.` : `${who} is already on this team.`, 409);
+      throw new TeamError(already.deactivated_at ? `${who} was removed earlier. Restore them from Former members on the Team page instead.` : `${who} is already in this workspace.`, 409);
     }
     const member = await teamRepository.addMembership({ ownerId, userId: existing.id, addedBy: actor?.userId || ownerId });
     const [team, owner] = await Promise.all([workspaceRepository.nameOf(ownerId), userRepository.findByIdWithPlan(ownerId)]);
@@ -316,8 +316,8 @@ async function addMember(ownerId, { email, name, password }, actor = null) {
       ownerId,
       actorUserId: actor?.userId || ownerId,
       kind: 'team.added',
-      title: `${owner?.name || owner?.email || 'An owner'} added you to ${team || 'their team'}`,
-      body: 'Switch between your teams from the team name at the top of the sidebar.',
+      title: `${owner?.name || owner?.email || 'An owner'} added you to ${team || 'their workspace'}`,
+      body: 'Switch workspaces from the workspace at the top of the account rail, or find it with Ctrl K.',
       url: '/connections',
       subjectType: 'member',
       subjectId: existing.id,
@@ -330,7 +330,7 @@ async function addMember(ownerId, { email, name, password }, actor = null) {
     return { member: await teamRepository.createMember({ ownerId, email, name, passwordHash, addedBy: actor?.userId || ownerId }), existingLogin: false };
   } catch (err) {
     // The same email added twice at once.
-    if (err.code === '23505') throw new TeamError('An account with this email already exists. Add it again to bring it into the team.', 409);
+    if (err.code === '23505') throw new TeamError('An account with this email already exists. Add it again to bring it into the workspace.', 409);
     throw err;
   }
 }
@@ -355,7 +355,7 @@ async function manageable(actor, memberId, ownerId) {
 async function setMemberPassword(memberId, ownerId, password, actor) {
   const member = await manageable(actor, memberId, ownerId);
   if (member.shared_login) {
-    throw new TeamError(`${member.name || member.email} also signs in to another team on Liston, so only they can change their password: from their profile, or Forgot password on the sign-in page.`, 403);
+    throw new TeamError(`${member.name || member.email} also signs in to another workspace on Liston, so only they can change their password: from their profile, or Forgot password on the sign-in page.`, 403);
   }
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
   const updated = await teamRepository.setMemberPassword(memberId, ownerId, passwordHash);
@@ -410,7 +410,7 @@ async function setOwnerAccess(memberId, ownerId, on, actor) {
       title: on ? `${ownerName} gave you owner access${inTeam}` : `${ownerName} took away your owner access${inTeam}`,
       body: on
         ? 'You can now see and do everything the owner can: every eBay account, settings, and the rest of the team.'
-        : "You're back to the access set for you on the team. Reload Liston to see it.",
+        : "You're back to the access set for you in the workspace. Reload Liston to see it.",
       url: on ? '/dashboard' : '/connections',
       subjectType: 'member',
       subjectId: memberId,
@@ -464,9 +464,9 @@ async function updateMemberPermissions(memberId, ownerId, permissions, actor) {
 
 /** Renames the team (its owner only: the route lets no one else in; checked here as well). */
 async function renameTeam(ownerId, name, actor = null) {
-  if (actor?.coOwner) throw new TeamError("Only the team's owner can rename it.", 403);
+  if (actor?.coOwner) throw new TeamError("Only the workspace's owner can rename it.", 403);
   const clean = teams.cleanTeamName(name);
-  if (!clean) throw new TeamError('Give the team a name.', 400);
+  if (!clean) throw new TeamError('Give the workspace a name.', 400);
   const owner = await userRepository.findByIdWithPlan(ownerId);
   await workspaceRepository.create(ownerId, teams.defaultTeamName(owner || {}));
   return workspaceRepository.rename(ownerId, clean);
