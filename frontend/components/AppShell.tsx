@@ -20,7 +20,7 @@ interface AppShellProps {
   // Team management is owner-only — the nav item (and the page itself) is
   // hidden for a member, who never has a role other than "member" here.
   role?: "owner" | "member";
-  // Access requests are reviewed only by the addresses in ADMIN_EMAILS.
+  // Workspaces (access requests and every workspace account) are only for the addresses in ADMIN_EMAILS.
   isAdmin?: boolean;
   // The page fills the space below the header and scrolls inside itself (the Inbox).
   fill?: boolean;
@@ -133,12 +133,12 @@ export function AppShell({ children, header, subheader, role, isAdmin, fill = fa
           {isAdmin && (
             <NavItem
               href="/admin/access"
-              active={pathname === "/admin/access"}
-              label="Access requests"
+              active={pathname === "/admin/access" || pathname.startsWith("/admin/workspaces/")}
+              label="Workspaces"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path d="M12 3l7 3v5c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6l7-3z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M9 12l2 2 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M4 20V8.5L12 4l8 4.5V20" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M9 20v-5h6v5M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               }
             />

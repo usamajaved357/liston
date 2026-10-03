@@ -1,84 +1,78 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AccessRequest, api, ApiError, User } from "@/lib/api";
+import { AccessRequest, AdminWorkspace, api, ApiError, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { formatDateTime } from "@/lib/format";
+import { formatShortDate } from "@/lib/format";
 import { PillTabs } from "@/components/PillTabs";
 import { timeAgo } from "@/components/team/team-shared";
+import { CARD, FIGURE, NOTE, SectionHead, StatCard, statIcon } from "@/components/StatCard";
+import { AdminChip, StatusChip, WorkspaceFace, plural } from "@/components/admin/workspace-shared";
 
-// Access requests (admins only): the in-app version of the approve and
-// reject email, for when the email is lost or the admin would rather see
-// everyone at once. The counts at the top; everyone waiting as a card of
-// their own (who, their workspace, when, whether their email is verified,
-// what they said about their business) with Approve and Reject; and the
-// last 30 days' decisions, each one reversible.
+// Workspaces (admins only): every business on Liston. Usage at the top;
+// anyone waiting for access as a card with Approve and Reject (the
+// approve/reject email's in-app twin); then every workspace in one list,
+// searched by its name or its owner's name or email and filtered by status,
+// each row opening the workspace's own page, where the rest of its actions
+// are (revoke, restore, delete) beside how much it uses Liston.
 
-function initials(r: AccessRequest) {
-  const parts = (r.name || r.email).trim().split(/[\s@._-]+/).filter(Boolean);
-  return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || "?";
-}
+const ICONS = {
+  workspaces: statIcon(
+    <>
+      <path d="M4 20V8.5L12 4l8 4.5V20" />
+      <path d="M9 20v-5h6v5" />
+    </>,
+  ),
+  waiting: statIcon(
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v4.5l3 1.5" />
+    </>,
+  ),
+  accounts: statIcon(
+    <>
+      <path d="M4 8.5h16l-1.2 10a1.5 1.5 0 01-1.5 1.3H6.7a1.5 1.5 0 01-1.5-1.3L4 8.5z" />
+      <path d="M8.5 8.5V7a3.5 3.5 0 017 0v1.5" />
+    </>,
+  ),
+  people: statIcon(
+    <>
+      <circle cx="9" cy="8.5" r="3.2" />
+      <path d="M3.5 19a5.5 5.5 0 0111 0" />
+      <path d="M16 5.6a3.2 3.2 0 010 5.8M17.5 14a5.5 5.5 0 013 5" />
+    </>,
+  ),
+  search: (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+      <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M13.2 13.2L17 17" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  ),
+};
 
-function Face({ r, size = 40 }: { r: AccessRequest; size?: number }) {
-  return (
-    <span
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.34) }}
-      className="flex flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/15"
-      aria-hidden
-    >
-      {initials(r)}
-    </span>
-  );
-}
+type Filter = "all" | "active" | "pending" | "rejected";
 
-function Chip({ tone, children }: { tone: "emerald" | "amber" | "rose" | "slate"; children: React.ReactNode }) {
-  const tones = {
-    emerald: ["bg-emerald-50 text-emerald-700 ring-emerald-200", "bg-emerald-500"],
-    amber: ["bg-amber-50 text-amber-800 ring-amber-200", "bg-amber-500"],
-    rose: ["bg-rose-50 text-rose-700 ring-rose-200", "bg-rose-500"],
-    slate: ["bg-slate-50 text-slate-600 ring-slate-200", "bg-slate-400"],
-  }[tone];
-  return (
-    <span className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${tones[0]}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${tones[1]}`} aria-hidden />
-      {children}
-    </span>
-  );
-}
-
-function Count({ label, value, note, tone }: { label: string; value: number; note: string; tone?: "amber" }) {
-  return (
-    <div className="px-5 py-4">
-      <p className="text-[12px] font-medium text-[var(--color-muted)]">{label}</p>
-      <p className={`mt-1 text-[22px] font-semibold leading-tight tracking-tight tabular-nums ${tone === "amber" && value > 0 ? "text-amber-700" : "text-[var(--color-ink)]"}`}>{value}</p>
-      <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">{note}</p>
-    </div>
-  );
-}
-
-// One applicant waiting for a decision.
+// Someone waiting for access: who, their workspace, what they said, and the decision.
 function Applicant({ r, busy, onApprove, onReject }: { r: AccessRequest; busy: boolean; onApprove: () => void; onReject: () => void }) {
   return (
-    <article className="card px-5 py-4">
+    <article className={`${CARD} p-4 sm:p-5`}>
       <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-        <Face r={r} size={44} />
+        <WorkspaceFace id={r.id} name={r.team_name || r.name} email={r.email} size={44} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <p className="truncate text-[15px] font-semibold text-[var(--color-ink)]">{r.name || "No name given"}</p>
-            {r.email_verified_at ? <Chip tone="emerald">Email verified</Chip> : <Chip tone="amber">Email not verified</Chip>}
+            <Link href={`/admin/workspaces/${r.id}`} className="truncate text-[15px] font-semibold text-[var(--color-ink)] hover:text-[var(--color-primary)]">
+              {r.team_name || r.name || r.email}
+            </Link>
+            {!r.email_verified_at && <span className="inline-flex h-5 items-center rounded-full bg-amber-50 px-2 text-[10.5px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">Email not verified</span>}
           </div>
-          <a href={`mailto:${r.email}`} className="block truncate text-[13px] text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:underline">
-            {r.email}
-          </a>
-          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-[var(--color-muted)]">
-            {r.team_name && <span>{`Workspace: ${r.team_name}`}</span>}
-            <span title={formatDateTime(r.created_at)}>{`Signed up ${timeAgo(r.created_at)}`}</span>
-          </p>
+          <p className="truncate text-[12.5px] text-[var(--color-muted)]">{[r.name, r.email].filter(Boolean).join(" · ")}</p>
+          <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">{`Signed up ${timeAgo(r.created_at)}`}</p>
         </div>
         <div className="flex w-full flex-shrink-0 items-center justify-end gap-2 sm:w-auto">
           <button type="button" onClick={onReject} disabled={busy} className="btn btn-ghost btn-sm text-[var(--color-danger)]">
@@ -89,66 +83,136 @@ function Applicant({ r, busy, onApprove, onReject }: { r: AccessRequest; busy: b
           </button>
         </div>
       </div>
-      <div className="mt-3.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-3">
+      <div className="mt-3.5 rounded-xl bg-[var(--color-paper)] px-4 py-3 ring-1 ring-inset ring-[var(--color-line)]">
         <p className="text-[11.5px] font-medium text-[var(--color-muted)]">About their business</p>
-        <p className={`mt-1 whitespace-pre-line text-[13.5px] leading-relaxed ${r.access_note ? "text-[var(--color-ink)]" : "italic text-[var(--color-muted)]"}`}>{r.access_note || "No note left."}</p>
+        <p className={`mt-1 whitespace-pre-line text-[13px] leading-relaxed ${r.access_note ? "text-[var(--color-ink)]" : "italic text-[var(--color-muted)]"}`}>{r.access_note || "No note left."}</p>
       </div>
     </article>
   );
 }
 
-export default function AccessRequestsPage() {
+// The list's columns: the workspace, three counts centred under their headings, two dates, its status.
+const GRID = "md:grid md:grid-cols-[minmax(0,2.6fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,0.95fr)_minmax(0,0.85fr)_16px] md:items-center md:gap-3";
+
+function WorkspaceRow({ w }: { w: AdminWorkspace }) {
+  const lastActive = w.last_active_at && (!w.last_login_at || w.last_active_at > w.last_login_at) ? w.last_active_at : w.last_login_at;
+  return (
+    <Link href={`/admin/workspaces/${w.id}`} className={`group flex flex-col gap-2 px-4 py-3.5 transition-colors hover:bg-[var(--color-paper)] sm:px-5 ${GRID}`}>
+      <div className="flex min-w-0 items-center gap-3">
+        <WorkspaceFace id={w.id} name={w.team_name || w.name} email={w.email} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="truncate text-[13.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{w.team_name || "Untitled workspace"}</p>
+            {w.is_admin && <AdminChip />}
+          </div>
+          <p className="truncate text-[12px] text-[var(--color-muted)]">{[w.name, w.email].filter(Boolean).join(" · ")}</p>
+        </div>
+        <span className="md:hidden">
+          <StatusChip status={w.access_status} />
+        </span>
+      </div>
+      {/* On a phone the figures read as one line under the name. */}
+      <p className="pl-[52px] text-[11.5px] text-[var(--color-muted)] md:hidden">
+        {[plural(w.members, "member"), plural(w.accounts, "eBay account"), plural(w.marketplaces, "marketplace"), `created ${formatShortDate(w.created_at)}`].join(" · ")}
+      </p>
+      <span className="hidden text-center text-[13px] font-semibold tabular-nums text-[var(--color-ink)] md:block">{w.members}</span>
+      <span className="hidden text-center text-[13px] font-semibold tabular-nums text-[var(--color-ink)] md:block">{w.accounts}</span>
+      <span className="hidden text-center text-[13px] font-semibold tabular-nums text-[var(--color-ink)] md:block">{w.marketplaces}</span>
+      <span className="hidden text-center text-[12.5px] text-[var(--color-muted)] md:block">{formatShortDate(w.created_at)}</span>
+      <span className="hidden text-center text-[12.5px] text-[var(--color-muted)] md:block">{lastActive ? timeAgo(lastActive) : "Never"}</span>
+      <span className="hidden justify-center md:flex">
+        <StatusChip status={w.access_status} />
+      </span>
+      <svg viewBox="0 0 24 24" fill="none" className="hidden h-4 w-4 text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5 md:block" aria-hidden>
+        <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </Link>
+  );
+}
+
+export default function WorkspacesPage() {
   const router = useRouter();
   const cachedUser = useCachedUser();
   const [liveUser, setUser] = useState<User | null>(null);
   const user = liveUser ?? cachedUser;
   const [requests, setRequests] = useState<AccessRequest[]>([]);
-  const [reviewed, setReviewed] = useState<AccessRequest[]>([]);
+  const [workspaces, setWorkspaces] = useState<AdminWorkspace[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<"all" | "active" | "rejected">("all");
   const [confirmReject, setConfirmReject] = useState<AccessRequest | null>(null);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+
+  async function load() {
+    const [list, all] = await Promise.all([api.listAccessRequests(), api.listAdminWorkspaces()]);
+    setRequests(list.requests);
+    setWorkspaces(all.workspaces);
+  }
 
   useEffect(() => {
-    Promise.all([api.me(), api.listAccessRequests()])
-      .then(([me, list]) => {
-        if (!me.user.is_admin) {
-          router.replace("/dashboard");
-          return;
-        }
-        setUser(me.user);
-        cacheUser(me.user);
-        setRequests(list.requests);
-        setReviewed(list.reviewed);
-      })
-      .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) router.replace("/login");
-        else if (err instanceof ApiError && err.status === 403) router.replace("/dashboard");
-        else setError("Couldn't load access requests.");
-      })
-      .finally(() => setLoading(false));
+    // After this render, as the other pages do.
+    const t = setTimeout(() => {
+      // Back from a workspace that was deleted on its page: say so.
+      const gone = new URLSearchParams(window.location.search).get("deleted");
+      if (gone) window.history.replaceState(null, "", "/admin/access");
+      Promise.all([api.me(), load()])
+        .then(([me]) => {
+          if (!me.user.is_admin) {
+            router.replace("/dashboard");
+            return;
+          }
+          setUser(me.user);
+          cacheUser(me.user);
+          if (gone) setNote(`${gone} was deleted.`);
+        })
+        .catch((err) => {
+          if (err instanceof ApiError && err.status === 401) router.replace("/login");
+          else if (err instanceof ApiError && err.status === 403) router.replace("/dashboard");
+          else setError("Couldn't load the workspaces.");
+        })
+        .finally(() => setLoading(false));
+    }, 0);
+    return () => clearTimeout(t);
   }, [router]);
 
-  async function decide(id: string, status: "active" | "rejected") {
-    setBusyId(id);
+  async function decide(r: AccessRequest, status: "active" | "rejected") {
+    setBusyId(r.id);
     setError(null);
+    setNote(null);
     try {
-      const { user: result } = await api.decideAccessRequest(id, status);
-      const from = requests.find((r) => r.id === id) || reviewed.find((r) => r.id === id);
-      setRequests((list) => list.filter((r) => r.id !== id));
-      if (result.deleted || !from) {
-        // A rejected applicant's sign-up is gone: nothing to show.
-        setReviewed((list) => list.filter((r) => r.id !== id));
-      } else {
-        setReviewed((list) => [{ ...from, access_status: status, access_reviewed_at: new Date().toISOString() }, ...list.filter((r) => r.id !== id)]);
-      }
+      await api.decideAccessRequest(r.id, status);
+      setNote(status === "active" ? `${r.team_name || r.email} is approved and has been emailed.` : `${r.email} was rejected and emailed; their sign-up is deleted.`);
+      await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save that decision.");
     } finally {
       setBusyId(null);
     }
   }
+
+  const counts = useMemo(
+    () => ({
+      all: workspaces.length,
+      active: workspaces.filter((w) => w.access_status === "active").length,
+      pending: workspaces.filter((w) => w.access_status === "pending").length,
+      rejected: workspaces.filter((w) => w.access_status === "rejected").length,
+    }),
+    [workspaces],
+  );
+  const totals = useMemo(
+    () => ({
+      accounts: workspaces.reduce((n, w) => n + w.accounts, 0),
+      withAccounts: workspaces.filter((w) => w.accounts > 0).length,
+      members: workspaces.reduce((n, w) => n + w.members, 0),
+    }),
+    [workspaces],
+  );
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return workspaces.filter((w) => (filter === "all" || w.access_status === filter) && (!q || [w.team_name, w.name, w.email].some((v) => v && v.toLowerCase().includes(q))));
+  }, [workspaces, filter, search]);
 
   if (!user) {
     return (
@@ -157,13 +221,6 @@ export default function AccessRequestsPage() {
       </main>
     );
   }
-
-  const shown = reviewed.filter((r) => filter === "all" || r.access_status === filter);
-  const counts = {
-    all: reviewed.length,
-    active: reviewed.filter((r) => r.access_status === "active").length,
-    rejected: reviewed.filter((r) => r.access_status === "rejected").length,
-  };
 
   return (
     <AppShell
@@ -174,134 +231,111 @@ export default function AccessRequestsPage() {
       isAdmin={user.is_admin}
       header={
         <div>
-          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Access requests</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Who gets into Liston. Approving someone also verifies their email.</p>
+          <h1 className="text-lg font-semibold text-[var(--color-ink)]">Workspaces</h1>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Every business on Liston: who&apos;s waiting to get in, who&apos;s in, and how much each one uses it.</p>
         </div>
       }
     >
-      {error && (
-        <div className="mb-4">
-          <Alert>{error}</Alert>
-        </div>
-      )}
-
       {loading ? (
-        <PageSkeleton rows={2} />
+        <PageSkeleton rows={3} />
       ) : (
-        <div className="max-w-4xl space-y-8 pb-4">
-          <section className="card grid grid-cols-3 divide-x divide-[var(--color-line)]">
-            <Count label="Waiting" value={requests.length} note="for a decision" tone="amber" />
-            <Count label="Approved" value={counts.active} note="in the last 30 days" />
-            <Count label="Revoked" value={counts.rejected} note="in the last 30 days" />
-          </section>
+        <div className="max-w-6xl space-y-6 pb-6">
+          {error && <Alert>{error}</Alert>}
+          {note && <Alert variant="success">{note}</Alert>}
 
-          <section>
-            <div className="mb-3 flex items-baseline gap-2">
-              <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Waiting for a decision</h2>
-              {requests.length > 0 && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-800 ring-1 ring-inset ring-amber-200">{requests.length}</span>}
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <StatCard label="Workspaces" hue="indigo" icon={ICONS.workspaces}>
+              <span className={`${FIGURE} text-[var(--color-ink)]`}>{counts.all}</span>
+              <span className={NOTE}>{`${counts.active} active · ${counts.rejected} revoked`}</span>
+            </StatCard>
+            <StatCard label="Waiting" hue="amber" icon={ICONS.waiting}>
+              <span className={`${FIGURE} ${counts.pending ? "text-amber-700" : "text-[var(--color-ink)]"}`}>{counts.pending}</span>
+              <span className={NOTE}>{counts.pending ? "For approval, below" : "No one waiting for approval"}</span>
+            </StatCard>
+            <StatCard label="eBay accounts" hue="sky" icon={ICONS.accounts}>
+              <span className={`${FIGURE} text-[var(--color-ink)]`}>{totals.accounts}</span>
+              <span className={NOTE}>{`Linked in ${plural(totals.withAccounts, "workspace")}`}</span>
+            </StatCard>
+            <StatCard label="People" hue="emerald" icon={ICONS.people}>
+              <span className={`${FIGURE} text-[var(--color-ink)]`}>{counts.all + totals.members}</span>
+              <span className={NOTE}>{`${counts.all} owners · ${totals.members} members`}</span>
+            </StatCard>
+          </div>
+
+          {requests.length > 0 && (
+            <section className="space-y-3">
+              <SectionHead hue="amber" icon={ICONS.waiting} title="Waiting for approval" sub="They can sign in, but use nothing until you approve them. Approving also verifies their email." />
+              {requests.map((r) => (
+                <Applicant key={r.id} r={r} busy={busyId === r.id} onApprove={() => decide(r, "active")} onReject={() => setConfirmReject(r)} />
+              ))}
+            </section>
+          )}
+
+          <section className={CARD}>
+            <div className="flex flex-col gap-3 border-b border-[var(--color-line)] px-4 py-3.5 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
+              <label className="relative flex min-w-0 items-center lg:w-[340px]">
+                <span className="pointer-events-none absolute left-3 text-[var(--color-muted)]">{ICONS.search}</span>
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by workspace, name or email"
+                  aria-label="Search workspaces"
+                  className="input h-10 w-full rounded-full !pl-9"
+                />
+              </label>
+              <PillTabs
+                label="Status"
+                tabs={(
+                  [
+                    ["all", "All"],
+                    ["active", "Active"],
+                    ["pending", "Waiting"],
+                    ["rejected", "Revoked"],
+                  ] as const
+                ).map(([key, label]) => ({ key, label, count: counts[key] }))}
+                value={filter}
+                onChange={setFilter}
+              />
             </div>
-            {requests.length === 0 ? (
-              <div className="card flex items-center gap-4 px-5 py-5">
-                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-200" aria-hidden>
-                  <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-                    <path d="M5 12.5l4.2 4.2L19 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </span>
-                <div>
-                  <p className="text-[14px] font-semibold text-[var(--color-ink)]">You&apos;re all caught up</p>
-                  <p className="text-[13px] text-[var(--color-muted)]">New sign-ups appear here, and in your email.</p>
-                </div>
-              </div>
+            <div className={`hidden border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-5 py-2 text-[11px] font-semibold uppercase tracking-[0.05em] text-[var(--color-muted)] ${GRID}`}>
+              <span>Workspace</span>
+              <span className="text-center">Members</span>
+              <span className="text-center">eBay accounts</span>
+              <span className="text-center">Marketplaces</span>
+              <span className="text-center">Created</span>
+              <span className="text-center">Last active</span>
+              <span className="text-center">Status</span>
+              <span />
+            </div>
+            {shown.length === 0 ? (
+              <p className="px-5 py-10 text-center text-[13px] text-[var(--color-muted)]">
+                {workspaces.length === 0 ? "No workspaces yet." : search.trim() ? `No workspace matches "${search.trim()}".` : "None with this status."}
+              </p>
             ) : (
-              <div className="space-y-3">
-                {requests.map((r) => (
-                  <Applicant key={r.id} r={r} busy={busyId === r.id} onApprove={() => decide(r.id, "active")} onReject={() => setConfirmReject(r)} />
+              <div className="divide-y divide-[var(--color-line)]">
+                {shown.map((w) => (
+                  <WorkspaceRow key={w.id} w={w} />
                 ))}
               </div>
             )}
-          </section>
-
-          <section>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-baseline gap-2">
-                <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Recently reviewed</h2>
-                <span className="text-[12px] text-[var(--color-muted)]">last 30 days</span>
-              </div>
-              {reviewed.length > 0 && (
-                <PillTabs
-                  label="Reviewed"
-                  tabs={(
-                    [
-                      ["all", "All"],
-                      ["active", "Approved"],
-                      ["rejected", "Revoked"],
-                    ] as const
-                  ).map(([key, label]) => ({ key, label, count: counts[key] }))}
-                  value={filter}
-                  onChange={setFilter}
-                />
-              )}
-            </div>
-            <div className="card overflow-hidden">
-              {shown.length === 0 ? (
-                <p className="px-5 py-8 text-center text-[13px] text-[var(--color-muted)]">
-                  {reviewed.length === 0 ? "No decisions in the last 30 days." : `Nothing ${filter === "active" ? "approved" : "revoked"} in the last 30 days.`}
-                </p>
-              ) : (
-                <ul className="divide-y divide-[var(--color-line)]">
-                  {shown.map((r) => {
-                    const approved = r.access_status === "active";
-                    return (
-                      <li key={r.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
-                        <Face r={r} size={36} />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-[13.5px] font-semibold text-[var(--color-ink)]">{r.name || r.email}</p>
-                          <p className="truncate text-[12px] text-[var(--color-muted)]">{[r.name ? r.email : null, r.team_name].filter(Boolean).join(" · ")}</p>
-                        </div>
-                        <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
-                          <span className="flex items-center gap-3">
-                            {approved ? <Chip tone="emerald">Approved</Chip> : <Chip tone="rose">Revoked</Chip>}
-                            <span className="w-[86px] text-[12px] text-[var(--color-muted)]" title={r.access_reviewed_at ? formatDateTime(r.access_reviewed_at) : undefined}>
-                              {r.access_reviewed_at ? timeAgo(r.access_reviewed_at) : "—"}
-                            </span>
-                          </span>
-                          {approved ? (
-                            <button type="button" onClick={() => setConfirmReject(r)} disabled={busyId === r.id} className="btn btn-ghost btn-sm w-[96px] text-[var(--color-danger)]">
-                              Revoke
-                            </button>
-                          ) : (
-                            <button type="button" onClick={() => decide(r.id, "active")} disabled={busyId === r.id} className="btn btn-secondary btn-sm w-[96px]">
-                              Restore
-                            </button>
-                          )}
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
           </section>
         </div>
       )}
 
       <ConfirmDialog
         open={confirmReject !== null}
-        title={confirmReject?.access_status === "active" ? `Revoke access for ${confirmReject?.name || confirmReject?.email}?` : `Reject ${confirmReject?.name || confirmReject?.email}?`}
-        description={
-          confirmReject?.access_status === "active"
-            ? "They're locked out at once and emailed. Their accounts, listings and workspace are kept, and you can restore access from here."
-            : "They're emailed that access isn't available, and their sign-up is deleted. They can sign up again later."
-        }
-        confirmLabel={confirmReject?.access_status === "active" ? "Revoke access" : "Reject"}
+        title={`Reject ${confirmReject?.team_name || confirmReject?.email}?`}
+        description="They're emailed that access isn't available, and their sign-up is deleted. They can sign up again later."
+        confirmLabel="Reject"
         danger
         loading={busyId === confirmReject?.id}
         onCancel={() => setConfirmReject(null)}
         onConfirm={async () => {
           if (!confirmReject) return;
-          const id = confirmReject.id;
+          const r = confirmReject;
           setConfirmReject(null);
-          await decide(id, "rejected");
+          await decide(r, "rejected");
         }}
       />
     </AppShell>

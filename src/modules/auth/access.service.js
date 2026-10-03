@@ -7,7 +7,9 @@
 // this module — the pending screen, the middleware, the emails — stays.
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { query } = require('../../db/client');
+const { query, pool } = require('../../db/client');
+const userRepository = require('../users/user.repository');
+const marketplaces = require('../ebay/marketplaces');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const emailService = require('../../utils/email');
@@ -130,10 +132,144 @@ async function listReviewed() {
   return rows;
 }
 
+/**
+ * Every workspace account on Liston (each owner and their workspace), for
+ * the admin: its status, when it joined and last signed in, its eBay
+ * accounts and people, the member logins that are in it alone (deleting it
+ * takes them), the other workspaces its login also works in, and whether
+ * it's an admin's (never deleted from here). Newest first.
+ */
+async function listWorkspaces() {
+  const { rows } = await query(
+    `SELECT u.id, u.email, u.name, w.name AS team_name, u.access_status, u.created_at, u.last_login_at, u.email_verified_at,
+            (SELECT count(*)::int FROM connections c WHERE c.user_id = u.id) AS accounts,
+            (SELECT count(*)::int FROM workspace_members m WHERE m.owner_user_id = u.id AND m.deactivated_at IS NULL) AS members,
+            (SELECT count(*)::int FROM workspace_members m JOIN users x ON x.id = m.user_id
+              WHERE m.owner_user_id = u.id AND x.role = 'member'
+                AND NOT EXISTS (SELECT 1 FROM workspace_members o WHERE o.user_id = m.user_id AND o.owner_user_id <> u.id)) AS logins_only_here,
+            (SELECT count(*)::int FROM workspace_members m WHERE m.user_id = u.id AND m.deactivated_at IS NULL) AS other_workspaces,
+            (SELECT count(DISTINCT coalesce(c.settings->'ebay'->>'marketplaceId', 'EBAY_GB'))::int FROM connections c WHERE c.user_id = u.id) AS marketplaces,
+            (SELECT max(a.created_at) FROM member_activity a WHERE a.owner_user_id = u.id) AS last_active_at
+       FROM users u LEFT JOIN workspaces w ON w.owner_user_id = u.id
+      WHERE u.role = 'owner'
+      ORDER BY u.created_at DESC`
+  );
+  return rows.map((r) => ({ ...r, is_admin: isAdminEmail(r.email) }));
+}
+
+const DAYS_30 = "now() - interval '30 days'";
+
+/**
+ * One workspace account for the admin: who owns it and when it joined and
+ * was reviewed, then how much it uses Liston, as counts only: its people,
+ * its eBay accounts by marketplace (never which accounts), orders, the work
+ * done in it and the team's time in the last 30 days, its inbox and chat,
+ * and the files it keeps.
+ */
+async function workspaceDetail(userId) {
+  const { rows } = await query(
+    `SELECT u.id, u.email, u.name, u.access_status, u.access_reviewed_at, u.created_at, u.last_login_at, u.email_verified_at,
+            w.name AS team_name, p.name AS plan_name,
+            (SELECT count(*)::int FROM workspace_members m WHERE m.user_id = u.id AND m.deactivated_at IS NULL) AS other_workspaces,
+            (SELECT count(*)::int FROM workspace_members m JOIN users x ON x.id = m.user_id
+              WHERE m.owner_user_id = u.id AND x.role = 'member'
+                AND NOT EXISTS (SELECT 1 FROM workspace_members o WHERE o.user_id = m.user_id AND o.owner_user_id <> u.id)) AS logins_only_here
+       FROM users u
+       LEFT JOIN workspaces w ON w.owner_user_id = u.id
+       LEFT JOIN plans p ON p.id = u.plan_id
+      WHERE u.id = $1 AND u.role = 'owner'`,
+    [userId]
+  );
+  const owner = rows[0];
+  if (!owner) throw new AccessError('That workspace no longer exists.', 404);
+  const one = async (sql) => (await query(sql, [userId])).rows[0];
+  const [people, invites, sites, orders, work, time, inbox, chat, files] = await Promise.all([
+    one(`SELECT count(*) FILTER (WHERE deactivated_at IS NULL)::int AS members,
+                count(*) FILTER (WHERE deactivated_at IS NULL AND owner_access_at IS NOT NULL)::int AS co_managers,
+                count(*) FILTER (WHERE deactivated_at IS NOT NULL)::int AS removed
+           FROM workspace_members WHERE owner_user_id = $1`),
+    one(`SELECT count(*)::int AS waiting FROM workspace_invites
+          WHERE owner_user_id = $1 AND member_user_id IS NULL AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()`),
+    query(
+      `SELECT coalesce(settings->'ebay'->>'marketplaceId', 'EBAY_GB') AS id, count(*)::int AS accounts,
+              count(*) FILTER (WHERE status <> 'active')::int AS needs_attention
+         FROM connections WHERE user_id = $1 GROUP BY 1 ORDER BY 2 DESC, 1`,
+      [userId]
+    ).then((r) => r.rows),
+    one(`SELECT count(*)::int AS total, count(*) FILTER (WHERE o.created_at > ${DAYS_30})::int AS last_30
+           FROM ebay_orders o JOIN connections c ON c.id = o.connection_id WHERE c.user_id = $1`),
+    one(`SELECT count(*)::int AS actions,
+                count(*) FILTER (WHERE kind = 'listing.published')::int AS published,
+                count(*) FILTER (WHERE kind = 'listing.drafted')::int AS drafted,
+                count(*) FILTER (WHERE kind IN ('order.supplier_ordered', 'sourcing.ordered'))::int AS supplier_orders,
+                count(*) FILTER (WHERE kind IN ('order.dispatched', 'ebay.dispatched_by_liston'))::int AS dispatched,
+                count(*) FILTER (WHERE kind = 'hunt.added')::int AS hunted,
+                count(*) FILTER (WHERE kind IN ('inbox.replied', 'inbox.messaged'))::int AS buyers_answered,
+                (SELECT max(created_at) FROM member_activity WHERE owner_user_id = $1) AS last_active_at
+           FROM member_activity WHERE owner_user_id = $1 AND created_at > ${DAYS_30}`),
+    one(`SELECT count(*) FILTER (WHERE working)::int AS working_minutes, count(DISTINCT user_id)::int AS people
+           FROM member_minutes WHERE owner_user_id = $1 AND minute > ${DAYS_30}`),
+    one(`SELECT count(*)::int AS conversations FROM ebay_conversations e JOIN connections c ON c.id = e.connection_id WHERE c.user_id = $1`),
+    one(`SELECT count(*)::int AS messages FROM chat_messages x JOIN chat_conversations c ON c.id = x.conversation_id
+          WHERE c.owner_user_id = $1 AND x.kind = 'text' AND x.created_at > ${DAYS_30}`),
+    one(`SELECT count(*)::int AS count, coalesce(sum(size_bytes), 0)::bigint AS bytes FROM files WHERE owner_user_id = $1`),
+  ]);
+  return {
+    ...owner,
+    is_admin: isAdminEmail(owner.email),
+    people: { ...people, invitations: invites.waiting },
+    accounts: {
+      total: sites.reduce((n, s) => n + s.accounts, 0),
+      needsAttention: sites.reduce((n, s) => n + s.needs_attention, 0),
+      marketplaces: sites.map((s) => {
+        const m = marketplaces.byId(s.id);
+        return { id: s.id, site: m?.label || s.id, name: m?.name || s.id, accounts: s.accounts };
+      }),
+    },
+    orders,
+    work,
+    time,
+    inbox: { conversations: inbox.conversations, chatMessages: chat.messages },
+    files: { count: files.count, bytes: Number(files.bytes) },
+  };
+}
+
+/**
+ * Deletes a workspace account, as the admin: the owner's login and their
+ * workspace with everything in it (eBay accounts, listings, orders, chat),
+ * the member logins in it alone, and the login's places in other
+ * workspaces. `confirmEmail` must be the account's email. Never an admin's
+ * account. Can't be undone.
+ */
+async function deleteAccount(userId, confirmEmail) {
+  const { rows } = await query(`SELECT id, email, name FROM users WHERE id = $1 AND role = 'owner'`, [userId]);
+  const user = rows[0];
+  if (!user) throw new AccessError('That account no longer exists.', 404);
+  if (isAdminEmail(user.email)) throw new AccessError("An admin's account can't be deleted from here.", 403);
+  if (String(confirmEmail || '').trim().toLowerCase() !== user.email.toLowerCase()) {
+    throw new AccessError(`Type ${user.email} to delete this account.`, 400);
+  }
+  const client = await pool.connect();
+  let members = 0;
+  try {
+    await client.query('BEGIN');
+    members = await userRepository.deleteLoginsOnlyIn(userId, client);
+    await client.query('DELETE FROM users WHERE id = $1', [userId]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  logger.info('Access: workspace account deleted by an admin', { userId, memberLogins: members });
+  return { deleted: true, email: user.email, memberLogins: members };
+}
+
 async function setStatus(userId, status) {
   if (status === 'active') return approve(userId);
   if (status === 'rejected') return reject(userId);
   throw new AccessError('Status must be active or rejected.', 400);
 }
 
-module.exports = { AccessError, isAdminEmail, notifyAdmins, decide, listPending, listReviewed, setStatus, decisionToken };
+module.exports = { AccessError, isAdminEmail, notifyAdmins, decide, listPending, listReviewed, listWorkspaces, workspaceDetail, deleteAccount, setStatus, decisionToken };

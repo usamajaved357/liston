@@ -189,7 +189,7 @@ function sendAccessRequestEmail(to, { applicantEmail, applicantName, teamName = 
       intro: `<strong style="color:${BRAND.ink}">${escape(applicantName || applicantEmail)}</strong> has asked for access to Liston. Review the details and decide with one click.`,
       body: details,
       action: actions,
-      footnote: 'These links are valid for 7 days and can be used once. You can also decide from the Access requests page in Liston.',
+      footnote: 'These links are valid for 7 days and can be used once. You can also decide from the Workspaces page in Liston.',
     }),
   });
 }

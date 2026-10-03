@@ -17,5 +17,9 @@ router.get('/access/approve', authController.accessDecision);
 router.get('/access/reject', authController.accessDecision);
 router.get('/access/requests', requireAuth, requireAdmin, authController.listAccessRequests);
 router.post('/access/requests/:userId', requireAuth, requireAdmin, authController.setAccessStatus);
+// Every workspace account, and deleting one with everything in it.
+router.get('/access/workspaces', requireAuth, requireAdmin, authController.listWorkspaces);
+router.get('/access/workspaces/:userId', requireAuth, requireAdmin, authController.workspaceDetail);
+router.delete('/access/accounts/:userId', requireAuth, requireAdmin, authController.deleteAccount);
 
 module.exports = router;

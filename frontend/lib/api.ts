@@ -558,6 +558,50 @@ export interface AccessRequest {
   access_reviewed_at?: string | null;
 }
 
+// A workspace account on Liston, for the admin (Access requests' All workspace accounts).
+export interface AdminWorkspace {
+  id: string;
+  email: string;
+  name: string | null;
+  team_name: string | null;
+  access_status: "pending" | "active" | "rejected";
+  created_at: string;
+  last_login_at: string | null;
+  email_verified_at: string | null;
+  accounts: number; // eBay accounts connected
+  members: number; // people in the workspace now
+  logins_only_here: number; // member logins deleting it takes
+  other_workspaces: number; // other workspaces the owner's login works in
+  marketplaces: number; // eBay sites its accounts sell on
+  last_active_at: string | null; // the last work anyone did in it
+  is_admin: boolean; // an admin's account: never deleted from here
+}
+
+// One workspace for the admin: its owner and dates, then its usage as counts only (never which eBay accounts).
+export interface AdminWorkspaceDetail {
+  id: string;
+  email: string;
+  name: string | null;
+  team_name: string | null;
+  plan_name: string | null;
+  access_status: "pending" | "active" | "rejected";
+  access_reviewed_at: string | null;
+  created_at: string;
+  last_login_at: string | null;
+  email_verified_at: string | null;
+  other_workspaces: number;
+  logins_only_here: number; // member logins deleting it takes
+  is_admin: boolean;
+  people: { members: number; co_managers: number; removed: number; invitations: number };
+  accounts: { total: number; needsAttention: number; marketplaces: { id: string; site: string; name: string; accounts: number }[] };
+  orders: { total: number; last_30: number };
+  // The last 30 days' work in it, and when anyone last did something.
+  work: { actions: number; published: number; drafted: number; supplier_orders: number; dispatched: number; hunted: number; buyers_answered: number; last_active_at: string | null };
+  time: { working_minutes: number; people: number };
+  inbox: { conversations: number; chatMessages: number };
+  files: { count: number; bytes: number };
+}
+
 export interface User {
   id: string;
   email: string;
@@ -2625,6 +2669,11 @@ export const api = {
 
   listAccessRequests: () =>
     request<{ requests: AccessRequest[]; reviewed: AccessRequest[] }>("/api/auth/access/requests"),
+  // Admins: every workspace account, and deleting one with everything in it (typing its email).
+  listAdminWorkspaces: () => request<{ workspaces: AdminWorkspace[] }>("/api/auth/access/workspaces"),
+  adminWorkspace: (userId: string) => request<{ workspace: AdminWorkspaceDetail }>(`/api/auth/access/workspaces/${userId}`),
+  deleteWorkspaceAccount: (userId: string, email: string) =>
+    request<{ deleted: true; email: string; memberLogins: number }>(`/api/auth/access/accounts/${userId}`, { method: "DELETE", body: JSON.stringify({ email }) }),
   decideAccessRequest: (userId: string, status: "active" | "rejected") =>
     request<{ user: { id: string; email: string; access_status: string; deleted?: boolean } }>(`/api/auth/access/requests/${userId}`, {
       method: "POST",

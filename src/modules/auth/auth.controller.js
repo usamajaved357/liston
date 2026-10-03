@@ -154,7 +154,43 @@ async function setAccessStatus(req, res, next) {
   }
 }
 
+// Every workspace account on Liston (admins).
+async function listWorkspaces(req, res, next) {
+  try {
+    res.status(200).json({ workspaces: await accessService.listWorkspaces() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// One workspace account, with its usage (admins).
+async function workspaceDetail(req, res, next) {
+  try {
+    if (!/^[0-9a-f-]{36}$/i.test(req.params.userId)) return res.status(404).json({ error: 'That workspace no longer exists.' });
+    res.status(200).json({ workspace: await accessService.workspaceDetail(req.params.userId) });
+  } catch (err) {
+    next(err);
+  }
+}
+
+const deleteAccountSchema = z.object({ email: z.string().max(320) });
+
+// Deletes a workspace account and everything in it (admins; typing its email).
+async function deleteAccount(req, res, next) {
+  try {
+    const parsed = deleteAccountSchema.safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: "Type the account's email to delete it." });
+    if (!/^[0-9a-f-]{36}$/i.test(req.params.userId)) return res.status(404).json({ error: 'That account no longer exists.' });
+    res.status(200).json(await accessService.deleteAccount(req.params.userId, parsed.data.email));
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
+  workspaceDetail,
+  listWorkspaces,
+  deleteAccount,
   accessDecision,
   listAccessRequests,
   setAccessStatus, signup, login, verifyEmail, resendVerification, forgotPassword, resetPassword };
