@@ -14,13 +14,14 @@ const orderMessages = require('./order-messages');
 //              them to reply rather than open a case if anything's wrong.
 //              Sent when eBay pushes the new order (welcomeOrder, from
 //              ebay-push), with the hourly run catching any push eBay
-//              dropped; only orders placed after it was switched on, within
-//              a day, paid and not yet dispatched.
+//              dropped; orders placed within the last day (those from
+//              just before it was switched on too), paid and not yet
+//              dispatched.
 //   delivered  a thank-you once the order is delivered, asking for
 //              feedback. Delivery comes from the order mirror (eBay's
 //              delivery scan, read again every few hours for dispatched
-//              orders, ebay.service); only deliveries after it was switched
-//              on and within the last few days.
+//              orders, ebay.service); deliveries within the last few days
+//              (those from just before it was switched on too).
 // Never twice: each order and kind is claimed in the database before eBay
 // is asked (order.repository claimMessage), so the push and the hourly run,
 // or two servers, can't both send it; whatever eBay answers is kept and
@@ -61,6 +62,7 @@ async function sendOne({ connection, accessToken, marketplaceId, store }, kind, 
     const out = await ebayMessage.sendMessage(accessToken, { buyerUsername: order.buyerUserId, itemId, text }, marketplaceId);
     await orderRepository.finishMessage({ ...base, status: 'sent', conversationId: out.conversationId });
     await orderRepository.addEvent({ connectionId: connection.id, orderId: order.orderId, kind: `message.${kind}`, detail: { conversationId: out.conversationId } }).catch(() => {});
+    logger.info('Order messages: message sent', { connectionId: connection.id, orderId: order.orderId, kind });
     return 'sent';
   } catch (err) {
     await orderRepository.finishMessage({ ...base, status: 'failed', error: err.message });
@@ -79,7 +81,10 @@ async function runFor(connection) {
   if (!anyOn(connection.settings)) return 0;
   try {
     const result = await connectionService.withDecryptedCredentials(connection.id, connection.user_id, async (credentials, full) => {
-      if (!ebayOauth.hasScope(credentials, SCOPE)) return { sent: 0, scopeMissing: true };
+      if (!ebayOauth.hasScope(credentials, SCOPE)) {
+        logger.warn('Order messages: account needs reconnecting to send messages', { connectionId: connection.id });
+        return { sent: 0, scopeMissing: true };
+      }
       const { accessToken, siteId, credentials: fresh, credentialsChanged } = await ebayService.ensureValidAccessToken(credentials);
       const placed = settingOf(full.settings, 'placed');
       const delivered = settingOf(full.settings, 'delivered');
@@ -88,16 +93,20 @@ async function runFor(connection) {
       const orders = await ebayService.getOrdersLast90Cached(connection.id, accessToken, siteId, push);
       const ctx = { connection: full, accessToken, marketplaceId: full.settings?.ebay?.marketplaceId || credentials.marketplaceId || 'EBAY_GB', store: await storeNameOf(full) };
       let sent = 0;
+      const found = {};
       if (placed?.enabled) {
         const done = await orderRepository.messagedOrderIds(connection.id, 'placed');
         const due = orderMessages.placedDue(orders, { since: placed.enabledAt, done, statusOf: ebayService.classifyOrderStatus }).slice(0, PER_RUN);
+        found.placed = due.length;
         for (const order of due) if ((await sendOne(ctx, 'placed', placed, order)) === 'sent') sent += 1;
       }
       if (delivered?.enabled) {
         const done = await orderRepository.messagedOrderIds(connection.id, 'delivered');
         const due = orderMessages.dueOrders(orders, { since: delivered.enabledAt, done, isCancelled }).slice(0, PER_RUN);
+        found.delivered = due.length;
         for (const order of due) if ((await sendOne(ctx, 'delivered', delivered, order)) === 'sent') sent += 1;
       }
+      logger.info('Order messages: account checked', { connectionId: connection.id, orders: orders.length, due: found, sent });
       return { sent, credentials: fresh, credentialsChanged };
     });
     return result?.sent || 0;
@@ -134,7 +143,9 @@ async function welcomeOrder(connectionId, ownerId, order) {
       const ctx = { connection: full, accessToken, marketplaceId: full.settings?.ebay?.marketplaceId || credentials.marketplaceId || 'EBAY_GB', store: await storeNameOf(full) };
       return { outcome: await sendOne(ctx, 'placed', setting, due), credentials: fresh, credentialsChanged };
     });
-    return result?.outcome || 'off';
+    const outcome = result?.outcome || 'off';
+    if (outcome !== 'off') logger.info('Order messages: new order', { connectionId, orderId: order?.orderId, outcome });
+    return outcome;
   } catch (err) {
     logger.warn('Order messages: welcome not sent', { connectionId, orderId: order?.orderId, error: err.message });
     return 'error';
@@ -160,8 +171,9 @@ async function getSettings(connectionId, ownerId) {
 
 /**
  * Turns the messages on or off and words them (`changes`: { placed?,
- * delivered? }, each { enabled, text }). Switched on, a message counts
- * orders (or deliveries) from now; the default wording is stored as none.
+ * delivered? }, each { enabled, text }). Switched on, a message covers the
+ * last day's orders (the last few days' deliveries) and everything after;
+ * the default wording is stored as none.
  */
 async function updateSettings(connectionId, ownerId, changes) {
   const connection = await connectionService.getConnectionWithDecryptedCredentials(connectionId, ownerId);

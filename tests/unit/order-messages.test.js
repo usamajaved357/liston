@@ -43,13 +43,15 @@ test('the delivered message names the buyer and the item, and goes only to order
   const orders = [
     order('fresh', hoursAgo(2)),
     order('before-switch-on', hoursAgo(30)),
+    order('four-days', hoursAgo(24 * 4)),
     order('done', hoursAgo(1)),
     order('not-delivered', null),
     order('cancelled', hoursAgo(1)),
     order('no-buyer', hoursAgo(1), { buyerUserId: null }),
   ];
   const due = orderMessages.dueOrders(orders, { since: hoursAgo(24), done: new Set(['done']), now: NOW, isCancelled: (o) => o.orderId === 'cancelled' });
-  assert.deepStrictEqual(due.map((o) => o.orderId), ['fresh']);
+  // Delivered just before it was switched on still gets one; four days ago doesn't.
+  assert.deepStrictEqual(due.map((o) => o.orderId), ['fresh', 'before-switch-on']);
   // Switched on long ago: still only deliveries of the last few days.
   const old = orderMessages.dueOrders([order('week', hoursAgo(24 * 7)), order('day', hoursAgo(20))], { since: hoursAgo(24 * 30), done: new Set(), now: NOW });
   assert.deepStrictEqual(old.map((o) => o.orderId), ['day']);
@@ -104,12 +106,13 @@ test('the welcome: Liston\'s wording signs off with the store, the item carries 
   assert.strictEqual(orderMessages.fill('Thanks!\n\n\n{store}', o, { kind: 'placed' }), 'Thanks!');
 });
 
-test('a welcome is due only for orders placed since it was switched on, within a day, paid and not dispatched, not already messaged', () => {
+test('a welcome is due for the last day\'s orders, those from just before it was switched on too, paid and not dispatched, not already messaged', () => {
   const placed = (id, h, over = {}) => order(id, null, { createdAt: hoursAgo(h), ...over });
   const status = { unpaid: 'awaiting_payment', shipped: 'dispatched', cancelled: 'cancelled' };
   const orders = [
     placed('new', 0.1),
     placed('before-switch-on', 5),
+    placed('yesterday', 30),
     placed('done', 0.5),
     placed('unpaid', 0.5),
     placed('shipped', 0.5),
@@ -118,7 +121,8 @@ test('a welcome is due only for orders placed since it was switched on, within a
     placed('no-item', 0.5, { lineItems: [] }),
   ];
   const due = orderMessages.placedDue(orders, { since: hoursAgo(2), done: new Set(['done']), now: NOW, statusOf: (o) => status[o.orderId] || 'awaiting_dispatch' });
-  assert.deepStrictEqual(due.map((o) => o.orderId), ['new']);
+  // Placed 5 hours ago, before it was switched on 2 hours ago, and still waiting: welcomed. Over a day old: not.
+  assert.deepStrictEqual(due.map((o) => o.orderId), ['new', 'before-switch-on']);
   // Switched on long ago: still only the last day's orders, never the backlog.
   const old = orderMessages.placedDue([placed('two-days', 48), placed('today', 20)], { since: hoursAgo(24 * 30), done: new Set(), now: NOW });
   assert.deepStrictEqual(old.map((o) => o.orderId), ['today']);
