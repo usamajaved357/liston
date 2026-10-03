@@ -5,6 +5,7 @@ const { mock } = require('node:test');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const connectionRepository = require('../../src/modules/connections/connection.repository');
@@ -54,7 +55,7 @@ async function setup() {
   await connectionRepository.mergeEbaySettings(connection.id, { username: seller, marketplaceId: 'EBAY_GB' });
   const member = async (name, inbox) => {
     const memberEmail = `inbox-team-${name.toLowerCase()}-${crypto.randomUUID()}@example.com`;
-    const added = await request('POST', '/api/team/members', { email: memberEmail, name, password: 'memberpassword123' }, data.token);
+    const added = await addMember(baseUrl, data.token, { email: memberEmail, name, password: 'memberpassword123' });
     assert.strictEqual(added.status, 201, JSON.stringify(added.data));
     if (inbox) await request('PUT', `/api/team/members/${added.data.member.id}/permissions`, { permissions: [{ connectionId: connection.id, feature: 'inbox', allowed: true }] }, data.token);
     const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });

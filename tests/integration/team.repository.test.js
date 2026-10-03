@@ -12,6 +12,13 @@ test.after(async () => {
   await pool.end();
 });
 
+// A member's login and their place in the owner's workspace, as accepting an invitation makes them.
+async function createMember({ ownerId, email, name = null, passwordHash }) {
+  const { rows } = await pool.query(`INSERT INTO users (email, password_hash, role, name) VALUES ($1, $2, 'member', $3) RETURNING id`, [email, passwordHash, name]);
+  await pool.query(`INSERT INTO workspace_members (owner_user_id, user_id) VALUES ($1, $2)`, [ownerId, rows[0].id]);
+  return teamRepository.findMemberForOwner(rows[0].id, ownerId);
+}
+
 async function createOwnerWithConnection() {
   const email = `owner-${crypto.randomUUID()}@example.com`;
   const { user } = await authService.signup({ email, password: 'testpassword123' });
@@ -25,7 +32,7 @@ async function createOwnerWithConnection() {
 
 test('resolvePermission denies by default when no rows exist', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
-  const member = await teamRepository.createMember({
+  const member = await createMember({
     ownerId,
     email: `member-${crypto.randomUUID()}@example.com`,
     name: 'Test Member',
@@ -38,7 +45,7 @@ test('resolvePermission denies by default when no rows exist', async () => {
 
 test('resolvePermission uses the global default when no scoped row exists', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
-  const member = await teamRepository.createMember({
+  const member = await createMember({
     ownerId,
     email: `member-${crypto.randomUUID()}@example.com`,
     passwordHash: 'hash',
@@ -52,7 +59,7 @@ test('resolvePermission uses the global default when no scoped row exists', asyn
 
 test('a scoped override wins over the global default, in both directions', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
-  const member = await teamRepository.createMember({
+  const member = await createMember({
     ownerId,
     email: `member-${crypto.randomUUID()}@example.com`,
     passwordHash: 'hash',
@@ -74,7 +81,7 @@ test('a scoped override wins over the global default, in both directions', async
 // it removes the override entirely so the global default takes over again.
 test('clearPermission removes a scoped override so the global default takes over again', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
-  const member = await teamRepository.createMember({
+  const member = await createMember({
     ownerId,
     email: `member-${crypto.randomUUID()}@example.com`,
     passwordHash: 'hash',
@@ -97,7 +104,7 @@ test('clearPermission removes a scoped override so the global default takes over
 
 test('setPermission upserts rather than duplicating rows on repeated writes', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
-  const member = await teamRepository.createMember({
+  const member = await createMember({
     ownerId,
     email: `member-${crypto.randomUUID()}@example.com`,
     passwordHash: 'hash',
@@ -116,7 +123,7 @@ test('setPermission upserts rather than duplicating rows on repeated writes', as
 
 test('resolveAnyPermission is true if at least one feature is granted', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
-  const member = await teamRepository.createMember({
+  const member = await createMember({
     ownerId,
     email: `member-${crypto.randomUUID()}@example.com`,
     passwordHash: 'hash',
@@ -130,7 +137,7 @@ test('resolveAnyPermission is true if at least one feature is granted', async ()
 
 test('getResolvedPermissions returns a flat map across every known feature', async () => {
   const { ownerId, connectionId } = await createOwnerWithConnection();
-  const member = await teamRepository.createMember({
+  const member = await createMember({
     ownerId,
     email: `member-${crypto.randomUUID()}@example.com`,
     passwordHash: 'hash',

@@ -17,6 +17,30 @@ export function readCachedUser(): User | null {
   }
 }
 
+/**
+ * This browser's sign-in ended: the API refused it, or the live channel
+ * said the login's password changed (`reason: "password"`; every device of
+ * the login is signed out then, this one too). `token`: the sign-in that
+ * ended; when this browser holds a newer one already (the new password was
+ * just used in another tab), the page reloads with that instead. Otherwise
+ * it's forgotten and the sign-in page says why.
+ */
+export function endSession(token: string | null, reason?: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    const now = localStorage.getItem("token");
+    if (token && now && now !== token) {
+      window.location.reload();
+      return;
+    }
+    localStorage.removeItem("token");
+    localStorage.removeItem(KEY);
+  } catch {
+    // storage unavailable: the sign-in page still opens
+  }
+  if (!window.location.pathname.startsWith("/login")) window.location.assign(reason === "password" ? "/login?reason=password" : "/login");
+}
+
 export function cacheUser(user: User | null) {
   if (typeof window === "undefined") return;
   try {

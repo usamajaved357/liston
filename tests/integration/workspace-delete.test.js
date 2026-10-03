@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 
@@ -25,8 +26,8 @@ test.after(async () => {
   await pool.end();
 });
 
-async function request(method, url, body, token) {
-  const res = await fetch(`${baseUrl}${url}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+async function request(method, url, body, token, team = null) {
+  const res = await fetch(`${baseUrl}${url}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(team ? { 'X-Liston-Workspace': team } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
@@ -41,7 +42,7 @@ async function owner(name, teamName) {
 }
 
 async function member(ownerToken, name, email = `ws-delete-${name.toLowerCase()}-${crypto.randomUUID()}@example.com`) {
-  const added = await request('POST', '/api/team/members', { email, name, password: PASSWORD }, ownerToken);
+  const added = await addMember(baseUrl, ownerToken, { email, name, password: PASSWORD });
   assert.strictEqual(added.status, 201, JSON.stringify(added.data));
   return { id: added.data.member.id, email };
 }
@@ -101,7 +102,8 @@ test("an owner who's in another workspace keeps their login there, a member's fr
   const connection = await account(usama.id);
   await member(talha.token, 'Usama', usama.email);
 
-  const res = await request('DELETE', '/api/team/workspace', { name: 'Walexo Group' }, usama.token);
+  // Joining opened Talha's workspace for them; this is their own.
+  const res = await request('DELETE', '/api/team/workspace', { name: 'Walexo Group' }, usama.token, usama.id);
   assert.strictEqual(res.status, 200, JSON.stringify(res.data));
   assert.deepStrictEqual(res.data, { loginKept: true });
 

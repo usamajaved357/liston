@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember, linkToken } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 
@@ -69,7 +70,7 @@ async function scenario() {
   for (const c of [walexo, minsu, talhas]) await unreadConversation(c.id);
 
   const email = `scenario-bilal-${crypto.randomUUID()}@example.com`;
-  const added = await request('POST', '/api/team/members', { email, name: 'Bilal', password: PASSWORD }, usama.token);
+  const added = await addMember(baseUrl, usama.token, { email, name: 'Bilal', password: PASSWORD });
   assert.strictEqual(added.status, 201, JSON.stringify(added.data));
   const bilalId = added.data.member.id;
   const granted = await request(
@@ -86,8 +87,10 @@ async function scenario() {
   );
   assert.strictEqual(granted.status, 200, JSON.stringify(granted.data));
 
-  const joined = await request('POST', '/api/team/members', { email }, talha.token);
-  assert.deepStrictEqual([joined.status, joined.data.existingLogin], [201, true]);
+  const invited = await request('POST', '/api/team/invites', { email }, talha.token);
+  assert.strictEqual(invited.data.invite.existingLogin, true);
+  const joined = await request('POST', `/api/invites/${linkToken(invited.data.invite.link)}/accept`, { password: PASSWORD });
+  assert.strictEqual(joined.status, 200, JSON.stringify(joined.data));
   const coManager = await request('PUT', `/api/team/members/${bilalId}/owner-access`, { ownerAccess: true }, talha.token);
   assert.strictEqual(coManager.status, 200, JSON.stringify(coManager.data));
 
@@ -131,7 +134,7 @@ test("in one workspace a member with chosen areas on chosen accounts, in the oth
   assert.deepStrictEqual((await inUsama('GET', '/api/inbox/unread')).data.accounts, { [walexo.id]: 1 });
   // A member doesn't run the workspace here.
   assert.strictEqual((await inUsama('GET', '/api/team/members')).status, 403);
-  assert.strictEqual((await inUsama('POST', '/api/team/members', { email: `scenario-x-${crypto.randomUUID()}@example.com`, name: 'X', password: PASSWORD })).status, 403);
+  assert.strictEqual((await inUsama('POST', '/api/team/invites', { email: `scenario-x-${crypto.randomUUID()}@example.com`, name: 'X' })).status, 403);
   // Talha's account isn't reachable from Usama's workspace.
   assert.strictEqual((await inUsama('GET', `/api/connections/${talhas.id}`)).status, 404);
 
@@ -153,7 +156,7 @@ test('a co-manager runs the members, but never makes co-managers, renames or del
 
   const members = await inTalha('GET', '/api/team/members');
   assert.strictEqual(members.status, 200);
-  const sara = await inTalha('POST', '/api/team/members', { email: `scenario-sara-${crypto.randomUUID()}@example.com`, name: 'Sara', password: PASSWORD });
+  const sara = await addMember(baseUrl, bilal.token, { email: `scenario-sara-${crypto.randomUUID()}@example.com`, name: 'Sara', password: PASSWORD }, { team: talha.id });
   assert.strictEqual(sara.status, 201, JSON.stringify(sara.data));
   const saraId = sara.data.member.id;
   assert.strictEqual((await inTalha('PUT', `/api/team/members/${saraId}/permissions`, { permissions: [{ connectionId: talhas.id, feature: 'orders', allowed: true }] })).status, 200);

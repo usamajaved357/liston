@@ -9,6 +9,7 @@ process.env.STORAGE_DIR = path.join(os.tmpdir(), `liston-test-storage-${process.
 delete process.env.R2_ACCOUNT_ID;
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const notificationsService = require('../../src/modules/notifications/notifications.service');
@@ -52,7 +53,7 @@ async function setup() {
     ['Ali', [{ connectionId: null, feature: 'chat_manage', allowed: true }]],
   ]) {
     const memberEmail = `chat-${name.toLowerCase()}-${crypto.randomUUID()}@example.com`;
-    const added = await request('POST', '/api/team/members', { email: memberEmail, password: 'memberpassword123', name }, o.token);
+    const added = await addMember(baseUrl, o.token, { email: memberEmail, password: 'memberpassword123', name });
     const id = added.data.id || added.data.member?.id;
     if (grants.length) await request('PUT', `/api/team/members/${id}/permissions`, { permissions: grants }, o.token);
     const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });

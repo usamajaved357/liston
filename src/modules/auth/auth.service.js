@@ -9,6 +9,7 @@ const accessService = require('./access.service');
 const activityRepository = require('../team/activity.repository');
 const workspaceRepository = require('../team/workspace.repository');
 const teams = require('../team/teams');
+const userEvents = require('../realtime/user-events');
 
 const SALT_ROUNDS = 12;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -176,14 +177,16 @@ async function resetPassword(rawToken, newPassword) {
   const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
   await query(
     `UPDATE users
-     SET password_hash = $1, password_reset_token_hash = NULL, password_reset_expires_at = NULL
+     SET password_hash = $1, password_reset_token_hash = NULL, password_reset_expires_at = NULL,
+         session_version = session_version + 1
      WHERE id = $2`,
     [passwordHash, result.rows[0].id]
   );
+  await endSessions(result.rows[0].id);
 }
 
 async function login({ email, password }) {
-  const result = await query('SELECT id, email, password_hash, plan_id, role FROM users WHERE email = $1', [email]);
+  const result = await query('SELECT id, email, password_hash, plan_id, role, session_version FROM users WHERE email = $1', [email]);
   if (result.rows.length === 0) {
     throw new AuthError('Invalid email or password', 401);
   }
@@ -218,8 +221,21 @@ async function login({ email, password }) {
   };
 }
 
+/**
+ * After a login's password changed (its session_version bumped with it):
+ * every device signed in to it is signed out. Their sign-ins already fail
+ * at the next request (requireAuth); open tabs are told now on the live
+ * channel, and browsers stop getting its notifications until someone signs
+ * in there again (the bell ties the browser back on). Never throws.
+ */
+async function endSessions(userId) {
+  await query('DELETE FROM push_subscriptions WHERE user_id = $1', [userId]).catch((err) => logger.warn('Push subscriptions not cleared', { error: err.message }));
+  userEvents.emit(String(userId), { type: 'session.ended', reason: 'password' });
+}
+
+// `sv`: the login's session version when signed in (migration 054); a changed password makes it stale.
 function issueToken(user) {
-  return jwt.sign({ sub: user.id, email: user.email }, config.jwt.secret, {
+  return jwt.sign({ sub: user.id, email: user.email, sv: Number(user.session_version) || 0 }, config.jwt.secret, {
     expiresIn: config.jwt.expiresIn,
   });
 }
@@ -233,6 +249,7 @@ module.exports = {
   login,
   issueToken,
   verifyToken,
+  endSessions,
   verifyEmail,
   resendVerification,
   requestPasswordReset,

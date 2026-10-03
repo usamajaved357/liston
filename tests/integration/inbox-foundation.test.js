@@ -10,6 +10,7 @@ delete process.env.R2_ACCOUNT_ID;
 
 const sharp = require('sharp');
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const storage = require('../../src/lib/storage');
@@ -56,7 +57,7 @@ async function owner(label) {
 
 async function member(ownerToken, grants) {
   const email = `inbox-member-${crypto.randomUUID()}@example.com`;
-  const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, ownerToken);
+  const added = await addMember(baseUrl, ownerToken, { email, password: 'memberpassword123', name: 'Sara' });
   await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: grants }, ownerToken);
   const login = await request('POST', '/api/auth/login', { email, password: 'memberpassword123' });
   return { id: login.data.user.id, token: login.data.token };

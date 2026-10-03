@@ -2,13 +2,16 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { teamHeaders } from "@/lib/team";
+import { endSession } from "@/lib/session";
 
 // The signed-in person's live channel (GET /api/me/events): one stream per
 // tab, shared by everything that listens (the Inbox, the sidebar's unread
 // badge), opened with the first listener and closed with the last. Uses
 // fetch streaming so the token travels in a header, never in the URL, and
 // reconnects with backoff. Also tells the server which conversation this tab
-// shows, so nobody is pushed about a conversation they're reading.
+// shows, so nobody is pushed about a conversation they're reading. When the
+// login's password changes (on any device) the server says so here, and
+// this tab is signed out at once (lib/session endSession).
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
@@ -32,6 +35,15 @@ function start() {
     while (!signal.aborted) {
       try {
         const res = await fetch(`${API_URL}/api/me/events`, { headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream", ...teamHeaders() }, signal });
+        // This sign-in has ended (its password changed, or it ran out): no reconnecting with it.
+        if (res.status === 401) {
+          const refused = (await res.json().catch(() => ({}))) as { code?: string; reason?: string };
+          if (refused.code === "SESSION_ENDED") {
+            stop();
+            endSession(token, refused.reason);
+            return;
+          }
+        }
         if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
         attempt = 0;
         if (!first) reconnectListeners.forEach((fn) => fn());
@@ -56,6 +68,11 @@ function start() {
             if (!data) continue;
             try {
               const event = JSON.parse(data) as MyEvent;
+              if (event.type === "session.ended") {
+                stop();
+                endSession(token, event.reason);
+                return;
+              }
               listeners.forEach((fn) => fn(event));
             } catch {
               // Not for us.

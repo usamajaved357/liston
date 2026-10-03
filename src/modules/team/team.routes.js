@@ -2,6 +2,7 @@ const express = require('express');
 const { requireAuth } = require('../../middleware/auth.middleware');
 const { requireOwner, requireMainOwner } = require('../../middleware/feature.middleware');
 const teamController = require('./team.controller');
+const invitesController = require('./invites.controller');
 
 const router = express.Router();
 
@@ -13,13 +14,19 @@ router.post('/clock', requireAuth, teamController.clock);
 // rest of the team, never their own login or another with owner access:
 // team.service manageable). Owner access itself is the owner's alone.
 router.get('/members', requireAuth, requireOwner, teamController.listMembers);
-router.post('/members', requireAuth, requireOwner, teamController.addMember);
+// Joining is by invitation (invites.service): the person accepts from the emailed link.
+router.get('/invites', requireAuth, requireOwner, invitesController.listInvites);
+router.post('/invites', requireAuth, requireOwner, invitesController.invite);
+router.post('/invites/:inviteId/resend', requireAuth, requireOwner, invitesController.resend);
+router.delete('/invites/:inviteId', requireAuth, requireOwner, invitesController.revoke);
 router.delete('/members/:id', requireAuth, requireOwner, teamController.removeMember);
 router.post('/members/:id/restore', requireAuth, requireOwner, teamController.restoreMember);
 router.get('/members/:id/overview', requireAuth, requireOwner, teamController.getMemberOverview);
 router.get('/members/:id/activity', requireAuth, requireOwner, teamController.getMemberActivity);
 router.get('/members/:id/time', requireAuth, requireOwner, teamController.getMemberTime);
-router.put('/members/:id/password', requireAuth, requireOwner, teamController.setMemberPassword);
+// A member's email confirmed, or moved to their real one, from the link sent there (they choose their
+// own password then: nobody else ever sets a member's password).
+router.post('/members/:id/email', requireAuth, requireOwner, invitesController.changeMemberEmail);
 router.get('/members/:id/permissions', requireAuth, requireOwner, teamController.getMemberPermissions);
 router.put('/members/:id/permissions', requireAuth, requireOwner, teamController.updateMemberPermissions);
 router.put('/members/:id/owner-access', requireAuth, requireMainOwner, teamController.setOwnerAccess);

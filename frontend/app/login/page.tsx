@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
@@ -17,6 +17,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Sent here because the login's password changed (lib/session endSession).
+  const [passwordChanged, setPasswordChanged] = useState(false);
+
+  useEffect(() => {
+    // After the first paint: the page is the same on the server, the reason only in the address.
+    const t = setTimeout(() => setPasswordChanged(new URLSearchParams(window.location.search).get("reason") === "password"), 0);
+    return () => clearTimeout(t);
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -58,6 +66,7 @@ export default function LoginPage() {
           password managers recognise this as a login form: offer to save the
           credentials the first time and fill them on later visits. */}
       <form onSubmit={handleSubmit} method="post" action="/login" className="space-y-3.5">
+        {passwordChanged && !error && <Alert variant="success">Your password was changed, so you were signed out on every device. Log in with your new password.</Alert>}
         <Field label="Email" type="email" name="email" value={email} onChange={setEmail} autoComplete="username" required />
         <div>
           <div className="flex items-center justify-between mb-1.5">

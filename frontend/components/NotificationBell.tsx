@@ -86,6 +86,27 @@ const KIND: Record<string, Kind> = {
       </>
     ),
   },
+  // Invited to another workspace: the link opens the invitation.
+  "team.invited": {
+    label: "Invitation",
+    ring: "bg-teal-50 text-teal-600 ring-teal-200",
+    chip: "bg-teal-50 text-teal-700 ring-teal-200",
+    note: "border-teal-300",
+    icon: <path d="M3.5 6.5l6.5 4.5 6.5-4.5M4.5 5h11a1 1 0 011 1v8a1 1 0 01-1 1h-11a1 1 0 01-1-1V6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />,
+  },
+  // Someone you invited joined: the link opens their access.
+  "team.joined": {
+    label: "New member",
+    ring: "bg-emerald-50 text-emerald-600 ring-emerald-200",
+    chip: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+    note: "border-emerald-300",
+    icon: (
+      <>
+        <circle cx="8" cy="7" r="2.6" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M3.5 15.5c0-2.5 2-4.2 4.5-4.2s4.5 1.7 4.5 4.2M12.5 9.5l1.8 1.8 3.2-3.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </>
+    ),
+  },
   // A buyer's new eBay message, and a conversation given to you.
   "inbox.message": {
     label: "Buyer message",
@@ -223,6 +244,8 @@ function openLabel(toast: Toast): string {
   if (toast.kind === "chat.message") return toast.url?.includes("&t=") ? "Open the thread" : "Open the conversation";
   if (toast.kind?.includes("message")) return "Open the conversation";
   if (toast.kind === "team.added") return "Open the workspace";
+  if (toast.kind === "team.invited") return "Open the invitation";
+  if (toast.kind === "team.joined") return "Choose their access";
   if (toast.kind?.startsWith("team.owner_access")) return "Reload Liston";
   return "Open";
 }

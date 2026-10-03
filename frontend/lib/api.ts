@@ -1,5 +1,5 @@
 import { currentTeam, rememberTeam, teamHeaders } from "@/lib/team";
-import { cacheUser } from "@/lib/session";
+import { cacheUser, endSession } from "@/lib/session";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
@@ -55,13 +55,9 @@ async function request<T>(
       try {
         localStorage.removeItem("liston:me");
       } catch {}
-      // The sign-in has run out (or the login was removed): to the sign-in page, not an error on this one.
-      if (data.code === "SESSION_ENDED" && !window.location.pathname.startsWith("/login")) {
-        try {
-          localStorage.removeItem("token");
-        } catch {}
-        window.location.assign("/login");
-      }
+      // The sign-in has run out, the login was removed, or its password changed (on any device):
+      // to the sign-in page, not an error on this one.
+      if (data.code === "SESSION_ENDED" && !window.location.pathname.startsWith("/login")) endSession(token, data.reason);
     }
     // Removed from the team this tab was in: forget it and open their home in the team they're in now.
     if (res.status === 403 && data.code === "TEAM_GONE" && typeof window !== "undefined") {
@@ -660,11 +656,48 @@ export interface TeamMember {
   owner_access_at?: string | null;
   // Their login is also an owner's or in another team: only they change its password.
   shared_login?: boolean;
+  // Whether their login's email was ever proven (an invitation accepted, or confirmed); old typed-in logins aren't.
+  email_confirmed?: boolean;
+  // A move to a real email sent, waiting for them to confirm it there.
+  pending_email?: string | null;
   lastActiveAt?: string | null; // their last recorded action
   today?: TeamMetrics; // what they've done today (Team page cards)
   // Their time in Liston today (minutes), and whether a tab of theirs is open now.
   time?: { working: number; idle: number; lastSeenAt: string | null; inListon: boolean };
   permissions: TeamMemberPermission[];
+}
+
+// An open invitation on the Members page: someone invited to join, or a
+// member's login moving to a real email (`kind: "email"`, `memberId`).
+export interface TeamInvite {
+  id: string;
+  email: string;
+  name: string | null;
+  kind: "join" | "email";
+  memberId: string | null;
+  // The email already signs in to Liston: they join with that login.
+  existingLogin: boolean;
+  invitedBy: string | null;
+  // The member whose access they get on joining.
+  sameAs: { id: string; name: string | null } | null;
+  sentAt: string;
+  expiresAt: string;
+  expired: boolean;
+  // The link the email carries, to send another way.
+  link: string;
+}
+
+// What an invitation link's page shows. `kind`: new (they create their
+// login), join (they have one), email (their login moves to this email).
+export interface InvitePage {
+  email: string;
+  name: string | null;
+  workspace: string;
+  invitedBy: string;
+  kind: "new" | "join" | "email";
+  currentEmail: string | null;
+  expiresAt: string;
+  status: "open" | "expired" | "accepted" | "revoked";
 }
 
 // A member's figures (backend team/activity.js METRICS). An order line or
@@ -3126,12 +3159,19 @@ export const api = {
   listTeamMembers: () =>
     request<{ members: TeamMember[]; knownFeatures: string[] }>(`/api/team/members?tz=${encodeURIComponent(viewerTimeZone())}`),
 
-  // A new email gets a login with this password; one already on Liston joins with their own (`existingLogin`).
-  addTeamMember: (input: { email: string; name?: string; password?: string }) =>
-    request<{ member: TeamMember; existingLogin: boolean }>("/api/team/members", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+  // Invitations: someone joins from the emailed link (`emailed` false when the email couldn't go: send `invite.link` yourself).
+  listTeamInvites: () => request<{ invites: TeamInvite[] }>("/api/team/invites"),
+  inviteMember: (input: { email: string; name?: string; sameAs?: string | null }) =>
+    request<{ invite: TeamInvite; emailed: boolean; again: boolean }>("/api/team/invites", { method: "POST", body: JSON.stringify(input) }),
+  resendInvite: (id: string) => request<{ invite: TeamInvite; emailed: boolean }>(`/api/team/invites/${id}/resend`, { method: "POST" }),
+  revokeInvite: (id: string) => request<void>(`/api/team/invites/${id}`, { method: "DELETE" }),
+  // A member's login moving to a real email, once they confirm it from the link sent there.
+  changeMemberEmail: (id: string, email: string) =>
+    request<{ invite: TeamInvite; emailed: boolean }>(`/api/team/members/${id}/email`, { method: "POST", body: JSON.stringify({ email }) }),
+  // The invited person's side: what the link is, and accepting it (signs them in).
+  getInvite: (token: string) => request<{ invite: InvitePage }>(`/api/invites/${encodeURIComponent(token)}`),
+  acceptInvite: (token: string, input: { name?: string; password?: string }) =>
+    request<AuthResponse>(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST", body: JSON.stringify(input) }),
 
   removeTeamMember: (id: string) => request<void>(`/api/team/members/${id}`, { method: "DELETE" }),
   restoreTeamMember: (id: string) => request<void>(`/api/team/members/${id}/restore`, { method: "POST" }),
@@ -3172,8 +3212,6 @@ export const api = {
   // Owner access: the owner only gives it or takes it away.
   setOwnerAccess: (id: string, ownerAccess: boolean) =>
     request<{ member: TeamMember }>(`/api/team/members/${id}/owner-access`, { method: "PUT", body: JSON.stringify({ ownerAccess }) }),
-  setTeamMemberPassword: (id: string, password: string) =>
-    request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
   updateMemberPermissions: (memberId: string, permissions: PermissionUpdate[]) =>
     request<{ permissions: TeamMemberPermission[] }>(`/api/team/members/${memberId}/permissions`, {

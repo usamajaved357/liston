@@ -127,6 +127,8 @@ async function changePassword(userId, currentPassword, newPassword) {
 
   const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
   await userRepository.updatePasswordHash(userId, passwordHash);
+  // Signed out everywhere, this device too: they sign in again with the new password.
+  await authService.endSessions(userId);
 }
 
 const AVATAR_DATA_URL_PATTERN = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+=*$/;

@@ -14,9 +14,14 @@ const KNOWN_FEATURES = ['orders', 'listings', 'listings_publish', 'analytics', '
 // `created_at` is when they joined this team; `shared_login`: the login is
 // also an owner's or in another team, so only the person changes its
 // password; `avatar_url` their profile photo (a small JPEG, as workspace
-// chat sends it) for the Members page and their own page.
+// chat sends it) for the Members page and their own page; `email_confirmed`
+// whether the login's email was ever proven (an invitation accepted, or
+// confirmed), `pending_email` an email change sent and not yet confirmed
+// (migration 053).
 const MEMBER_COLUMNS = `u.id, u.email, u.name, u.avatar_url, m.created_at, u.last_login_at, m.deactivated_at, m.owner_access_at,
-  (u.role = 'owner' OR EXISTS (SELECT 1 FROM workspace_members o WHERE o.user_id = u.id AND o.owner_user_id <> m.owner_user_id)) AS shared_login`;
+  (u.role = 'owner' OR EXISTS (SELECT 1 FROM workspace_members o WHERE o.user_id = u.id AND o.owner_user_id <> m.owner_user_id)) AS shared_login,
+  (u.email_verified_at IS NOT NULL) AS email_confirmed,
+  (SELECT i.email FROM workspace_invites i WHERE i.member_user_id = u.id AND i.owner_user_id = m.owner_user_id AND i.accepted_at IS NULL AND i.revoked_at IS NULL LIMIT 1) AS pending_email`;
 
 async function listMembers(ownerId) {
   const result = await query(
@@ -27,32 +32,6 @@ async function listMembers(ownerId) {
     [ownerId]
   );
   return result.rows;
-}
-
-/** A new login (no team of its own) and its place in this team, together. */
-async function createMember({ ownerId, email, name, passwordHash, addedBy = null }) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const { rows } = await client.query(
-      `INSERT INTO users (email, password_hash, role, name) VALUES ($1, $2, 'member', $3) RETURNING id`,
-      [email, passwordHash, name || null]
-    );
-    await client.query(`INSERT INTO workspace_members (owner_user_id, user_id, added_by) VALUES ($1, $2, $3)`, [ownerId, rows[0].id, addedBy]);
-    await client.query('COMMIT');
-    return findMemberForOwner(rows[0].id, ownerId);
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-/** An existing login (another team's member, or an owner) joining this team. */
-async function addMembership({ ownerId, userId, addedBy = null }) {
-  await query(`INSERT INTO workspace_members (owner_user_id, user_id, added_by) VALUES ($1, $2, $3)`, [ownerId, userId, addedBy]);
-  return findMemberForOwner(userId, ownerId);
 }
 
 async function findMemberForOwner(id, ownerId) {
@@ -69,20 +48,6 @@ async function findMemberForOwner(id, ownerId) {
 async function findLoginByEmail(email) {
   const result = await query(`SELECT id, email, name, role FROM users WHERE lower(email) = lower($1)`, [email]);
   return result.rows[0] || null;
-}
-
-// Only a login that's this team's alone: never one that's also an owner's
-// or in another team (an owner there could otherwise take it over, and
-// with it the other team's work).
-async function setMemberPassword(id, ownerId, passwordHash) {
-  const result = await query(
-    `UPDATE users u SET password_hash = $3, updated_at = now()
-      WHERE u.id = $1 AND u.role = 'member'
-        AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.user_id = u.id AND m.owner_user_id = $2)
-        AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.user_id = u.id AND m.owner_user_id <> $2)`,
-    [id, ownerId, passwordHash]
-  );
-  return result.rowCount > 0;
 }
 
 // Removing a member takes them out of this team but keeps them (and their
@@ -212,13 +177,10 @@ module.exports = {
   copyConnectionPermissions,
   KNOWN_FEATURES,
   listMembers,
-  createMember,
-  addMembership,
   findMemberForOwner,
   findLoginByEmail,
   setMemberDeactivated,
   setOwnerAccess,
-  setMemberPassword,
   getPermissions,
   setPermission,
   clearPermission,

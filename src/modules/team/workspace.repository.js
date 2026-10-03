@@ -12,7 +12,7 @@ const userRepository = require('../users/user.repository');
  */
 async function sessionFor(userId) {
   const { rows } = await query(
-    `SELECT u.id, u.email, u.role, u.access_status, u.last_workspace_id,
+    `SELECT u.id, u.email, u.role, u.access_status, u.last_workspace_id, u.session_version,
             coalesce(json_agg(json_build_object('ownerId', m.owner_user_id, 'ownerAccessAt', m.owner_access_at, 'accessStatus', o.access_status) ORDER BY m.created_at)
                      FILTER (WHERE m.owner_user_id IS NOT NULL), '[]') AS memberships
        FROM users u

@@ -66,6 +66,8 @@ const config = {
   resend: {
     apiKey: process.env.RESEND_API_KEY || null,
     fromEmail: process.env.EMAIL_FROM || 'Liston <onboarding@resend.dev>',
+    // Where replies go (a mailbox someone reads); without it, to the sender.
+    replyTo: process.env.EMAIL_REPLY_TO || null,
   },
 
   // Who approves new owner accounts (comma-separated). These addresses are

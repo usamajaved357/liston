@@ -108,8 +108,10 @@ async function createConversation({ ownerId, kind, name = null, topic = null, is
       [ownerId, kind, name, topic, isPrivate, connectionId, dmKey, createdBy]
     );
     const conversation = rows[0];
+    // Each joined a moment after the one before (now() is the same all through a transaction):
+    // the order they were picked is the order a group's name lists them in, every time.
     for (const m of members) {
-      await client.query(`INSERT INTO chat_members (conversation_id, user_id, role, last_read_at) VALUES ($1, $2, $3, now()) ON CONFLICT DO NOTHING`, [conversation.id, m.userId, m.role || 'member']);
+      await client.query(`INSERT INTO chat_members (conversation_id, user_id, role, last_read_at, joined_at) VALUES ($1, $2, $3, now(), clock_timestamp()) ON CONFLICT DO NOTHING`, [conversation.id, m.userId, m.role || 'member']);
     }
     await client.query('COMMIT');
     return conversation;
@@ -146,7 +148,7 @@ async function membersOf(conversationIds) {
        JOIN chat_conversations c ON c.id = m.conversation_id
        LEFT JOIN workspace_members wm ON wm.owner_user_id = c.owner_user_id AND wm.user_id = m.user_id
       WHERE m.conversation_id = ANY($1::uuid[])
-      ORDER BY m.joined_at`,
+      ORDER BY m.joined_at, m.user_id`,
     [conversationIds]
   );
   return rows;

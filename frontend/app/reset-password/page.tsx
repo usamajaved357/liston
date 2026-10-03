@@ -36,7 +36,8 @@ function ResetPasswordForm() {
     try {
       await api.resetPassword(token, password);
       setDone(true);
-      setTimeout(() => router.push("/login"), 1500);
+      // Every device signed in before is signed out now: the sign-in page says so.
+      setTimeout(() => router.push("/login?reason=password"), 1500);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't reset your password. Try again.");
     } finally {

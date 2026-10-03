@@ -68,7 +68,8 @@ async function updateEmail(userId, newEmail) {
 }
 
 async function updatePasswordHash(userId, passwordHash) {
-  await query('UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2', [passwordHash, userId]);
+  // Every sign-in from before ends with it (migration 054).
+  await query('UPDATE users SET password_hash = $1, session_version = session_version + 1, updated_at = now() WHERE id = $2', [passwordHash, userId]);
 }
 
 async function updateName(userId, name) {

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const orderRepository = require('../../src/modules/orders/order.repository');
@@ -66,7 +67,7 @@ test('the owner switches the delivered message on and words it; members cannot; 
 
   // A member can't see or change it.
   const memberEmail = `messages-member-${crypto.randomUUID()}@example.com`;
-  await request('POST', '/api/team/members', { email: memberEmail, password: 'memberpassword123', name: 'm' }, data.token);
+  await addMember(baseUrl, data.token, { email: memberEmail, password: 'memberpassword123', name: 'm' });
   const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
   assert.strictEqual((await request('GET', base, undefined, login.data.token)).status, 403);
 });

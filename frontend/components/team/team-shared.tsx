@@ -1,11 +1,12 @@
 "use client";
 
 // The pieces the Team page and a member's page share: who a member is
-// (avatar, name), their access switches, the one-time login details, and
-// changing their password.
+// (avatar, name), their access switches, and invitations and email
+// confirmations (sent, waiting, their link). Nobody but the member sets
+// their password.
 
 import { useState, FormEvent } from "react";
-import { api, ApiError, Connection, TeamMember, PermissionUpdate } from "@/lib/api";
+import { api, ApiError, Connection, TeamMember, TeamInvite, PermissionUpdate } from "@/lib/api";
 import { formatShortDate } from "@/lib/format";
 
 export const FEATURE_LABELS: Record<string, string> = {
@@ -94,136 +95,185 @@ export function Switch({ on, disabled, inherited, onChange, label }: { on: boole
   );
 }
 
-export function CopyButton({ value }: { value: string }) {
+const LINK_ICON = (
+  <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+    <path d="M8.5 11.5a3 3 0 004.2 0l2.6-2.6a3 3 0 00-4.2-4.2l-.9.9M11.5 8.5a3 3 0 00-4.2 0l-2.6 2.6a3 3 0 004.2 4.2l.9-.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </svg>
+);
+
+/** A slim "Copy link" capsule that says Copied for a moment. */
+export function CopyLinkButton({ link, label = "Copy link" }: { link: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
-      onClick={() => {
-        navigator.clipboard?.writeText(value).then(() => {
+      onClick={() =>
+        navigator.clipboard?.writeText(link).then(() => {
           setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        });
-      }}
-      className="btn btn-ghost btn-icon"
-      title="Copy"
-      aria-label="Copy"
+          setTimeout(() => setCopied(false), 1600);
+        })
+      }
+      className={`inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors ${
+        copied ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)] hover:border-[var(--color-primary)]/30 hover:text-[var(--color-primary)]"
+      }`}
     >
       {copied ? (
-        <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 text-[var(--color-accent)]">
-          <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+        <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+          <path d="M5 10.5l3.2 3.2L15 6.8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       ) : (
-        <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-          <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M5 15V6a2 2 0 012-2h9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
+        LINK_ICON
       )}
+      {copied ? "Copied" : label}
     </button>
   );
 }
 
-// Shown once, right after a login is created or reset — the only moment the
-// password exists in plain text. It's never stored or shown again.
-export function LoginDetails({ email, password, onDismiss }: { email: string; password: string; onDismiss: () => void }) {
-  const loginUrl = typeof window !== "undefined" ? `${window.location.origin}/login` : "/login";
-  const all = `Liston login\n${loginUrl}\nEmail: ${email}\nPassword: ${password}`;
+/** "in 5 days" / "in 3 hours" / "expired 2 days ago", for an invitation. */
+export function expiresText(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return `Expired ${timeAgo(iso)}`;
+  const hours = Math.round(ms / 3600e3);
+  if (hours < 24) return `Expires in ${Math.max(1, hours)} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `Expires in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+/**
+ * Right after an invitation or an email change is sent: whether the email
+ * went, and its link to send another way (WhatsApp, anywhere). When the
+ * email couldn't go, the link is the way.
+ */
+export function SentCard({ title, emailed, email, link, onDismiss }: { title: string; emailed: boolean; email: string; link: string; onDismiss: () => void }) {
   return (
-    <div className="card border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] p-5">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-sm font-semibold text-[var(--color-ink)]">Login details, ready to share</p>
-          <p className="mt-0.5 text-[12.5px] text-[var(--color-muted)]">The password is shown only this once. If it&apos;s lost, set a new one from the member&apos;s page.</p>
+    <div className={`flex items-start gap-3 rounded-[18px] border p-4 sm:p-5 ${emailed ? "border-emerald-200 bg-emerald-50/70" : "border-amber-200 bg-amber-50/70"}`}>
+      <span className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full ring-1 ring-inset ${emailed ? "bg-white text-emerald-600 ring-emerald-200" : "bg-white text-amber-600 ring-amber-200"}`} aria-hidden>
+        <svg viewBox="0 0 20 20" fill="none" className="h-[18px] w-[18px]">
+          {emailed ? <path d="M3.5 6.5l6.5 4.5 6.5-4.5M4.5 5h11a1 1 0 011 1v8a1 1 0 01-1 1h-11a1 1 0 01-1-1V6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" /> : <path d="M10 6.5v4.5M10 13.6v.1M8.6 3.6L2.9 13.4A1.6 1.6 0 004.3 15.8h11.4a1.6 1.6 0 001.4-2.4L11.4 3.6a1.6 1.6 0 00-2.8 0z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />}
+        </svg>
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="break-words text-[14px] font-semibold text-[var(--color-ink)]">{emailed ? title : `Couldn't email ${email}`}</p>
+        <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+          {emailed ? (
+            <>
+              Liston emailed <span className="font-medium text-[var(--color-ink)]">{email}</span>{" "}a link. It works for 7 days, and you can also copy it to send yourself.
+            </>
+          ) : (
+            <>
+              The link is ready: copy it and send it to them yourself, on WhatsApp or anywhere. It works for 7 days.
+            </>
+          )}
+        </p>
+        <div className="mt-2.5">
+          <CopyLinkButton link={link} />
         </div>
-        <button type="button" onClick={onDismiss} className="btn btn-ghost btn-icon" aria-label="Dismiss">
-          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
+      </div>
+      <button type="button" onClick={onDismiss} className="btn btn-ghost btn-icon -mr-1 -mt-1" aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+/** A member's email change waiting for them to confirm it: its link, sending it again, or calling it off. */
+export function PendingEmailChange({ invite, name, onChanged }: { invite: TeamInvite; name: string; onChanged: (resent?: { emailed: boolean; invite: TeamInvite }) => void }) {
+  const [busy, setBusy] = useState<"resend" | "cancel" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function act(kind: "resend" | "cancel") {
+    setBusy(kind);
+    setError(null);
+    try {
+      if (kind === "resend") {
+        onChanged(await api.resendInvite(invite.id));
+      } else {
+        await api.revokeInvite(invite.id);
+        onChanged();
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't do that. Try again.");
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[14px] border border-indigo-100 bg-indigo-50/60 px-4 py-3">
+      <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-white text-[var(--color-primary)] ring-1 ring-inset ring-indigo-100" aria-hidden>
+        <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+          <path d="M3.5 6.5l6.5 4.5 6.5-4.5M4.5 5h11a1 1 0 011 1v8a1 1 0 01-1 1h-11a1 1 0 01-1-1V6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-semibold text-[var(--color-ink)]">
+          Waiting for {name} to confirm{" "}<span className="break-all">{invite.email}</span>
+        </p>
+        <p className="text-[12px] text-[var(--color-muted)]">
+          {`Sent ${timeAgo(invite.sentAt)} · ${expiresText(invite.expiresAt)}. They sign in as now until they confirm it and choose their own password.`}
+        </p>
+        {error && <p className="mt-1 text-[12px] text-[var(--color-danger)]">{error}</p>}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <CopyLinkButton link={invite.link} />
+        <button type="button" onClick={() => act("resend")} disabled={busy !== null} className="inline-flex h-7 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3 text-[12px] font-medium text-[var(--color-ink)] hover:border-[var(--color-primary)]/30 hover:text-[var(--color-primary)] disabled:opacity-60">
+          {busy === "resend" ? "Sending…" : "Send again"}
         </button>
-      </div>
-      <div className="mt-4 space-y-2">
-        {[
-          ["Login page", loginUrl],
-          ["Email", email],
-          ["Password", password],
-        ].map(([label, value]) => (
-          <div key={label} className="flex items-center gap-3">
-            <span className="w-20 flex-shrink-0 text-[12px] font-medium text-[var(--color-muted)]">{label}</span>
-            <code className="min-w-0 flex-1 truncate rounded-lg bg-white px-3 py-1.5 text-[13px] text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-line)]">{value}</code>
-            <CopyButton value={value} />
-          </div>
-        ))}
-      </div>
-      <div className="mt-4">
-        <button
-          type="button"
-          onClick={() => navigator.clipboard?.writeText(all)}
-          className="btn btn-accent btn-sm"
-        >
-          Copy all
+        <button type="button" onClick={() => act("cancel")} disabled={busy !== null} className="inline-flex h-7 items-center rounded-full px-2.5 text-[12px] font-medium text-[var(--color-muted)] hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60">
+          {busy === "cancel" ? "Cancelling…" : "Cancel change"}
         </button>
       </div>
     </div>
   );
 }
 
-export function ResetPasswordDialog({ member, onClose, onDone }: { member: TeamMember | null; onClose: () => void; onDone: (email: string, password: string) => void }) {
-  const [password, setPassword] = useState("");
+/**
+ * Confirms a member's email, or moves their login to their real one:
+ * Liston sends the address a link, and once they open it and choose their
+ * own password, the email is theirs (confirmed) and only they know the
+ * password. A login whose email was never confirmed starts with it filled
+ * in, to send as it is or correct. Until they open it nothing changes.
+ */
+export function ChangeEmailDialog({ member, onClose, onSent }: { member: TeamMember | null; onClose: () => void; onSent: (result: { invite: TeamInvite; emailed: boolean }) => void }) {
+  const confirming = member?.email_confirmed === false;
+  const [email, setEmail] = useState(confirming ? member?.email || "" : "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [visible, setVisible] = useState(true);
   if (!member) return null;
-
-  function generate() {
-    const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
-    const bytes = new Uint8Array(14);
-    crypto.getRandomValues(bytes);
-    setPassword(Array.from(bytes, (b) => alphabet[b % alphabet.length]).join(""));
-  }
+  const who = member.name || "they";
+  const same = email.trim().toLowerCase() === member.email.toLowerCase();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api.setTeamMemberPassword(member!.id, password);
-      onDone(member!.email, password);
+      onSent(await api.changeMemberEmail(member!.id, email.trim()));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't reset the password. Try again.");
+      setError(err instanceof ApiError ? err.message : "Couldn't send it. Try again.");
       setBusy(false);
     }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.45)] p-4" onClick={onClose}>
-      <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="card w-full max-w-md p-5 sm:p-6 max-h-[calc(100dvh-2rem)] overflow-y-auto">
-        <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Change password for {member.name || member.email}</h2>
-        <p className="mt-1 text-[13px] text-[var(--color-muted)]">
-          Passwords are stored scrambled, so the current one can&apos;t be shown. Set a new one here. It replaces the old one straight away and you&apos;ll see it once, to pass on.
+      <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="card w-full max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:p-6">
+        <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">
+          {confirming ? "Confirm" : "Change"} {member.name ? `${member.name}'s` : "their"} email
+        </h2>
+        <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">
+          {confirming
+            ? `Liston sends this address a link. When ${who} opens it and chooses their own password, the email is confirmed and only they know the password. If it isn't their real email, correct it first.`
+            : `Liston sends the new address a link. When ${who} opens it and chooses their own password, they sign in with the new email. Until then they sign in as now.`}
         </p>
-        <label className="label mt-5" htmlFor="rp-password">New password</label>
-        <div className="mt-1 flex items-center gap-2">
-          <input
-            id="rp-password"
-            type={visible ? "text" : "password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="At least 8 characters"
-            autoComplete="new-password"
-            autoFocus
-            className="input"
-          />
-          <button type="button" onClick={() => setVisible((v) => !v)} className="btn btn-ghost btn-icon flex-shrink-0" aria-label={visible ? "Hide" : "Show"}>
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-              <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z" stroke="currentColor" strokeWidth="1.8" />
-              <circle cx="12" cy="12" r="2.5" stroke="currentColor" strokeWidth="1.8" />
-              {!visible && <path d="M4 20L20 4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />}
-            </svg>
-          </button>
-        </div>
-        <button type="button" onClick={generate} className="mt-2 text-[12.5px] font-medium text-[var(--color-accent)] hover:underline">
-          Generate a strong one
-        </button>
+        {!confirming && (
+          <div className="mt-4 rounded-xl bg-[var(--color-paper)] px-3 py-2 text-[12.5px] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
+            Now: <span className="break-all font-medium text-[var(--color-ink)]">{member.email}</span>
+          </div>
+        )}
+        <label className="label mt-4" htmlFor="ce-email">{confirming ? "Their email" : "New email"}</label>
+        <input id="ce-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@gmail.com" autoComplete="off" autoFocus required className="input mt-1" />
+        {confirming && !same && email.includes("@") && <p className="mt-1.5 text-[12px] text-[var(--color-muted)]">Their login moves to this email once they confirm it.</p>}
         {error && (
           <div className="notice notice-danger mt-4">
             <span className="flex-1">{error}</span>
@@ -233,15 +283,14 @@ export function ResetPasswordDialog({ member, onClose, onDone }: { member: TeamM
           <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
             Cancel
           </button>
-          <button type="submit" disabled={busy || password.length < 8} className="btn btn-primary btn-sm">
-            {busy ? "Saving…" : "Set password"}
+          <button type="submit" disabled={busy || !email.includes("@")} className="btn btn-primary btn-sm">
+            {busy ? "Sending…" : "Send confirmation link"}
           </button>
         </div>
       </form>
     </div>
   );
 }
-
 
 // ---- owner access ------------------------------------------------------------------
 
@@ -286,7 +335,7 @@ export function canManageMember(viewer: { id: string; owner_access?: boolean }, 
   return member.id !== viewer.id && !member.owner_access_at;
 }
 
-const OWNER_ACCESS_GIVES = ["Every eBay account and every area in it", "Connecting and removing eBay accounts, and every account's settings", "Adding members and changing their access"];
+const OWNER_ACCESS_GIVES = ["Every eBay account and every area in it", "Connecting and removing eBay accounts, and every account's settings", "Inviting members and changing their access"];
 
 /**
  * The top of a member's Access tab: owner access, everything the owner has.

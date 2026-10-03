@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 
@@ -75,7 +76,7 @@ test("a member sees counts only where they have the Inbox, and never another own
   await conversation(talhas.id);
 
   const email = `rail-bilal-${crypto.randomUUID()}@example.com`;
-  const added = await request('POST', '/api/team/members', { email, name: 'Bilal', password: 'memberpassword123' }, usama.token);
+  const added = await addMember(baseUrl, usama.token, { email, name: 'Bilal', password: 'memberpassword123' });
   assert.strictEqual(added.status, 201, JSON.stringify(added.data));
   await request('PUT', `/api/team/members/${added.data.member.id}/permissions`, { permissions: [{ connectionId: walexo.id, feature: 'inbox', allowed: true }] }, usama.token);
   const login = await request('POST', '/api/auth/login', { email, password: 'memberpassword123' });

@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { Resend } = require('resend');
 const config = require('../config');
 const logger = require('./logger');
@@ -32,7 +33,18 @@ async function sendEmail({ to, subject, html, about = null }) {
     // The SDK reports failures in the response rather than throwing —
     // Resend's sandbox refusing a non-owner recipient was being counted as
     // a successful send. Confirmed live.
-    const { error } = await resend.emails.send({ from: config.resend.fromEmail, to, subject, html });
+    const { error } = await resend.emails.send({
+      from: config.resend.fromEmail,
+      to,
+      subject,
+      html,
+      // A plain-text copy beside the HTML: mail that's HTML only is a spam signal, and some readers show only text.
+      text: toText(html),
+      // Replies reach a person (EMAIL_REPLY_TO), not the no-reply sender.
+      ...(config.resend.replyTo ? { replyTo: config.resend.replyTo } : {}),
+      // Each email its own: Gmail otherwise folds emails with the same subject into one thread.
+      headers: { 'X-Entity-Ref-ID': crypto.randomUUID() },
+    });
     if (error) {
       logger.error('Email provider refused the send', { to, subject, error: error.message });
       return { sent: false, reason: error.message };
@@ -51,6 +63,32 @@ async function sendEmail({ to, subject, html, about = null }) {
 // is blocked or "loads" late.
 const BRAND = { primary: '#4f46e5', ink: '#0f172a', muted: '#64748b', line: '#e2e8f0', paper: '#f4f6fb', danger: '#e11d48', accent: '#0d9488' };
 
+/**
+ * An email's plain-text copy from its HTML: the words in reading order, a
+ * button as its label and link, the hidden preview line and the logo left
+ * out.
+ */
+function toText(html) {
+  const entities = { '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" };
+  const lines = String(html || '')
+    .replace(/<head[\s\S]*?<\/head>/i, '')
+    .replace(/<!--brand-->[\s\S]*?<!--\/brand-->/g, '\nListon\n')
+    .replace(/<span style="display:none[^"]*"[^>]*>[\s\S]*?<\/span>/i, '')
+    .replace(/<a [^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href, label) => {
+      const words = label.replace(/<[^>]+>/g, '').trim();
+      const target = href.replace(/^mailto:/i, '');
+      return words && words !== target ? `${words}: ${target}` : target;
+    })
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|h1|h2|tr|div|table|li)>/gi, '\n')
+    .replace(/<\/td>/gi, '  ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&(nbsp|amp|lt|gt|quot|#39);/g, (m) => entities[m])
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim());
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function escape(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -62,17 +100,17 @@ function button(label, href, color = BRAND.primary) {
 }
 
 function layout({ preheader, title, intro, body = '', action, afterAction = '', footnote }) {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escape(title)}</title></head>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escape(title)}</title></head>
 <body style="margin:0;padding:0;background:${BRAND.paper};font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${BRAND.ink}">
   <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden">${escape(preheader || title)}</span>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:${BRAND.paper}">
     <tr><td align="center" style="padding:40px 16px">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:520px">
-        <tr><td style="padding:0 4px 18px">
+        <tr><td style="padding:0 4px 18px"><!--brand-->
           <table role="presentation" cellspacing="0" cellpadding="0" border="0"><tr>
             <td style="width:34px;height:34px;border-radius:10px;background:${BRAND.primary};text-align:center;vertical-align:middle;font:800 18px Helvetica,Arial,sans-serif;color:#ffffff">L</td>
             <td style="padding-left:10px;font:700 17px -apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:${BRAND.ink}">Liston</td>
-          </tr></table>
+          </tr></table><!--/brand-->
         </td></tr>
         <tr><td style="background:#ffffff;border:1px solid ${BRAND.line};border-radius:16px;padding:32px 32px 28px">
           <h1 style="margin:0 0 10px;font-size:22px;line-height:1.3;font-weight:700;color:${BRAND.ink}">${title}</h1>
@@ -172,4 +210,41 @@ function sendAccessDecisionEmail(to, { approved, loginLink }) {
   });
 }
 
-module.exports = { sendVerificationEmail, sendPasswordResetEmail, sendAccessRequestEmail, sendAccessDecisionEmail, isReservedAddress };
+// An invitation to a workspace: someone new creates their login from the
+// link, someone already on Liston joins with theirs.
+function sendWorkspaceInviteEmail(to, { inviter, team, link, existingLogin, days }) {
+  const who = escape(inviter);
+  const where = escape(team);
+  return sendEmail({
+    to,
+    subject: `${inviter} invited you to ${team} on Liston`,
+    html: layout({
+      preheader: `Join ${team} on Liston.`,
+      title: `Join ${where}`,
+      intro: existingLogin
+        ? `<strong style="color:${BRAND.ink}">${who}</strong> invited you to work in <strong style="color:${BRAND.ink}">${where}</strong> on Liston. You already have a Liston login, so you join with the email and password you use now.`
+        : `<strong style="color:${BRAND.ink}">${who}</strong> invited you to work in <strong style="color:${BRAND.ink}">${where}</strong> on Liston. Choose your name and a password, and you're in.`,
+      action: button(existingLogin ? 'Join the workspace' : 'Accept the invitation', link),
+      afterAction: linkFallback(link),
+      footnote: `This invitation is for ${escape(to)} and works for ${days} days. If you weren't expecting it, you can ignore this email.`,
+    }),
+  });
+}
+
+// A member's login moving to this address: they confirm it and choose their own password.
+function sendEmailChangeEmail(to, { inviter, team, link, days }) {
+  return sendEmail({
+    to,
+    subject: `Confirm your email for ${team} on Liston`,
+    html: layout({
+      preheader: 'Confirm this email for your Liston login.',
+      title: 'Confirm your email',
+      intro: `<strong style="color:${BRAND.ink}">${escape(inviter)}</strong> asked for your Liston login in <strong style="color:${BRAND.ink}">${escape(team)}</strong> to use this email. Confirm it and choose your own password: from then on you sign in with this email.`,
+      action: button('Confirm my email', link),
+      afterAction: linkFallback(link),
+      footnote: `This link works for ${days} days. Until you confirm, you sign in as you do now. If you weren't expecting this, you can ignore this email.`,
+    }),
+  });
+}
+
+module.exports = { toText, layout, button, sendVerificationEmail, sendPasswordResetEmail, sendAccessRequestEmail, sendAccessDecisionEmail, sendWorkspaceInviteEmail, sendEmailChangeEmail, isReservedAddress };

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const quickRepliesRepository = require('../../src/modules/inbox/quick-replies.repository');
@@ -47,7 +48,7 @@ async function owner(label = 'Walexo') {
 
 async function member(o, features) {
   const email = `quick-replies-member-${crypto.randomUUID()}@example.com`;
-  const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, o.token);
+  const added = await addMember(baseUrl, o.token, { email, password: 'memberpassword123', name: 'Sara' });
   await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: features.map((feature) => ({ connectionId: o.connection.id, feature, allowed: true })) }, o.token);
   return (await request('POST', '/api/auth/login', { email, password: 'memberpassword123' })).data.token;
 }

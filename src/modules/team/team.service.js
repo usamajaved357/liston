@@ -1,4 +1,3 @@
-const bcrypt = require('bcrypt');
 const teamRepository = require('./team.repository');
 const connectionRepository = require('../connections/connection.repository');
 const activityRepository = require('./activity.repository');
@@ -12,8 +11,6 @@ const userRepository = require('../users/user.repository');
 const workspaceRepository = require('./workspace.repository');
 const teams = require('./teams');
 const notificationsService = require('../notifications/notifications.service');
-
-const SALT_ROUNDS = 12;
 
 class TeamError extends Error {
   constructor(message, statusCode = 400) {
@@ -292,49 +289,6 @@ async function getMemberActivity(ownerId, memberId, { range, from, to, timeZone 
   };
 }
 
-/**
- * Adds someone to the team. An email new to Liston gets a new login with
- * the password given. One that already signs in to Liston (in another
- * team, or an owner of their own) joins with that same login, as on Slack:
- * no password is set or changed, and they're told; the team shows in
- * their team menu. Their access here starts empty, as anyone's.
- * Returns { member, existingLogin }.
- */
-async function addMember(ownerId, { email, name, password }, actor = null) {
-  const existing = await teamRepository.findLoginByEmail(email);
-  if (existing) {
-    if (String(existing.id) === String(ownerId)) throw new TeamError("That's the workspace owner's own login.", 400);
-    const already = await teamRepository.findMemberForOwner(existing.id, ownerId);
-    if (already) {
-      const who = already.name || already.email;
-      throw new TeamError(already.deactivated_at ? `${who} was removed earlier. Restore them from Former members on the Members page instead.` : `${who} is already in this workspace.`, 409);
-    }
-    const member = await teamRepository.addMembership({ ownerId, userId: existing.id, addedBy: actor?.userId || ownerId });
-    const [team, owner] = await Promise.all([workspaceRepository.nameOf(ownerId), userRepository.findByIdWithPlan(ownerId)]);
-    await notificationsService.notify({
-      userId: existing.id,
-      ownerId,
-      actorUserId: actor?.userId || ownerId,
-      kind: 'team.added',
-      title: `${owner?.name || owner?.email || 'An owner'} added you to ${team || 'their workspace'}`,
-      body: 'Switch workspaces from the workspace at the top of the account rail, or find it with Ctrl K.',
-      url: '/connections',
-      subjectType: 'member',
-      subjectId: existing.id,
-    });
-    return { member, existingLogin: true };
-  }
-  if (!password || password.length < 8) throw new TeamError('Set a password for their new login (at least 8 characters).', 400);
-  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-  try {
-    return { member: await teamRepository.createMember({ ownerId, email, name, passwordHash, addedBy: actor?.userId || ownerId }), existingLogin: false };
-  } catch (err) {
-    // The same email added twice at once.
-    if (err.code === '23505') throw new TeamError('An account with this email already exists. Add it again to bring it into the workspace.', 409);
-    throw err;
-  }
-}
-
 // Who may change a member (`actor`: { userId, coOwner }, the person asking):
 // the owner, anyone on the team; someone with owner access, the rest of the
 // team, but never their own login or another with owner access: those are
@@ -347,21 +301,6 @@ async function manageable(actor, memberId, ownerId) {
     if (member.owner_access_at) throw new TeamError(`${member.name || member.email} is a co-manager, so only the workspace owner can change their login or access.`, 403);
   }
   return member;
-}
-
-// Owners hand out member logins, so they can also reset one — the member's
-// old password stops working immediately. Never a login that's also in
-// another team or an owner's own: only its person changes that password.
-async function setMemberPassword(memberId, ownerId, password, actor) {
-  const member = await manageable(actor, memberId, ownerId);
-  if (member.shared_login) {
-    throw new TeamError(`${member.name || member.email} also signs in to another workspace on Liston, so only they can change their password: from their profile, or Forgot password on the sign-in page.`, 403);
-  }
-  const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-  const updated = await teamRepository.setMemberPassword(memberId, ownerId, passwordHash);
-  if (!updated) {
-    throw new TeamError('Member not found', 404);
-  }
 }
 
 // Removing a member signs them out and refuses their login from then on;
@@ -498,7 +437,7 @@ async function deleteWorkspace(ownerId, confirmName, actor = null) {
 module.exports = {
   KNOWN_FEATURES: teamRepository.KNOWN_FEATURES,
   listMembers,
-  addMember,
+  manageable,
   removeMember,
   restoreMember,
   getMemberOverview,
@@ -506,7 +445,6 @@ module.exports = {
   getMemberActivity,
   getMemberTime,
   clock,
-  setMemberPassword,
   setOwnerAccess,
   renameTeam,
   deleteWorkspace,

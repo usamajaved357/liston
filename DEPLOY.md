@@ -29,7 +29,8 @@ Click its box on the canvas → **Settings**:
 | `FRONTEND_URL` | the frontend's public URL (step 3) — also locks CORS to it |
 | `JWT_SECRET` | a fresh random string for production |
 | `CREDENTIALS_ENCRYPTION_KEY` | `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` — **generate a new one; existing dev connections won't decrypt with a different key** |
-| `RESEND_API_KEY`, `EMAIL_FROM` | as local |
+| `RESEND_API_KEY`, `EMAIL_FROM` | as local; `EMAIL_FROM` on the domain verified in Resend, e.g. `Liston <team@snagai.pro>` (see "Emails reaching the inbox") |
+| `EMAIL_REPLY_TO` | a mailbox someone reads (e.g. `support@snagai.pro`); replies to Liston's emails go there. Optional |
 | `ANTHROPIC_API_KEY` | as local |
 | `AI_MODEL` | `claude-haiku-4-5-20251001` (optional; that's the default) |
 | `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_RU_NAME`, `EBAY_ENVIRONMENT=PRODUCTION` | as local |
@@ -71,6 +72,18 @@ Then click **Apply Online** on the app in the AliExpress console. Until the app 
 ## 5b. Copying an account from local to production
 
 `node scripts/copy-account.js <email> --to-prod` copies one owner (team members, connections with re-encrypted credentials, listings, permissions) and the AliExpress token up to production; `--from-prod` pulls an account down to the local database to reproduce its data. Needs `PROD_DATABASE_URL` (the Postgres public URL) and `PROD_CREDENTIALS_ENCRYPTION_KEY` (the backend's key) in `.env`. Run `DATABASE_URL=<public url> node src/db/migrate.js up` first if the schema is behind.
+
+## 5c. Emails reaching the inbox, not spam
+
+Liston's emails (invitations, email confirmations, password resets, access requests) are sent through Resend from `EMAIL_FROM`'s domain. Every email goes with a plain-text copy, a Reply-To when `EMAIL_REPLY_TO` is set, and its own ID. What decides inbox or spam beyond that is the domain:
+
+1. **Resend → Domains:** the sending domain shows *Verified* (DKIM `resend._domainkey`, and the `send.` subdomain's SPF and MX). Checked 3 Oct 2026 for snagai.pro: all present.
+2. **DMARC** (`_dmarc` TXT): snagai.pro has `v=DMARC1; p=none;`. Once a week of reports looks clean, tighten it to `v=DMARC1; p=quarantine; adkim=r; aspf=r; rua=mailto:dmarc@snagai.pro`. Gmail and Yahoo trust a domain that enforces DMARC more.
+3. **Links on the same domain as the sender.** An email from snagai.pro whose buttons go to a `*.up.railway.app` address looks like phishing to filters. Give the app a subdomain (Railway → Settings → Networking → Custom Domain, e.g. `app.snagai.pro` for the frontend and `api.snagai.pro` for the API, each a CNAME), then set `FRONTEND_URL`, `API_URL` and the frontend's `NEXT_PUBLIC_API_URL` to them.
+4. **Resend → Domains → Configuration:** click and open tracking off. Tracking rewrites every link to a tracking domain, which filters distrust.
+5. **The From address** reads as a person or team (`team@`, `hello@`) rather than `noreply@`, with the name "Liston".
+6. **A new domain earns trust slowly.** Ask the first members to mark Liston's email "Not spam" (and add the sender to contacts); each one teaches their mail provider.
+7. **Check a real send:** send one email to the address mail-tester.com gives you, and fix whatever it scores down.
 
 ## 6. After the first deploy
 

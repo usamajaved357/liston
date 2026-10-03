@@ -3,12 +3,12 @@
 import { useEffect, useState, FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, ApiError, User, Connection, TeamMember, TeamMetricKey } from "@/lib/api";
+import { api, ApiError, User, Connection, TeamMember, TeamInvite, TeamMetricKey } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatShortDate } from "@/lib/format";
-import { LoginDetails, MemberAvatar, OwnerAccessBadge, YouBadge, accessSummary, timeAgo } from "@/components/team/team-shared";
+import { CopyLinkButton, MemberAvatar, OwnerAccessBadge, SentCard, YouBadge, accessSummary, expiresText, timeAgo } from "@/components/team/team-shared";
 import { minutesText } from "@/components/team/time-format";
 import { EmptyCard, statIcon } from "@/components/StatCard";
 
@@ -17,7 +17,10 @@ import { EmptyCard, statIcon } from "@/components/StatCard";
 // Liston today, working and idle, with a dot while they're in it now). A
 // card opens the member's page, where their work, time and access live.
 // Members with owner access are marked; someone with it sees the page as
-// the owner does, their own card marked You.
+// the owner does, their own card marked You. People join by invitation: the
+// invitations still waiting are listed above the members, and a login whose
+// email was never confirmed (made before invitations) is marked so its
+// email can be moved to a real one from the member's page.
 
 // Today's figures in a line, the non-zero ones in this order.
 const TODAY_WORDS: [TeamMetricKey, string, string][] = [
@@ -41,8 +44,15 @@ function todayParts(member: TeamMember): string[] {
 }
 
 // A small capsule on a member's card: what they've done today, their time.
-function Pill({ tone = "plain", children, title }: { tone?: "plain" | "work" | "time"; children: React.ReactNode; title?: string }) {
-  const look = tone === "work" ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)] ring-[var(--color-primary)]/15" : tone === "time" ? "bg-emerald-50 text-emerald-700 ring-emerald-100" : "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]";
+function Pill({ tone = "plain", children, title }: { tone?: "plain" | "work" | "time" | "warn"; children: React.ReactNode; title?: string }) {
+  const look =
+    tone === "work"
+      ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)] ring-[var(--color-primary)]/15"
+      : tone === "time"
+        ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
+        : tone === "warn"
+          ? "bg-amber-50 text-amber-700 ring-amber-200"
+          : "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]";
   return (
     <span title={title} className={`inline-flex max-w-full items-center gap-1 truncate whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${look}`}>
       {children}
@@ -55,6 +65,8 @@ function MemberCard({ member, connections, knownFeatures, me }: { member: TeamMe
   const today = todayParts(member);
   const live = !removed && member.time?.inListon;
   const timed = !removed && member.time && member.time.working + member.time.idle > 0;
+  // A login made before invitations: its email typed in, never proven. Only the workspace's own logins can be moved.
+  const unconfirmed = !removed && !member.shared_login && member.email_confirmed === false;
   return (
     <Link
       href={`/team/${member.id}`}
@@ -87,6 +99,17 @@ function MemberCard({ member, connections, knownFeatures, me }: { member: TeamMe
               <span className="text-[11px] text-[var(--color-muted)]">Active {timeAgo(member.lastActiveAt)}</span>
             </>
           )}
+          {member.pending_email ? (
+            <Pill tone="warn" title={`Waiting for them to confirm ${member.pending_email}`}>
+              Email change sent
+            </Pill>
+          ) : (
+            unconfirmed && (
+              <Pill tone="warn" title="Added before invitations: this email was typed in and never confirmed. Open them to move it to their real email.">
+                Email not confirmed
+              </Pill>
+            )
+          )}
         </div>
       </div>
       <svg viewBox="0 0 24 24" fill="none" className="mt-3 h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5" aria-hidden>
@@ -96,38 +119,46 @@ function MemberCard({ member, connections, knownFeatures, me }: { member: TeamMe
   );
 }
 
-type Added = { email: string; name: string | null; password: string | null };
-
-// A new email gets a login with the password typed; someone already on
-// Liston (in another team, or with a team of their own) joins with their
-// own login, as on Slack, so no password is needed or used for them.
-function AddMemberForm({ onAdd, onCancel }: { onAdd: (added: Added) => void; onCancel: () => void }) {
+// Someone joins by invitation: Liston emails them a link, someone new
+// chooses their own name and password there, someone already on Liston
+// joins with their login. Their access starts empty, or as a member's here.
+function InviteForm({ members, onSent, onCancel }: { members: TeamMember[]; onSent: (sent: { invite: TeamInvite; emailed: boolean; again: boolean }) => void; onCancel: () => void }) {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
+  const [sameAs, setSameAs] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only members with access of their own to copy (a co-manager's is everything, not a setting).
+  const models = members.filter((m) => !m.deactivated_at && !m.owner_access_at);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
-      const { member, existingLogin } = await api.addTeamMember({ email, name: name || undefined, password: password || undefined });
-      onAdd({ email: member.email, name: member.name, password: existingLogin ? null : password });
+      onSent(await api.inviteMember({ email: email.trim(), name: name.trim() || undefined, sameAs: sameAs || null }));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't add this member. Try again.");
+      setError(err instanceof ApiError ? err.message : "Couldn't send the invitation. Try again.");
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="card p-6">
+    <form onSubmit={handleSubmit} className="rounded-[18px] border border-[var(--color-line)] bg-[var(--color-panel)] p-5 shadow-[var(--shadow-card)] sm:p-6">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Add a member</h2>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Open them once added to choose what they can see.</p>
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[10px] bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100" aria-hidden>
+            <svg viewBox="0 0 20 20" fill="none" className="h-[18px] w-[18px]">
+              <path d="M3.5 6.5l6.5 4.5 6.5-4.5M4.5 5h11a1 1 0 011 1v8a1 1 0 01-1 1h-11a1 1 0 01-1-1V6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-[var(--color-ink)]">Invite a member</h2>
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+              They get an email with a link to join. Someone new chooses their own password there; someone already on Liston joins with the login they have.
+            </p>
+          </div>
         </div>
         <button type="button" onClick={onCancel} className="btn btn-ghost btn-icon" aria-label="Close">
           <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
@@ -138,23 +169,25 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (added: Added) => void; onC
 
       <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-3">
         <div>
-          <label className="label" htmlFor="tm-name">Name</label>
-          <input id="tm-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Optional" autoComplete="off" className="input mt-1" />
+          <label className="label" htmlFor="inv-email">Email</label>
+          <input id="inv-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@gmail.com" autoComplete="off" required autoFocus className="input mt-1" />
         </div>
         <div>
-          <label className="label" htmlFor="tm-email">Email</label>
-          <input id="tm-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" autoComplete="off" required className="input mt-1" />
-        </div>
-        <div>
-          <label className="label" htmlFor="tm-password">
-            Password <span className="font-normal text-[var(--color-muted)]">(new logins)</span>
+          <label className="label" htmlFor="inv-name">
+            Name <span className="font-normal text-[var(--color-muted)]">(optional)</span>
           </label>
-          <input id="tm-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 8 characters" autoComplete="new-password" className="input mt-1" />
+          <input id="inv-name" type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="They can change it" autoComplete="off" className="input mt-1" />
+        </div>
+        <div>
+          <label className="label" htmlFor="inv-access">Access when they join</label>
+          <select id="inv-access" value={sameAs} onChange={(e) => setSameAs(e.target.value)} className="input mt-1">
+            <option value="">None yet, I&apos;ll choose</option>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>{`Same as ${m.name || m.email}`}</option>
+            ))}
+          </select>
         </div>
       </div>
-      <p className="mt-2 text-[12px] leading-relaxed text-[var(--color-muted)]">
-        Someone new gets a login with this password, shown to you once to pass on. Someone already on Liston, in another team, joins with the email and password they use now: leave the password blank for them.
-      </p>
 
       {error && (
         <div className="notice notice-danger mt-4">
@@ -163,8 +196,8 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (added: Added) => void; onC
       )}
 
       <div className="mt-5 flex items-center gap-2">
-        <button type="submit" disabled={submitting || !email || (password.length > 0 && password.length < 8)} className="btn btn-primary btn-sm">
-          {submitting ? "Adding…" : "Add member"}
+        <button type="submit" disabled={submitting || !email.includes("@")} className="btn btn-primary btn-sm">
+          {submitting ? "Sending…" : "Send invitation"}
         </button>
         <button type="button" onClick={onCancel} className="btn btn-ghost btn-sm">
           Cancel
@@ -174,24 +207,72 @@ function AddMemberForm({ onAdd, onCancel }: { onAdd: (added: Added) => void; onC
   );
 }
 
-// Someone already on Liston joined with their own login: nothing to pass on.
-function JoinedWithOwnLogin({ who, team, onDismiss }: { who: string; team: string; onDismiss: () => void }) {
+// An invitation still waiting: who, who sent it and when, when it runs out;
+// its link, sending it again, or withdrawing it.
+function InviteRow({ invite, onChanged }: { invite: TeamInvite; onChanged: (note: { title: string; emailed: boolean; invite: TeamInvite } | null) => void }) {
+  const [busy, setBusy] = useState<"resend" | "revoke" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function act(kind: "resend" | "revoke") {
+    setBusy(kind);
+    setError(null);
+    try {
+      if (kind === "resend") {
+        const sent = await api.resendInvite(invite.id);
+        onChanged({ title: `Invitation sent again to ${invite.name || invite.email}`, emailed: sent.emailed, invite: sent.invite });
+      } else {
+        await api.revokeInvite(invite.id);
+        onChanged(null);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't do that. Try again.");
+      setBusy(null);
+    }
+  }
   return (
-    <div className="card flex items-start gap-3 border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] p-5">
-      <svg viewBox="0 0 20 20" fill="none" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[var(--color-accent)]" aria-hidden>
-        <path d="M5 10.5l3.2 3.2L15 6.8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-[var(--color-ink)]">{`${who} joined ${team} with their own login`}</p>
-        <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-          They already sign in to Liston, so they use the same email and password, and switch to this team from the team name at the top of their sidebar. They&apos;ve been told. Open them to choose what they can see here.
-        </p>
-      </div>
-      <button type="button" onClick={onDismiss} className="btn btn-ghost btn-icon" aria-label="Dismiss">
-        <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 px-4 py-3 sm:flex-nowrap">
+      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-dashed border-[var(--color-line-strong)] bg-[var(--color-paper)] text-[var(--color-muted)]" aria-hidden>
+        <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+          <path d="M3.5 6.5l6.5 4.5 6.5-4.5M4.5 5h11a1 1 0 011 1v8a1 1 0 01-1 1h-11a1 1 0 01-1-1V6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
         </svg>
-      </button>
+      </span>
+      <div className="min-w-0 flex-1 basis-[calc(100%-52px)] sm:basis-auto">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <p className="min-w-0 break-all text-[13.5px] font-semibold text-[var(--color-ink)] sm:truncate sm:break-normal">{invite.name || invite.email}</p>
+          {invite.existingLogin && <span className="inline-flex h-5 items-center rounded-full bg-teal-50 px-2 text-[10.5px] font-semibold text-teal-700 ring-1 ring-inset ring-teal-200">On Liston</span>}
+          {invite.sameAs && <span className="inline-flex h-5 items-center truncate rounded-full bg-[var(--color-paper)] px-2 text-[10.5px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">{`Access as ${invite.sameAs.name || "a member"}`}</span>}
+        </div>
+        <p className="break-words text-[12px] text-[var(--color-muted)] sm:truncate">
+          {invite.name ? `${invite.email} · ` : ""}
+          {`Invited ${timeAgo(invite.sentAt)}${invite.invitedBy ? ` by ${invite.invitedBy}` : ""} · `}
+          <span className={invite.expired ? "font-medium text-amber-700" : ""}>{expiresText(invite.expiresAt)}</span>
+        </p>
+        {error && <p className="mt-0.5 text-[12px] text-[var(--color-danger)]">{error}</p>}
+      </div>
+      <div className="ml-[52px] flex flex-shrink-0 items-center gap-1.5 sm:ml-0">
+        {!invite.expired && <CopyLinkButton link={invite.link} />}
+        <button
+          type="button"
+          onClick={() => act("resend")}
+          disabled={busy !== null}
+          className={`inline-flex h-7 items-center rounded-full border px-3 text-[12px] font-medium disabled:opacity-60 ${
+            invite.expired ? "border-[var(--color-primary)] bg-[var(--color-primary)] text-white hover:opacity-90" : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)] hover:border-[var(--color-primary)]/30 hover:text-[var(--color-primary)]"
+          }`}
+        >
+          {busy === "resend" ? "Sending…" : invite.expired ? "Send again" : "Resend"}
+        </button>
+        <button
+          type="button"
+          onClick={() => act("revoke")}
+          disabled={busy !== null}
+          aria-label={`Withdraw the invitation to ${invite.email}`}
+          title="Withdraw the invitation"
+          className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
+        >
+          <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
+            <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }
@@ -276,18 +357,21 @@ export default function TeamPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [revealed, setRevealed] = useState<{ email: string; password: string } | null>(null);
-  const [joined, setJoined] = useState<string | null>(null);
+  const [invites, setInvites] = useState<TeamInvite[]>([]);
+  // The invitation just sent (or sent again): whether the email went, and its link.
+  const [sent, setSent] = useState<{ title: string; emailed: boolean; invite: TeamInvite } | null>(null);
   const [showFormer, setShowFormer] = useState(false);
 
   async function loadAll() {
     try {
-      const [meData, connectionsData, teamData] = await Promise.all([api.me(), api.listConnections(), api.listTeamMembers()]);
+      const [meData, connectionsData, teamData, inviteData] = await Promise.all([api.me(), api.listConnections(), api.listTeamMembers(), api.listTeamInvites()]);
       setUser(meData.user);
       cacheUser(meData.user);
       setConnections(connectionsData.connections);
       setMembers(teamData.members);
       setKnownFeatures(teamData.knownFeatures);
+      // Email changes show on the member's own page; here, the people still to join.
+      setInvites(inviteData.invites.filter((i) => i.kind === "join"));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         localStorage.removeItem("token");
@@ -348,7 +432,7 @@ export default function TeamPage() {
             }}
           />
           <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">
-            {`Members get their own login and see only what ${user.owner_access ? "they're allowed" : "you allow"}. Open one to see their work and change their access.`}
+            {`Members join by invitation with their own login, and see only what ${user.owner_access ? "they're allowed" : "you allow"}. Open one to see their work and change their access.`}
           </p>
         </div>
       }
@@ -383,23 +467,19 @@ export default function TeamPage() {
                     <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                       <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
                     </svg>
-                    Add member
+                    Invite member
                   </button>
                 )}
               </div>
 
               {adding && (
                 <div className="mb-6">
-                  <AddMemberForm
-                    onAdd={(added) => {
+                  <InviteForm
+                    members={members}
+                    onSent={(result) => {
                       setAdding(false);
-                      if (added.password) {
-                        setJoined(null);
-                        setRevealed({ email: added.email, password: added.password });
-                      } else {
-                        setRevealed(null);
-                        setJoined(added.name || added.email);
-                      }
+                      const who = result.invite.name || result.invite.email;
+                      setSent({ title: result.again ? `Invitation sent again to ${who}` : `Invitation sent to ${who}`, emailed: result.emailed, invite: result.invite });
                       loadAll();
                     }}
                     onCancel={() => setAdding(false)}
@@ -407,26 +487,41 @@ export default function TeamPage() {
                 </div>
               )}
 
-              {revealed && (
+              {sent && (
                 <div className="mb-6">
-                  <LoginDetails email={revealed.email} password={revealed.password} onDismiss={() => setRevealed(null)} />
+                  <SentCard title={sent.title} emailed={sent.emailed} email={sent.invite.email} link={sent.invite.link} onDismiss={() => setSent(null)} />
                 </div>
               )}
-              {joined && (
+
+              {invites.length > 0 && (
                 <div className="mb-6">
-                  <JoinedWithOwnLogin who={joined} team={user.team?.name || "your workspace"} onDismiss={() => setJoined(null)} />
+                  <p className="mb-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-[var(--color-muted)]">{`Invited · ${invites.length}`}</p>
+                  <div className="divide-y divide-[var(--color-line)] overflow-hidden rounded-[18px] border border-[var(--color-line)] bg-[var(--color-panel)] shadow-[var(--shadow-card)]">
+                    {invites.map((invite) => (
+                      <InviteRow
+                        key={invite.id}
+                        invite={invite}
+                        onChanged={(note) => {
+                          if (note) setSent(note);
+                          else setInvites((list) => list.filter((i) => i.id !== invite.id));
+                          loadAll();
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
 
               {active.length === 0 ? (
-                !adding && (
+                !adding &&
+                !invites.length && (
                   <EmptyCard
                     icon={statIcon(<><circle cx="9" cy="8.5" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0111 0" /><path d="M16 5.6a3.2 3.2 0 010 5.8M17.5 14a5.5 5.5 0 013 5" /></>, "h-6 w-6")}
                     title="No members yet"
                   >
-                    <p>Add a member, then open them to pick which accounts and areas they can work in.</p>
+                    <p>Invite someone by email. Once they join, open them to pick which accounts and areas they can work in.</p>
                     <button type="button" onClick={() => setAdding(true)} className="btn btn-primary btn-sm mt-4">
-                      Add your first member
+                      Invite your first member
                     </button>
                   </EmptyCard>
                 )

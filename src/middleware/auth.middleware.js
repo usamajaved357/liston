@@ -19,7 +19,9 @@ const teams = require('../modules/team/teams');
 // pages keep, so someone using Liston isn't signed out mid-work. One that
 // has run out (or is no good) is a 401 with code SESSION_ENDED, on which
 // the pages go to the sign-in page; a database hiccup is a 500, never a
-// sign-out.
+// sign-out. A sign-in from before the login's password last changed
+// (session_version, migration 054) is ended the same way, with reason
+// 'password', on every device at once.
 const RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
 const ended = (res, error) => res.status(401).json({ error, code: 'SESSION_ENDED' });
 
@@ -42,6 +44,10 @@ async function requireAuth(req, res, next) {
     const session = await workspaceRepository.sessionFor(payload.sub);
     if (!session) return ended(res, 'Your sign-in has run out. Sign in again.');
     const { user } = session;
+    // Signed in before the password last changed (on any device): out, to sign in with the new one.
+    if ((Number(payload.sv) || 0) !== (Number(user.session_version) || 0)) {
+      return res.status(401).json({ error: 'Your password was changed, so you were signed out. Log in with your new password.', code: 'SESSION_ENDED', reason: 'password' });
+    }
     const asked = req.headers['x-liston-workspace'] || null;
     const picked = teams.pickTeam(session.teams, { asked, last: user.last_workspace_id });
     // A member removed from every team they were in is signed out at their next request.

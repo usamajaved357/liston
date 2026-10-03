@@ -5,6 +5,7 @@ const { mock } = require('node:test');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const mirror = require('../../src/modules/ebay/ebay-mirror.repository');
@@ -185,7 +186,7 @@ test("a member sees an order's money only with Orders access there", async () =>
   stubFinances('17-7');
   await mirror.upsertOrderFinances(t.connection.id, [{ orderId: '17-7', currency: 'GBP', gross: 5, fees: 1, adFees: 0, refunds: 0, earnings: 4, fundsStatus: 'Paid out', saleDate: null }]);
   const email = `order-money-member-${crypto.randomUUID()}@example.com`;
-  const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, t.owner.token);
+  const added = await addMember(baseUrl, t.owner.token, { email, password: 'memberpassword123', name: 'Sara' });
   const memberId = added.data.id || added.data.member?.id;
   await request('PUT', `/api/team/members/${memberId}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'inbox', allowed: true }] }, t.owner.token);
   const login = await request('POST', '/api/auth/login', { email, password: 'memberpassword123' });

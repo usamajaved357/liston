@@ -5,6 +5,7 @@ const { mock } = require('node:test');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const ebayService = require('../../src/modules/ebay/ebay.service');
@@ -57,7 +58,7 @@ async function setup() {
 
   const member = async (name, perms) => {
     const memberEmail = `exports-${name.toLowerCase()}-${crypto.randomUUID()}@example.com`;
-    const added = await fetch(`${baseUrl}/api/team/members`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${signup.token}` }, body: JSON.stringify({ email: memberEmail, name, password: PASSWORD }) }).then((r) => r.json());
+    const added = (await addMember(baseUrl, signup.token, { email: memberEmail, name, password: PASSWORD })).data;
     if (perms) await request('PUT', `/api/team/members/${added.member.id}/permissions`, { permissions: perms }, signup.token);
     if (name === 'Bilal') await request('PUT', `/api/team/members/${added.member.id}/owner-access`, { ownerAccess: true }, signup.token);
     const login = await fetch(`${baseUrl}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: memberEmail, password: PASSWORD }) }).then((r) => r.json());

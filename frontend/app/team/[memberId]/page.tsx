@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, Connection, MemberActivityItem, MemberOverview, PermissionUpdate, TeamMember, TeamMetricKey, TeamRange, User } from "@/lib/api";
+import { api, ApiError, Connection, MemberActivityItem, MemberOverview, PermissionUpdate, TeamMember, TeamMetricKey, TeamRange, User, TeamInvite } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -12,7 +12,7 @@ import { dayRangeLabel } from "@/components/charts/chart-format";
 import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatMoney, formatShortDate } from "@/lib/format";
 import { downloadCsv, toCsv } from "@/lib/csv";
-import { AccessGrid, LoginDetails, MemberAvatar, OwnerAccessBadge, OwnerAccessCard, ResetPasswordDialog, Switch, YouBadge, canManageMember, timeAgo } from "@/components/team/team-shared";
+import { AccessGrid, ChangeEmailDialog, MemberAvatar, OwnerAccessBadge, OwnerAccessCard, PendingEmailChange, SentCard, Switch, YouBadge, canManageMember, timeAgo } from "@/components/team/team-shared";
 import { MemberPerformance } from "@/components/team/MemberPerformance";
 import { MemberTimeView } from "@/components/team/MemberTime";
 import { waitText } from "@/components/team/time-format";
@@ -27,14 +27,32 @@ const PAGE_ICONS = {
   empty: statIcon(<><path d="M4 13.5l2.2-7A1.5 1.5 0 017.6 5.5h8.8a1.5 1.5 0 011.4 1l2.2 7" /><path d="M4 13.5V18a1.5 1.5 0 001.5 1.5h13A1.5 1.5 0 0020 18v-4.5h-4.5l-1.2 2h-4.6l-1.2-2H4z" /></>, "h-6 w-6"),
 };
 
-// A fact about the member in the header: when added, last login, last active.
-function MetaChip({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+// A fact about the member under their name: when they joined, last logged in, were last active.
+function MetaItem({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[var(--color-panel)] px-2.5 py-0.5 text-[11.5px] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
-      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 flex-shrink-0" aria-hidden>
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 flex-shrink-0 opacity-70" aria-hidden>
         {icon}
       </svg>
       {children}
+    </span>
+  );
+}
+
+// Beside their email: confirmed, never confirmed (a login from before
+// invitations), or a confirmation link sent and waiting.
+function EmailStatus({ confirmed, pending }: { confirmed: boolean; pending: string | null }) {
+  const [look, label, title, icon] = pending
+    ? ["bg-indigo-50 text-indigo-700 ring-indigo-200", "Confirmation sent", `Waiting for them to confirm ${pending}`, <path key="i" d="M3.5 6.5l6.5 4.5 6.5-4.5M4.5 5h11a1 1 0 011 1v8a1 1 0 01-1 1h-11a1 1 0 01-1-1V6a1 1 0 011-1z" />]
+    : confirmed
+      ? ["bg-emerald-50 text-emerald-700 ring-emerald-200", "Confirmed", "They proved this email is theirs", <path key="i" d="M5 10.5l3.2 3.2L15 6.8" />]
+      : ["bg-amber-50 text-amber-700 ring-amber-200", "Not confirmed", "Added before invitations: this email was typed in and never proven. Send them a confirmation link.", <path key="i" d="M10 6.5v4.5M10 13.6v.1M8.6 3.6L2.9 13.4A1.6 1.6 0 004.3 15.8h11.4a1.6 1.6 0 001.4-2.4L11.4 3.6a1.6 1.6 0 00-2.8 0z" />];
+  return (
+    <span title={title} className={`inline-flex h-5 flex-shrink-0 items-center gap-1 rounded-full px-2 text-[11px] font-semibold ring-1 ring-inset ${look}`}>
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3" aria-hidden>
+        {icon}
+      </svg>
+      {label}
     </span>
   );
 }
@@ -481,19 +499,27 @@ function MemberPageBody() {
   const figuresKey = JSON.stringify([memberId, range, custom]);
   const [answered, setAnswered] = useState<string | null>(null);
   const loading = answered !== figuresKey;
-  const [resetOpen, setResetOpen] = useState(false);
-  const [revealed, setRevealed] = useState<{ email: string; password: string } | null>(null);
+  // Confirming their email, or moving it to their real one: the dialog, the link waiting for them, and the one just sent.
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailChange, setEmailChange] = useState<TeamInvite | null>(null);
+  const [emailSent, setEmailSent] = useState<{ emailed: boolean; invite: TeamInvite; note?: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (range === "custom" && (!custom.from || !custom.to)) return;
     try {
-      const [me, conns, overview] = await Promise.all([api.me(), api.listConnections(), api.getMemberOverview(memberId, range, custom)]);
+      const [me, conns, overview, invites] = await Promise.all([
+        api.me(),
+        api.listConnections(),
+        api.getMemberOverview(memberId, range, custom),
+        api.listTeamInvites().catch(() => ({ invites: [] as TeamInvite[] })),
+      ]);
       setUser(me.user);
       cacheUser(me.user);
       setConnections(conns.connections);
       setData(overview);
+      setEmailChange(invites.invites.find((i) => i.kind === "email" && i.memberId === memberId) || null);
       setError(null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -566,39 +592,83 @@ function MemberPageBody() {
       role={user.role}
       isAdmin={user.is_admin}
       header={
-        <div className="flex min-w-0 items-center gap-3">
-          <Link
-            href="/team"
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[var(--color-line)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)]"
-            aria-label="Back to Members"
-            title="Back to Members"
-          >
-            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-              <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </Link>
-          {member && <MemberAvatar member={member} size={46} />}
-          <div className="min-w-0">
-            <h1 className="flex items-center gap-2 truncate text-lg font-semibold text-[var(--color-ink)]">
-              <span className="truncate">{name || "Member"}</span>
-              {member?.id === user.id && <YouBadge />}
-              {member?.owner_access_at && <OwnerAccessBadge size="md" />}
-              {removed && <span className="chip text-[11px] font-medium text-[var(--color-muted)]">Removed {formatShortDate(member!.deactivated_at!)}</span>}
-            </h1>
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
+            <Link
+              href="/team"
+              className="mt-[13px] flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] transition-colors hover:bg-[var(--color-panel)] hover:text-[var(--color-ink)] hover:shadow-[var(--shadow-card)]"
+              aria-label="Back to Members"
+              title="Back to Members"
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]">
+                <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </Link>
             {member && (
-              <>
-                <p className="line-clamp-2 text-[12.5px] text-[var(--color-muted)] sm:hidden">
-                  {member.name ? `${member.email} · ` : ""}added {formatShortDate(member.created_at)} · last login {timeAgo(member.last_login_at)} · last active {timeAgo(member.lastActiveAt)}
-                </p>
-                <div className="mt-1 hidden min-w-0 flex-wrap items-center gap-1.5 sm:flex">
-                  {member.name && <span className="mr-0.5 truncate text-[12.5px] text-[var(--color-muted)]">{member.email}</span>}
-                  <MetaChip icon={<><path d="M10 4.5v11M4.5 10h11" /></>}>Added {formatShortDate(member.created_at)}</MetaChip>
-                  <MetaChip icon={<><path d="M8 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H8M12 6.5L15.5 10 12 13.5M15.5 10H8" /></>}>Last login {timeAgo(member.last_login_at)}</MetaChip>
-                  <MetaChip icon={<path d="M3 10h3l2-4.5 3.5 9 2-4.5H17" />}>Last active {timeAgo(member.lastActiveAt)}</MetaChip>
-                </div>
-              </>
+              <span className="flex-shrink-0 rounded-full bg-[var(--color-panel)] p-[3px] shadow-[var(--shadow-card)] ring-1 ring-[var(--color-line)]">
+                <MemberAvatar member={member} size={52} />
+              </span>
             )}
+            <div className="min-w-0 flex-1 pt-0.5">
+              <h1 className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[20px] font-semibold leading-tight tracking-[-0.01em] text-[var(--color-ink)]">
+                <span className="min-w-0 truncate">{name || "Member"}</span>
+                {member?.id === user.id && <YouBadge />}
+                {member?.owner_access_at && <OwnerAccessBadge size="md" />}
+                {removed && <span className="chip text-[11px] font-medium text-[var(--color-muted)]">Removed {formatShortDate(member!.deactivated_at!)}</span>}
+              </h1>
+              {member && (
+                <>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    {member.name && <span className="min-w-0 break-all text-[13px] text-[var(--color-muted)] sm:truncate sm:break-normal">{member.email}</span>}
+                    {!member.shared_login && !removed && <EmailStatus confirmed={member.email_confirmed !== false} pending={emailChange?.email || null} />}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-[var(--color-muted)]">
+                    <MetaItem icon={<><rect x="3.5" y="4.5" width="13" height="12" rx="2" /><path d="M3.5 8.5h13M7 3v3M13 3v3" /></>}>Joined {formatShortDate(member.created_at)}</MetaItem>
+                    <MetaItem icon={<path d="M8 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H8M12 6.5L15.5 10 12 13.5M15.5 10H8" />}>Last login {timeAgo(member.last_login_at)}</MetaItem>
+                    <MetaItem icon={<path d="M3 10h3l2-4.5 3.5 9 2-4.5H17" />}>Active {timeAgo(member.lastActiveAt)}</MetaItem>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
+          {/* Their email and their access here are the viewer's to manage; their password is only ever theirs. */}
+          {member && manage && (
+            <div className="flex flex-shrink-0 items-center gap-2 max-sm:w-full max-sm:pl-11 sm:mt-2.5">
+              {!removed && !member.shared_login && (
+                <button
+                  type="button"
+                  onClick={() => setEmailOpen(true)}
+                  className={`inline-flex h-9 items-center gap-1.5 rounded-full px-4 text-[13px] font-semibold transition-colors ${
+                    member.email_confirmed === false && !emailChange
+                      ? "bg-[var(--color-primary)] text-white shadow-[0_6px_16px_-8px_rgba(79,70,229,0.7)] hover:opacity-95"
+                      : "border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)] hover:border-[var(--color-primary)]/30 hover:text-[var(--color-primary)]"
+                  }`}
+                >
+                  <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+                    <path d="M3.5 6.5l6.5 4.5 6.5-4.5M4.5 5h11a1 1 0 011 1v8a1 1 0 01-1 1h-11a1 1 0 01-1-1V6a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                  </svg>
+                  {member.email_confirmed === false ? "Confirm email" : "Change email"}
+                </button>
+              )}
+              {removed ? (
+                <button type="button" onClick={() => setRemoved(false)} disabled={busy} className="btn btn-primary btn-sm !h-9 !px-4">
+                  {busy ? "Restoring…" : "Restore access"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmRemove(true)}
+                  aria-label="Remove access"
+                  title="Remove access"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted)] transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
+                >
+                  <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
+                    <path d="M4.5 6h11M8 6V4.5h4V6M6 6l.7 9.2a1 1 0 001 .8h4.6a1 1 0 001-.8L14 6M8.5 9v4.5M11.5 9v4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
         </div>
       }
     >
@@ -608,9 +678,21 @@ function MemberPageBody() {
             <span className="flex-1">{error}</span>
           </div>
         )}
-        {revealed && (
+        {emailSent && (
           <div className="mb-4">
-            <LoginDetails email={revealed.email} password={revealed.password} onDismiss={() => setRevealed(null)} />
+            <SentCard title={emailSent.note || `Confirmation link sent to ${emailSent.invite.email}`} emailed={emailSent.emailed} email={emailSent.invite.email} link={emailSent.invite.link} onDismiss={() => setEmailSent(null)} />
+          </div>
+        )}
+        {emailChange && manage && !emailSent && (
+          <div className="mb-4">
+            <PendingEmailChange
+              invite={emailChange}
+              name={member?.name || "they"}
+              onChanged={(resent) => {
+                if (resent) setEmailSent({ ...resent, note: `Confirmation link sent again to ${resent.invite.email}` });
+                load();
+              }}
+            />
           </div>
         )}
 
@@ -618,37 +700,8 @@ function MemberPageBody() {
           <PageSkeleton rows={2} />
         ) : !data ? null : (
           <>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="mb-4">
               <Tabs value={tab} onChange={(t) => setQuery({ tab: t === "performance" ? null : t })} />
-              <div className={`flex items-center gap-1.5 max-sm:ml-auto ${manage ? "" : "hidden"}`}>
-                {/* A login also in another team (or an owner's own) is only its person's to change. */}
-                {!removed && !member?.shared_login && (
-                  <button type="button" onClick={() => setResetOpen(true)} className="btn btn-secondary btn-sm !h-8 gap-1.5 !px-3 !text-[12.5px]">
-                    <svg viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" aria-hidden>
-                      <circle cx="7" cy="12.5" r="3.2" stroke="currentColor" strokeWidth="1.6" />
-                      <path d="M9.3 10.2L16 3.5M13.5 6l1.8 1.8M11.8 7.7l1.4 1.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-                    </svg>
-                    Change password
-                  </button>
-                )}
-                {removed ? (
-                  <button type="button" onClick={() => setRemoved(false)} disabled={busy} className="btn btn-primary btn-sm !h-8 !px-3 !text-[12.5px]">
-                    {busy ? "Restoring…" : "Restore access"}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmRemove(true)}
-                    aria-label="Remove access"
-                    title="Remove access"
-                    className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-muted)] transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600"
-                  >
-                    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden>
-                      <path d="M4.5 6h11M8 6V4.5h4V6M6 6l.7 9.2a1 1 0 001 .8h4.6a1 1 0 001-.8L14 6M8.5 9v4.5M11.5 9v4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
-                )}
-              </div>
             </div>
 
             {tab !== "access" && (
@@ -678,7 +731,7 @@ function MemberPageBody() {
                   <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.6" />
                   <path d="M10 9v4.5M10 6.5v.1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                 </svg>
-                <span>{`${member.name || member.email} signs in to another workspace on Liston with this login too, so only they can change its password. What they can use here is this workspace's alone.`}</span>
+                <span>{`${member.name || member.email} signs in to another workspace on Liston with this login too, so only they can change its email. What they can use here is this workspace's alone.`}</span>
               </p>
             )}
             {tab === "access" && memberForGrid && (isOwner || memberForGrid.owner_access_at) && (
@@ -714,12 +767,14 @@ function MemberPageBody() {
         )}
       </div>
 
-      <ResetPasswordDialog
-        member={resetOpen && member ? member : null}
-        onClose={() => setResetOpen(false)}
-        onDone={(email, password) => {
-          setResetOpen(false);
-          setRevealed({ email, password });
+      <ChangeEmailDialog
+        key={emailOpen ? "open" : "closed"}
+        member={emailOpen && member ? member : null}
+        onClose={() => setEmailOpen(false)}
+        onSent={(result) => {
+          setEmailOpen(false);
+          setEmailSent(result);
+          load();
           window.scrollTo({ top: 0, behavior: "smooth" });
         }}
       />

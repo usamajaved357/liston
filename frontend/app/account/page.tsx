@@ -9,7 +9,8 @@ import { AppShell } from "@/components/AppShell";
 import { NotificationSettingsCard } from "@/components/inbox/NotificationSettingsCard";
 import { NotificationBell } from "@/components/NotificationBell";
 import { PageSkeleton } from "@/components/PageSkeleton";
-import { cacheUser, useCachedUser } from "@/lib/session";
+import { cacheUser, endSession, useCachedUser } from "@/lib/session";
+import { offerToSaveLogin } from "@/lib/savedLogin";
 import { HeaderAvatar } from "@/components/AccountMenu";
 import { AvatarUploader } from "@/components/AvatarUploader";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -101,11 +102,11 @@ function ChangePasswordForm({ email }: { email: string }) {
 
     setLoading(true);
     try {
-      const { message } = await api.updatePassword(currentPassword, newPassword);
-      setSuccess(message);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
+      await api.updatePassword(currentPassword, newPassword);
+      setSuccess("Password changed. Signing you out so you can log in with it.");
+      // The browser's saved password follows the change; then out, everywhere (this device too).
+      await offerToSaveLogin(email, newPassword);
+      endSession(null, "password");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't update your password. Try again.");
     } finally {
@@ -139,6 +140,7 @@ function ChangePasswordForm({ email }: { email: string }) {
         <button type="submit" disabled={loading || !currentPassword || !newPassword || !confirmPassword} className="btn btn-primary btn-sm">
           {loading ? "Updating…" : "Update password"}
         </button>
+        <p className="mt-2 text-[12px] leading-relaxed text-[var(--color-muted)]">Changing it signs you out on every device, this one too. You log in again with the new password.</p>
       </div>
     </form>
   );

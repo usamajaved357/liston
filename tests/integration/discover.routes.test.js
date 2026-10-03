@@ -5,6 +5,7 @@ const { mock } = require('node:test');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const config = require('../../src/config');
 const connectionService = require('../../src/modules/connections/connection.service');
@@ -128,7 +129,7 @@ async function team() {
   const connection = await connectionService.createConnection(data.user.id, { platformKey: 'ebay', label: 'Discover Store', credentials: { accessToken: 'x' } });
   const member = async (name, features) => {
     const memberEmail = `discover-${name}-${crypto.randomUUID()}@example.com`;
-    const added = await request('POST', '/api/team/members', { email: memberEmail, password: 'memberpassword123', name }, data.token);
+    const added = await addMember(baseUrl, data.token, { email: memberEmail, password: 'memberpassword123', name });
     await request('PUT', `/api/team/members/${added.data.member.id}/permissions`, { permissions: features.map((feature) => ({ connectionId: null, feature, allowed: true })) }, data.token);
     const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
     return login.data.token;

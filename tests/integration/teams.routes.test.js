@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember, linkToken } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 
@@ -51,18 +52,21 @@ const login = (email) => request('POST', '/api/auth/login', { email, password })
 const me = (token, team) => request('GET', '/api/users/me', undefined, token, team);
 const accounts = async (token, team) => (await request('GET', '/api/connections', undefined, token, team)).data.connections;
 
-// Usama and Talha each run a team; Bilal works in both on one login.
+// Usama and Talha each run a team; Bilal works in both on one login: new to
+// Liston at Usama's invitation, then joining Talha's with that login.
 async function twoTeams() {
   const usama = await owner('Usama', 'Usama Retail');
   const talha = await owner('Talha');
   const email = `bilal-${crypto.randomUUID()}@example.com`;
-  const added = await request('POST', '/api/team/members', { email, name: 'Bilal', password }, usama.token);
-  assert.strictEqual(added.status, 201);
+  const added = await addMember(baseUrl, usama.token, { email, name: 'Bilal', password });
+  assert.strictEqual(added.status, 201, JSON.stringify(added.data));
   assert.strictEqual(added.data.existingLogin, false);
-  const joined = await request('POST', '/api/team/members', { email }, talha.token);
-  assert.strictEqual(joined.status, 201, JSON.stringify(joined.data));
+  const invited = await request('POST', '/api/team/invites', { email }, talha.token);
+  assert.strictEqual(invited.status, 201, JSON.stringify(invited.data));
+  const joined = await request('POST', `/api/invites/${linkToken(invited.data.invite.link)}/accept`, { password });
+  assert.strictEqual(joined.status, 200, JSON.stringify(joined.data));
   const bilal = { id: added.data.member.id, email, token: (await login(email)).data.token };
-  return { usama, talha, bilal, joined };
+  return { usama, talha, bilal, invited, joined };
 }
 
 test('a team is named at sign-up, or after its owner', async () => {
@@ -75,10 +79,11 @@ test('a team is named at sign-up, or after its owner', async () => {
   assert.strictEqual(rows[0].name, "Talha's workspace");
 });
 
-test('one login joins a second team with the same email and password, and is told', async () => {
-  const { usama, talha, bilal, joined } = await twoTeams();
-  assert.strictEqual(joined.data.existingLogin, true);
-  assert.strictEqual(joined.data.member.id, bilal.id, 'the same login, not a second one');
+test('one login joins a second team from its invitation, with the same email and password', async () => {
+  const { usama, talha, bilal, invited, joined } = await twoTeams();
+  assert.strictEqual(invited.data.invite.existingLogin, true);
+  assert.strictEqual(joined.data.user.id, bilal.id, 'the same login, not a second one');
+  assert.strictEqual(joined.data.user.team.id, talha.id, 'signed in, in the team joined');
   // Their password is untouched, and Talha's team appears in their team menu.
   assert.strictEqual((await login(bilal.email)).status, 200);
   const profile = (await me(bilal.token, usama.id)).data.user;
@@ -87,18 +92,21 @@ test('one login joins a second team with the same email and password, and is tol
     [talha.id, "Talha's workspace", 'member'],
   ]);
   assert.strictEqual(profile.owns_team, false);
-  // Told in Talha's team (not in Usama's bell), and counted on Talha's team in the menu.
-  const inTalha = await request('GET', '/api/notifications', undefined, bilal.token, talha.id);
-  assert.deepStrictEqual(inTalha.data.items.map((n) => n.kind), ['team.added']);
-  assert.match(inTalha.data.items[0].url, new RegExp(`ws=${talha.id}`));
-  assert.deepStrictEqual((await request('GET', '/api/notifications', undefined, bilal.token, usama.id)).data.items, []);
-  assert.strictEqual(profile.teams.find((t) => t.id === talha.id).unread, 1);
+  // Invited in the bell wherever they were (not yet in Talha's team), read once they joined.
+  const bell = await request('GET', '/api/notifications', undefined, bilal.token, usama.id);
+  const told = bell.data.items.find((n) => n.kind === 'team.invited');
+  assert.match(told.url, /^\/invite\//);
+  assert.ok(told.readAt, 'read: they joined');
+  // Talha is told Bilal joined, the link opening his access.
+  const talhaBell = await request('GET', '/api/notifications', undefined, talha.token);
+  assert.deepStrictEqual(talhaBell.data.items.map((n) => n.kind), ['team.joined']);
+  assert.match(talhaBell.data.items[0].url, new RegExp(`^/team/${bilal.id}\\?tab=access`));
 
-  // Adding them again is refused, as is the owner's own login.
-  assert.strictEqual((await request('POST', '/api/team/members', { email: bilal.email }, talha.token)).status, 409);
-  assert.strictEqual((await request('POST', '/api/team/members', { email: talha.email }, talha.token)).status, 400);
-  // A new email still needs a password.
-  assert.strictEqual((await request('POST', '/api/team/members', { email: `new-${crypto.randomUUID()}@example.com` }, talha.token)).status, 400);
+  // Inviting them again is refused, as is the owner's own login; the link is used.
+  assert.strictEqual((await request('POST', '/api/team/invites', { email: bilal.email }, talha.token)).status, 409);
+  assert.strictEqual((await request('POST', '/api/team/invites', { email: talha.email }, talha.token)).status, 400);
+  const again = await request('POST', `/api/invites/${linkToken(invited.data.invite.link)}/accept`, { password });
+  assert.deepStrictEqual([again.status, again.data.code], [409, 'INVITE_USED']);
 });
 
 test("each team's access is its own, and a page works in the team it names", async () => {
@@ -125,11 +133,12 @@ test("each team's access is its own, and a page works in the team it names", asy
 
 test('switching teams is remembered: it opens there next time, at login too', async () => {
   const { usama, talha, bilal } = await twoTeams();
-  assert.strictEqual((await me(bilal.token)).data.user.team.id, usama.id);
-  const switched = await request('POST', '/api/users/me/team', { id: talha.id }, bilal.token);
-  assert.deepStrictEqual([switched.status, switched.data.team.id, switched.data.team.role], [200, talha.id, 'member']);
+  // The team they joined last is the one they're in.
   assert.strictEqual((await me(bilal.token)).data.user.team.id, talha.id);
-  assert.strictEqual((await login(bilal.email)).data.user.team.id, talha.id);
+  const switched = await request('POST', '/api/users/me/team', { id: usama.id }, bilal.token);
+  assert.deepStrictEqual([switched.status, switched.data.team.id, switched.data.team.role], [200, usama.id, 'member']);
+  assert.strictEqual((await me(bilal.token)).data.user.team.id, usama.id);
+  assert.strictEqual((await login(bilal.email)).data.user.team.id, usama.id);
   assert.strictEqual((await request('POST', '/api/users/me/team', { id: crypto.randomUUID() }, bilal.token)).status, 404);
 });
 
@@ -154,11 +163,11 @@ test("owner access is one team's: the owner in Talha's team, a member in Usama's
 test("no owner can change a login that's in another team too; only its person can", async () => {
   const { usama, talha, bilal } = await twoTeams();
   for (const o of [usama, talha]) {
-    const reset = await request('PUT', `/api/team/members/${bilal.id}/password`, { password: 'takenover123' }, o.token);
-    assert.strictEqual(reset.status, 403);
-    assert.match(reset.data.error, /only they can change their password/);
+    const moved = await request('POST', `/api/team/members/${bilal.id}/email`, { email: `takenover-${crypto.randomUUID()}@example.com` }, o.token);
+    assert.strictEqual(moved.status, 403);
+    assert.match(moved.data.error, /only they can change their email/);
   }
-  assert.strictEqual((await login(bilal.email)).status, 200, 'the password is unchanged');
+  assert.strictEqual((await login(bilal.email)).status, 200, 'the login is unchanged');
   const listed = (await request('GET', '/api/team/members', undefined, usama.token)).data.members.find((m) => m.id === bilal.id);
   assert.strictEqual(listed.shared_login, true);
 });
@@ -185,8 +194,11 @@ test('removed from one team they keep the other; removed from both they are sign
 test("an owner works in another owner's team as a member there, their own team untouched", async () => {
   const usama = await owner('Usama');
   const talha = await owner('Talha');
-  const joined = await request('POST', '/api/team/members', { email: talha.email }, usama.token);
-  assert.deepStrictEqual([joined.status, joined.data.existingLogin], [201, true]);
+  const invited = await request('POST', '/api/team/invites', { email: talha.email }, usama.token);
+  assert.strictEqual(invited.data.invite.existingLogin, true);
+  // Signed in as Talha, joining needs no password.
+  const joined = await request('POST', `/api/invites/${linkToken(invited.data.invite.link)}/accept`, {}, talha.token);
+  assert.deepStrictEqual([joined.status, joined.data.user.id], [200, talha.id]);
   const inUsama = (await me(talha.token, usama.id)).data.user;
   assert.deepStrictEqual([inUsama.role, inUsama.owns_team], ['member', true]);
   assert.deepStrictEqual(await accounts(talha.token, usama.id), []);
@@ -194,14 +206,14 @@ test("an owner works in another owner's team as a member there, their own team u
   // In Usama's team chat Talha is a member, not an owner.
   const people = (await request('GET', '/api/chat/people', undefined, usama.token)).data.people;
   assert.strictEqual(people.find((p) => p.id === talha.id).role, 'member');
-  // Usama can't set the password of Talha's own login.
-  assert.strictEqual((await request('PUT', `/api/team/members/${talha.id}/password`, { password: 'takenover123' }, usama.token)).status, 403);
+  // Usama can't move Talha's own login to another email.
+  assert.strictEqual((await request('POST', `/api/team/members/${talha.id}/email`, { email: `takenover-${crypto.randomUUID()}@example.com` }, usama.token)).status, 403);
 });
 
 test("an owner's team going takes the logins only in it; those in other teams stay", async () => {
   const { usama, talha, bilal } = await twoTeams();
   const onlyUsama = `only-${crypto.randomUUID()}@example.com`;
-  await request('POST', '/api/team/members', { email: onlyUsama, password }, usama.token);
+  await addMember(baseUrl, usama.token, { email: onlyUsama, password });
   assert.strictEqual((await request('DELETE', '/api/users/me', undefined, usama.token)).status, 204);
   assert.strictEqual((await login(onlyUsama)).status, 401, 'gone with the team');
   const after = await login(bilal.email);

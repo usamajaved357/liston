@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const ebaySource = require('../../src/modules/sourcing/ebay-listing.source');
@@ -86,7 +87,7 @@ async function signup() {
 
 async function member(ownerToken, name, features) {
   const email = `hunt-${name}-${crypto.randomUUID()}@example.com`;
-  const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name }, ownerToken);
+  const added = await addMember(baseUrl, ownerToken, { email, password: 'memberpassword123', name });
   assert.strictEqual(added.status, 201);
   const id = added.data.member.id;
   await request('PUT', `/api/team/members/${id}/permissions`, { permissions: features.map((feature) => ({ connectionId: null, feature, allowed: true })) }, ownerToken);
@@ -535,9 +536,9 @@ test("the hunter is notified when a reviewer approves, rejects or sends back the
   assert.match(sentBack.body, /sent it back for you to improve\. “Find a cheaper supplier”/);
   // The reviewer isn't told about their own decisions, and nobody else sees the hunter's.
   assert.strictEqual((await request('GET', '/api/notifications', undefined, t.reviewer.token)).data.items.length, 0);
-  // The owner's own finds are approved as added: nobody is told.
+  // The owner's own finds are approved as added: nobody is told (their bell has only the members joining).
   await hunt(t.connectionId, t.ownerToken);
-  assert.strictEqual((await request('GET', '/api/notifications', undefined, t.ownerToken)).data.items.length, 0);
+  assert.deepStrictEqual((await request('GET', '/api/notifications', undefined, t.ownerToken)).data.items.filter((n) => n.kind !== 'team.joined'), []);
 
   const one1 = await request('POST', '/api/notifications/read', { ids: [approved.id] }, t.hunter.token);
   assert.strictEqual(one1.data.unread, 2);

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 
@@ -55,23 +56,19 @@ async function createOwnerWithMemberAndConnection() {
 
   const memberEmail = `member-${crypto.randomUUID()}@example.com`;
   const memberPassword = 'memberpassword123';
-  const addRes = await request('POST', '/api/team/members', { email: memberEmail, password: memberPassword }, ownerToken);
+  const addRes = await addMember(baseUrl, ownerToken, { email: memberEmail, password: memberPassword });
   assert.strictEqual(addRes.status, 201);
 
-  const { data: loginData } = await request('POST', '/api/auth/login', { email: memberEmail, password: memberPassword });
-  return { ownerId, ownerToken, memberId: addRes.data.member.id, memberToken: loginData.token, memberEmail, connectionId: connection.id };
+  // Accepting the invitation signs them in.
+  return { ownerId, ownerToken, memberId: addRes.data.member.id, memberToken: addRes.data.token, memberEmail, connectionId: connection.id };
 }
 
-test('POST /api/team/members requires the caller to be an owner', async () => {
+test('inviting someone takes the workspace owner (or a co-manager)', async () => {
   const { memberToken } = await createOwnerWithMemberAndConnection();
 
-  const { status } = await request(
-    'POST',
-    '/api/team/members',
-    { email: `nested-${crypto.randomUUID()}@example.com`, password: 'testpassword123' },
-    memberToken
-  );
+  const { status } = await request('POST', '/api/team/invites', { email: `nested-${crypto.randomUUID()}@example.com` }, memberToken);
   assert.strictEqual(status, 403);
+  assert.strictEqual((await request('GET', '/api/team/invites', undefined, memberToken)).status, 403);
 });
 
 test('a member with no granted permissions sees no connections and gets 403 on the connection directly', async () => {
@@ -236,7 +233,7 @@ test('DELETE /api/team/members/:id removes the login but keeps the member, who c
 
   const { data } = await request('GET', '/api/team/members', undefined, ownerToken);
   assert.ok(data.members.find((m) => m.id === memberId).deactivated_at, 'still listed, as removed');
-  const again = await request('POST', '/api/team/members', { email: memberEmail, password: 'anotherpassword1' }, ownerToken);
+  const again = await request('POST', '/api/team/invites', { email: memberEmail }, ownerToken);
   assert.strictEqual(again.status, 409);
   assert.match(again.data.error, /Restore them/);
 
@@ -275,7 +272,7 @@ test("a member's work is on their page: figures for the range, per account, and 
   assert.deepStrictEqual(feed.data.items.map((i) => i.kind), ['order.note', 'order.dispatched']);
   assert.ok(feed.data.next, 'more to load');
   const rest = await request('GET', `/api/team/members/${memberId}/activity?range=7d&before=${feed.data.next}`, undefined, ownerToken);
-  assert.deepStrictEqual(rest.data.items.map((i) => i.kind).sort(), ['order.supplier_ordered', 'order.supplier_ordered', 'order.supplier_ordered', 'session.login'], 'the rest, and the login that started the sitting');
+  assert.deepStrictEqual(rest.data.items.map((i) => i.kind).sort(), ['order.supplier_ordered', 'order.supplier_ordered', 'order.supplier_ordered', 'session.login'], 'the rest, and the sign-in joining started the sitting with');
   const only = await request('GET', `/api/team/members/${memberId}/activity?range=7d&kind=supplier_orders`, undefined, ownerToken);
   assert.deepStrictEqual([only.data.items.length, only.data.items[0].label], [3, 'Placed the supplier order'], 'the log lists every save');
 
@@ -298,22 +295,11 @@ test("a member's work is on their page: figures for the range, per account, and 
   assert.strictEqual((await request('GET', `/api/team/members/${memberId}/overview`, undefined, memberToken)).status, 403, 'members never see the team');
 });
 
-test('PUT /api/team/members/:id/password resets a member login (owner only)', async () => {
-  const { ownerToken, memberId, memberToken, memberEmail } = await createOwnerWithMemberAndConnection();
-
-  const asMember = await request('PUT', `/api/team/members/${memberId}/password`, { password: 'newpassword123' }, memberToken);
-  assert.strictEqual(asMember.status, 403);
-
-  const short = await request('PUT', `/api/team/members/${memberId}/password`, { password: 'short' }, ownerToken);
-  assert.strictEqual(short.status, 400);
-
-  const ok = await request('PUT', `/api/team/members/${memberId}/password`, { password: 'newpassword123' }, ownerToken);
-  assert.strictEqual(ok.status, 204);
-
-  const oldLogin = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
-  assert.strictEqual(oldLogin.status, 401);
-  const newLogin = await request('POST', '/api/auth/login', { email: memberEmail, password: 'newpassword123' });
-  assert.strictEqual(newLogin.status, 200);
+test("nobody but the member sets their password: the owner's reset is gone", async () => {
+  const { ownerToken, memberId, memberEmail } = await createOwnerWithMemberAndConnection();
+  const reset = await request('PUT', `/api/team/members/${memberId}/password`, { password: 'newpassword123' }, ownerToken);
+  assert.strictEqual(reset.status, 404);
+  assert.strictEqual((await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' })).status, 200, 'their own password still works');
 });
 
 test('team activity can be rebuilt from an account\'s order timeline (a copy from before it was recorded)', async () => {
@@ -360,7 +346,7 @@ test('everything a member does lands on their record: logins, draft work (once a
   assert.deepStrictEqual([data.totals.draft_work, data.totals.supplier_orders, data.totals.active_days], [1, 1, 1]);
   const feed = await request('GET', `/api/team/members/${memberId}/activity?range=today`, undefined, ownerToken);
   const kinds = feed.data.items.map((i) => i.kind).sort();
-  assert.deepStrictEqual(kinds, ['listing.draft_edited', 'order.supplier_ordered', 'order.supplier_updated', 'session.login', 'session.login'], 'the setup\'s login and this one');
+  assert.deepStrictEqual(kinds, ['listing.draft_edited', 'order.supplier_ordered', 'order.supplier_updated', 'session.login', 'session.login'], 'joining (a sign-in) and this login');
   assert.deepStrictEqual(feed.data.items.find((i) => i.kind === 'order.supplier_updated').detail.status, { from: 'ordered', to: 'delivered' });
   assert.strictEqual(data.actions, 3, 'a login is recorded, but it is not work');
 });

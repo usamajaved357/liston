@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const invited = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const teamRepository = require('../../src/modules/team/team.repository');
@@ -40,7 +41,7 @@ async function request(method, path, body, token) {
 async function addMember(ownerToken, name) {
   const email = `${name}-${crypto.randomUUID()}@example.com`;
   const password = 'memberpassword123';
-  const added = await request('POST', '/api/team/members', { email, name, password }, ownerToken);
+  const added = await invited.addMember(baseUrl, ownerToken, { email, name, password });
   assert.strictEqual(added.status, 201, JSON.stringify(added.data));
   const login = await request('POST', '/api/auth/login', { email, password });
   return { id: added.data.member.id, email, password, token: login.data.token, login: login.data };
@@ -123,12 +124,14 @@ test('someone with owner access runs the rest of the team', async () => {
   const t = await team();
   await giveOwnerAccess(t, t.partner);
 
-  const added = await request('POST', '/api/team/members', { email: `new-${crypto.randomUUID()}@example.com`, password: 'testpassword123' }, t.partner.token);
+  const added = await invited.addMember(baseUrl, t.partner.token, { email: `new-${crypto.randomUUID()}@example.com`, password: 'testpassword123' });
   assert.strictEqual(added.status, 201);
+  // …and changes a member's email, sent to the new address to confirm.
+  const moved = await request('POST', `/api/team/members/${t.worker.id}/email`, { email: `worker-real-${crypto.randomUUID()}@example.com` }, t.partner.token);
+  assert.strictEqual(moved.status, 201, JSON.stringify(moved.data));
 
   const grant = await request('PUT', `/api/team/members/${t.worker.id}/permissions`, { permissions: [{ connectionId: t.connectionId, feature: 'listings', allowed: true }] }, t.partner.token);
   assert.strictEqual(grant.status, 200);
-  assert.strictEqual((await request('PUT', `/api/team/members/${t.worker.id}/password`, { password: 'anotherpassword1' }, t.partner.token)).status, 204);
   assert.strictEqual((await request('DELETE', `/api/team/members/${t.worker.id}`, undefined, t.partner.token)).status, 204);
   assert.strictEqual((await request('POST', `/api/team/members/${t.worker.id}/restore`, undefined, t.partner.token)).status, 204);
   assert.strictEqual((await request('GET', `/api/team/members/${t.worker.id}/overview?range=7d`, undefined, t.partner.token)).status, 200);
@@ -144,7 +147,7 @@ test('someone with owner access can never change their own login, another with o
   for (const target of [self, other]) {
     const perms = await request('PUT', `/api/team/members/${target.id}/permissions`, { permissions: [{ connectionId: null, feature: 'orders', allowed: false }] }, self.token);
     assert.strictEqual(perms.status, 403);
-    assert.strictEqual((await request('PUT', `/api/team/members/${target.id}/password`, { password: 'takeoverpass1' }, self.token)).status, 403);
+    assert.strictEqual((await request('POST', `/api/team/members/${target.id}/email`, { email: `takeover-${crypto.randomUUID()}@example.com` }, self.token)).status, 403);
     assert.strictEqual((await request('DELETE', `/api/team/members/${target.id}`, undefined, self.token)).status, 403);
     assert.strictEqual((await request('POST', `/api/team/members/${target.id}/restore`, undefined, self.token)).status, 403);
     assert.strictEqual((await request('PUT', `/api/team/members/${target.id}/owner-access`, { ownerAccess: false }, self.token)).status, 403);
@@ -160,7 +163,7 @@ test('someone with owner access can never change their own login, another with o
   assert.strictEqual((await request('POST', '/api/auth/login', { email: other.email, password: other.password })).status, 200);
 
   // The owner still manages both.
-  assert.strictEqual((await request('PUT', `/api/team/members/${other.id}/password`, { password: 'ownerresetpass1' }, t.owner.token)).status, 204);
+  assert.strictEqual((await request('POST', `/api/team/members/${other.id}/email`, { email: `other-real-${crypto.randomUUID()}@example.com` }, t.owner.token)).status, 201);
   assert.strictEqual((await request('DELETE', `/api/team/members/${other.id}`, undefined, t.owner.token)).status, 204);
 });
 

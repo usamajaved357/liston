@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 
@@ -43,7 +44,7 @@ test('price and stock: listings access needed, an eBay item number, and a change
 
   // A member without access to the account's listings can't read or change it.
   const memberEmail = `stock-member-${crypto.randomUUID()}@example.com`;
-  await request('POST', '/api/team/members', { email: memberEmail, password: 'memberpassword123', name: 'm' }, data.token);
+  await addMember(baseUrl, data.token, { email: memberEmail, password: 'memberpassword123', name: 'm' });
   const login = await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' });
   assert.strictEqual((await request('GET', `${base}/400000000001/stock`, undefined, login.data.token)).status, 403);
   assert.strictEqual((await request('POST', `${base}/400000000001/stock`, { changes: [{ key: 'item', quantity: 2 }] }, login.data.token)).status, 403);

@@ -5,6 +5,7 @@ const { mock } = require('node:test');
 require('dotenv').config();
 
 const createApp = require('../../src/app');
+const { addMember } = require('../helpers/members');
 const { pool } = require('../../src/db/client');
 const connectionService = require('../../src/modules/connections/connection.service');
 const connectionRepository = require('../../src/modules/connections/connection.repository');
@@ -177,13 +178,13 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
 
     // A member with Inbox but not Orders: the messages, not the orders. Without Inbox: nothing.
     const memberEmail = `inbox-member-${crypto.randomUUID()}@example.com`;
-    const added = await request('POST', '/api/team/members', { email: memberEmail, password: 'memberpassword123', name: 'Sara' }, t.owner.token);
+    const added = await addMember(baseUrl, t.owner.token, { email: memberEmail, password: 'memberpassword123', name: 'Sara' });
     await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'inbox', allowed: true }] }, t.owner.token);
     const member = (await request('POST', '/api/auth/login', { email: memberEmail, password: 'memberpassword123' })).data.token;
     const seen = await request('GET', `${base}/c1`, undefined, member);
     assert.deepStrictEqual([seen.data.context.orders, seen.data.context.ordersHidden, seen.data.context.buyerName], [[], true, null], 'no orders, no name from them');
     const other = `inbox-other-${crypto.randomUUID()}@example.com`;
-    const added2 = await request('POST', '/api/team/members', { email: other, password: 'memberpassword123', name: 'Tom' }, t.owner.token);
+    const added2 = await addMember(baseUrl, t.owner.token, { email: other, password: 'memberpassword123', name: 'Tom' });
     await request('PUT', `/api/team/members/${added2.data.id || added2.data.member?.id}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'orders', allowed: true }] }, t.owner.token);
     const tom = (await request('POST', '/api/auth/login', { email: other, password: 'memberpassword123' })).data.token;
     assert.strictEqual((await request('GET', base, undefined, tom)).status, 403);
@@ -192,8 +193,12 @@ test('opening a conversation reads its messages, marks it read on eBay, and puts
     const all = await request('GET', '/api/inbox?folder=archived', undefined, t.owner.token);
     assert.deepStrictEqual(all.data.conversations.map((c) => c.account.label), ['Walexo']);
 
-    // eBay says the buyer closed their account: their conversation and messages go.
-    assert.ok((await inboxService.forgetMember('AND_630713')) >= 1, 'on every account');
+    // eBay says the buyer closed their account: their conversation and messages go, on every
+    // account. A buyer name only this test uses: the shared fixture buyer's conversations in
+    // the other test files, running at the same time, would go with it.
+    const closed = `closed-${crypto.randomUUID().slice(0, 8)}`;
+    await pool.query('UPDATE ebay_conversations SET other_party = $2 WHERE connection_id = $1', [t.connection.id, closed]);
+    assert.ok((await inboxService.forgetMember(closed.toUpperCase())) >= 1, 'whatever the case');
     assert.strictEqual((await pool.query('SELECT count(*)::int AS n FROM ebay_conversations WHERE connection_id = $1', [t.connection.id])).rows[0].n, 0);
     assert.strictEqual((await pool.query('SELECT count(*)::int AS n FROM ebay_messages WHERE connection_id = $1', [t.connection.id])).rows[0].n, 0);
   } finally {
@@ -269,7 +274,7 @@ test("the details panel's listing and order facts come from Liston's own copies,
     // Inbox and Orders, not Listings: the order's facts, none of the listing's.
     const add = async (features) => {
       const email = `inbox-facts-${crypto.randomUUID()}@example.com`;
-      const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, t.owner.token);
+      const added = await addMember(baseUrl, t.owner.token, { email, password: 'memberpassword123', name: 'Sara' });
       await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: features.map((feature) => ({ connectionId: t.connection.id, feature, allowed: true })) }, t.owner.token);
       return (await request('POST', '/api/auth/login', { email, password: 'memberpassword123' })).data.token;
     };
@@ -390,7 +395,7 @@ test("a buyer's conversation is marked with an open return (eBay's for the whole
 
     // A member with the Inbox but not Orders sees no marks.
     const email = `inbox-issues-${crypto.randomUUID()}@example.com`;
-    const added = await request('POST', '/api/team/members', { email, password: 'memberpassword123', name: 'Sara' }, t.owner.token);
+    const added = await addMember(baseUrl, t.owner.token, { email, password: 'memberpassword123', name: 'Sara' });
     await request('PUT', `/api/team/members/${added.data.id || added.data.member?.id}/permissions`, { permissions: [{ connectionId: t.connection.id, feature: 'inbox', allowed: true }] }, t.owner.token);
     const sara = (await request('POST', '/api/auth/login', { email, password: 'memberpassword123' })).data.token;
     const saras = (await request('GET', base, undefined, sara)).data;

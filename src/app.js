@@ -75,6 +75,8 @@ function createApp() {
   app.use('/api/listings', requireAuth, requireAccess, listingRoutes);
   app.use('/api/hunting', requireAuth, requireAccess, require('./modules/hunting/hunting.routes'));
   app.use('/api/team', requireAuth, requireAccess, teamRoutes);
+  // An invitation link's page: no sign-in needed to read or accept it.
+  app.use('/api/invites', require('./modules/team/invites.routes'));
   app.use('/api/notifications', requireAuth, requireAccess, require('./modules/notifications/notifications.routes'));
   app.use('/api/source-accounts', requireAuth, requireAccess, require('./modules/orders/source-account.routes'));
   app.use('/api/overview', overviewRoutes);
