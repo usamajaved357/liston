@@ -48,6 +48,21 @@ async function findAllByUser(userId) {
   return result.rows;
 }
 
+// Each eBay account's store logo, from Liston's copy of its store profile
+// (ebay_snapshots 'store_profile', the description template's branding):
+// the logo's URL when the store has one, and when the copy was read. An
+// account never read has no entry.
+async function storeLogos(connectionIds) {
+  if (!connectionIds.length) return new Map();
+  const result = await query(
+    `SELECT connection_id, data->>'logoUrl' AS logo_url, synced_at
+     FROM ebay_snapshots
+     WHERE kind = 'store_profile' AND connection_id = ANY($1::uuid[])`,
+    [connectionIds]
+  );
+  return new Map(result.rows.map((r) => [String(r.connection_id), { logoUrl: r.logo_url || null, syncedAt: new Date(r.synced_at).getTime() }]));
+}
+
 async function findByIdForUser(id, userId) {
   const result = await query(
     `SELECT c.id, c.user_id, c.label, c.status, c.credentials, c.settings, c.created_at, c.updated_at,
@@ -193,4 +208,5 @@ module.exports = {
   mergeEbaySettings,
   updateStatus,
   deleteByIdForUser,
+  storeLogos,
 };

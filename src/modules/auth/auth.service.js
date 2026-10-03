@@ -1,12 +1,14 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { query } = require('../../db/client');
+const { query, pool } = require('../../db/client');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const emailService = require('../../utils/email');
 const accessService = require('./access.service');
 const activityRepository = require('../team/activity.repository');
+const workspaceRepository = require('../team/workspace.repository');
+const teams = require('../team/teams');
 
 const SALT_ROUNDS = 12;
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -40,7 +42,8 @@ async function deliverLink(kind, sendFn, userEmail, rawToken, path) {
   }
 }
 
-async function signup({ email, password, name, accessNote }) {
+// `teamName`: what the new owner's team is called ("Talha's team" when left out); only they rename it later.
+async function signup({ email, password, name, accessNote, teamName }) {
   const existing = await query('SELECT id FROM users WHERE email = $1', [email]);
   if (existing.rows.length > 0) {
     throw new AuthError('An account with this email already exists', 409);
@@ -56,35 +59,49 @@ async function signup({ email, password, name, accessNote }) {
   const rawVerificationToken = generateRawToken();
   // Admins are in from the start; everyone else waits for an admin's yes.
   const accessStatus = accessService.isAdminEmail(email) ? 'active' : 'pending';
-  const result = await query(
-    `INSERT INTO users (email, password_hash, plan_id, email_verification_token_hash, email_verification_expires_at, name, access_status, access_note)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id, email, plan_id, created_at, access_status`,
-    [
-      email,
-      passwordHash,
-      starterPlan.rows[0].id,
-      hashToken(rawVerificationToken),
-      new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
-      name || null,
-      accessStatus,
-      accessNote || null,
-    ]
-  );
-
-  const user = result.rows[0];
+  const team = teams.cleanTeamName(teamName) || teams.defaultTeamName({ name, email });
+  // The owner and their team together: an owner never exists without one.
+  const client = await pool.connect();
+  let user;
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `INSERT INTO users (email, password_hash, plan_id, email_verification_token_hash, email_verification_expires_at, name, access_status, access_note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, email, plan_id, created_at, access_status`,
+      [
+        email,
+        passwordHash,
+        starterPlan.rows[0].id,
+        hashToken(rawVerificationToken),
+        new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS),
+        name || null,
+        accessStatus,
+        accessNote || null,
+      ]
+    );
+    user = result.rows[0];
+    await workspaceRepository.create(user.id, team, client);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.code === '23505') throw new AuthError('An account with this email already exists', 409);
+    throw err;
+  } finally {
+    client.release();
+  }
   await deliverLink('Email verification', emailService.sendVerificationEmail, email, rawVerificationToken, '/verify-email');
   // Tell the admins now rather than only after verification: while the
   // email provider is sandboxed the verification mail may never arrive, and
   // an admin approving someone vouches for the address anyway.
   if (accessStatus === 'pending') {
-    await accessService.notifyAdmins({ id: user.id, email, name: name || null, access_note: accessNote || null, emailVerified: false });
+    await accessService.notifyAdmins({ id: user.id, email, name: name || null, team_name: team, access_note: accessNote || null, emailVerified: false });
   }
 
   const token = issueToken(user);
   // emailVerificationToken is for internal/test use only — controllers must
   // not include it in the HTTP response.
-  return { user, token, emailVerificationToken: rawVerificationToken };
+  return { user: { ...user, role: 'owner', team: { id: user.id, name: team } }, token, emailVerificationToken: rawVerificationToken };
 }
 
 async function verifyEmail(rawToken) {
@@ -166,10 +183,7 @@ async function resetPassword(rawToken, newPassword) {
 }
 
 async function login({ email, password }) {
-  const result = await query(
-    'SELECT id, email, password_hash, plan_id, role, parent_user_id, deactivated_at FROM users WHERE email = $1',
-    [email]
-  );
+  const result = await query('SELECT id, email, password_hash, plan_id, role FROM users WHERE email = $1', [email]);
   if (result.rows.length === 0) {
     throw new AuthError('Invalid email or password', 401);
   }
@@ -179,20 +193,27 @@ async function login({ email, password }) {
   if (!passwordMatches) {
     throw new AuthError('Invalid email or password', 401);
   }
-  // A removed team member keeps their history, not their login.
-  if (user.deactivated_at) {
-    throw new AuthError('This login has been removed by the account owner.', 403);
+  // The teams it can open (migration 051): a member removed from every team
+  // keeps their history, not their login.
+  const session = await workspaceRepository.sessionFor(user.id);
+  const picked = teams.pickTeam(session?.teams || [], { last: session?.user.last_workspace_id });
+  if (picked.none) {
+    throw new AuthError('This login has been removed by the workspace owner.', 403);
   }
   await query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
-  // When each person started, for their team record (attendance).
-  await activityRepository.record({ actorUserId: user.id, ownerUserId: user.role === 'member' ? user.parent_user_id : user.id, kind: 'session.login', subjectType: 'session', subjectId: user.id });
+  // When each person started, for their record in every team they're in (attendance).
+  for (const t of session.teams) {
+    await activityRepository.record({ actorUserId: user.id, ownerUserId: t.ownerId, kind: 'session.login', subjectType: 'session', subjectId: user.id });
+  }
 
   const token = issueToken(user);
   return {
-    // `role` lets the frontend send a team member straight to their
-    // accessible connection(s) instead of the owner-only dashboard/
-    // connections-management pages — see frontend/app/login/page.tsx.
-    user: { id: user.id, email: user.email, plan_id: user.plan_id, role: user.role },
+    // `role` (in the team it opens in) lets the frontend send a team member
+    // straight to their accessible connection(s) instead of the owner-only
+    // dashboard/connections-management pages — see
+    // frontend/app/login/page.tsx; `team` is that team, which the pages
+    // then name on every request.
+    user: { id: user.id, email: user.email, plan_id: user.plan_id, role: teams.roleIn(picked.team).role, team: { id: picked.team.ownerId } },
     token,
   };
 }

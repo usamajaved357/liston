@@ -10,61 +10,93 @@ import { Alert } from "@/components/Alert";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDateTime } from "@/lib/format";
 import { PillTabs } from "@/components/PillTabs";
+import { timeAgo } from "@/components/team/team-shared";
+
+// Access requests (admins only): the in-app version of the approve and
+// reject email, for when the email is lost or the admin would rather see
+// everyone at once. The counts at the top; everyone waiting as a card of
+// their own (who, their workspace, when, whether their email is verified,
+// what they said about their business) with Approve and Reject; and the
+// last 30 days' decisions, each one reversible.
 
 function initials(r: AccessRequest) {
-  const source = (r.name || r.email).trim();
-  const parts = source.split(/[\s@._-]+/).filter(Boolean);
+  const parts = (r.name || r.email).trim().split(/[\s@._-]+/).filter(Boolean);
   return ((parts[0]?.[0] || "") + (parts[1]?.[0] || "")).toUpperCase() || "?";
 }
 
-
-function Person({ r, size = "md" }: { r: AccessRequest; size?: "md" | "sm" }) {
-  const big = size === "md";
+function Face({ r, size = 40 }: { r: AccessRequest; size?: number }) {
   return (
-    <div className="flex min-w-0 items-center gap-3">
-      <span
-        className={`flex flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] ${
-          big ? "h-10 w-10 text-sm" : "h-9 w-9 text-xs"
-        }`}
-      >
-        {initials(r)}
-      </span>
-      <div className="min-w-0">
-        <p className={`truncate font-semibold text-[var(--color-ink)] ${big ? "text-[15px]" : "text-sm"}`}>{r.name || "No name given"}</p>
-        <a href={`mailto:${r.email}`} className="block truncate text-[13px] text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:underline">
-          {r.email}
-        </a>
-      </div>
+    <span
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.34) }}
+      className="flex flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/15"
+      aria-hidden
+    >
+      {initials(r)}
+    </span>
+  );
+}
+
+function Chip({ tone, children }: { tone: "emerald" | "amber" | "rose" | "slate"; children: React.ReactNode }) {
+  const tones = {
+    emerald: ["bg-emerald-50 text-emerald-700 ring-emerald-200", "bg-emerald-500"],
+    amber: ["bg-amber-50 text-amber-800 ring-amber-200", "bg-amber-500"],
+    rose: ["bg-rose-50 text-rose-700 ring-rose-200", "bg-rose-500"],
+    slate: ["bg-slate-50 text-slate-600 ring-slate-200", "bg-slate-400"],
+  }[tone];
+  return (
+    <span className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${tones[0]}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${tones[1]}`} aria-hidden />
+      {children}
+    </span>
+  );
+}
+
+function Count({ label, value, note, tone }: { label: string; value: number; note: string; tone?: "amber" }) {
+  return (
+    <div className="px-5 py-4">
+      <p className="text-[12px] font-medium text-[var(--color-muted)]">{label}</p>
+      <p className={`mt-1 text-[22px] font-semibold leading-tight tracking-tight tabular-nums ${tone === "amber" && value > 0 ? "text-amber-700" : "text-[var(--color-ink)]"}`}>{value}</p>
+      <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">{note}</p>
     </div>
   );
 }
 
-
-const StatusPill = ({ status }: { status: "active" | "rejected" | "pending" }) => {
-  const styles = {
-    active: ["bg-emerald-50 text-emerald-700 ring-emerald-200", "bg-emerald-500", "Approved"],
-    rejected: ["bg-rose-50 text-rose-700 ring-rose-200", "bg-rose-500", "Access revoked"],
-    pending: ["bg-amber-50 text-amber-800 ring-amber-200", "bg-amber-500", "Waiting"],
-  }[status];
+// One applicant waiting for a decision.
+function Applicant({ r, busy, onApprove, onReject }: { r: AccessRequest; busy: boolean; onApprove: () => void; onReject: () => void }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 ring-inset ${styles[0]}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${styles[1]}`} />
-      {styles[2]}
-    </span>
+    <article className="card px-5 py-4">
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+        <Face r={r} size={44} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <p className="truncate text-[15px] font-semibold text-[var(--color-ink)]">{r.name || "No name given"}</p>
+            {r.email_verified_at ? <Chip tone="emerald">Email verified</Chip> : <Chip tone="amber">Email not verified</Chip>}
+          </div>
+          <a href={`mailto:${r.email}`} className="block truncate text-[13px] text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:underline">
+            {r.email}
+          </a>
+          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[12px] text-[var(--color-muted)]">
+            {r.team_name && <span>{`Workspace: ${r.team_name}`}</span>}
+            <span title={formatDateTime(r.created_at)}>{`Signed up ${timeAgo(r.created_at)}`}</span>
+          </p>
+        </div>
+        <div className="flex w-full flex-shrink-0 items-center justify-end gap-2 sm:w-auto">
+          <button type="button" onClick={onReject} disabled={busy} className="btn btn-ghost btn-sm text-[var(--color-danger)]">
+            Reject
+          </button>
+          <button type="button" onClick={onApprove} disabled={busy} className="btn btn-primary btn-sm">
+            {busy ? "Saving…" : "Approve"}
+          </button>
+        </div>
+      </div>
+      <div className="mt-3.5 rounded-xl border border-[var(--color-line)] bg-[var(--color-paper)] px-4 py-3">
+        <p className="text-[11.5px] font-medium text-[var(--color-muted)]">About their business</p>
+        <p className={`mt-1 whitespace-pre-line text-[13.5px] leading-relaxed ${r.access_note ? "text-[var(--color-ink)]" : "italic text-[var(--color-muted)]"}`}>{r.access_note || "No note left."}</p>
+      </div>
+    </article>
   );
-};
+}
 
-
-// Every row in both lists shares one column template so names, statuses,
-// dates and buttons line up top to bottom, whatever the row's state.
-const COLS = "grid items-center gap-4 px-5 sm:grid-cols-[minmax(0,1fr)_130px_140px_200px]";
-const ColHead = ({ children }: { children: React.ReactNode }) => (
-  <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">{children}</span>
-);
-
-
-// The in-app version of the approve/reject email, for when the email is
-// lost or the admin would rather see everyone waiting at once.
 export default function AccessRequestsPage() {
   const router = useRouter();
   const cachedUser = useCachedUser();
@@ -106,7 +138,7 @@ export default function AccessRequestsPage() {
       const from = requests.find((r) => r.id === id) || reviewed.find((r) => r.id === id);
       setRequests((list) => list.filter((r) => r.id !== id));
       if (result.deleted || !from) {
-        // A rejected applicant's account is gone — nothing to show.
+        // A rejected applicant's sign-up is gone: nothing to show.
         setReviewed((list) => list.filter((r) => r.id !== id));
       } else {
         setReviewed((list) => [{ ...from, access_status: status, access_reviewed_at: new Date().toISOString() }, ...list.filter((r) => r.id !== id)]);
@@ -143,7 +175,7 @@ export default function AccessRequestsPage() {
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Access requests</h1>
-          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Who gets into Liston. Approving an applicant also verifies their email.</p>
+          <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Who gets into Liston. Approving someone also verifies their email.</p>
         </div>
       }
     >
@@ -156,71 +188,46 @@ export default function AccessRequestsPage() {
       {loading ? (
         <PageSkeleton rows={2} />
       ) : (
-        <>
+        <div className="max-w-4xl space-y-8 pb-4">
+          <section className="card grid grid-cols-3 divide-x divide-[var(--color-line)]">
+            <Count label="Waiting" value={requests.length} note="for a decision" tone="amber" />
+            <Count label="Approved" value={counts.active} note="in the last 30 days" />
+            <Count label="Revoked" value={counts.rejected} note="in the last 30 days" />
+          </section>
+
           <section>
             <div className="mb-3 flex items-baseline gap-2">
-              <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">Waiting for a decision</h2>
-              <span className="rounded-full bg-[var(--color-primary-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-primary)]">{requests.length}</span>
+              <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Waiting for a decision</h2>
+              {requests.length > 0 && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-800 ring-1 ring-inset ring-amber-200">{requests.length}</span>}
             </div>
-
             {requests.length === 0 ? (
-              <div className="card flex items-center gap-4 px-5 py-4">
-                <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)]">
-                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                    <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+              <div className="card flex items-center gap-4 px-5 py-5">
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-inset ring-emerald-200" aria-hidden>
+                  <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                    <path d="M5 12.5l4.2 4.2L19 7" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </span>
                 <div>
-                  <p className="text-sm font-medium text-[var(--color-ink)]">You&apos;re all caught up</p>
-                  <p className="text-[13px] text-[var(--color-muted)]">New sign-ups show up here and in your inbox.</p>
+                  <p className="text-[14px] font-semibold text-[var(--color-ink)]">You&apos;re all caught up</p>
+                  <p className="text-[13px] text-[var(--color-muted)]">New sign-ups appear here, and in your email.</p>
                 </div>
               </div>
             ) : (
-              <div className="card divide-y divide-[var(--color-line)]">
-                <div className={`${COLS} hidden py-2.5 sm:grid`}>
-                  <ColHead>Applicant</ColHead>
-                  <ColHead>Email</ColHead>
-                  <ColHead>Signed up</ColHead>
-                  <span />
-                </div>
+              <div className="space-y-3">
                 {requests.map((r) => (
-                  <div key={r.id} className="px-5 py-4">
-                    <div className="grid grid-cols-1 items-center gap-4 sm:grid-cols-[minmax(0,1fr)_130px_140px_200px]">
-                      <Person r={r} />
-                      <div>
-                        <span className={`chip font-medium ${r.email_verified_at ? "chip-accent" : "chip-warning"}`}>
-                          {r.email_verified_at ? "Verified" : "Unverified"}
-                        </span>
-                      </div>
-                      <span className="text-[13px] text-[var(--color-muted)]">{formatDateTime(r.created_at)}</span>
-                      <div className="flex items-center justify-end gap-2">
-                        <button type="button" onClick={() => setConfirmReject(r)} disabled={busyId === r.id} className="btn btn-danger btn-sm">
-                          Reject
-                        </button>
-                        <button type="button" onClick={() => decide(r.id, "active")} disabled={busyId === r.id} className="btn btn-accent btn-sm">
-                          Approve
-                        </button>
-                      </div>
-                    </div>
-                    <div className="mt-3 rounded-xl bg-[var(--color-paper)] px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">About their business</p>
-                      <p className={`mt-1 text-[13.5px] leading-relaxed ${r.access_note ? "text-[var(--color-ink)]" : "italic text-[var(--color-muted)]"}`}>
-                        {r.access_note || "No note left."}
-                      </p>
-                    </div>
-                  </div>
+                  <Applicant key={r.id} r={r} busy={busyId === r.id} onApprove={() => decide(r.id, "active")} onReject={() => setConfirmReject(r)} />
                 ))}
               </div>
             )}
           </section>
 
-          {reviewed.length > 0 && (
-            <section className="mt-8">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-baseline gap-2">
-                  <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">Recently reviewed</h2>
-                  <span className="text-[12px] text-[var(--color-muted)]">last 30 days</span>
-                </div>
+          <section>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-baseline gap-2">
+                <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Recently reviewed</h2>
+                <span className="text-[12px] text-[var(--color-muted)]">last 30 days</span>
+              </div>
+              {reviewed.length > 0 && (
                 <PillTabs
                   label="Reviewed"
                   tabs={(
@@ -233,43 +240,49 @@ export default function AccessRequestsPage() {
                   value={filter}
                   onChange={setFilter}
                 />
-              </div>
-
-              <div className="card divide-y divide-[var(--color-line)]">
-                <div className={`${COLS} hidden py-2.5 sm:grid`}>
-                  <ColHead>Person</ColHead>
-                  <ColHead>Status</ColHead>
-                  <ColHead>Reviewed</ColHead>
-                  <span />
-                </div>
-                {shown.length === 0 ? (
-                  <p className="px-5 py-8 text-center text-[13px] text-[var(--color-muted)]">Nothing {filter === "active" ? "approved" : "revoked"} in the last 30 days.</p>
-                ) : (
-                  shown.map((r) => (
-                    <div key={r.id} className={`${COLS} py-3`}>
-                      <Person r={r} size="sm" />
-                      <div>
-                        <StatusPill status={r.access_status === "active" ? "active" : "rejected"} />
-                      </div>
-                      <span className="text-[13px] text-[var(--color-muted)]">{r.access_reviewed_at ? formatDateTime(r.access_reviewed_at) : "—"}</span>
-                      <div className="flex items-center justify-end">
-                        {r.access_status === "rejected" ? (
-                          <button type="button" onClick={() => decide(r.id, "active")} disabled={busyId === r.id} className="btn btn-accent btn-sm w-[132px]">
-                            Restore access
-                          </button>
-                        ) : (
-                          <button type="button" onClick={() => setConfirmReject(r)} disabled={busyId === r.id} className="btn btn-danger btn-sm w-[132px]">
-                            Revoke access
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </section>
-          )}
-        </>
+              )}
+            </div>
+            <div className="card overflow-hidden">
+              {shown.length === 0 ? (
+                <p className="px-5 py-8 text-center text-[13px] text-[var(--color-muted)]">
+                  {reviewed.length === 0 ? "No decisions in the last 30 days." : `Nothing ${filter === "active" ? "approved" : "revoked"} in the last 30 days.`}
+                </p>
+              ) : (
+                <ul className="divide-y divide-[var(--color-line)]">
+                  {shown.map((r) => {
+                    const approved = r.access_status === "active";
+                    return (
+                      <li key={r.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
+                        <Face r={r} size={36} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13.5px] font-semibold text-[var(--color-ink)]">{r.name || r.email}</p>
+                          <p className="truncate text-[12px] text-[var(--color-muted)]">{[r.name ? r.email : null, r.team_name].filter(Boolean).join(" · ")}</p>
+                        </div>
+                        <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-end">
+                          <span className="flex items-center gap-3">
+                            {approved ? <Chip tone="emerald">Approved</Chip> : <Chip tone="rose">Revoked</Chip>}
+                            <span className="w-[86px] text-[12px] text-[var(--color-muted)]" title={r.access_reviewed_at ? formatDateTime(r.access_reviewed_at) : undefined}>
+                              {r.access_reviewed_at ? timeAgo(r.access_reviewed_at) : "—"}
+                            </span>
+                          </span>
+                          {approved ? (
+                            <button type="button" onClick={() => setConfirmReject(r)} disabled={busyId === r.id} className="btn btn-ghost btn-sm w-[96px] text-[var(--color-danger)]">
+                              Revoke
+                            </button>
+                          ) : (
+                            <button type="button" onClick={() => decide(r.id, "active")} disabled={busyId === r.id} className="btn btn-secondary btn-sm w-[96px]">
+                              Restore
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </section>
+        </div>
       )}
 
       <ConfirmDialog
@@ -277,8 +290,8 @@ export default function AccessRequestsPage() {
         title={confirmReject?.access_status === "active" ? `Revoke access for ${confirmReject?.name || confirmReject?.email}?` : `Reject ${confirmReject?.name || confirmReject?.email}?`}
         description={
           confirmReject?.access_status === "active"
-            ? "They'll be locked out immediately and emailed. Their connections, listings and team are kept, and you can restore access from here."
-            : "They'll be emailed that access isn't available, and their sign-up will be deleted. They can sign up again later."
+            ? "They're locked out at once and emailed. Their accounts, listings and workspace are kept, and you can restore access from here."
+            : "They're emailed that access isn't available, and their sign-up is deleted. They can sign up again later."
         }
         confirmLabel={confirmReject?.access_status === "active" ? "Revoke access" : "Reject"}
         danger

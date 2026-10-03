@@ -2,18 +2,19 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Marketplace, User } from "@/lib/api";
 import { AccountTimeZoneProvider } from "@/lib/timezone";
 import { SyncStatus } from "@/components/SyncStatus";
 import { SITE_TIMEZONES } from "@/components/orders/order-ui";
-import { Logo } from "@/components/Logo";
-import { AccountSwitcher } from "@/components/AccountSwitcher";
+import { SidebarHeader } from "@/components/SidebarHeader";
+import { SidebarFooter } from "@/components/SidebarFooter";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
 import { NotificationBell } from "@/components/NotificationBell";
 import { useAccountInboxBadge } from "@/lib/useInboxBadge";
+import { sectionAllowedWith } from "@/lib/permissions";
+import Link from "next/link";
 
 interface AccountShellProps {
   children: React.ReactNode;
@@ -79,6 +80,36 @@ function useHuntBadge(connectionId: string, enabled: boolean, permissions?: Reco
   return enabled ? badge : 0;
 }
 
+const SECTION_NAMES: Record<string, string> = {
+  orders: "Orders",
+  listings: "Listings",
+  research: "Research",
+  hunting: "Hunting",
+  analytics: "Analytics",
+  inbox: "the Inbox",
+  campaigns: "Campaigns",
+  settings: "this account's Settings",
+};
+
+// A section of the account the viewer hasn't been given.
+function NoAccess({ section, account, overview }: { section: string; account: string; overview: string }) {
+  return (
+    <div className="card mx-auto mt-6 flex max-w-lg flex-col items-center px-6 py-8 text-center">
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-paper)] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]" aria-hidden>
+        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+          <rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M8 11V8a4 4 0 018 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      </span>
+      <h2 className="mt-3 text-[15px] font-semibold text-[var(--color-ink)]">{`You don't have ${SECTION_NAMES[section] || "this"} on ${account}`}</h2>
+      <p className="mt-1 text-[13px] leading-relaxed text-[var(--color-muted)]">Ask the workspace owner or a co-manager if you need it. What you can open here is in the sidebar.</p>
+      <Link href={overview} className="btn btn-secondary btn-sm mt-4">
+        {`Go to ${account}'s Overview`}
+      </Link>
+    </div>
+  );
+}
+
 export function AccountShell({
   children,
   header,
@@ -89,7 +120,6 @@ export function AccountShell({
   fill = false,
   connectionId,
   label,
-  platformKey,
   platformName,
   marketplace,
   permissions,
@@ -103,7 +133,10 @@ export function AccountShell({
   const huntingAccess = canShow("hunting") || canShow("hunting_review") || canShow("listings");
   const huntBadge = useHuntBadge(connectionId, huntingAccess, permissions);
   const inboxBadge = useAccountInboxBadge(connectionId, canShow("inbox"));
-  const dashboard = permissions === undefined ? { href: "/dashboard", sub: "All accounts" } : { href: "/connections", sub: "Your accounts" };
+  // A section opened without access to it (a typed or old link): said plainly
+  // instead of the page's own error; the API refuses it either way.
+  const section = pathname.slice(base.length).split("/")[1] || "";
+  const blocked = !sectionAllowedWith(permissions, section);
 
 
   return (
@@ -113,12 +146,8 @@ export function AccountShell({
       sidebarClassName="gap-6"
       sidebar={
       <>
-        <div className="flex items-center gap-2.5 px-2">
-          <Logo size={30} />
-          <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
-        </div>
-
-        <AccountSwitcher connectionId={connectionId} label={label} platformKey={platformKey} platformName={platformName} marketplace={marketplace} />
+        {/* Where this is (the team, the account and its site), and the button showing the teams and accounts rail. */}
+        <SidebarHeader account={{ id: connectionId, label, site: marketplace ? `${marketplace.name} · ${marketplace.currency}` : platformName }} />
 
         <nav className="flex flex-col gap-0.5">
           {/* Every member has an Overview: their own work on the account
@@ -251,27 +280,8 @@ export function AccountShell({
           )}
         </nav>
 
-        {/* Back to the Dashboard: an owner's of every account, a member's of the accounts they work on. */}
-        <Link
-          href={dashboard.href}
-          className="group mt-auto flex items-center gap-3 rounded-2xl border border-[var(--color-line)] px-2.5 py-2.5 transition-colors hover:border-[var(--color-primary)]/35 hover:bg-[var(--color-primary-soft)]"
-        >
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--color-primary)] text-white shadow-[0_4px_12px_-4px_rgba(79,70,229,0.55)]">
-            <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
-              <rect x="3.5" y="3.5" width="7" height="8" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="13.5" y="3.5" width="7" height="5" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="13.5" y="11.5" width="7" height="9" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-              <rect x="3.5" y="14.5" width="7" height="6" rx="1.8" stroke="currentColor" strokeWidth="1.8" />
-            </svg>
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[13px] font-semibold leading-4 text-[var(--color-ink)]">Dashboard</span>
-            <span className="mt-0.5 block text-[11.5px] leading-4 text-[var(--color-muted)]">{dashboard.sub}</span>
-          </span>
-          <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-primary)]" aria-hidden>
-            <path d="M8 5l5 5-5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </Link>
+        {/* Who's signed in, and Log out. */}
+        <SidebarFooter />
       </>
       }
     >
@@ -284,14 +294,14 @@ export function AccountShell({
             <div className="min-w-0 flex-1 basis-[220px]">{header}</div>
             {/* On a phone the controls take their own row under the title, on
                 the right. The notifications bell is always the last thing on
-                the right; the Dashboard is at the bottom of the sidebar. */}
+                the right; All accounts is on the rail and the sidebar's team name. */}
             <div className="page-header-controls max-sm:w-full max-sm:justify-end">
               {sync && <SyncStatus syncedAt={sync.syncedAt} onRefresh={sync.onRefresh} refreshing={sync.refreshing} note={sync.note} />}
               {actions}
               <NotificationBell />
             </div>
           </div>
-          {subheader && <div className="mt-5">{subheader}</div>}
+          {subheader && !blocked && <div className="mt-5">{subheader}</div>}
           </div>
         )}
         <div
@@ -299,9 +309,9 @@ export function AccountShell({
           data-fill={fill ? "" : undefined}
           className={`relative flex-1 min-h-0 px-[var(--page-gutter)] ${fill ? "flex flex-col overflow-hidden pb-2" : `overflow-y-auto overscroll-contain ${header ? "pb-8" : "py-8"}`}`}
         >
-          {children}
+          {blocked ? <NoAccess section={section} account={label} overview={base} /> : children}
         </div>
-        {footer && (
+        {footer && !blocked && (
           <div
             data-pinned-footer={pinFooter ? "" : undefined}
             className={`flex-shrink-0 border-t border-[var(--color-line)] bg-[var(--color-panel)] px-[var(--page-gutter)] ${pinFooter ? "shadow-[0_-8px_24px_-18px_rgba(15,23,42,0.35)]" : ""}`}

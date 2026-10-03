@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { teamHeaders } from "@/lib/team";
 import { usePathname } from "next/navigation";
 
 // A team member's time in Liston: once a minute each open tab says whether
@@ -62,7 +63,7 @@ export function useWorkClock(member: boolean) {
       if (since > IDLE_UP_TO_MS || !token) return;
       fetch(`${API_URL}/api/team/clock`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, ...teamHeaders() },
         body: JSON.stringify({ working: since <= WORKING_WITHIN_MS, ...where.current }),
         keepalive: true,
       }).catch(() => {});

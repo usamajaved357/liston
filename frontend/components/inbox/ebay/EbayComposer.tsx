@@ -215,7 +215,7 @@ export function EbayComposer({
     return (
       <div className="relative border-t border-amber-200 bg-amber-50/60 px-3 py-2">
         <div className="mb-1.5 flex items-center justify-between gap-2 px-1">
-          <p className="text-[11.5px] font-semibold text-amber-800">Note for the team · the buyer won&apos;t see it</p>
+          <p className="text-[11.5px] font-semibold text-amber-800">Internal note · the buyer won&apos;t see it</p>
           <button
             type="button"
             onClick={() => {
@@ -247,9 +247,9 @@ export function EbayComposer({
                 saveNote();
               }
             }}
-            placeholder="What the team should know: a supplier's answer, what was agreed…"
+            placeholder="What everyone here should know: a supplier's answer, what was agreed…"
             className="max-h-[200px] min-h-[32px] flex-1 resize-none bg-transparent px-1 py-[6px] text-[13px] leading-[1.45] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-muted)]"
-            aria-label="Note for the team"
+            aria-label="Internal note"
           />
           <button
             type="button"
@@ -410,8 +410,8 @@ export function EbayComposer({
               setSlash(null);
               setNoting(true);
             }}
-            title="Write a note for the team (the buyer won't see it)"
-            aria-label="Note for the team"
+            title="Write an internal note (the buyer won't see it)"
+            aria-label="Internal note"
             className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[var(--color-muted)] hover:bg-amber-50 hover:text-amber-700"
           >
             <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>

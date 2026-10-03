@@ -1,9 +1,19 @@
 const teamRepository = require('../modules/team/team.repository');
 
 // Requires requireAuth to have run first (needs req.role/req.userId/req.ownerId).
+// A co-manager (owner access) passes (req.role is 'owner' for them).
 function requireOwner(req, res, next) {
   if (req.role !== 'owner') {
-    return res.status(403).json({ error: 'Only the account owner can do this.' });
+    return res.status(403).json({ error: 'Only the workspace owner or a co-manager can do this.' });
+  }
+  next();
+}
+
+// The workspace owner only, never a co-manager: making someone a co-manager
+// or stopping it, and renaming the workspace.
+function requireMainOwner(req, res, next) {
+  if (req.role !== 'owner' || req.coOwner) {
+    return res.status(403).json({ error: 'Only the workspace owner can do this.' });
   }
   next();
 }
@@ -78,4 +88,4 @@ async function canPublishListings(req, connectionId) {
   return Boolean(connectionId && (await teamRepository.resolvePermission(req.userId, connectionId, 'listings_publish')));
 }
 
-module.exports = { requireOwner, requireFeature, requireAnyFeature, canPublishListings };
+module.exports = { requireOwner, requireMainOwner, requireFeature, requireAnyFeature, canPublishListings };

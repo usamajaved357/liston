@@ -419,7 +419,7 @@ async function rejectMismatch(ownerId, huntId, mismatch, { actorId = null } = {}
   // Not the hunter who's just saved it: the page tells them.
   if (!hunt?.hunter_user_id || hunt.hunter_user_id === actorId) return;
   const notice = noticeFor('hunt.rejected', { title: hunt.title, reason: reasonLabel('mismatch'), note: mismatch.reason, system: true });
-  await notificationsService.notify({ userId: hunt.hunter_user_id, actorUserId: null, kind: 'hunt.rejected', ...notice, url: `/accounts/${hunt.connection_id}/hunting?open=${hunt.id}`, subjectType: 'hunt', subjectId: hunt.id });
+  await notificationsService.notify({ userId: hunt.hunter_user_id, ownerId, actorUserId: null, kind: 'hunt.rejected', ...notice, url: `/accounts/${hunt.connection_id}/hunting?open=${hunt.id}`, subjectType: 'hunt', subjectId: hunt.id });
 }
 
 // ---- drafting approved products by themselves ------------------------------------------
@@ -788,7 +788,7 @@ async function decide(auth, huntId, input) {
   if (!rules.canDecide(hunt, viewer)) {
     if (!viewer.canReview) refuse("You don't review hunted products on this account.");
     if (!['pending', 'sent_back', 'approved', 'rejected'].includes(stageOf(hunt))) refuse('It has been drafted already, so its review is settled.');
-    refuse("You can't review a product you hunted. The owner or another reviewer decides on it.");
+    refuse("You can't review a product you hunted. The workspace owner or another reviewer decides on it.");
   }
   const fields = decisionFields(input);
   await huntingRepository.setDecision(hunt.id, fields, auth.userId);
@@ -813,7 +813,7 @@ async function tellHunter(auth, hunt, kind, { reason = null, note = null, url })
   if (!hunt.hunter_user_id || hunt.hunter_user_id === auth.userId) return;
   const notice = noticeFor(kind, { title: hunt.title, by: await huntingRepository.personName(auth.userId).catch(() => null), reason, note });
   if (!notice) return;
-  await notificationsService.notify({ userId: hunt.hunter_user_id, actorUserId: auth.userId, kind, ...notice, url, subjectType: 'hunt', subjectId: hunt.id });
+  await notificationsService.notify({ userId: hunt.hunter_user_id, ownerId: auth.ownerId, actorUserId: auth.userId, kind, ...notice, url, subjectType: 'hunt', subjectId: hunt.id });
 }
 
 /** Only a reviewer (the owner included) removes a hunted product, whatever its stage; hunters edit theirs instead. */

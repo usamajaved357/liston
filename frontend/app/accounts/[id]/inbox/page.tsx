@@ -54,7 +54,7 @@ export default function AccountInboxPage() {
           <AccountInboxView connectionId={connection.id} isOwner={user.role !== "member"} syncSlot={syncSlot} />
         </Suspense>
       ) : (
-        <div className="card flex flex-1 items-center justify-center p-8 text-center text-[13px] text-[var(--color-muted)]">You don&apos;t have access to this account&apos;s messages. Ask the owner for Inbox access.</div>
+        <div className="card flex flex-1 items-center justify-center p-8 text-center text-[13px] text-[var(--color-muted)]">You don&apos;t have access to this account&apos;s messages. Ask the workspace owner or a co-manager for Inbox access.</div>
       )}
     </AccountShell>
   );

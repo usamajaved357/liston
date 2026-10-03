@@ -1,10 +1,12 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Logo } from "@/components/Logo";
+import { SidebarHeader } from "@/components/SidebarHeader";
 import { SidebarNavItem as NavItem } from "@/components/SidebarNavItem";
 import { ShellFrame } from "@/components/ShellFrame";
 import { useInboxBadge } from "@/lib/useInboxBadge";
+import { SETTINGS_ICON } from "@/components/AccountRail";
+import { SidebarFooter } from "@/components/SidebarFooter";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -20,15 +22,13 @@ interface AppShellProps {
   role?: "owner" | "member";
   // Access requests are reviewed only by the addresses in ADMIN_EMAILS.
   isAdmin?: boolean;
-  // Pinned to the sidebar's foot (a member's name and Log out).
-  sidebarFooter?: React.ReactNode;
   // The page fills the space below the header and scrolls inside itself (the Inbox).
   fill?: boolean;
 }
 
 // connectionsUsed / maxConnections / planName are accepted for compatibility
 // with existing pages; the sidebar no longer shows plan usage.
-export function AppShell({ children, header, subheader, role, isAdmin, sidebarFooter, fill = false }: AppShellProps) {
+export function AppShell({ children, header, subheader, role, isAdmin, fill = false }: AppShellProps) {
   const pathname = usePathname();
   const inboxBadge = useInboxBadge();
 
@@ -38,10 +38,8 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
       sidebarClassName="gap-7"
       sidebar={
       <>
-        <div className="flex items-center gap-2.5 px-2">
-          <Logo size={30} />
-          <span className="font-extrabold text-[15px] text-[var(--color-ink)]">Liston</span>
-        </div>
+        {/* Where this is (the team), and the button showing the teams and accounts rail. */}
+        <SidebarHeader />
 
         <nav className="flex flex-col gap-0.5">
           {/* Overview and Connections management are owner-only concepts — a
@@ -100,24 +98,11 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
               </svg>
             }
           />
-          {role === "member" && (
-            <NavItem
-              href="/account"
-              active={pathname === "/account"}
-              label="Profile"
-              icon={
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <circle cx="12" cy="8.5" r="3.5" stroke="currentColor" strokeWidth="1.8" />
-                  <path d="M5 19.5c0-3.3 3.1-5.5 7-5.5s7 2.2 7 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                </svg>
-              }
-            />
-          )}
           {role === "owner" && (
             <NavItem
               href="/team"
               active={pathname === "/team"}
-              label="Team"
+              label="Members"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                   <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.8" />
@@ -128,11 +113,15 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
               }
             />
           )}
+          {/* Their own account: name, photo, password, notifications (workspace settings are on the rail's workspace menu). */}
+          <NavItem href="/account" active={pathname === "/account"} label="Settings" icon={SETTINGS_ICON} />
+          {/* Liston's own admin pages, apart from the workspace's. */}
+          {isAdmin && <p className="mb-1 mt-5 px-2.5 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">Admin</p>}
           {isAdmin && (
             <NavItem
               href="/admin/usage"
               active={pathname === "/admin/usage"}
-              label="eBay usage"
+              label="API usage"
               icon={
                 <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
                   <path d="M4 19h16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -156,7 +145,8 @@ export function AppShell({ children, header, subheader, role, isAdmin, sidebarFo
           )}
         </nav>
 
-        {sidebarFooter && <div className="mt-auto border-t border-[var(--color-line)] pt-3">{sidebarFooter}</div>}
+        {/* Who's signed in, and Log out. */}
+        <SidebarFooter />
       </>
       }
     >

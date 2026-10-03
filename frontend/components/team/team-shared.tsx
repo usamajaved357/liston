@@ -6,6 +6,7 @@
 
 import { useState, FormEvent } from "react";
 import { api, ApiError, Connection, TeamMember, PermissionUpdate } from "@/lib/api";
+import { formatShortDate } from "@/lib/format";
 
 export const FEATURE_LABELS: Record<string, string> = {
   orders: "Orders",
@@ -242,8 +243,172 @@ export function ResetPasswordDialog({ member, onClose, onDone }: { member: TeamM
 }
 
 
+// ---- owner access ------------------------------------------------------------------
+
+// A key: owner access, everything the owner has.
+const KEY_ICON = (
+  <>
+    <circle cx="7" cy="7.5" r="3.6" stroke="currentColor" strokeWidth="1.6" />
+    <path d="M9.6 10.1L16.5 17M13.6 14.1l1.7-1.7M15.2 15.7l1.4-1.4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+  </>
+);
+
+/** "Co-manager" beside a member's name (owner access: everything the workspace owner has). */
+export function OwnerAccessBadge({ size = "sm" }: { size?: "sm" | "md" }) {
+  return (
+    <span
+      className={`inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/20 ${
+        size === "md" ? "h-6 px-2.5 text-[11.5px]" : "h-5 px-2 text-[10.5px]"
+      }`}
+      title="Everything the workspace owner can see and do"
+    >
+      <svg viewBox="0 0 20 20" fill="none" className={size === "md" ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden>
+        {KEY_ICON}
+      </svg>
+      Co-manager
+    </span>
+  );
+}
+
+/** "You" beside your own name in the team. */
+export function YouBadge() {
+  return <span className="inline-flex h-5 flex-shrink-0 items-center rounded-full bg-[var(--color-paper)] px-2 text-[10.5px] font-semibold text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">You</span>;
+}
+
+/**
+ * Whether the viewer may change this member's login and access: the owner
+ * anyone; someone with owner access the rest of the team, never their own
+ * login or another with owner access (the owner's alone). The API says the
+ * same.
+ */
+export function canManageMember(viewer: { id: string; owner_access?: boolean }, member: Pick<TeamMember, "id" | "owner_access_at">) {
+  if (!viewer.owner_access) return true;
+  return member.id !== viewer.id && !member.owner_access_at;
+}
+
+const OWNER_ACCESS_GIVES = ["Every eBay account and every area in it", "Connecting and removing eBay accounts, and every account's settings", "Adding members and changing their access"];
+
+/**
+ * The top of a member's Access tab: owner access, everything the owner has.
+ * The owner switches it on (after saying what it gives) or off; anyone else
+ * sees whether they have it.
+ */
+export function OwnerAccessCard({ member, canChange, ownerName, onChange }: { member: TeamMember; canChange: boolean; ownerName: string; onChange: (on: boolean) => Promise<void> }) {
+  const [asking, setAsking] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const on = Boolean(member.owner_access_at);
+  const removed = Boolean(member.deactivated_at);
+  const name = member.name || member.email;
+  const first = member.name ? member.name.split(/\s+/)[0] : "they";
+
+  async function apply(next: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      await onChange(next);
+      setAsking(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "That didn't go through. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className={`mb-4 overflow-hidden rounded-[18px] border bg-[var(--color-panel)] shadow-[var(--shadow-card)] ${on ? "border-[var(--color-primary)]/30" : "border-[var(--color-line)]"}`}>
+      <div className={`flex items-start gap-3 px-5 py-4 ${on ? "bg-[radial-gradient(120%_160%_at_0%_0%,var(--color-primary-soft)_0%,transparent_60%)]" : ""}`}>
+        <span
+          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${
+            on ? "bg-[var(--color-primary)] text-white ring-[var(--color-primary)]" : "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]"
+          }`}
+          aria-hidden
+        >
+          <svg viewBox="0 0 20 20" fill="none" className="h-[18px] w-[18px]">
+            {KEY_ICON}
+          </svg>
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Co-manager</h2>
+            {on && <span className="text-[11.5px] font-medium text-[var(--color-primary)]">Since {formatShortDate(member.owner_access_at!)}</span>}
+          </div>
+          <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+            {canChange
+              ? on
+                ? `${name} sees and does everything you can, and runs the rest of the workspace. They can't change your login, their own, or another co-manager's. Only you can stop it.`
+                : `Makes ${name} a co-manager: everything you can see and do, and the rest of the workspace to run. Only you make someone a co-manager or stop it, and only you manage a co-manager's login.`
+              : on
+                ? `Everything ${ownerName} can see and do, and the rest of the workspace to run. Only ${ownerName} can change this login or stop you being a co-manager.`
+                : `Only ${ownerName}, the workspace owner, can make someone a co-manager.`}
+          </p>
+          {canChange && removed && !on && <p className="mt-1 text-[12px] text-[var(--color-muted)]">{`Restore ${first === "they" ? "them" : first} first to make them a co-manager.`}</p>}
+        </div>
+        {canChange && (
+          <span className="flex flex-shrink-0 items-center gap-2 pt-1.5">
+            <span className={`hidden text-[11.5px] font-medium sm:inline ${on ? "text-[var(--color-primary)]" : "text-[var(--color-muted)]"}`}>{on ? "On" : "Off"}</span>
+            <Switch on={on} disabled={busy || (!on && removed)} onChange={() => setAsking(!on)} label="Co-manager" />
+          </span>
+        )}
+      </div>
+      {error && asking === null && <p className="border-t border-[var(--color-line)] px-5 py-2.5 text-[12.5px] text-[var(--color-danger)]">{error}</p>}
+
+      {asking !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={() => !busy && setAsking(null)}>
+          <div role="alertdialog" aria-modal="true" aria-labelledby="owner-access-title" className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-xl bg-[var(--color-panel)] p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h2 id="owner-access-title" className="text-lg font-semibold text-[var(--color-ink)]">
+              {asking ? `Make ${name} a co-manager?` : `Stop ${name} being a co-manager?`}
+            </h2>
+            {asking ? (
+              <>
+                <p className="mt-2 text-sm text-[var(--color-muted)]">{`From their next click, ${first} can see and do everything you can:`}</p>
+                <ul className="mt-3 space-y-1.5">
+                  {OWNER_ACCESS_GIVES.map((line) => (
+                    <li key={line} className="flex items-start gap-2 text-[13px] text-[var(--color-ink)]">
+                      <svg viewBox="0 0 20 20" fill="none" className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--color-accent)]" aria-hidden>
+                        <path d="M5 10.5l3.2 3.2L15 6.8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-3 rounded-lg bg-[var(--color-paper)] px-3 py-2 text-[12.5px] leading-relaxed text-[var(--color-muted)]">
+                  They can&apos;t change your login, their own, or another co-manager&apos;s, and can&apos;t make anyone a co-manager. You can stop it at any time.
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-[var(--color-muted)]">{`From their next click, ${first} is back to the access set for them on this tab. They're told in Liston.`}</p>
+            )}
+            {error && <p className="mt-3 text-[12.5px] text-[var(--color-danger)]">{error}</p>}
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" onClick={() => setAsking(null)} disabled={busy} className="btn btn-ghost">
+                Cancel
+              </button>
+              <button type="button" onClick={() => apply(asking)} disabled={busy} className={`btn ${asking ? "btn-primary" : "btn-danger"}`}>
+                {busy ? (asking ? "Making co-manager…" : "Stopping…") : asking ? "Make co-manager" : "Stop being co-manager"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** A member's initials in a circle; greyed once they've been removed. */
-export function MemberAvatar({ member, size = 40 }: { member: Pick<TeamMember, "name" | "email" | "deactivated_at">; size?: number }) {
+export function MemberAvatar({ member, size = 40 }: { member: Pick<TeamMember, "name" | "email" | "deactivated_at" | "avatar_url">; size?: number }) {
+  // Their profile photo when they've set one (greyed once removed), else their initials.
+  if (member.avatar_url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={member.avatar_url}
+        alt=""
+        style={{ width: size, height: size }}
+        className={`flex-shrink-0 rounded-full object-cover ring-1 ring-black/[0.06] ${member.deactivated_at ? "opacity-60 grayscale" : ""}`}
+      />
+    );
+  }
   return (
     <span
       style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}
@@ -414,6 +579,7 @@ export function AccessGrid({
 
 /** "Orders and Listings on all accounts" / "on 3 of 9 accounts" / "No access yet". */
 export function accessSummary(member: TeamMember, connections: Connection[], knownFeatures: string[]): string {
+  if (member.owner_access_at) return "Everything the workspace owner can see and do · all accounts";
   const rows = permissionsGrid(member, connections, knownFeatures);
   const global = rows[0].values;
   const perAccount = rows.slice(1);

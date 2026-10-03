@@ -9,6 +9,7 @@ import { PasswordInput } from "@/components/PasswordInput";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Alert } from "@/components/Alert";
 import { offerToSaveLogin } from "@/lib/savedLogin";
+import { homeFor, rememberTeam } from "@/lib/team";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -24,11 +25,13 @@ export default function LoginPage() {
     try {
       const { user, token } = await api.login(email, password);
       localStorage.setItem("token", token);
+      // The team it opens in (their last), named on every request from here.
+      if (user.team?.id) rememberTeam(user.team.id);
       await offerToSaveLogin(email, password, user.name || undefined);
       // A team member has no plan/billing of their own and can't manage
       // connections — send them straight to their accessible account(s)
       // instead of the owner-only overview dashboard.
-      router.push(user.role === "member" ? "/connections" : "/dashboard");
+      router.push(homeFor(user.role));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't log you in. Try again.");
     } finally {

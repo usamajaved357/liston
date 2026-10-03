@@ -98,7 +98,7 @@ export default function PendingPage() {
       subtitle={
         rejected
           ? "We're not able to open access for this account right now."
-          : "It's with the Liston team now. We'll email you the moment it's approved, usually within a day."
+          : "It's with Liston now. We'll email you the moment it's approved, usually within a day."
       }
       footer={
         <span className="text-[var(--color-muted)]">
@@ -142,7 +142,7 @@ export default function PendingPage() {
                 </>
               )}
             </Step>
-            <Step n={3} state={rejected ? "failed" : "current"} title={rejected ? "Request declined" : "Reviewed by the Liston team"}>
+            <Step n={3} state={rejected ? "failed" : "current"} title={rejected ? "Request declined" : "Reviewed by Liston"}>
               {rejected
                 ? "If you think this is a mistake, reply to the email you received."
                 : "Nothing more for you to do. This page updates itself when a decision is made."}

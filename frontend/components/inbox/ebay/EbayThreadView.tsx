@@ -232,7 +232,7 @@ export function EbayThreadView({
   const about = ebay ? "Messages from eBay" : `${account ? `${account} · ` : ""}${item?.title || conv?.title || "Buyer"}`;
   const menu: MenuItem[] = [
     ...(!ebay ? [{ label: detailsOpen ? "Hide details" : "Details", onSelect: onToggleDetails }] : []),
-    ...(!ebay && onDiscuss ? [{ label: "Discuss with team", onSelect: onDiscuss }] : []),
+    ...(!ebay && onDiscuss ? [{ label: "Discuss in chat", onSelect: onDiscuss }] : []),
     { label: "Mark as unread", onSelect: onMarkUnread },
     { label: conv?.status === "ARCHIVE" ? "Move back to the inbox" : "Archive", onSelect: onArchive },
   ];

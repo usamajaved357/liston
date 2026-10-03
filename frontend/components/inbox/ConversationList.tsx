@@ -183,7 +183,7 @@ export function ConversationList({
   return (
     <aside className="flex min-h-0 w-full flex-col border-r border-[var(--color-line)] bg-[var(--color-paper)] lg:w-[268px] lg:flex-shrink-0">
       <div className="flex h-[52px] flex-shrink-0 items-center gap-2 pl-4 pr-3">
-        <h2 className="min-w-0 flex-1 truncate text-[16px] font-bold text-[var(--color-ink)]">Team chat</h2>
+        <h2 className="min-w-0 flex-1 truncate text-[16px] font-bold text-[var(--color-ink)]">Workspace chat</h2>
         <button type="button" onClick={onNewChat} title="New message" aria-label="New message" className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)]/75 transition-colors hover:border-[var(--color-primary)]/40 hover:text-[var(--color-primary)]">
           <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
             <path d="M12 5H6.5A2.5 2.5 0 004 7.5v10A2.5 2.5 0 006.5 20h10a2.5 2.5 0 002.5-2.5V12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />

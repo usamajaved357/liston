@@ -1,40 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { Avatar } from "@/components/Avatar";
+import { AvatarCropDialog } from "@/components/AvatarCropDialog";
 
-const OUTPUT_SIZE = 256;
+// A chosen photo opens AvatarCropDialog to be positioned, zoomed and turned
+// in a round frame; only the square inside it is saved (256 across, JPEG).
 const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
-
-function readFileAsImage(file: File): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Couldn't read that file."));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("That file isn't a valid image."));
-      img.onload = () => resolve(img);
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
-function cropToSquareDataUrl(img: HTMLImageElement): string {
-  const canvas = document.createElement("canvas");
-  canvas.width = OUTPUT_SIZE;
-  canvas.height = OUTPUT_SIZE;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Couldn't process that image.");
-
-  const side = Math.min(img.width, img.height);
-  const sx = (img.width - side) / 2;
-  const sy = (img.height - side) / 2;
-  ctx.drawImage(img, sx, sy, side, side, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
-
-  return canvas.toDataURL("image/jpeg", 0.9);
-}
 
 interface AvatarUploaderProps {
   avatarUrl?: string | null;
@@ -45,30 +18,42 @@ export function AvatarUploader({ avatarUrl, onChange }: AvatarUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The photo being fitted (an object URL), and what went wrong saving it.
+  const [cropping, setCropping] = useState<string | null>(null);
+  const [cropError, setCropError] = useState<string | null>(null);
 
-  async function handleFile(file: File) {
+  // The chosen file's URL is let go once it's done with.
+  useEffect(() => () => {
+    if (cropping) URL.revokeObjectURL(cropping);
+  }, [cropping]);
+
+  function handleFile(file: File) {
     setError(null);
+    setCropError(null);
+    if (inputRef.current) inputRef.current.value = "";
 
-    if (!file.type.startsWith("image/")) {
-      setError("Please choose an image file (PNG, JPEG or WebP).");
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setError("Choose a PNG, JPEG or WebP image.");
       return;
     }
     if (file.size > MAX_SOURCE_BYTES) {
-      setError("That image is too large. Please choose one under 8MB.");
+      setError("That image is over 8 MB. Choose a smaller one.");
       return;
     }
+    setCropping(URL.createObjectURL(file));
+  }
 
+  async function saveCropped(dataUrl: string) {
     setUploading(true);
+    setCropError(null);
     try {
-      const img = await readFileAsImage(file);
-      const dataUrl = cropToSquareDataUrl(img);
       await api.updateAvatar(dataUrl);
       onChange(dataUrl);
+      setCropping(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Couldn't update your photo.");
+      setCropError(err instanceof ApiError ? err.message : "Couldn't save your photo. Try again.");
     } finally {
       setUploading(false);
-      if (inputRef.current) inputRef.current.value = "";
     }
   }
 
@@ -97,7 +82,7 @@ export function AvatarUploader({ avatarUrl, onChange }: AvatarUploaderProps) {
           disabled={uploading}
           onClick={() => inputRef.current?.click()}
           aria-label={avatarUrl ? "Change photo" : "Upload a photo"}
-          title={avatarUrl ? "Change photo (PNG, JPEG or WebP, cropped to a square)" : "Upload a photo (PNG, JPEG or WebP, cropped to a square)"}
+          title={avatarUrl ? "Change photo (PNG, JPEG or WebP; you fit it in the circle next)" : "Upload a photo (PNG, JPEG or WebP; you fit it in the circle next)"}
           className="absolute -bottom-0.5 -right-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-md ring-2 ring-[var(--color-panel)] transition-colors hover:bg-[var(--color-primary-hover,#4338ca)] disabled:opacity-60"
         >
           {uploading ? (
@@ -123,6 +108,17 @@ export function AvatarUploader({ avatarUrl, onChange }: AvatarUploaderProps) {
         </button>
       )}
       {error && <p className="mt-1 w-[180px] text-center text-[11px] leading-snug text-[var(--color-danger)]">{error}</p>}
+      {cropping && (
+        <AvatarCropDialog
+          key={cropping}
+          src={cropping}
+          saving={uploading}
+          error={cropError}
+          onCancel={() => setCropping(null)}
+          onChooseAnother={() => inputRef.current?.click()}
+          onSave={saveCropped}
+        />
+      )}
       <input
         ref={inputRef}
         type="file"

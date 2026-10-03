@@ -17,9 +17,11 @@ const DEFAULTS = { placed: PLACED_DEFAULT, delivered: DELIVERED_DEFAULT };
 const KINDS = Object.keys(DEFAULTS);
 const TOKENS = ['buyer', 'item', 'order', 'store'];
 
-// An order older than this when it's first seen gets no welcome (it's on its way by then).
+// The welcome goes to orders placed within this, those from just before it
+// was switched on included; an older one is left alone (it's on its way by then).
 const PLACED_WITHIN_HOURS = 24;
-// A delivery older than this when the job first sees it is left alone (no thanks a week late).
+// The thank-you goes to deliveries within this, those from just before it was
+// switched on included; an older one is left alone (no thanks a week late).
 const DELIVERED_WITHIN_DAYS = 3;
 // One welcome a day per buyer: a second order within this is noted, not messaged.
 const BUYER_GAP_HOURS = 24;
@@ -74,13 +76,14 @@ function fill(template, order, { store = '', kind = 'delivered' } = {}) {
 const writable = (o) => Boolean(o.orderId) && Boolean(o.buyerUserId) && Boolean(o.lineItems?.[0]?.itemId);
 
 /**
- * The new orders due a welcome: placed after it was switched on (`since`)
- * and within the last day, paid and not yet dispatched or cancelled
+ * The orders due a welcome while it's switched on (`since`: when it was):
+ * placed within the last day, those that came in just before it was
+ * switched on included, paid and not yet dispatched or cancelled
  * (`statusOf` gives 'awaiting_dispatch' for those), and not already
- * messaged (`done`: a Set of order ids).
+ * messaged (`done`: a Set of order ids). Never switched on: none.
  */
 function placedDue(orders, { since, done, now = Date.now(), statusOf = () => 'awaiting_dispatch' }) {
-  const from = Math.max(since ? new Date(since).getTime() : now, now - PLACED_WITHIN_HOURS * HOUR_MS);
+  const from = since ? now - PLACED_WITHIN_HOURS * HOUR_MS : now;
   return orders.filter((o) => {
     if (!o.createdAt || done.has(o.orderId) || !writable(o)) return false;
     const at = new Date(o.createdAt).getTime();
@@ -89,12 +92,13 @@ function placedDue(orders, { since, done, now = Date.now(), statusOf = () => 'aw
 }
 
 /**
- * The delivered orders due a message: delivered after it was switched on
- * (`since`) and within the last few days, not cancelled, with a buyer and
- * an item to write about, and not already messaged (`done`: a Set of order ids).
+ * The delivered orders due a message while it's switched on (`since`):
+ * delivered within the last few days, those from just before it was
+ * switched on included, not cancelled, with a buyer and an item to write
+ * about, and not already messaged (`done`: a Set of order ids).
  */
 function dueOrders(orders, { since, done, now = Date.now(), isCancelled = () => false }) {
-  const from = Math.max(since ? new Date(since).getTime() : now, now - DELIVERED_WITHIN_DAYS * DAY_MS);
+  const from = since ? now - DELIVERED_WITHIN_DAYS * DAY_MS : now;
   return orders.filter((o) => {
     if (!o.deliveredAt || done.has(o.orderId) || isCancelled(o) || !writable(o)) return false;
     const at = new Date(o.deliveredAt).getTime();

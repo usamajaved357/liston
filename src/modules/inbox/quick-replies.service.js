@@ -14,7 +14,7 @@ async function requireInbox(auth, connectionId) {
 }
 
 function requireOwner(auth) {
-  if (auth.role !== 'owner') throw new InboxError('Only the owner can change quick replies.', 403);
+  if (auth.role !== 'owner') throw new InboxError('Only the workspace owner or a co-manager can change quick replies.', 403);
 }
 
 async function started(connectionId) {

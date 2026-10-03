@@ -5,8 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, ApiError, ListingWork, Overview, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
-import { AccountMenu } from "@/components/AccountMenu";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { HeaderAvatar } from "@/components/AccountMenu";
 import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
 import { BestSellersCard, SalesTrendCard } from "@/components/overview/OverviewSales";
 import { AccountListingsCard, addListingTrends, ListingTrendCard, RecentListingsCard } from "@/components/overview/OverviewListings";
@@ -69,7 +68,6 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [resendState, setResendState] = useState<"idle" | "sending" | "sent">("idle");
-  const [confirmLogout, setConfirmLogout] = useState(false);
 
   const loadOverview = useCallback(async (r: string) => {
     setRefreshing(true);
@@ -132,10 +130,6 @@ export default function DashboardPage() {
     loadOverview(r);
   }
 
-  function handleLogout() {
-    localStorage.removeItem("token");
-    router.push("/login");
-  }
 
   async function handleResendVerification() {
     setResendState("sending");
@@ -239,12 +233,7 @@ export default function DashboardPage() {
             <p className="mt-0.5 text-[13px] text-[var(--color-muted)]">Across all your connected accounts.</p>
           </div>
           <div className="page-header-controls">
-            <AccountMenu
-              email={user.email}
-              subtitle={`${planName} plan`}
-              avatarUrl={user.avatar_url}
-              onLogout={() => setConfirmLogout(true)}
-            />
+            <HeaderAvatar email={user.email} avatarUrl={user.avatar_url} />
           </div>
         </div>
       }
@@ -378,15 +367,6 @@ export default function DashboardPage() {
           )}
         </>
       )}
-
-      <ConfirmDialog
-        open={confirmLogout}
-        title="Log out?"
-        description="You'll need to log in again to access your dashboard."
-        confirmLabel="Log out"
-        onCancel={() => setConfirmLogout(false)}
-        onConfirm={handleLogout}
-      />
     </AppShell>
   );
 }

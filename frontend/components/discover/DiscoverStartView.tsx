@@ -313,7 +313,7 @@ export function DiscoverCategoriesTab({ data, onOpen }: { data: DiscoverStart; o
 export function DiscoverRecent({ data, onOpen }: { data: DiscoverStart; onOpen: (subject: DiscoverSubjectRef) => void }) {
   return (
     <section className="card p-4">
-      <CardHeader title="Recently explored" note={`What your team opened on ${data.market.name} in the last 3 days, read again nightly`} />
+      <CardHeader title="Recently explored" note={`What your workspace opened on ${data.market.name} in the last 3 days, read again nightly`} />
       {data.recent.length ? (
         <ul className="-mx-2 mt-2 grid grid-cols-1 gap-x-4 md:grid-cols-2 xl:grid-cols-3">
           {data.recent.map((r) => (

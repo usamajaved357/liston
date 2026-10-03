@@ -9,6 +9,7 @@ import { PasswordField } from "@/components/PasswordField";
 import { AuthLayout } from "@/components/AuthLayout";
 import { Alert } from "@/components/Alert";
 import { offerToSaveLogin } from "@/lib/savedLogin";
+import { rememberTeam } from "@/lib/team";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -16,6 +17,9 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [accessNote, setAccessNote] = useState("");
+  const [teamName, setTeamName] = useState("");
+  // What the team is called if they leave it blank (the server's default too).
+  const defaultTeam = `${name.trim().split(/\s+/)[0] || email.split("@")[0] || "Your"}'s workspace`;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -30,8 +34,9 @@ export default function SignupPage() {
 
     setLoading(true);
     try {
-      const { token, user } = await api.signup(email, password, { name: name || undefined, accessNote: accessNote || undefined });
+      const { token, user } = await api.signup(email, password, { name: name || undefined, accessNote: accessNote || undefined, teamName: teamName.trim() || undefined });
       localStorage.setItem("token", token);
+      if (user.team?.id) rememberTeam(user.team.id);
       await offerToSaveLogin(email, password, name || undefined);
       router.push(user.access_status === "pending" ? "/pending" : "/dashboard");
     } catch (err) {
@@ -68,6 +73,22 @@ export default function SignupPage() {
           autoComplete="new-password"
           showCriteria
         />
+        <div>
+          <label className="block text-[13px] font-medium text-[var(--color-ink)]" htmlFor="team-name">
+            Workspace name <span className="font-normal text-[var(--color-muted)]">(optional)</span>
+          </label>
+          <input
+            id="team-name"
+            type="text"
+            className="input mt-1"
+            placeholder={defaultTeam}
+            value={teamName}
+            onChange={(e) => setTeamName(e.target.value)}
+            maxLength={60}
+            autoComplete="organization"
+          />
+          <p className="mt-1 text-[12px] text-[var(--color-muted)]">{`What everyone in it sees at the top of Liston. Left blank, it's ${defaultTeam}; you can rename it later.`}</p>
+        </div>
         <div>
           <label className="block text-[13px] font-medium text-[var(--color-ink)]">About your business <span className="font-normal text-[var(--color-muted)]">(optional)</span></label>
           <textarea

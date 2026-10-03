@@ -2,8 +2,8 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
-import { api, ApiError, type OrderCases, type OrderDetailResponse, type OrderSourcing } from "@/lib/api";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { api, ApiError, ebayInboxApi, type OrderCases, type OrderDetailResponse, type OrderSourcing } from "@/lib/api";
 import { useConnection } from "@/lib/useConnection";
 import { formatPrice, formatDateTime, internationalPhone } from "@/lib/format";
 import { AccountShell } from "@/components/AccountShell";
@@ -85,8 +85,11 @@ export default function OrderDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [saveNotes, setSaveNotes] = useState<Record<string, { tone: "ok" | "bad"; text: string } | null>>({});
   const [moreOpen, setMoreOpen] = useState(false);
-  // "Message buyer" from Liston (people with the Inbox here; the rest go to eBay's contact page).
+  // "Message buyer" from Liston (people with the Inbox here; the rest go to eBay's contact page):
+  // their conversation in the Inbox when there is one, else a new message (`messaging`).
+  const router = useRouter();
   const [messaging, setMessaging] = useState(false);
+  const [openingChat, setOpeningChat] = useState(false);
   const [action, setAction] = useState<ActionKind | null>(null);
   const [actionNote, setActionNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const [archiving, setArchiving] = useState(false);
@@ -260,6 +263,34 @@ export default function OrderDetailPage() {
   const promoted = !!earnings?.fees.some((f) => f.code.startsWith("AD_FEE"));
   const buyerUrl = order?.buyer.username ? `https://${host}/usr/${encodeURIComponent(order.buyer.username)}` : null;
   const messageUrl = order?.buyer.username ? `https://contact.${host.replace(/^www\./, "")}/ws/eBayISAPI.dll?M2MContact&requested=${encodeURIComponent(order.buyer.username)}${firstItem?.itemId ? `&item=${firstItem.itemId}` : ""}` : null;
+  // Message the buyer in Liston: an existing conversation with them opens in
+  // the Inbox (the one about this order's item first, else their latest, in
+  // the archive too); with none yet, a new message to them, which opens in
+  // the Inbox once sent.
+  const messageHere = !connection.permissions || connection.permissions.inbox;
+  async function messageBuyer() {
+    const buyer = order?.buyer.username;
+    if (!buyer || openingChat) return;
+    setOpeningChat(true);
+    try {
+      const items = new Set((order?.lineItems || []).map((li) => li.itemId).filter(Boolean));
+      for (const folder of ["buyers", "archived"] as const) {
+        const { conversations } = await ebayInboxApi.list(connection!.id, { folder, q: buyer });
+        const theirs = conversations.filter((c) => c.type === "FROM_MEMBERS" && c.otherParty?.toLowerCase() === buyer.toLowerCase());
+        const chat = theirs.find((c) => c.referenceId && items.has(c.referenceId)) || theirs[0];
+        if (chat) {
+          router.push(`/accounts/${connection!.id}/inbox?e=${connection!.id}~${encodeURIComponent(chat.conversationId)}`);
+          return;
+        }
+      }
+      setMessaging(true);
+    } catch {
+      // The Inbox couldn't be read: write to them from here instead.
+      setMessaging(true);
+    } finally {
+      setOpeningChat(false);
+    }
+  }
   const ebayOrderUrl = order ? `https://${host}/mesh/ord/details?orderid=${encodeURIComponent(order.legacyOrderId || order.orderId)}` : null;
   // The actions that only exist on eBay's own pages open there.
   const couponUrl = `https://${host}/sh/mkt/couponcodes`;
@@ -462,7 +493,7 @@ export default function OrderDetailPage() {
                               { label: "View payment details", run: () => scrollTo("payment") },
                               { label: order.cancelRequests.some((r) => r.state === "REQUESTED") ? "Approve cancellation" : "Cancel order", run: guarded(() => setAction("cancel")), disabled: dispatched || cancelled },
                               // Through Liston, into the Inbox, for whoever has it here (an owner always); else eBay's own contact page.
-                              !connection.permissions || connection.permissions.inbox ? { label: "Message buyer", run: () => setMessaging(true), disabled: !order.buyer.username } : { label: "Message buyer", href: messageUrl },
+                              messageHere ? { label: "Message buyer", run: messageBuyer, disabled: !order.buyer.username || openingChat } : { label: "Message buyer", href: messageUrl },
                               { label: "Report buyer", href: reportBuyerUrl },
                               { label: "Relist", href: relistUrl },
                               { label: "Sell similar", href: sellSimilarUrl },
@@ -785,10 +816,16 @@ export default function OrderDetailPage() {
                     {!a?.email && <p className="mt-1 text-[12px] text-[var(--color-muted)]">The buyer&apos;s email comes with the reconnected account.</p>}
                   </div>
                 )}
-                {messageUrl && (
-                  <a href={messageUrl} target="_blank" rel="noreferrer" className="btn btn-secondary mt-4 w-full print:hidden">
-                    Message buyer
-                  </a>
+                {messageHere && order.buyer.username ? (
+                  <button type="button" onClick={messageBuyer} disabled={openingChat} className="btn btn-secondary mt-4 w-full print:hidden">
+                    {openingChat ? "Opening the chat…" : "Message buyer"}
+                  </button>
+                ) : (
+                  messageUrl && (
+                    <a href={messageUrl} target="_blank" rel="noreferrer" className="btn btn-secondary mt-4 w-full print:hidden">
+                      Message buyer
+                    </a>
+                  )
                 )}
               </div>
 

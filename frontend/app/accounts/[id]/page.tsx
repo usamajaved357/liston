@@ -41,13 +41,55 @@ const ORDERS_RANGE: Record<string, OrderRange> = { today: "7d", "7d": "7d", "30d
 type QueuePeriod = { key: string; label: string; ordersRange: OrderRange };
 const LAST_90_DAYS: QueuePeriod = { key: "90d", label: "last 90 days", ordersRange: "90d" };
 
-// The queue by state, one small link each, coloured by what the state means:
+// The queue by state, one tile each, coloured by what the state means:
 // amber waits on you, blue is on its way, green arrived, red fell through.
-const ORDER_STATES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; dot: string; ink: string }[] = [
-  { key: "awaiting_dispatch", label: "Awaiting dispatch", hint: "Paid, needs shipping", dot: "bg-amber-500", ink: "text-amber-700" },
-  { key: "dispatched", label: "Dispatched", hint: "On the way to the buyer", dot: "bg-sky-500", ink: "text-sky-700" },
-  { key: "delivered", label: "Delivered", hint: "Carrier confirmed delivery", dot: "bg-emerald-500", ink: "text-emerald-700" },
-  { key: "cancelled", label: "Cancelled", hint: "No action needed", dot: "bg-rose-400", ink: "text-rose-600" },
+// The same colour marks the state's share of the bar above the tiles.
+const stateIcon = (paths: React.ReactNode) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden>
+    {paths}
+  </svg>
+);
+const ORDER_STATES: { key: Exclude<OrderStatusFilter, "all">; label: string; hint: string; bar: string; tile: string; pill: string; icon: React.ReactNode }[] = [
+  {
+    key: "awaiting_dispatch",
+    label: "Awaiting dispatch",
+    hint: "Paid, needs shipping",
+    bar: "bg-amber-400",
+    tile: "bg-amber-50 text-amber-600 ring-amber-100",
+    pill: "text-amber-700 ring-amber-200/70",
+    // A parcel waiting to go.
+    icon: stateIcon(<><path d="M12 3.5l7.5 4.2v8.6L12 20.5l-7.5-4.2V7.7L12 3.5z" /><path d="M4.5 7.7L12 12l7.5-4.3M12 12v8.5" /></>),
+  },
+  {
+    key: "dispatched",
+    label: "Dispatched",
+    hint: "On the way to the buyer",
+    bar: "bg-sky-500",
+    tile: "bg-sky-50 text-sky-600 ring-sky-100",
+    pill: "text-sky-700 ring-sky-200/70",
+    // A van on its way.
+    icon: stateIcon(<><path d="M3 7.5A1.5 1.5 0 014.5 6h8A1.5 1.5 0 0114 7.5V15.5H3V7.5z" /><path d="M14 10h3.4a1.5 1.5 0 011.2.6l1.9 2.5a1.5 1.5 0 01.3.9v1.5H14" /><circle cx="7" cy="17" r="1.7" /><circle cx="16.5" cy="17" r="1.7" /></>),
+  },
+  {
+    key: "delivered",
+    label: "Delivered",
+    hint: "Carrier confirmed delivery",
+    bar: "bg-emerald-500",
+    tile: "bg-emerald-50 text-emerald-600 ring-emerald-100",
+    pill: "text-emerald-700 ring-emerald-200/70",
+    // Home, with a tick.
+    icon: stateIcon(<><path d="M4 11L12 4.5 20 11" /><path d="M6 9.5v9.5h12V9.5" /><path d="M9.5 14.3l1.8 1.8 3.3-3.5" /></>),
+  },
+  {
+    key: "cancelled",
+    label: "Cancelled",
+    hint: "No action needed",
+    bar: "bg-rose-400",
+    tile: "bg-rose-50 text-rose-500 ring-rose-100",
+    pill: "text-rose-600 ring-rose-200/70",
+    // A circle struck through.
+    icon: stateIcon(<><circle cx="12" cy="12" r="8.5" /><path d="M6 6l12 12" /></>),
+  },
 ];
 
 type Attention = { overdue: number; notOrdered: number | null };
@@ -104,87 +146,105 @@ function OrderQueue({
     );
   }
   return (
-    <section className="card overflow-hidden">
-      <div className="flex items-baseline justify-between gap-3 px-5 pt-4">
-        <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">Order queue</h2>
-        <span className="text-[12px] text-[var(--color-muted)]">
-          {loading ? period.label.replace(/^./, (c) => c.toUpperCase()) : `${total.toLocaleString("en-GB")} order${total === 1 ? "" : "s"} · ${period.label}`}
+    <section className="rounded-[18px] border border-[var(--color-line)] bg-[var(--color-panel)] p-4 shadow-[var(--shadow-card)] sm:p-5">
+      {/* Its name, and how many orders in which dates. */}
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-[10px] bg-indigo-50 text-indigo-600 ring-1 ring-inset ring-indigo-100">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className="h-[17px] w-[17px]" aria-hidden>
+            <path d="M9 6.5h10.5M9 12h10.5M9 17.5h10.5" />
+            <circle cx="5" cy="6.5" r="1" fill="currentColor" stroke="none" />
+            <circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" />
+            <circle cx="5" cy="17.5" r="1" fill="currentColor" stroke="none" />
+          </svg>
+        </span>
+        <h2 className="min-w-0 flex-1 truncate text-[14.5px] font-semibold text-[var(--color-ink)]">Order queue</h2>
+        <span className="flex-shrink-0 rounded-full bg-[var(--color-paper)] px-2.5 py-1 text-[12px] font-medium text-[var(--color-muted)]">
+          {loading ? (
+            period.label.replace(/^./, (c) => c.toUpperCase())
+          ) : (
+            <>
+              <span className="tabular-nums text-[var(--color-ink)]">{total.toLocaleString("en-GB")}</span> order{total === 1 ? "" : "s"} · {period.label}
+            </>
+          )}
         </span>
       </div>
 
-      {/* How the orders split, as one bar. */}
-      <div className="px-5 pt-3">
-        {loading ? (
-          <div className="h-2 animate-pulse rounded-full bg-[var(--color-line)]" />
-        ) : (
-          <div className="flex h-2 gap-[3px] overflow-hidden rounded-full bg-[var(--color-line)]" role="img" aria-label="Orders by state">
-            {total > 0 &&
-              ORDER_STATES.filter((st) => (counts?.[st.key] ?? 0) > 0).map((st) => (
-                <span key={st.key} className={`h-full ${st.dot}`} style={{ flexGrow: counts?.[st.key] ?? 0, flexBasis: 0, minWidth: 6 }} title={`${st.label}: ${counts?.[st.key] ?? 0}`} />
-              ))}
+      {/* How the orders split, as one bar: only when there are any to split. */}
+      {loading ? (
+        <div className="mt-4 h-2.5 animate-pulse rounded-full bg-[var(--color-line)]" />
+      ) : (
+        total > 0 && (
+          <div className="mt-4 flex h-2.5 gap-[3px] overflow-hidden rounded-full" role="img" aria-label="Orders by state">
+            {ORDER_STATES.filter((st) => (counts?.[st.key] ?? 0) > 0).map((st) => (
+              <span key={st.key} className={`h-full rounded-full ${st.bar}`} style={{ flexGrow: counts?.[st.key] ?? 0, flexBasis: 0, minWidth: 8 }} title={`${st.label}: ${counts?.[st.key] ?? 0}`} />
+            ))}
           </div>
-        )}
-      </div>
+        )
+      )}
 
-      <div className="mt-3 grid grid-cols-2 divide-[var(--color-line)] border-t border-[var(--color-line)] lg:grid-cols-4 lg:divide-x">
+      {/* Each state as a tile, opening the Orders page on it. */}
+      <div className="mt-4 grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4">
         {ORDER_STATES.map((st) => {
           const n = counts?.[st.key] ?? 0;
           return (
             <Link
               key={st.key}
               href={`/accounts/${connectionId}/orders?status=${st.key}&range=${period.ordersRange}`}
-              className="group px-5 py-3.5 transition-colors hover:bg-[var(--color-paper)]/70"
+              className="group relative flex min-w-0 flex-col rounded-xl bg-[var(--color-paper)] p-3 ring-1 ring-inset ring-transparent transition-all hover:bg-[var(--color-panel)] hover:shadow-[0_6px_18px_-10px_rgba(15,23,42,0.25)] hover:ring-[var(--color-line)] sm:p-3.5"
             >
-              <span className="flex items-center gap-2 text-[12.5px] text-[var(--color-muted)]">
-                <span className={`h-2 w-2 rounded-full ${st.dot}`} aria-hidden />
-                {st.label}
+              <span className="flex items-center gap-2">
+                <span className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${st.tile}`}>{st.icon}</span>
+                <span className="min-w-0 flex-1 text-[12.5px] font-medium leading-tight text-[var(--color-ink)] sm:truncate">{st.label}</span>
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)] opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100">
+                  <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </span>
               {loading ? (
-                <span className="mt-2 block h-6 w-14 animate-pulse rounded-md bg-[var(--color-line)]" />
+                <span className="mt-3 block h-7 w-14 animate-pulse rounded-lg bg-[var(--color-line)]" />
               ) : (
-                <span className="mt-1.5 flex items-baseline gap-2">
-                  <span className={`text-[22px] font-semibold leading-none tracking-tight tabular-nums ${n ? st.ink : "text-[var(--color-ink)]"}`}>{n.toLocaleString("en-GB")}</span>
-                  <span className="text-[12px] tabular-nums text-[var(--color-muted)]">{share(n)}</span>
+                <span className="mt-3 flex items-center gap-2">
+                  <span className="text-[24px] font-semibold leading-none tracking-[-0.025em] tabular-nums text-[var(--color-ink)]">{n.toLocaleString("en-GB")}</span>
+                  <span className={`rounded-full bg-[var(--color-panel)] px-1.5 py-0.5 text-[11px] font-semibold leading-none tabular-nums ring-1 ring-inset ${n ? st.pill : "text-[var(--color-muted)] ring-[var(--color-line)]"}`}>{share(n)}</span>
                 </span>
               )}
-              <span className="mt-1 block text-[12px] text-[var(--color-muted)] group-hover:text-[var(--color-ink)]">{st.hint}</span>
+              <span className="mt-2 text-[12px] leading-snug text-[var(--color-muted)] sm:truncate">{st.hint}</span>
             </Link>
           );
         })}
       </div>
 
-      {/* What needs doing, at the foot of the card. */}
-      {todo.map((t) => {
-        const tone =
-          t.tone === "danger"
-            ? { row: "bg-rose-50/70 hover:bg-rose-50", icon: "bg-rose-100 text-rose-600", action: "text-rose-700" }
-            : { row: "bg-amber-50/70 hover:bg-amber-50", icon: "bg-amber-100 text-amber-700", action: "text-amber-800" };
-        return (
-          <Link
-            key={t.text}
-            href={`/accounts/${connectionId}/orders?status=awaiting_dispatch&range=${SUMMARY_RANGE}`}
-            className={`group flex items-center gap-3 border-t border-[var(--color-line)] px-5 py-3 transition-colors ${tone.row}`}
-          >
-            <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tone.icon}`}>{t.icon}</span>
-            <span className="min-w-0 flex-1 text-[13.5px] text-[var(--color-ink)]">
-              <span className="font-semibold tabular-nums">
-                {t.n.toLocaleString("en-GB")} order{t.n === 1 ? "" : "s"}
-              </span>{" "}
-              <span className="text-[var(--color-muted)]">{t.text}</span>
-              {/* What needs doing looks at every open order, whatever the dates above. */}
-              {period.key !== "90d" && <span className="text-[var(--color-muted)]"> · last 90 days</span>}
-            </span>
-            <span className={`flex shrink-0 items-center gap-1 text-[13px] font-medium ${tone.action}`}>
-              Review
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-4 w-4 transition-transform group-hover:translate-x-0.5">
-                <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </span>
-          </Link>
-        );
-      })}
+      {/* What needs doing, under the tiles. */}
+      {todo.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {todo.map((t) => {
+            const tone =
+              t.tone === "danger"
+                ? { row: "bg-rose-50/80 ring-rose-200/70 hover:bg-rose-50", icon: "text-rose-600 ring-rose-200/70", action: "text-rose-700 ring-rose-200/80" }
+                : { row: "bg-amber-50/80 ring-amber-200/70 hover:bg-amber-50", icon: "text-amber-600 ring-amber-200/70", action: "text-amber-800 ring-amber-200/80" };
+            return (
+              <Link key={t.text} href={`/accounts/${connectionId}/orders?status=awaiting_dispatch&range=${SUMMARY_RANGE}`} className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 ring-1 ring-inset transition-colors sm:px-3.5 ${tone.row}`}>
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] bg-[var(--color-panel)] ring-1 ring-inset ${tone.icon}`}>{t.icon}</span>
+                <span className="min-w-0 flex-1 text-[13px] leading-snug text-[var(--color-ink)]">
+                  <span className="font-semibold tabular-nums">
+                    {t.n.toLocaleString("en-GB")} order{t.n === 1 ? "" : "s"}
+                  </span>{" "}
+                  <span className="text-[var(--color-muted)]">{t.text}</span>
+                  {/* What needs doing looks at every open order, whatever the dates above. */}
+                  {period.key !== "90d" && <span className="text-[var(--color-muted)]"> · last 90 days</span>}
+                </span>
+                <span className={`flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--color-panel)] py-1 pl-3 pr-2 text-[12.5px] font-semibold shadow-sm ring-1 ring-inset ${tone.action}`}>
+                  Review
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5">
+                    <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
       {!loading && todo.length === 0 && (
-        <p className="flex items-center gap-2 border-t border-[var(--color-line)] px-5 py-3 text-[13px] text-[var(--color-muted)]">
+        <p className="mt-3 flex items-center gap-2.5 rounded-xl bg-emerald-50/70 px-3.5 py-2.5 text-[13px] text-emerald-900 ring-1 ring-inset ring-emerald-200/60">
           <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden>
             <circle cx="10" cy="10" r="8" fill="currentColor" opacity=".15" />
             <path d="M6.5 10.2l2.3 2.3 4.7-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />

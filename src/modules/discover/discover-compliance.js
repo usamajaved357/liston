@@ -234,7 +234,7 @@ function productRisk(product, { refusals = [], rejected = [] } = {}) {
   if (ip.length) return { kind: 'refused', level: 'bad', text: `eBay refused ${ip.length === 1 ? 'one of your drafts' : `${ip.length} of your drafts`} for a product like this, for brand or intellectual-property reasons` };
   const ids = new Set((product.itemIds || []).map(String));
   if (rejected.some((h) => (h.itemId && ids.has(String(h.itemId))) || titleSimilarity(h.title || '', product.name || '') >= SIMILAR_AT)) {
-    return { kind: 'rejected', level: 'warn', text: 'Your team rejected a product like this for brand or VeRO risk' };
+    return { kind: 'rejected', level: 'warn', text: 'Your workspace rejected a product like this for brand or VeRO risk' };
   }
   if (past.length) return { kind: 'refused', level: 'warn', text: `eBay refused ${past.length === 1 ? 'one of your drafts' : `${past.length} of your drafts`} for a product like this, for a listing policy` };
   if (named) return { kind: 'vero', level: 'warn', source: 'ai', brand: named.brand, text: `Liston's AI reading thinks ${named.brand} may be a protected brand. It isn't on Liston's VeRO list and eBay hasn't taken these listings down: check the brand before you hunt it` };

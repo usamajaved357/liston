@@ -1,3 +1,6 @@
+import { currentTeam, rememberTeam, teamHeaders } from "@/lib/team";
+import { cacheUser } from "@/lib/session";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
 
@@ -31,6 +34,8 @@ async function request<T>(
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // The team this tab is in (lib/team.ts).
+      ...teamHeaders(),
       ...options.headers,
     },
   });
@@ -57,6 +62,12 @@ async function request<T>(
         } catch {}
         window.location.assign("/login");
       }
+    }
+    // Removed from the team this tab was in: forget it and open their home in the team they're in now.
+    if (res.status === 403 && data.code === "TEAM_GONE" && typeof window !== "undefined") {
+      rememberTeam(null);
+      window.location.assign("/");
+      return new Promise<T>(() => {});
     }
     // The approval gate: any 403 carrying accessStatus means this account
     // isn't approved yet — send them to the review screen from anywhere.
@@ -543,6 +554,7 @@ export interface AccessRequest {
   id: string;
   email: string;
   name: string | null;
+  team_name?: string | null; // the team they named at sign-up
   access_note: string | null;
   created_at: string;
   email_verified_at: string | null;
@@ -565,7 +577,26 @@ export interface User {
   avatar_url?: string | null;
   access_status?: "pending" | "active" | "rejected";
   is_admin?: boolean;
+  // `role` is what they are in the team they're in now: "owner" for its
+  // owner and anyone given owner access there (`owner_access`), on the
+  // team owner's plan and accounts; `owner` is who that owner is (null in
+  // their own team). `owns_team`: they have a team of their own.
+  owner_access?: boolean;
+  owner?: { name: string | null; email: string } | null;
+  owns_team?: boolean;
+  // The team they're in now, and every team they can switch to (each with its unread notifications).
+  team?: UserTeam | null;
+  teams?: UserTeam[];
   created_at: string;
+}
+
+// A team (Slack's workspace) a login can work in: an owner's business, keyed by the owner's id.
+export interface UserTeam {
+  id: string;
+  name: string;
+  ownerName: string;
+  role: "owner" | "owner_access" | "member";
+  unread: number;
 }
 
 export interface AuthResponse {
@@ -603,6 +634,8 @@ export interface Connection {
   settings?: { ebay?: EbaySettings; pricing?: PricingSettings; template?: DescriptionTemplate };
   marketplace?: Marketplace | null;
   permissions?: ConnectionPermissions;
+  // The account's eBay store logo (its store profile, read by Liston), when it has one.
+  logo_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -618,9 +651,15 @@ export interface TeamMember {
   id: string;
   email: string;
   name: string | null;
+  // Their profile photo, when they've set one.
+  avatar_url?: string | null;
   created_at: string;
   last_login_at?: string | null;
   deactivated_at?: string | null; // removed: no login, history kept
+  // Since when they have owner access (everything the owner has); null without it.
+  owner_access_at?: string | null;
+  // Their login is also an owner's or in another team: only they change its password.
+  shared_login?: boolean;
   lastActiveAt?: string | null; // their last recorded action
   today?: TeamMetrics; // what they've done today (Team page cards)
   // Their time in Liston today (minutes), and whether a tab of theirs is open now.
@@ -2518,8 +2557,29 @@ function researchQuery(params: ResearchParams): URLSearchParams {
 }
 
 // The Products tab's filters as query values (the Winners list, and Find more with the same).
+// A CSV download through the API: the token and workspace ride along, the
+// file is saved under the server's own name; resolves to how many rows it has.
+async function downloadCsvExport(path: string, fallbackName: string): Promise<number> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  const res = await fetch(`${API_URL}${path}`, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...teamHeaders() } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(body?.error || "Couldn't make the file. Try again.", res.status);
+  }
+  const blob = await res.blob();
+  const name = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || fallbackName;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return Number(res.headers.get("X-Liston-Rows") || 0);
+}
+
 export const api = {
-  signup: (email: string, password: string, extra: { name?: string; accessNote?: string } = {}) =>
+  signup: (email: string, password: string, extra: { name?: string; accessNote?: string; teamName?: string } = {}) =>
     request<AuthResponse>("/api/auth/signup", {
       method: "POST",
       body: JSON.stringify({ email, password, ...extra }),
@@ -2542,7 +2602,18 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
 
-  me: () => request<{ user: User }>("/api/users/me"),
+  // Remembered on every read, so the sidebar's team menu (lib/useCurrentTeam) has it on any page.
+  me: () =>
+    request<{ user: User }>("/api/users/me").then((d) => {
+      cacheUser(d.user);
+      return d;
+    }),
+  // Teams: the one to open next time (switched to), and the team an account belongs to.
+  switchTeam: (id: string) => request<{ team: { id: string; role: "owner" | "member"; coOwner: boolean } }>("/api/users/me/team", { method: "POST", body: JSON.stringify({ id }) }),
+  teamOfConnection: (connectionId: string) => request<{ team: { id: string } }>(`/api/users/me/team-of?connectionId=${encodeURIComponent(connectionId)}`),
+  renameTeam: (name: string) => request<{ team: { id: string; name: string } }>("/api/team/name", { method: "PUT", body: JSON.stringify({ name }) }),
+  // Deletes the workspace (its owner, typing its name); `loginKept` when they're in another workspace.
+  deleteWorkspace: (name: string) => request<{ loginKept: boolean }>("/api/team/workspace", { method: "DELETE", body: JSON.stringify({ name }) }),
   // The owner's dashboard: "today" is the viewer's own day.
   overview: (range = "30d") => request<Overview>(`/api/overview?range=${range}&tz=${encodeURIComponent(viewerTimeZone())}`),
 
@@ -2588,7 +2659,22 @@ export const api = {
 
   listPlatforms: () => request<{ platforms: Platform[] }>("/api/connections/platforms"),
 
-  getConnection: (id: string) => request<{ connection: Connection }>(`/api/connections/${id}`),
+  // An account of another of the person's teams (a link from there): this tab moves to that team and opens it.
+  getConnection: async (id: string) => {
+    try {
+      return await request<{ connection: Connection }>(`/api/connections/${id}`);
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 404 || err.status === 403) && typeof window !== "undefined") {
+        const team = await request<{ team: { id: string } }>(`/api/users/me/team-of?connectionId=${encodeURIComponent(id)}`).catch(() => null);
+        if (team && team.team.id !== currentTeam()) {
+          rememberTeam(team.team.id);
+          window.location.reload();
+          return new Promise<{ connection: Connection }>(() => {});
+        }
+      }
+      throw err;
+    }
+  },
 
   // `marketplaceId`: the eBay site to link the account for. The same eBay
   // account can be linked once per site.
@@ -2633,6 +2719,27 @@ export const api = {
   // Re-reads the account from eBay now (once a minute per account).
   refreshConnection: (id: string) => request<{ syncedAt: string }>(`/api/connections/${id}/refresh`, { method: "POST" }),
 
+  // CSV of the orders the page's filters show (or only `ids`), with the supplier orders' tracking but never their logins; the workspace owner and co-managers only.
+  exportOrdersCsv: (
+    id: string,
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; archived?: boolean; supplier?: SupplierFilter; ids?: string[] }
+  ) => {
+    const q = new URLSearchParams({ range: params.range, status: params.status });
+    if (params.search) q.set("search", params.search);
+    if (params.sort) q.set("sort", params.sort);
+    if (params.archived) q.set("archived", "1");
+    if (params.supplier && params.supplier !== "any") q.set("supplier", params.supplier);
+    if (params.ids?.length) q.set("ids", params.ids.join(","));
+    return downloadCsvExport(`/api/connections/${id}/orders/export?${q.toString()}`, "orders.csv");
+  },
+  // CSV of the live or ended listings the page's filters show (or only `ids`); the workspace owner and co-managers only.
+  exportListingsCsv: (id: string, params: { status: ListingStatusFilter; search?: string; sort?: ListingSort; ids?: string[] }) => {
+    const q = new URLSearchParams({ status: params.status });
+    if (params.search) q.set("q", params.search);
+    if (params.sort) q.set("sort", params.sort);
+    if (params.ids?.length) q.set("ids", params.ids.join(","));
+    return downloadCsvExport(`/api/connections/${id}/listings/export?${q.toString()}`, "listings.csv");
+  },
   getConnectionOrders: (
     id: string,
     params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean; supplier?: SupplierFilter }
@@ -3004,7 +3111,7 @@ export const api = {
   downloadDraftImage: async (listingId: string, url: string, n: number) => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
     const res = await fetch(`${API_URL}/api/listings/${listingId}/images/download?url=${encodeURIComponent(url)}&n=${n}`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...teamHeaders() },
     });
     if (!res.ok) throw new ApiError("Couldn't download that image.", res.status);
     const blob = await res.blob();
@@ -3019,8 +3126,9 @@ export const api = {
   listTeamMembers: () =>
     request<{ members: TeamMember[]; knownFeatures: string[] }>(`/api/team/members?tz=${encodeURIComponent(viewerTimeZone())}`),
 
-  addTeamMember: (input: { email: string; name?: string; password: string }) =>
-    request<{ member: TeamMember }>("/api/team/members", {
+  // A new email gets a login with this password; one already on Liston joins with their own (`existingLogin`).
+  addTeamMember: (input: { email: string; name?: string; password?: string }) =>
+    request<{ member: TeamMember; existingLogin: boolean }>("/api/team/members", {
       method: "POST",
       body: JSON.stringify(input),
     }),
@@ -3061,6 +3169,9 @@ export const api = {
     }
     return request<MemberTime>(`/api/team/members/${id}/time?${q.toString()}`);
   },
+  // Owner access: the owner only gives it or takes it away.
+  setOwnerAccess: (id: string, ownerAccess: boolean) =>
+    request<{ member: TeamMember }>(`/api/team/members/${id}/owner-access`, { method: "PUT", body: JSON.stringify({ ownerAccess }) }),
   setTeamMemberPassword: (id: string, password: string) =>
     request<void>(`/api/team/members/${id}/password`, { method: "PUT", body: JSON.stringify({ password }) }),
 
@@ -3227,6 +3338,7 @@ export function uploadFile(file: File | Blob, { name, purpose = "chat", onProgre
     xhr.open("POST", `${API_URL}/api/files?purpose=${purpose}`);
     const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    for (const [k, v] of Object.entries(teamHeaders())) xhr.setRequestHeader(k, v);
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     xhr.setRequestHeader("X-File-Name", encodeURIComponent(name || (file as File).name || "file"));
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
@@ -3447,6 +3559,8 @@ export const ebayInboxApi = {
   refresh: (connectionId: string) => request<{ changed: number }>(`/api/connections/${connectionId}/inbox/refresh`, { method: "POST" }),
   // Unread conversations (buyers' and eBay's) for the sidebar; never reads eBay.
   unread: (connectionId: string) => request<{ unread: number }>(`/api/connections/${connectionId}/inbox/unread`),
+  // Every account's unread conversations at once (the account rail), an account with none left out.
+  unreadByAccount: () => request<{ accounts: Record<string, number> }>(`/api/inbox/unread`),
   quickReplies: (connectionId: string) => request<QuickReplyList>(`/api/connections/${connectionId}/inbox/quick-replies`),
   addQuickReply: (connectionId: string, input: { name: string; body: string }) => request<QuickReply>(`/api/connections/${connectionId}/inbox/quick-replies`, { method: "POST", body: JSON.stringify(input) }),
   saveQuickReply: (connectionId: string, id: string, input: { name: string; body: string }) =>

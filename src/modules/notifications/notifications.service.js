@@ -2,10 +2,13 @@ const notificationsRepository = require('./notifications.repository');
 const push = require('./push');
 const userEvents = require('../realtime/user-events');
 const logger = require('../../utils/logger');
+const { linkInTeam } = require('../team/teams');
 
 // What Liston tells a person: kept for the bell, and pushed to every browser
 // they turned push notifications on in. Each change is also said on the
 // person's live stream (`notifications.changed`) so an open bell follows at once.
+// Each is about one team (`ownerId`): the bell lists the team the person is
+// in, and its link opens in that team (`ws`), from a push too.
 
 const changed = (userId) => userEvents.emit(String(userId), { type: 'notifications.changed' });
 
@@ -14,11 +17,12 @@ const changed = (userId) => userEvents.emit(String(userId), { type: 'notificatio
  * Never throws, since a failed notification must not undo the work that
  * caused it.
  */
-async function notify({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId = null, detail = {} }) {
+async function notify({ userId, ownerId = null, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId = null, detail = {} }) {
   if (!userId || !kind || !title) return null;
+  url = linkInTeam(url, ownerId);
   let row;
   try {
-    row = await notificationsRepository.insert({ userId, actorUserId, kind, title, body, url, subjectType, subjectId, detail });
+    row = await notificationsRepository.insert({ userId, ownerId, actorUserId, kind, title, body, url, subjectType, subjectId, detail });
   } catch (err) {
     logger.warn('Notification not kept', { kind, error: err.message });
     return null;
@@ -35,11 +39,12 @@ async function notify({ userId, actorUserId = null, kind, title, body = null, ur
  * is sent to the person's browsers — tag, title, body, url, image — and
  * left out when they shouldn't be disturbed. Never throws.
  */
-async function notifyGrouped({ userId, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId, detail = {}, push: pushed = null }) {
+async function notifyGrouped({ userId, ownerId = null, actorUserId = null, kind, title, body = null, url = null, subjectType = null, subjectId, detail = {}, push: pushed = null }) {
   if (!userId || !kind || !title || !subjectId) return null;
+  url = linkInTeam(url, ownerId);
   let row;
   try {
-    row = await notificationsRepository.upsertGrouped({ userId, actorUserId, kind, title, body, url, subjectType, subjectId, detail });
+    row = await notificationsRepository.upsertGrouped({ userId, ownerId, actorUserId, kind, title, body, url, subjectType, subjectId, detail });
   } catch (err) {
     logger.warn('Notification not kept', { kind, error: err.message });
     return null;
@@ -86,15 +91,16 @@ function shape(row) {
   return { id: row.id, kind: row.kind, title: row.title, body: row.body, url: row.url, detail, readAt: row.read_at, createdAt: row.created_at };
 }
 
-async function list(userId) {
-  const { rows, unread } = await notificationsRepository.listFor(userId);
+/** The person's notifications in the team they're in (`ownerId`). */
+async function list(userId, ownerId) {
+  const { rows, unread } = await notificationsRepository.listFor(userId, ownerId);
   return { items: rows.map(shape), unread, push: { available: push.configured(), publicKey: push.publicKey() } };
 }
 
-async function markRead(userId, ids) {
-  await notificationsRepository.markRead(userId, ids || null);
+async function markRead(userId, ownerId, ids) {
+  await notificationsRepository.markRead(userId, ownerId, ids || null);
   changed(userId);
-  return list(userId);
+  return list(userId, ownerId);
 }
 
 async function subscribe(userId, { endpoint, keys, userAgent }) {
@@ -107,15 +113,15 @@ async function subscribe(userId, { endpoint, keys, userAgent }) {
   await notificationsRepository.saveSubscription(userId, { endpoint, p256dh: keys.p256dh, auth: keys.auth, userAgent });
 }
 
-/** Clears some (or all) of a person's notifications. */
-async function clear(userId, ids) {
-  await notificationsRepository.deleteFor(userId, ids || null);
+/** Clears some (or all in the team) of a person's notifications. */
+async function clear(userId, ownerId, ids) {
+  await notificationsRepository.deleteFor(userId, ownerId, ids || null);
   changed(userId);
-  return list(userId);
+  return list(userId, ownerId);
 }
 
-/** A notification to oneself, to see that this browser and computer show them. */
-async function sendTest(userId) {
+/** A notification to oneself (of no team), to see that this browser and computer show them. */
+async function sendTest(userId, ownerId) {
   await notify({
     userId,
     kind: 'test',
@@ -123,7 +129,7 @@ async function sendTest(userId) {
     body: "This is how Liston tells you when a reviewer decides on a product you hunted.",
     url: null,
   });
-  return list(userId);
+  return list(userId, ownerId);
 }
 
 async function unsubscribe(userId, endpoint) {

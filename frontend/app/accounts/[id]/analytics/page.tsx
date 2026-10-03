@@ -268,7 +268,7 @@ function AnalyticsPageInner() {
       {!canView ? (
         <div className="card px-6 py-12 text-center">
           <p className="text-sm font-medium text-[var(--color-ink)]">You don&apos;t have access to Analytics for this account</p>
-          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Ask the account owner to give you Analytics access on the Team page.</p>
+          <p className="mt-1 text-[13px] text-[var(--color-muted)]">Ask the workspace owner or a co-manager to give you Analytics access on the Members page.</p>
         </div>
       ) : (
         <div className={`space-y-5 transition-opacity ${data && !fresh ? "opacity-60" : ""}`}>

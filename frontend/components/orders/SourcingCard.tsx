@@ -217,7 +217,7 @@ export function SourcingCard({
             </div>
             <div className="sm:col-span-2">
               <label className={labelClass}>Notes</label>
-              <input className={fieldClass} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything the team should know about this supplier order" />
+              <input className={fieldClass} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything others should know about this supplier order" />
             </div>
           </div>
           <p className="mt-2 text-[11.5px] text-[var(--color-muted)]">

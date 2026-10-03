@@ -50,12 +50,26 @@ function withMarketplace(connection) {
   return { ...connection, marketplace: id ? marketplaces.summary(id) : null };
 }
 
+// eBay serves a store logo at its full upload size (often 1254px and most
+// of a megabyte); the rail draws it 40px across, so the list carries eBay's
+// 140px copy of the same picture: /00/s/<size>/z/<id>/$_57.PNG and
+// /images/g/<id>/s-l1600.png both become /images/g/<id>/s-l140.png.
+// Anything else is left as it is.
+function smallLogo(url) {
+  if (!url) return null;
+  const legacy = String(url).match(/^https:\/\/i\.ebayimg\.com\/00\/s\/[^/]+\/z\/([^/]+)\/\$_\d+\.(png|jpe?g|webp)(\?|$)/i);
+  if (legacy) return `https://i.ebayimg.com/images/g/${legacy[1]}/s-l140.${legacy[2].toLowerCase()}`;
+  return String(url).replace(/^(https:\/\/i\.ebayimg\.com\/images\/g\/[^/]+\/)s-l\d+\./i, '$1s-l140.');
+}
+
 async function listConnections(ownerId, viewer) {
   const [rawConnections, maxConnections] = await Promise.all([
     connectionRepository.findAllByUser(ownerId),
     connectionRepository.getMaxConnectionsForUser(ownerId),
   ]);
-  const connections = rawConnections.map(withMarketplace);
+  // Each account's eBay store logo, drawn on the rail and in the finder.
+  const logos = await connectionRepository.storeLogos(rawConnections.map((c) => c.id));
+  const connections = rawConnections.map((c) => ({ ...withMarketplace(c), logo_url: smallLogo(logos.get(String(c.id))?.logoUrl) }));
 
   if (!viewer || viewer.role === 'owner') {
     return { connections, maxConnections };
@@ -69,6 +83,35 @@ async function listConnections(ownerId, viewer) {
   );
   const visible = withPermissions.filter((c) => Object.values(c.permissions).some(Boolean));
   return { connections: visible, maxConnections };
+}
+
+// The store logos the account list shows: an eBay account whose store
+// profile Liston has never read, or not for a week, is read in the
+// background (two rationed Trading calls, GetStore and GetUser, the same
+// copy the description template's branding uses). A workspace is checked at
+// most every ten minutes and an account tried at most every six hours, so
+// an account without a store (or one eBay refuses) isn't asked on every page.
+const LOGO_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const LOGO_CHECK_MS = 10 * 60 * 1000;
+const LOGO_RETRY_MS = 6 * 60 * 60 * 1000;
+const logoCheckedAt = new Map();
+const logoTriedAt = new Map();
+
+async function refreshStoreLogos(ownerId, ebayService, now = Date.now()) {
+  if (now - (logoCheckedAt.get(String(ownerId)) || 0) < LOGO_CHECK_MS) return [];
+  logoCheckedAt.set(String(ownerId), now);
+  const accounts = (await connectionRepository.findAllByUser(ownerId)).filter((c) => c.platform_key === 'ebay' && c.status === 'active');
+  const logos = await connectionRepository.storeLogos(accounts.map((c) => c.id));
+  const due = accounts.filter((c) => {
+    const copy = logos.get(String(c.id));
+    if (copy && now - copy.syncedAt < LOGO_MAX_AGE_MS) return false;
+    return now - (logoTriedAt.get(String(c.id)) || 0) >= LOGO_RETRY_MS;
+  });
+  for (const c of due) {
+    logoTriedAt.set(String(c.id), now);
+    await withDecryptedCredentials(c.id, ownerId, (credentials) => ebayService.getStoreProfile(credentials, c.id, { priority: 'background' })).catch(() => null);
+  }
+  return due.map((c) => c.id);
 }
 
 // Plan limits are switched off for now: the product is being run for a
@@ -395,6 +438,8 @@ async function addEbaySite(ownerId, connectionId, marketplaceId, ebayService) {
 }
 
 module.exports = {
+  refreshStoreLogos,
+  smallLogo,
   reconnectEbayAccount,
   ebaySites,
   addEbaySite,

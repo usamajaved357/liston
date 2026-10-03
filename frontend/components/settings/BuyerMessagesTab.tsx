@@ -18,7 +18,8 @@ import { SettingsSection } from "./SettingsSection";
 //                       what it means) and worded in place, with the buyer's
 //                       name, the item, the order number and the store
 //                       filled in per order. Each order gets each once (the
-//                       server makes sure), only orders after it's switched on.
+//                       server makes sure): switched on, the last day's
+//                       orders (the last few days' deliveries) and after.
 //   Quick replies       the Inbox's "/" replies (QuickRepliesCard).
 //   Sent lately         what went, what eBay refused and what was skipped.
 
@@ -54,7 +55,7 @@ const KINDS: {
     when: "As soon as a buyer places an order: thanks them, and asks them to reply here first if anything isn't right.",
     confirm: {
       title: "Send order confirmations?",
-      text: "From now on, every buyer who orders gets this message from your eBay account: once per order, and no more than once a day per buyer. Orders placed before now aren't messaged.",
+      text: "From now on, every buyer who orders gets this message from your eBay account: once per order, and no more than once a day per buyer. Paid orders from the last 24 hours that aren't dispatched yet get it too; older orders aren't messaged.",
     },
     note: "Sent within a minute or so of the order, for paid orders not yet dispatched. A buyer with a second order the same day isn't messaged again. Replies land in your Inbox.",
     icon: (
@@ -71,9 +72,9 @@ const KINDS: {
     when: "Once eBay shows the order delivered: hopes they're happy, and asks for feedback on the item and your service.",
     confirm: {
       title: "Send delivery thank-yous?",
-      text: "From now on, each buyer whose order eBay shows as delivered gets this message from your eBay account, once per order, within a few days of delivery. Orders delivered before now aren't messaged.",
+      text: "From now on, each buyer whose order eBay shows as delivered gets this message from your eBay account, once per order, within a few days of delivery. Orders delivered in the last 3 days get it too; earlier deliveries aren't messaged.",
     },
-    note: "Sent within a few days of delivery, once per order, and only for orders delivered after you switch it on. Replies land in your Inbox.",
+    note: "Sent within a few days of delivery, once per order, including deliveries in the 3 days before you switched it on. Replies land in your Inbox.",
     icon: (
       <svg viewBox="0 0 24 24" fill="none" className="h-[18px] w-[18px]" aria-hidden>
         <path d="M4 8l8-4 8 4v8l-8 4-8-4V8z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />

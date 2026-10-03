@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { teamHeaders } from "@/lib/team";
 
 // Live updates for one account: the server streams a small event whenever
 // that account's listings, orders or count were re-read from eBay (after
@@ -32,7 +33,7 @@ export function useAccountEvents(connectionId: string | null | undefined, onEven
       while (!stopped) {
         try {
           const res = await fetch(`${API_URL}/api/connections/${connectionId}/events`, {
-            headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+            headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream", ...teamHeaders() },
             signal: controller.signal,
           });
           if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);

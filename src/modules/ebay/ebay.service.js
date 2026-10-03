@@ -684,7 +684,7 @@ const storeProfileCache = createSwrCache({
   store: (key, value) => mirror.saveSnapshot(key, 'store_profile', value),
 });
 
-async function getStoreProfile(credentials, connectionId, { refresh = false } = {}) {
+async function getStoreProfile(credentials, connectionId, { refresh = false, priority = 'user' } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   if (!connectionId) {
     const profile = await ebayTrading.getStoreProfile(accessToken, { siteId });
@@ -692,7 +692,7 @@ async function getStoreProfile(credentials, connectionId, { refresh = false } = 
   }
   const key = String(connectionId);
   if (refresh) storeProfileCache.invalidate(key);
-  const profile = await storeProfileCache.get(key, { accessToken, siteId, connectionId: key, priority: 'user' });
+  const profile = await storeProfileCache.get(key, { accessToken, siteId, connectionId: key, priority });
   return { ...profile, credentialsChanged, credentials: refreshedCredentials };
 }
 
@@ -1434,6 +1434,11 @@ function forgetMarketScopes() {
 async function getOrdersLast90Cached(connectionId, accessToken, siteId, push = false) {
   const [orders, scope] = await Promise.all([ordersCache.get(connectionId, { accessToken, siteId, connectionId, push }), scopeOf(connectionId)]);
   return marketScope.ordersIn(scope, orders);
+}
+
+/** The orders this connection keeps (its own site's, when the eBay account is connected on several). */
+async function ordersInScope(connectionId, orders) {
+  return marketScope.ordersIn(await scopeOf(String(connectionId)), orders);
 }
 
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
@@ -2531,7 +2536,7 @@ function isMarkedDispatched(order) {
 // `dispatches` are the orders Liston marked dispatched (orders.dispatchLookup): orderId → { lines, at,
 // by, tracked }. eBay's order feed shows a dispatch minutes later; until it does, an order whose every
 // line Liston dispatched counts as dispatched now. Either way the order says who marked it.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null, dispatches = null }) {
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null, dispatches = null, enrich = true }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2587,8 +2592,9 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   const totalPages = Math.max(1, Math.ceil(totalEntries / perPage));
   const pageOrders = filtered.slice((page - 1) * perPage, page * perPage);
 
-  const uniqueItemIds = [...new Set(pageOrders.flatMap((o) => o.lineItems.map((li) => li.itemId).filter(Boolean)))];
-  const summaryByItemId = await getItemSummariesCached(accessToken, uniqueItemIds, siteId);
+  // Each line's photo and stock (one GetItem per item not yet known); a CSV download skips it (`enrich: false`).
+  const uniqueItemIds = enrich ? [...new Set(pageOrders.flatMap((o) => o.lineItems.map((li) => li.itemId).filter(Boolean)))] : [];
+  const summaryByItemId = uniqueItemIds.length ? await getItemSummariesCached(accessToken, uniqueItemIds, siteId) : new Map();
 
   const enrichedOrders = pageOrders.map((order) => ({
     ...order,
@@ -2797,6 +2803,7 @@ function categoryAspectSchema(marketplaceId, categoryId) {
 }
 
 module.exports = {
+  ordersInScope,
   postagePolicyDetails,
   listingStates,
   searchSimilarListings,

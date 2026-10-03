@@ -4,6 +4,7 @@ import { ReactNode } from "react";
 import Link from "next/link";
 import { ListingWork, MoneySummary } from "@/lib/api";
 import { currencySymbol } from "@/lib/format";
+import { FIGURE, Hue, NOTE, StatCard, StatRow, statIcon } from "@/components/StatCard";
 
 // The business Overview: two tabs. Sales shows the money end to end in
 // one view, one card per step (sales, fees, earnings, source cost, profit),
@@ -53,6 +54,30 @@ function inkOf(tone: Tone | undefined, value: number | null): string {
   return INK[tone];
 }
 
+const icon = (paths: ReactNode) => statIcon(paths);
+const ICONS = {
+  // Sales: a shopping bag.
+  bag: icon(<><path d="M5.5 8.5h13l-1 11a1.5 1.5 0 01-1.5 1.4H8a1.5 1.5 0 01-1.5-1.4l-1-11z" /><path d="M9 8.5V7a3 3 0 016 0v1.5" /></>),
+  // Fees: a receipt with a percent.
+  receipt: icon(<><path d="M6.5 3.5h11v17l-2.75-1.5-2.75 1.5-2.75-1.5-2.75 1.5v-17z" /><path d="M9.5 14l5-5" /><circle cx="9.75" cy="9.25" r=".6" fill="currentColor" /><circle cx="14.25" cy="13.75" r=".6" fill="currentColor" /></>),
+  // Earnings: a wallet.
+  wallet: icon(<><path d="M4 7.5A2.5 2.5 0 016.5 5H17a1.5 1.5 0 011.5 1.5V8" /><rect x="4" y="8" width="16" height="11" rx="2.5" /><path d="M16 13.5h.01" strokeWidth="2.4" /></>),
+  // Source cost: a parcel from the supplier.
+  box: icon(<><path d="M12 3.5l7.5 4.2v8.6L12 20.5l-7.5-4.2V7.7L12 3.5z" /><path d="M4.5 7.7L12 12l7.5-4.3M12 12v8.5" /></>),
+  // Profit: a line going up.
+  trend: icon(<><path d="M4 16.5l5-5 3.5 3.5L20 7.5" /><path d="M14.5 7.5H20V13" /></>),
+  // Hunted: a target.
+  target: icon(<><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" /><path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5" /></>),
+  // Approved: a tick in a circle.
+  approved: icon(<><circle cx="12" cy="12" r="8.5" /><path d="M8.5 12.2l2.4 2.4 4.6-4.9" /></>),
+  // Rejected: a cross in a circle.
+  rejected: icon(<><circle cx="12" cy="12" r="8.5" /><path d="M9.5 9.5l5 5M14.5 9.5l-5 5" /></>),
+  // Drafted: a page and pen.
+  draft: icon(<><path d="M13.5 3.5H7A2.5 2.5 0 004.5 6v12A2.5 2.5 0 007 20.5h10a2.5 2.5 0 002.5-2.5V9.5" /><path d="M17.8 3.7a1.6 1.6 0 012.3 2.3L13 13.1l-3 .7.7-3 7.1-7.1z" /></>),
+  // Published: going up to eBay.
+  publish: icon(<><path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9" /><path d="M4.5 14.5v3a2.5 2.5 0 002.5 2.5h10a2.5 2.5 0 002.5-2.5v-3" /></>),
+};
+
 interface Detail {
   label: string;
   figure: Figure;
@@ -69,8 +94,9 @@ interface Step {
   label: string;
   figure: Figure;
   tone: Tone;
-  // The small marker beside the card's name.
-  accent: string;
+  // The card's own colour (its icon and the wash at its top) and icon.
+  hue: Hue;
+  icon: ReactNode;
   note: string | ((m: MoneySummary) => string);
   // The longer explanation, on hover.
   hint: string;
@@ -83,7 +109,8 @@ const STEPS: Step[] = [
     label: "Sales",
     figure: { kind: "money", of: (m) => m.sales },
     tone: "plain",
-    accent: "bg-[var(--color-primary)]",
+    hue: "indigo",
+    icon: ICONS.bag,
     note: "Paid by buyers",
     hint: "What buyers paid, cancelled orders left out",
     details: [
@@ -96,7 +123,8 @@ const STEPS: Step[] = [
     label: "Fees",
     figure: { kind: "money", of: (m) => m.fees },
     tone: "out",
-    accent: "bg-rose-400",
+    hue: "rose",
+    icon: ICONS.receipt,
     note: (m) => (m.settledSales > 0 ? `${percent(m.fees, m.settledSales)} of sales` : "Taken by eBay"),
     hint: "Everything eBay took: the fees on each order, ads, listing fees and the eBay Store subscription (each day's share of it, not the whole month on the day eBay bills it)",
     fromEbay: true,
@@ -114,7 +142,8 @@ const STEPS: Step[] = [
     figure: { kind: "money", of: (m) => m.earnings },
     // Plain: green is kept for profit, what's actually left.
     tone: "plain",
-    accent: "bg-sky-500",
+    hue: "sky",
+    icon: ICONS.wallet,
     note: "Paid out to you",
     hint: "What reached you, after fees and refunds",
     fromEbay: true,
@@ -128,11 +157,12 @@ const STEPS: Step[] = [
     label: "Source cost",
     figure: { kind: "money", of: (m) => m.sourceCost },
     tone: "out",
-    accent: "bg-orange-400",
+    hue: "amber",
+    icon: ICONS.box,
     note: "Paid to suppliers",
     hint: "From each order's Source section",
     details: [
-      { label: "Costed orders", figure: { kind: "text", of: (m) => `${count(m.withCost)} of ${count(m.withEarnings)}` }, fromEbay: true },
+      { label: "With a cost", figure: { kind: "text", of: (m) => `${count(m.withCost)} of ${count(m.withEarnings)}` }, fromEbay: true },
       { label: "Avg. order", figure: { kind: "money", of: (m) => per(m.sourceCost, m.withCost) }, tone: "out" },
       { label: "Without a cost", figure: { kind: "count", of: uncosted }, fromEbay: true, warn: (m) => uncosted(m) > 0 },
     ],
@@ -141,7 +171,8 @@ const STEPS: Step[] = [
     label: "Profit",
     figure: { kind: "money", of: (m) => m.profit },
     tone: "result",
-    accent: "bg-emerald-500",
+    hue: "emerald",
+    icon: ICONS.trend,
     note: "Earnings − source cost",
     hint: "What's left after eBay and the supplier. ROI: profit ÷ supplier cost, over the orders with a cost entered",
     fromEbay: true,
@@ -243,18 +274,32 @@ export function SalesCards({
         const blocked = Boolean(unavailable && step.fromEbay);
         const figure = step.figure;
         return (
-          <div key={step.label} className={`card flex min-w-0 flex-col px-3.5 py-3 sm:px-5 sm:py-4 ${index === STEPS.length - 1 ? "max-lg:col-span-2" : ""}`} title={step.hint}>
-            <span className="flex items-center gap-2 text-[13px] font-medium text-[var(--color-muted)]">
-              <span className={`h-2 w-2 rounded-full ${step.accent}`} aria-hidden />
-              {step.label}
-            </span>
+          <StatCard
+            key={step.label}
+            label={step.label}
+            hue={step.hue}
+            icon={step.icon}
+            hint={step.hint}
+            wide={index === STEPS.length - 1}
+            details={step.details
+              .filter((d) => !d.shown || (main && !loading && d.shown(main)))
+              .map((d) => {
+                const dBlocked = Boolean(unavailable && d.fromEbay);
+                const warn = main && !dBlocked && !loading ? Boolean(d.warn?.(main)) : false;
+                return (
+                  <StatRow key={d.label} label={d.label} warn={warn} ink={main && !dBlocked && !loading ? inkFor(d.tone, d.figure) : INK.plain}>
+                    {loading || !main ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-[var(--color-line)] align-middle" /> : dBlocked ? "—" : show(d.figure)}
+                  </StatRow>
+                );
+              })}
+          >
             {loading || !main ? (
-              <span className="mt-3 h-7 w-28 animate-pulse rounded-md bg-[var(--color-line)]" />
+              <span className="h-7 w-28 animate-pulse rounded-lg bg-[var(--color-line)] sm:h-8" />
             ) : blocked ? (
-              <span className="mt-2.5 text-[20px] font-semibold leading-none text-[var(--color-line-strong)] sm:text-[24px]">—</span>
+              <span className="text-[24px] font-semibold leading-none text-[var(--color-line-strong)] sm:text-[28px] xl:text-[24px] 2xl:text-[28px]">—</span>
             ) : (
               <>
-                <span className={`mt-2.5 truncate text-[20px] font-semibold leading-none tracking-tight tabular-nums sm:text-[24px] ${inkFor(step.tone, figure)}`}>{show(figure)}</span>
+                <span className={`${FIGURE} ${inkFor(step.tone, figure)}`}>{show(figure)}</span>
                 {figure.kind === "money" &&
                   // Only when no exchange rate could be had: each other currency
                   // apart. A market with nothing in these dates, or one eBay has
@@ -262,30 +307,16 @@ export function SalesCards({
                   others
                     .filter((o) => (step.label === "Sales" || o.withEarnings > 0) && figure.of(o) !== 0)
                     .map((o) => (
-                      <span key={o.currency} className="mt-1 text-[12px] font-medium tabular-nums text-[var(--color-muted)]">
+                      <span key={o.currency} className="mt-1.5 text-[12px] font-medium tabular-nums text-[var(--color-muted)]">
                         + {hidden ? maskAmount(o.currency) : formatAmount(figure.of(o), o.currency)}
                       </span>
                     ))}
               </>
             )}
-            <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">
+            <span className={NOTE}>
               {blocked && !loading ? "Needs the account reconnected" : typeof step.note === "function" ? (main && !loading ? step.note(main) : "\u00a0") : step.note}
             </span>
-            <dl className="mt-3 space-y-1 border-t border-[var(--color-line)] pt-2.5 text-[12px] sm:mt-3.5 sm:pt-3 sm:text-[12.5px]">
-              {step.details.filter((d) => !d.shown || (main && !loading && d.shown(main))).map((d) => {
-                const dBlocked = Boolean(unavailable && d.fromEbay);
-                const warn = main && !dBlocked ? d.warn?.(main) : false;
-                return (
-                  <div key={d.label} className="flex items-baseline justify-between gap-2">
-                    <dt className="truncate text-[var(--color-muted)]">{d.label}</dt>
-                    <dd className={`shrink-0 font-medium tabular-nums ${warn ? "text-amber-600" : main && !dBlocked ? inkFor(d.tone, d.figure) : INK.plain}`}>
-                      {loading || !main ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-[var(--color-line)] align-middle" /> : dBlocked ? "—" : show(d.figure)}
-                    </dd>
-                  </div>
-                );
-              })}
-            </dl>
-          </div>
+          </StatCard>
         );
       })}
     </div>
@@ -306,9 +337,11 @@ interface StageDetail {
   warn?: boolean;
 }
 const num = (v: number | undefined) => v ?? 0;
-const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink?: string; details: StageDetail[] }[] = [
+const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink?: string; hue: Hue; icon: ReactNode; details: StageDetail[] }[] = [
   {
     label: "Hunted",
+    hue: "indigo",
+    icon: ICONS.target,
     note: "Products found to list",
     of: (w) => num(w.hunted),
     details: [
@@ -319,16 +352,20 @@ const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink
   },
   {
     label: "Approved",
+    hue: "emerald",
+    icon: ICONS.approved,
     note: "Picked to draft",
     of: (w) => num(w.approved),
     ink: "text-emerald-600",
     details: [
       { label: "By a reviewer", of: (w) => num(w.approved) - num(w.approvedAsAdded), hint: "Opened on the Hunting page and approved" },
-      { label: "Owner's own", of: (w) => num(w.approvedAsAdded), hint: "Hunted by the owner with their own supplier: approved as added" },
+      { label: "Owner's own", of: (w) => num(w.approvedAsAdded), hint: "Hunted by the workspace owner with their own supplier: approved as added" },
     ],
   },
   {
     label: "Rejected",
+    hue: "rose",
+    icon: ICONS.rejected,
     note: "Passed over",
     of: (w) => num(w.rejected),
     ink: "text-rose-600",
@@ -340,6 +377,8 @@ const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink
   },
   {
     label: "Drafted",
+    hue: "amber",
+    icon: ICONS.draft,
     note: "Drafts created in Liston",
     of: (w) => w.drafted,
     details: [
@@ -349,6 +388,8 @@ const STAGES: { label: string; note: string; of: (w: ListingWork) => number; ink
   },
   {
     label: "Published",
+    hue: "violet",
+    icon: ICONS.publish,
     note: "Went live from Liston",
     of: (w) => w.published,
     details: [
@@ -383,28 +424,28 @@ export function ListingCards({ work, loading, huntingHref }: { work: ListingWork
         {STAGES.map((stage, index) => {
           const value = work ? stage.of(work) : 0;
           return (
-            <div key={stage.label} className={`card flex min-w-0 flex-col px-3.5 py-3 sm:px-5 sm:py-4 ${index === STAGES.length - 1 ? "max-lg:col-span-2" : ""}`}>
-              <span className="text-[13px] font-medium text-[var(--color-muted)]">{stage.label}</span>
+            <StatCard
+              key={stage.label}
+              label={stage.label}
+              hue={stage.hue}
+              icon={stage.icon}
+              wide={index === STAGES.length - 1}
+              details={stage.details.map((d) => {
+                const figure = work ? Math.max(0, d.of(work)) : 0;
+                return (
+                  <StatRow key={d.label} label={d.label} hint={d.hint} warn={Boolean(d.warn && figure > 0)} ink="text-[var(--color-ink)]">
+                    {loading || !work ? <span className="inline-block h-3 w-6 animate-pulse rounded bg-[var(--color-line)] align-middle" /> : count(figure)}
+                  </StatRow>
+                );
+              })}
+            >
               {loading || !work ? (
-                <span className="mt-3 h-7 w-16 animate-pulse rounded-md bg-[var(--color-line)]" />
+                <span className="h-7 w-16 animate-pulse rounded-lg bg-[var(--color-line)] sm:h-8" />
               ) : (
-                <span className={`mt-2.5 text-[20px] font-semibold leading-none tracking-tight tabular-nums sm:text-[24px] ${value > 0 && stage.ink ? stage.ink : "text-[var(--color-ink)]"}`}>{count(value)}</span>
+                <span className={`${FIGURE} ${value > 0 && stage.ink ? stage.ink : "text-[var(--color-ink)]"}`}>{count(value)}</span>
               )}
-              <span className="mt-1.5 truncate text-[12px] text-[var(--color-muted)]">{stage.note}</span>
-              <dl className="mt-3 space-y-1 border-t border-[var(--color-line)] pt-2.5 text-[12px] sm:mt-3.5 sm:pt-3 sm:text-[12.5px]">
-                {stage.details.map((d) => {
-                  const figure = work ? Math.max(0, d.of(work)) : 0;
-                  return (
-                    <div key={d.label} className="flex items-baseline justify-between gap-2" title={d.hint}>
-                      <dt className="truncate text-[var(--color-muted)]">{d.label}</dt>
-                      <dd className={`shrink-0 font-medium tabular-nums ${d.warn && figure > 0 ? "text-amber-600" : "text-[var(--color-ink)]"}`}>
-                        {loading || !work ? <span className="inline-block h-3 w-6 animate-pulse rounded bg-[var(--color-line)] align-middle" /> : count(figure)}
-                      </dd>
-                    </div>
-                  );
-                })}
-              </dl>
-            </div>
+              <span className={NOTE}>{stage.note}</span>
+            </StatCard>
           );
         })}
       </div>

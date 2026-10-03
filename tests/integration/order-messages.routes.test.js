@@ -102,7 +102,11 @@ test('a message is claimed before it is sent: two runs at once send it once, a b
   const email = `messages-claim-${crypto.randomUUID()}@example.com`;
   const { data } = await request('POST', '/api/auth/signup', { email, password: 'testpassword123' });
   const connection = await connectionService.createConnection(data.user.id, { platformKey: 'ebay', label: 'Claim Store', credentials: { accessToken: 'x' } });
-  const claim = (orderId, buyer = 'kevin', kind = 'placed') => orderRepository.claimMessage({ connectionId: connection.id, orderId, kind, buyer, itemId: '1', text: 'hi', buyerGapHours: kind === 'placed' ? 24 : 0 });
+  // eBay's order numbers are unique across eBay, and a claim counts for every connection: this run's own.
+  const tag = crypto.randomUUID().slice(0, 8);
+  const claim = (orderId, buyer = 'kevin', kind = 'placed') =>
+    orderRepository.claimMessage({ connectionId: connection.id, orderId: `${tag}-${orderId}`, kind, buyer: `${buyer}-${tag}`, itemId: '1', text: 'hi', buyerGapHours: kind === 'placed' ? 24 : 0 });
+  const finish = (orderId, fields) => orderRepository.finishMessage({ connectionId: connection.id, orderId: `${tag}-${orderId}`, kind: 'placed', ...fields });
 
   // The push and the hourly run reach the same order at the same moment: one sends.
   const same = await Promise.all([claim('O-1'), claim('O-1'), claim('O-1')]);
@@ -110,27 +114,47 @@ test('a message is claimed before it is sent: two runs at once send it once, a b
   // The same buyer's second and third orders that day, at the same moment: noted, not messaged.
   const again = await Promise.all([claim('O-2'), claim('O-3')]);
   assert.deepStrictEqual(again, ['skipped', 'skipped']);
-  const skipped = await pool.query("SELECT error FROM order_messages WHERE connection_id = $1 AND order_id = 'O-2'", [connection.id]);
-  assert.match(skipped.rows[0].error, /order O-1/);
+  const skipped = await pool.query('SELECT error FROM order_messages WHERE connection_id = $1 AND order_id = $2', [connection.id, `${tag}-O-2`]);
+  assert.match(skipped.rows[0].error, new RegExp(`order ${tag}-O-1`));
   // Two different buyers at once: both welcomed.
   assert.deepStrictEqual(await Promise.all([claim('O-4', 'sara'), claim('O-5', 'tom')]), ['claimed', 'claimed']);
   // The delivered thank-you has no daily limit per buyer, and is its own message.
   assert.strictEqual(await claim('O-1', 'kevin', 'delivered'), 'claimed');
 
-  await orderRepository.finishMessage({ connectionId: connection.id, orderId: 'O-1', kind: 'placed', status: 'sent', conversationId: 'conv-1' });
+  await finish('O-1', { status: 'sent', conversationId: 'conv-1' });
   assert.strictEqual(await claim('O-1'), 'taken', 'sent: never again');
-  await orderRepository.finishMessage({ connectionId: connection.id, orderId: 'O-4', kind: 'placed', status: 'failed', error: 'The buyer has blocked messages.' });
+  await finish('O-4', { status: 'failed', error: 'The buyer has blocked messages.' });
   assert.strictEqual(await claim('O-4', 'sara'), 'taken', 'refused: not retried');
 
   // O-5 was cut off mid-send: closed as failed after a while, and not sent again.
-  await pool.query("UPDATE order_messages SET sent_at = now() - interval '20 minutes' WHERE connection_id = $1 AND order_id = 'O-5'", [connection.id]);
+  await pool.query("UPDATE order_messages SET sent_at = now() - interval '20 minutes' WHERE connection_id = $1 AND order_id = $2", [connection.id, `${tag}-O-5`]);
   assert.ok((await orderRepository.closeStaleClaims(15)) >= 1);
   const rows = await pool.query('SELECT order_id, kind, status FROM order_messages WHERE connection_id = $1 ORDER BY order_id, kind', [connection.id]);
-  assert.deepStrictEqual(rows.rows.map((r) => `${r.order_id}:${r.kind}:${r.status}`), ['O-1:delivered:sending', 'O-1:placed:sent', 'O-2:placed:skipped', 'O-3:placed:skipped', 'O-4:placed:failed', 'O-5:placed:failed']);
+  assert.deepStrictEqual(rows.rows.map((r) => `${r.order_id.replace(`${tag}-`, '')}:${r.kind}:${r.status}`), ['O-1:delivered:sending', 'O-1:placed:sent', 'O-2:placed:skipped', 'O-3:placed:skipped', 'O-4:placed:failed', 'O-5:placed:failed']);
   assert.strictEqual(await claim('O-5', 'tom'), 'taken');
 
   // Settings count what went, by message; a send in flight isn't listed.
   const recent = await orderRepository.recentMessages(connection.id);
   assert.deepStrictEqual(recent.last30.byKind.placed, { sent: 1, failed: 2, skipped: 2 });
   assert.ok(!recent.items.some((m) => m.status === 'sending'));
+});
+
+test('an eBay order is messaged once however many connections hear of it: the account on two sites, or in two workspaces', async () => {
+  const owner = async (who) => (await request('POST', '/api/auth/signup', { email: `messages-${who}-${crypto.randomUUID()}@example.com`, password: 'testpassword123' })).data.user.id;
+  const usama = await owner('usama');
+  const other = await owner('other');
+  const uk = await connectionService.createConnection(usama, { platformKey: 'ebay', label: 'Minsu UK', credentials: { accessToken: 'x' } });
+  const au = await connectionService.createConnection(usama, { platformKey: 'ebay', label: 'Minsu AU', credentials: { accessToken: 'x' } });
+  const elsewhere = await connectionService.createConnection(other, { platformKey: 'ebay', label: 'Minsu (another workspace)', credentials: { accessToken: 'x' } });
+  const orderId = `${crypto.randomUUID().slice(0, 8)}-15253-36327`;
+  const claim = (connection, kind = 'placed') => orderRepository.claimMessage({ connectionId: connection.id, orderId, kind, buyer: `phil-${orderId}`, itemId: '1', text: 'hi', buyerGapHours: kind === 'placed' ? 24 : 0 });
+
+  // eBay's push reaches every connection of the seller at once: one welcome.
+  const outcomes = await Promise.all([claim(uk), claim(au), claim(elsewhere)]);
+  assert.deepStrictEqual(outcomes.slice().sort(), ['claimed', 'taken', 'taken']);
+  // Later runs on any of them: still taken, and the thank-you is likewise once.
+  assert.deepStrictEqual(await Promise.all([claim(uk), claim(au)]), ['taken', 'taken']);
+  assert.deepStrictEqual((await Promise.all([claim(au, 'delivered'), claim(uk, 'delivered')])).sort(), ['claimed', 'taken']);
+  const rows = await pool.query('SELECT kind, count(*)::int AS n FROM order_messages WHERE order_id = $1 GROUP BY kind ORDER BY kind', [orderId]);
+  assert.deepStrictEqual(rows.rows, [{ kind: 'delivered', n: 1 }, { kind: 'placed', n: 1 }]);
 });

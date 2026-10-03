@@ -29,18 +29,18 @@ const handle = (fn) => async (req, res, next) => {
 
 module.exports = {
   list: handle(async (req, res) => {
-    res.json(await notificationsService.list(req.userId));
+    res.json(await notificationsService.list(req.userId, req.ownerId));
   }),
   read: handle(async (req, res) => {
     const input = parse(readSchema, req.body, res);
-    if (input) res.json(await notificationsService.markRead(req.userId, input.ids));
+    if (input) res.json(await notificationsService.markRead(req.userId, req.ownerId, input.ids));
   }),
   clear: handle(async (req, res) => {
     const input = parse(readSchema, req.body, res);
-    if (input) res.json(await notificationsService.clear(req.userId, input.ids));
+    if (input) res.json(await notificationsService.clear(req.userId, req.ownerId, input.ids));
   }),
   test: handle(async (req, res) => {
-    res.json(await notificationsService.sendTest(req.userId));
+    res.json(await notificationsService.sendTest(req.userId, req.ownerId));
   }),
   subscribe: handle(async (req, res) => {
     const input = parse(subscribeSchema, req.body, res);

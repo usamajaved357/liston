@@ -44,7 +44,7 @@ test('resolvePermission uses the global default when no scoped row exists', asyn
     passwordHash: 'hash',
   });
 
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'orders', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'orders', allowed: true });
 
   assert.strictEqual(await teamRepository.resolvePermission(member.id, connectionId, 'orders'), true);
   assert.strictEqual(await teamRepository.resolvePermission(member.id, connectionId, 'listings'), false);
@@ -58,12 +58,12 @@ test('a scoped override wins over the global default, in both directions', async
     passwordHash: 'hash',
   });
 
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'orders', allowed: true });
-  await teamRepository.setPermission({ memberId: member.id, connectionId, feature: 'orders', allowed: false });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'orders', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId, feature: 'orders', allowed: false });
   assert.strictEqual(await teamRepository.resolvePermission(member.id, connectionId, 'orders'), false);
 
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'listings', allowed: false });
-  await teamRepository.setPermission({ memberId: member.id, connectionId, feature: 'listings', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'listings', allowed: false });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId, feature: 'listings', allowed: true });
   assert.strictEqual(await teamRepository.resolvePermission(member.id, connectionId, 'listings'), true);
 });
 
@@ -80,8 +80,8 @@ test('clearPermission removes a scoped override so the global default takes over
     passwordHash: 'hash',
   });
 
-  await teamRepository.setPermission({ memberId: member.id, connectionId, feature: 'listings', allowed: false });
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'listings', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId, feature: 'listings', allowed: false });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'listings', allowed: true });
   assert.strictEqual(
     await teamRepository.resolvePermission(member.id, connectionId, 'listings'),
     false,
@@ -91,7 +91,7 @@ test('clearPermission removes a scoped override so the global default takes over
   await teamRepository.clearPermission({ memberId: member.id, connectionId, feature: 'listings' });
   assert.strictEqual(await teamRepository.resolvePermission(member.id, connectionId, 'listings'), true);
 
-  const rows = await teamRepository.getPermissions(member.id);
+  const rows = await teamRepository.getPermissions(member.id, ownerId);
   assert.strictEqual(rows.find((r) => r.connection_id === connectionId && r.feature === 'listings'), undefined);
 });
 
@@ -103,12 +103,12 @@ test('setPermission upserts rather than duplicating rows on repeated writes', as
     passwordHash: 'hash',
   });
 
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'orders', allowed: true });
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'orders', allowed: false });
-  await teamRepository.setPermission({ memberId: member.id, connectionId, feature: 'orders', allowed: true });
-  await teamRepository.setPermission({ memberId: member.id, connectionId, feature: 'orders', allowed: false });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'orders', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'orders', allowed: false });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId, feature: 'orders', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId, feature: 'orders', allowed: false });
 
-  const rows = await teamRepository.getPermissions(member.id);
+  const rows = await teamRepository.getPermissions(member.id, ownerId);
   assert.strictEqual(rows.length, 2); // one global + one scoped, not four
   assert.strictEqual(rows.find((r) => r.connection_id === null).allowed, false);
   assert.strictEqual(rows.find((r) => r.connection_id === connectionId).allowed, false);
@@ -124,7 +124,7 @@ test('resolveAnyPermission is true if at least one feature is granted', async ()
 
   assert.strictEqual(await teamRepository.resolveAnyPermission(member.id, connectionId, teamRepository.KNOWN_FEATURES), false);
 
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'inbox', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'inbox', allowed: true });
   assert.strictEqual(await teamRepository.resolveAnyPermission(member.id, connectionId, teamRepository.KNOWN_FEATURES), true);
 });
 
@@ -135,7 +135,7 @@ test('getResolvedPermissions returns a flat map across every known feature', asy
     email: `member-${crypto.randomUUID()}@example.com`,
     passwordHash: 'hash',
   });
-  await teamRepository.setPermission({ memberId: member.id, connectionId: null, feature: 'orders', allowed: true });
+  await teamRepository.setPermission({ memberId: member.id, ownerId, connectionId: null, feature: 'orders', allowed: true });
 
   const resolved = await teamRepository.getResolvedPermissions(member.id, connectionId);
   assert.deepStrictEqual(resolved, { orders: true, listings: false, listings_publish: false, analytics: false, inbox: false, campaigns: false, hunting: false, hunting_review: false });

@@ -18,6 +18,7 @@ import { useAccountTimeZone } from "@/lib/timezone";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { ListingAnalyticsPanel } from "@/components/analytics/ListingAnalyticsPanel";
 import { PillTabs } from "@/components/PillTabs";
+import { CsvButton, SelectBox } from "@/components/CsvExport";
 import { PriceStockDialog } from "@/components/listings/PriceStockDialog";
 import { MenuItem, PopMenu } from "@/components/PopMenu";
 
@@ -105,10 +106,16 @@ const MENU_ICONS = {
 // its actions. One grid for the header and every row, so they line up.
 const LISTING_COLUMNS = "xl:grid xl:grid-cols-[minmax(0,1fr)_104px_136px_156px_40px] xl:items-center xl:gap-5";
 
-function ListingColumnsHeader({ labels }: { labels: [string, string, string, string] }) {
+// A tick box before each listing for the workspace owner and co-managers (the CSV download).
+type RowSelect = { checked: boolean; onChange: () => void };
+
+function ListingColumnsHeader({ labels, select }: { labels: [string, string, string, string]; select?: RowSelect & { indeterminate: boolean } }) {
   return (
     <div className={`hidden border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)] ${LISTING_COLUMNS}`}>
-      <span>{labels[0]}</span>
+      <span className="flex items-center gap-3.5">
+        {select && <SelectBox checked={select.checked} indeterminate={select.indeterminate} onChange={select.onChange} label="Select every listing on this page" />}
+        {labels[0]}
+      </span>
       <span className="text-center">{labels[1]}</span>
       <span className="text-center">{labels[2]}</span>
       <span className="text-center">{labels[3]}</span>
@@ -158,7 +165,9 @@ function ListingRow({
   onEnd,
   onAnalytics,
   onPriceStock,
+  select,
 }: {
+  select?: RowSelect;
   item: Listing;
   onEdit: () => void;
   relist?: boolean; // an ended listing: opens it to relist
@@ -219,10 +228,11 @@ function ListingRow({
         e.dataTransfer.setData("application/x-liston-ref", JSON.stringify({ kind: "listing", id: String(item.itemId) }));
         e.dataTransfer.effectAllowed = "copy";
       }}
-      className={`group px-4 py-3.5 transition-colors hover:bg-[var(--color-paper)]/70 sm:px-5 ${LISTING_COLUMNS} ${item.viewItemUrl ? "cursor-pointer" : ""}`}
+      className={`group px-4 py-3.5 transition-colors sm:px-5 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : "hover:bg-[var(--color-paper)]/70"} ${LISTING_COLUMNS} ${item.viewItemUrl ? "cursor-pointer" : ""}`}
     >
       {/* The listing */}
       <div className="flex min-w-0 items-center gap-3.5">
+        {select && <SelectBox checked={select.checked} onChange={select.onChange} label={`Select ${item.title}`} />}
         <Thumb src={item.imageUrl} />
         <div className="min-w-0 flex-1">
           <p className="line-clamp-2 text-[14px] font-medium leading-snug text-[var(--color-ink)] group-hover:text-[var(--color-primary)] xl:line-clamp-1" title={item.title}>
@@ -453,6 +463,13 @@ export default function AccountListingsPage() {
   }
   const [perPage, setPerPage] = useState<number | "all">(25);
   const [items, setItems] = useState<Listing[]>([]);
+  // Ticked listings for the CSV download, kept across pages; a new tab, search or sort starts afresh.
+  const filterKey = [filter, debounced, sort].join("|");
+  const [ticked, setTicked] = useState<{ key: string; ids: string[] }>({ key: "", ids: [] });
+  const selectedIds = ticked.key === filterKey ? ticked.ids : [];
+  function toggleListing(id: string) {
+    setTicked({ key: filterKey, ids: selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id] });
+  }
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
@@ -649,6 +666,14 @@ export default function AccountListingsPage() {
     );
   }
 
+  // Ticking listings is for the workspace owner and co-managers, on the live and ended tabs (the CSV download).
+  const canTick = !connection.permissions && filter !== "draft";
+  const pageTicked = items.filter((i) => selectedIds.includes(String(i.itemId))).length;
+  function togglePage() {
+    const onPage = items.map((i) => String(i.itemId));
+    setTicked({ key: filterKey, ids: pageTicked === onPage.length ? selectedIds.filter((id) => !onPage.includes(id)) : [...new Set([...selectedIds, ...onPage])] });
+  }
+
   const tabs: { key: Tab; label: string }[] = [
     { key: "active", label: "Active" },
     { key: "draft", label: "Drafts" },
@@ -666,6 +691,16 @@ export default function AccountListingsPage() {
       permissions={connection.permissions}
       user={user}
       sync={filter !== "draft" ? { syncedAt, onRefresh: handleRefresh, refreshing, note: refreshNote } : undefined}
+      // The workspace owner and co-managers: these listings (or the ticked ones) as a CSV file.
+      actions={
+        canTick && (
+          <CsvButton
+            selected={selectedIds.length}
+            noun="listing"
+            run={() => api.exportListingsCsv(connection.id, { status: filter === "inactive" ? "inactive" : "active", search: debounced, sort, ids: selectedIds })}
+          />
+        )
+      }
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Listings</h1>
@@ -819,12 +854,24 @@ export default function AccountListingsPage() {
           </div>
         ) : (
           <>
-          <ListingColumnsHeader labels={["Listing", "Price", "Stock", "Sales"]} />
+          <ListingColumnsHeader
+            labels={["Listing", "Price", "Stock", "Sales"]}
+            select={canTick ? { checked: pageTicked === items.length, indeterminate: pageTicked > 0 && pageTicked < items.length, onChange: togglePage } : undefined}
+          />
+          {canTick && selectedIds.length > 0 && (
+            <p className="border-b border-[var(--color-line)] bg-[var(--color-primary-soft)]/40 px-5 py-2 text-xs text-[var(--color-muted)]">
+              {`${selectedIds.length} listing${selectedIds.length === 1 ? "" : "s"} ticked for the download · `}
+              <button type="button" onClick={() => setTicked({ key: filterKey, ids: [] })} className="font-semibold text-[var(--color-primary)] hover:underline">
+                Clear
+              </button>
+            </p>
+          )}
           <ul className="divide-y divide-[var(--color-line)]">
             {items.map((item) => (
               <ListingRow
                 key={item.itemId}
                 item={item}
+                select={canTick ? { checked: selectedIds.includes(String(item.itemId)), onChange: () => toggleListing(String(item.itemId)) } : undefined}
                 onAnalytics={filter === "active" && canSeeAnalytics ? () => setAnalyticsItem(item.itemId) : undefined}
                 editing={editingItemId === item.itemId}
                 onEdit={() => openLiveEdit(item.itemId)}

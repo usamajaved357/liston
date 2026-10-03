@@ -40,9 +40,9 @@ function PeoplePicker({ people, picked, onChange, exclude = [] }: { people: Chat
   const shown = people.filter((p) => !exclude.includes(p.id) && (!q.trim() || `${p.name} ${p.email}`.toLowerCase().includes(q.trim().toLowerCase())));
   return (
     <div>
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search your team" className="input input-sm mb-2" aria-label="Search your team" />
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people" className="input input-sm mb-2" aria-label="Search people" />
       <div className="max-h-[300px] overflow-y-auto rounded-xl border border-[var(--color-line)]">
-        {shown.length === 0 && <p className="px-3 py-3 text-[12.5px] text-[var(--color-muted)]">{people.length <= 1 ? "Add people on the Team page to chat with them." : "Nobody matches."}</p>}
+        {shown.length === 0 && <p className="px-3 py-3 text-[12.5px] text-[var(--color-muted)]">{people.length <= 1 ? "Add people on the Members page to chat with them." : "Nobody matches."}</p>}
         {shown.map((p) => {
           const on = picked.includes(p.id);
           return (
@@ -52,7 +52,7 @@ function PeoplePicker({ people, picked, onChange, exclude = [] }: { people: Chat
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium text-[var(--color-ink)]">
                   {p.name}
-                  {p.role === "owner" && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">Owner</span>}
+                  {p.role === "owner" && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">Workspace owner</span>}
                 </span>
                 <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{p.email}</span>
               </span>
@@ -89,7 +89,7 @@ export function NewChatDialog({ me, people, onClose, onOpened }: { me: string; p
         <p className="text-[12.5px] text-[var(--color-muted)]">One person for a direct message, or up to seven for a group.</p>
         <PeoplePicker people={people} picked={picked} onChange={setPicked} exclude={[me]} />
         {picked.length > 1 && !tooMany && <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name the group (optional)" maxLength={80} className="input input-sm" aria-label="Group name" />}
-        {tooMany && <p className="notice notice-warning text-[12.5px]">A group is up to 8 people. For more, ask the owner for a channel.</p>}
+        {tooMany && <p className="notice notice-warning text-[12.5px]">A group is up to 8 people. For more, ask the workspace owner for a channel.</p>}
         {error && <p className="notice notice-danger text-[12.5px]">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           <button type="button" onClick={onClose} className="btn btn-ghost btn-sm">
@@ -167,7 +167,7 @@ export function ChannelDialog({ me, people, channel, onClose, onSaved }: { me: s
             <span className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--color-ink)]">
               <LockIcon className="h-3.5 w-3.5" /> Private
             </span>
-            <span className="block text-[12px] text-[var(--color-muted)]">Only the people in it see it. A public channel anyone in the team can find and join.</span>
+            <span className="block text-[12px] text-[var(--color-muted)]">Only the people in it see it. A public channel anyone in the workspace can find and join.</span>
           </span>
         </label>
         {!channel && (
@@ -342,7 +342,7 @@ export function ConversationDetails({
                     {m.name}
                     {m.id === me && <span className="ml-1 font-normal text-[var(--color-muted)]">(you)</span>}
                   </span>
-                  <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{m.removed ? "No longer in the team" : m.role === "owner" ? "Owner" : m.email}</span>
+                  <span className="block truncate text-[11.5px] text-[var(--color-muted)]">{m.removed ? "No longer in the workspace" : m.role === "owner" ? "Workspace owner" : m.email}</span>
                 </span>
                 {conversation.kind === "channel" && conversation.permissions.manage && m.id !== me && (
                   <button type="button" onClick={() => run(async () => { await inboxApi.chatRemovePerson(conversation.id, m.id); onChanged(await inboxApi.chatGet(conversation.id)); })} className="text-[11.5px] font-medium text-[var(--color-muted)] hover:text-rose-600">

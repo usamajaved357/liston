@@ -63,16 +63,16 @@ export function DiscussDialog({ connectionId, conversationId, buyer, me, onClose
 
   if (sentTo) {
     return (
-      <Modal title="Discuss with team" onClose={onClose}>
+      <Modal title="Discuss in chat" onClose={onClose}>
         <div className="px-5 py-5 text-center">
-          <p className="text-[14px] font-semibold text-[var(--color-ink)]">Shared with your team</p>
-          <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">The conversation with {buyer} is in team chat as a card. {buyer} doesn&apos;t see any of it.</p>
+          <p className="text-[14px] font-semibold text-[var(--color-ink)]">Shared in workspace chat</p>
+          <p className="mt-1 text-[12.5px] text-[var(--color-muted)]">The conversation with {buyer} is in workspace chat as a card. {buyer} doesn&apos;t see any of it.</p>
           <div className="mt-4 flex justify-center gap-2">
             <button type="button" onClick={onClose} className="btn btn-secondary btn-sm">
               Done
             </button>
             <a href={`/inbox?c=${sentTo}`} target="_blank" rel="noopener" className="btn btn-primary btn-sm">
-              Open team chat
+              Open workspace chat
             </a>
           </div>
         </div>
@@ -81,9 +81,9 @@ export function DiscussDialog({ connectionId, conversationId, buyer, me, onClose
   }
 
   return (
-    <Modal title="Discuss with team" onClose={onClose}>
+    <Modal title="Discuss in chat" onClose={onClose}>
       <div className="space-y-3 px-5 py-4">
-        <p className="text-[12.5px] leading-relaxed text-[var(--color-muted)]">Share the conversation with {buyer} in team chat to talk it over. {buyer} won&apos;t see it.</p>
+        <p className="text-[12.5px] leading-relaxed text-[var(--color-muted)]">Share the conversation with {buyer} in workspace chat to talk it over. {buyer} won&apos;t see it.</p>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a channel, group or person" className="input input-sm" aria-label="Find a channel, group or person" autoFocus />
         <div className="max-h-[260px] overflow-y-auto rounded-xl border border-[var(--color-line)]">
           {!conversations ? (

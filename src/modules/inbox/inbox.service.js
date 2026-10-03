@@ -282,6 +282,7 @@ async function tellTeam(connectionId, ownerId, arrived) {
       const body = s?.hide_text ? `New message from ${buyer}` : r.latestPreview || 'New message';
       await notificationsService.notifyGrouped({
         userId,
+        ownerId,
         kind: 'inbox.message',
         title,
         body,
@@ -618,6 +619,12 @@ async function unread(auth, connectionId) {
   return { unread: counts.buyers + counts.ebay };
 }
 
+/** Each account's unread conversations, for every account whose messages the person may read (the account rail's counts). */
+async function unreadByAccount(auth) {
+  const accounts = await accountsFor(auth);
+  return { accounts: await inboxRepository.unreadByAccount(accounts.map((a) => a.id)) };
+}
+
 /** Marks a conversation read or unread, here and on eBay. */
 async function setRead(auth, connectionId, conversationId, read) {
   await requireAccount(auth, connectionId);
@@ -760,7 +767,7 @@ async function deleteNote(auth, connectionId, conversationId, noteId) {
   await buyerConversation(auth, connectionId, conversationId);
   const note = /^\d+$/.test(String(noteId)) ? await inboxRepository.findNote(connectionId, conversationId, noteId) : null;
   if (!note) throw new InboxError('Note not found.', 404);
-  if (auth.role !== 'owner' && String(note.author_user_id) !== String(auth.userId)) throw new InboxError('Only who wrote a note, or the owner, can delete it.', 403);
+  if (auth.role !== 'owner' && String(note.author_user_id) !== String(auth.userId)) throw new InboxError('Only who wrote a note, the workspace owner or a co-manager, can delete it.', 403);
   await inboxRepository.deleteNote(note.id);
   await announce(connectionId, auth.ownerId, { conversationId });
   return { ok: true };
@@ -822,6 +829,7 @@ module.exports = {
   list,
   thread,
   unread,
+  unreadByAccount,
   setRead,
   setStatus,
   reply,

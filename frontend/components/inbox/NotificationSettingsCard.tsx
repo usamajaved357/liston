@@ -58,7 +58,7 @@ export function NotificationSettingsCard() {
       ) : (
         <div className="space-y-5 px-5 py-4">
           <div>
-            <p className="mb-1.5 text-[12.5px] font-medium text-[var(--color-ink)]">Team chat</p>
+            <p className="mb-1.5 text-[12.5px] font-medium text-[var(--color-ink)]">Workspace chat</p>
             <PillTabs
               tabs={[
                 { key: "all" as const, label: "Every message" },
@@ -68,7 +68,7 @@ export function NotificationSettingsCard() {
               value={s.chat}
               onChange={(chat) => save({ chat })}
               role="radiogroup"
-              label="Team chat notifications"
+              label="Workspace chat notifications"
             />
           </div>
           <div>
