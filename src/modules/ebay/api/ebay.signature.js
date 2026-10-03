@@ -82,10 +82,21 @@ function verifySignature({ method, url, body, headers, publicKey }) {
   return crypto.verify(null, Buffer.from(base, 'utf8'), toPem(publicKey, 'PUBLIC KEY'), Buffer.from(sig[1], 'base64'));
 }
 
+// When a key ends, in ms. eBay gives `expirationTime` as seconds since 1970
+// (1885657651, Oct 2029); read as ms that was Jan 1970, every kept key
+// looked expired, and a new one was made on every order page and refund.
+function endsAt(expiresAt) {
+  const n = Number(expiresAt);
+  if (Number.isFinite(n)) return n < 1e12 ? n * 1000 : n;
+  return new Date(expiresAt).getTime();
+}
+
 function isExpired(key, now = Date.now()) {
   if (!key?.expiresAt) return false;
+  const end = endsAt(key.expiresAt);
+  if (!Number.isFinite(end)) return false;
   // A week's margin: a key that dies mid-refund helps nobody.
-  return new Date(key.expiresAt).getTime() - now < 7 * 24 * 60 * 60 * 1000;
+  return end - now < 7 * 24 * 60 * 60 * 1000;
 }
 
 module.exports = { createSigningKey, signatureHeaders, verifySignature, toPem, contentDigest, isExpired, baseUrl };

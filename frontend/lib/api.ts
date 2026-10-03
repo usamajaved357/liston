@@ -3517,6 +3517,9 @@ export const inboxApi = {
   // What's been shared in a conversation (files, photos, links), newest first, as the messages that carry them.
   chatConversationFiles: (conversationId: string) => request<{ messages: ChatMessage[] }>(`/api/chat/conversations/${conversationId}/files`),
   chatThread: (rootId: string) => request<ChatThreadDetail>(`/api/chat/threads/${rootId}`),
+  // A voice note's fresh link when the one the page had didn't play; `error` is what the browser said (logged), `again` when the fresh one didn't play either.
+  chatVoiceLink: (messageId: string, { error, again = false }: { error: string; again?: boolean }) =>
+    request<{ url: string }>(`/api/chat/messages/${messageId}/voice?error=${encodeURIComponent(error.slice(0, 200))}${again ? "&again=1" : ""}`),
   chatThreadRead: (rootId: string, messageId?: string | null) =>
     request<{ readAt: string; unread: ChatUnread }>(`/api/chat/threads/${rootId}/read`, { method: "POST", body: JSON.stringify({ messageId: messageId || null }) }),
   chatFollow: (rootId: string, following: boolean) => request<{ following: boolean }>(`/api/chat/threads/${rootId}/follow`, { method: "PUT", body: JSON.stringify({ following }) }),

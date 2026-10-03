@@ -172,7 +172,9 @@ async function send(res, file, variant, { range = null } = {}) {
   res.setHeader('Cache-Control', file.purpose === 'ebay' ? 'public, max-age=86400' : 'private, max-age=3600');
   const disposition = `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`;
   // An eBay attachment's bytes come from here, never a redirect: eBay fetches the link itself, and a stored link that runs out would break.
-  const direct = file.purpose === 'ebay' ? null : await storage.directUrl(key, { seconds: 600, filename: inline ? file.name : null, contentType: mime }).catch(() => null);
+  // R2's link outlives the browser's copy of the redirect by an hour, so a kept redirect never points at a link
+  // that has run out (it lived 10 minutes against an hour's copy, and a voice note played again later wouldn't).
+  const direct = file.purpose === 'ebay' ? null : await storage.directUrl(key, { seconds: 2 * 3600, filename: inline ? file.name : null, contentType: mime }).catch(() => null);
   if (direct) return res.redirect(302, direct);
   res.setHeader('Accept-Ranges', 'bytes');
   // Part of it (a voice note seeking, Safari starting one): local files answer ranges here.

@@ -56,4 +56,8 @@ test('isExpired flags a key within a week of its end, and never one without an e
   assert.strictEqual(isExpired({ expiresAt: '2029-09-20T00:00:00Z' }, now), false);
   assert.strictEqual(isExpired({ expiresAt: '2026-09-24T00:00:00Z' }, now), true);
   assert.strictEqual(isExpired({ expiresAt: null }, now), false);
+  // As eBay gives it: seconds since 1970 (this one from a key made on 3 Oct 2026, good for three years).
+  assert.strictEqual(isExpired({ expiresAt: 1885657651 }, now), false, 'a kept key is used again, not replaced');
+  assert.strictEqual(isExpired({ expiresAt: '1885657651' }, now), false);
+  assert.strictEqual(isExpired({ expiresAt: Math.floor(now / 1000) + 3 * 24 * 60 * 60 }, now), true, 'three days left: a new one');
 });

@@ -685,6 +685,24 @@ async function thread(auth, rootId) {
   return { root: shaped[0], replies: shaped.slice(1), following: Boolean(place?.following), readAt: place?.last_read_at || null };
 }
 
+const MESSAGE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A fresh link to a voice note, for a browser that couldn't play the one it
+ * had (a link that ran out on a page left open, or a stale copy of the
+ * redirect to storage): anyone in its conversation. What went wrong in that
+ * browser is logged, so a note that still won't play says why in the logs.
+ */
+async function voiceLink(auth, messageId, { error = null, again = false, browser = null } = {}) {
+  const row = MESSAGE_ID.test(String(messageId)) ? await chatRepository.findMessage(messageId) : null;
+  if (!row || row.deleted_at || !row.detail?.voice?.fileId) refuse('Voice message not found.', 404);
+  await requireMember(auth, row.conversation_id);
+  const [file] = await filesRepository.findByIds([String(row.detail.voice.fileId)]);
+  if (!file) refuse('Voice message not found.', 404);
+  logger.warn(again ? "Chat: a voice message still didn't play" : "Chat: a voice message didn't play, fresh link given", { messageId: row.id, mime: file.mime, error, browser });
+  return { url: filesService.signedUrl(file, 'full') };
+}
+
 /** Reads a thread up to a reply (or now): its count under Threads drops, its bell line clears. */
 async function threadRead(auth, rootId, { messageId = null } = {}) {
   const { root } = await requireThread(auth, rootId);
@@ -808,6 +826,7 @@ async function saveSettings(auth, input) {
 }
 
 module.exports = {
+  voiceLink,
   people,
   list,
   get,

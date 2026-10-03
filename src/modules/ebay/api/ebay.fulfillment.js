@@ -17,6 +17,14 @@ function call(accessToken, method, path, body, marketplaceId, options = {}) {
   return request(accessToken, method, `/sell/fulfillment/v1${path}`, body, marketplaceId, { baseUrl: baseUrl(), ...options });
 }
 
+// Payment disputes are the exception: only apiz.ebay.com answers them
+// (confirmed live, 3 Oct 2026: api.ebay.com is a bare 404, apiz a 200), so
+// on api.ebay.com every account looked to have none.
+function disputeCall(accessToken, method, path, body, marketplaceId) {
+  const host = ebayOauth.isSandbox() ? 'https://apiz.sandbox.ebay.com' : 'https://apiz.ebay.com';
+  return request(accessToken, method, `/sell/fulfillment/v1${path}`, body, marketplaceId, { baseUrl: host });
+}
+
 function getOrder(accessToken, orderId, marketplaceId) {
   return call(accessToken, 'GET', `/order/${encodeURIComponent(orderId)}?fieldGroups=TAX_BREAKDOWN`, undefined, marketplaceId);
 }
@@ -57,23 +65,23 @@ function getPaymentDisputeSummaries(accessToken, { orderId } = {}, marketplaceId
   const params = new URLSearchParams();
   if (orderId) params.set('order_id', orderId);
   params.set('limit', '50');
-  return call(accessToken, 'GET', `/payment_dispute_summary?${params.toString()}`, undefined, marketplaceId);
+  return disputeCall(accessToken, 'GET', `/payment_dispute_summary?${params.toString()}`, undefined, marketplaceId);
 }
 
 function getPaymentDispute(accessToken, disputeId, marketplaceId) {
-  return call(accessToken, 'GET', `/payment_dispute/${encodeURIComponent(disputeId)}`, undefined, marketplaceId);
+  return disputeCall(accessToken, 'GET', `/payment_dispute/${encodeURIComponent(disputeId)}`, undefined, marketplaceId);
 }
 
 // Accepts the dispute: the buyer keeps the money. `returnAddress` lets the
 // seller ask for the item back.
 function acceptPaymentDispute(accessToken, disputeId, { returnAddress } = {}, marketplaceId) {
-  return call(accessToken, 'POST', `/payment_dispute/${encodeURIComponent(disputeId)}/accept`, returnAddress ? { returnAddress } : {}, marketplaceId);
+  return disputeCall(accessToken, 'POST', `/payment_dispute/${encodeURIComponent(disputeId)}/accept`, returnAddress ? { returnAddress } : {}, marketplaceId);
 }
 
 // Contests it with the evidence already attached to the dispute; eBay
 // requires the dispute's current revision number.
 function contestPaymentDispute(accessToken, disputeId, { revision, returnAddress }, marketplaceId) {
-  return call(accessToken, 'POST', `/payment_dispute/${encodeURIComponent(disputeId)}/contest`, { revision, ...(returnAddress ? { returnAddress } : {}) }, marketplaceId);
+  return disputeCall(accessToken, 'POST', `/payment_dispute/${encodeURIComponent(disputeId)}/contest`, { revision, ...(returnAddress ? { returnAddress } : {}) }, marketplaceId);
 }
 
 // --- shape the order detail page renders ---------------------------------

@@ -29,6 +29,8 @@ router.get('/conversations/:id/files', c.conversationFiles);
 // Threads: the ones this person follows, one thread, reading it, following it.
 router.get('/threads', c.threads);
 router.get('/threads/:rootId', c.thread);
+// A voice note's fresh link, when the one a page had didn't play (the reason logged).
+router.get('/messages/:id/voice', c.voiceLink);
 router.post('/threads/:rootId/read', c.threadRead);
 router.put('/threads/:rootId/follow', c.follow);
 router.patch('/messages/:id', c.edit);

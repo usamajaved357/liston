@@ -113,3 +113,23 @@ test("a Global Shipping Programme order posts to eBay's hub with the Ref #, and 
   assert.strictEqual(plain.shippingProgramme, null);
   assert.strictEqual(plain.finalDestination, null);
 });
+
+test('payment disputes are asked of apiz.ebay.com, the only host that answers them; orders stay on api.ebay.com', async () => {
+  const urls = [];
+  const fetchMock = mock.method(global, 'fetch', async (url) => {
+    urls.push(url);
+    return { ok: true, status: 200, json: async () => ({ total: 0, paymentDisputeSummaries: [] }) };
+  });
+  try {
+    await ebayFulfillment.getPaymentDisputeSummaries('tok', { orderId: '10-15246-92427' }, 'EBAY_GB');
+    await ebayFulfillment.getPaymentDispute('tok', 'pd-1', 'EBAY_GB');
+    await ebayFulfillment.acceptPaymentDispute('tok', 'pd-1', {}, 'EBAY_GB');
+    await ebayFulfillment.contestPaymentDispute('tok', 'pd-1', { revision: 2 }, 'EBAY_GB');
+    await ebayFulfillment.getOrder('tok', '10-15246-92427', 'EBAY_GB');
+    const hosts = urls.map((u) => new URL(u).host.replace('.sandbox', ''));
+    assert.deepStrictEqual(hosts, ['apiz.ebay.com', 'apiz.ebay.com', 'apiz.ebay.com', 'apiz.ebay.com', 'api.ebay.com']);
+    assert.match(urls[0], /\/sell\/fulfillment\/v1\/payment_dispute_summary\?order_id=10-15246-92427&limit=50$/);
+  } finally {
+    fetchMock.mock.restore();
+  }
+});

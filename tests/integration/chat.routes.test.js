@@ -451,3 +451,40 @@ test("each push says when its line last moved, so an open tab knows a conversati
     mock.restoreAll();
   }
 });
+
+test("a voice note that didn't play gets a fresh link for anyone in its conversation, with what the browser said logged", async () => {
+  const t = await setup();
+  const logger = require('../../src/utils/logger');
+  const logged = [];
+  mock.method(logger, 'warn', (message, meta) => logged.push([message, meta]));
+  try {
+    const dm = (await request('POST', '/api/chat/dm', { userId: t.sara.id }, t.o.token)).data;
+    const audio = await (await fetch(`${baseUrl}/api/files?purpose=chat`, { method: 'POST', headers: { Authorization: `Bearer ${t.o.token}`, 'Content-Type': 'audio/mp4', 'X-File-Name': 'Voice message.m4a' }, body: crypto.randomBytes(2048) })).json();
+    const sent = (await request('POST', `/api/chat/conversations/${dm.id}/messages`, { fileIds: [audio.id], voice: { fileId: audio.id, durationMs: 3000, peaks: [0.5] } }, t.o.token)).data;
+
+    const res = await fetch(`${baseUrl}/api/chat/messages/${sent.id}/voice?error=${encodeURIComponent('4: DEMUXER_ERROR_COULD_NOT_OPEN')}`, {
+      headers: { Authorization: `Bearer ${t.sara.token}`, 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36' },
+    });
+    const fresh = await res.json();
+    assert.strictEqual(res.status, 200, JSON.stringify(fresh));
+    // The fresh link plays: the note's bytes, as audio.
+    const link = new URL(fresh.url);
+    const bytes = await fetch(`${baseUrl}${link.pathname}${link.search}`);
+    assert.deepStrictEqual([bytes.status, bytes.headers.get('content-type'), (await bytes.arrayBuffer()).byteLength], [200, 'audio/mp4', 2048]);
+    assert.deepStrictEqual(
+      logged.find(([m]) => m.startsWith('Chat: a voice message')),
+      ["Chat: a voice message didn't play, fresh link given", { messageId: sent.id, mime: 'audio/mp4', error: '4: DEMUXER_ERROR_COULD_NOT_OPEN', browser: 'Chrome 143 on Windows' }]
+    );
+    // When the fresh one didn't play either, that's logged too.
+    await request('GET', `/api/chat/messages/${sent.id}/voice?error=3&again=1`, undefined, t.sara.token);
+    assert.ok(logged.some(([m, meta]) => m === "Chat: a voice message still didn't play" && meta.error === '3'));
+
+    // Only for people in the conversation, and only for a voice note.
+    assert.strictEqual((await request('GET', `/api/chat/messages/${sent.id}/voice?error=4`, undefined, t.tom.token)).status, 404, "Tom isn't in that DM");
+    const words = (await request('POST', `/api/chat/conversations/${dm.id}/messages`, { body: 'Just words' }, t.o.token)).data;
+    assert.strictEqual((await request('GET', `/api/chat/messages/${words.id}/voice?error=4`, undefined, t.sara.token)).status, 404);
+    assert.strictEqual((await request('GET', '/api/chat/messages/not-an-id/voice?error=4', undefined, t.sara.token)).status, 404);
+  } finally {
+    mock.restoreAll();
+  }
+});

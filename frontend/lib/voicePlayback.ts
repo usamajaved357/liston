@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { inboxApi } from "@/lib/api";
 
 // Team chat's voice notes play through one audio element for the whole of
 // Liston, not one inside each bubble: a note keeps playing while its bubble
@@ -91,9 +92,7 @@ function element(): HTMLAudioElement {
     // Only a note that was loaded (stopping empties it, which errors too).
     const t = state.track;
     if (!t || !a.getAttribute("src")) return;
-    const failed = [...state.failed, t.id];
-    stopVoice();
-    set({ failed });
+    didntPlay(t, a.error ? `${a.error.code}${a.error.message ? `: ${a.error.message}` : ""}` : "error");
   });
   audio = a;
   return a;
@@ -115,9 +114,44 @@ function seekTo(a: HTMLAudioElement, seconds: number) {
   else a.addEventListener("loadedmetadata", () => (a.currentTime = seconds), { once: true });
 }
 
+// Fresh links, by note, for notes whose first link didn't play; and the notes already given one.
+const fresh = new Map<string, string>();
+const retried = new Set<string>();
+
+/** The link a note plays from: a fresh one when its first didn't play. */
+export function voiceUrl(track: VoiceTrack): string {
+  return fresh.get(track.id) || track.url;
+}
+
+/**
+ * A note that didn't play. The first time, a fresh link from the server and
+ * another go: the page's link may have run out (a page left open for hours),
+ * or the browser kept an old redirect to storage. A second time, it's one
+ * this browser can't play, offered to download instead. Either way the
+ * server logs what the browser said, so the logs say why.
+ */
+function didntPlay(track: VoiceTrack, reason: string) {
+  const at = state.at;
+  stopVoice();
+  if (retried.has(track.id)) {
+    inboxApi.chatVoiceLink(track.id, { error: reason, again: true }).catch(() => {});
+    set({ failed: [...state.failed, track.id] });
+    return;
+  }
+  retried.add(track.id);
+  inboxApi
+    .chatVoiceLink(track.id, { error: reason })
+    .then(({ url }) => {
+      fresh.set(track.id, url);
+      load(track, at);
+      play(element(), track);
+    })
+    .catch(() => set({ failed: [...state.failed, track.id] }));
+}
+
 function load(track: VoiceTrack, at: number) {
   const a = element();
-  a.src = track.url;
+  a.src = voiceUrl(track);
   a.defaultPlaybackRate = state.speed;
   a.playbackRate = state.speed;
   if (at > 0) seekTo(a, at);
@@ -127,11 +161,10 @@ function load(track: VoiceTrack, at: number) {
 
 function play(a: HTMLAudioElement, track: VoiceTrack) {
   a.playbackRate = state.speed;
-  a.play().catch((err: { name?: string }) => {
-    // Switched to another note before it started; or the browser wants a tap first.
-    if (err?.name === "AbortError" || err?.name === "NotAllowedError") return;
-    stopVoice();
-    set({ failed: [...state.failed, track.id] });
+  a.play().catch((err: { name?: string; message?: string }) => {
+    // Switched to another note before it started; or the browser wants a tap first; or it couldn't load it, which the error event handles.
+    if (err?.name === "AbortError" || err?.name === "NotAllowedError" || err?.name === "NotSupportedError") return;
+    didntPlay(track, `${err?.name || "Error"}${err?.message ? `: ${err.message}` : ""}`);
   });
 }
 

@@ -1,14 +1,15 @@
 "use client";
 
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { nextVoiceSpeed, seekVoice, seeVoice, toggleVoice, useVoice, VoiceTrack } from "@/lib/voicePlayback";
+import { nextVoiceSpeed, seekVoice, seeVoice, toggleVoice, useVoice, voiceUrl, VoiceTrack } from "@/lib/voicePlayback";
 import { PersonAvatar } from "./PersonAvatar";
 
 // Voice notes, as WhatsApp has them. Recording: the composer's mic starts
 // it (the browser asks for the microphone the first time), a bar shows the
 // time and the sound as it comes in, the bin throws it away and the arrow
-// sends it; ten minutes at most. What's kept is the audio (MP4 where the
-// browser records it, which plays everywhere; else WebM), its length and
+// sends it; ten minutes at most. What's kept is the audio (AAC in MP4 where
+// the browser records it, which plays everywhere, iPhones too; Chrome's
+// plain "audio/mp4" is Opus, which some don't; else WebM), its length and
 // the shape of its sound as 48 bars. Playing: drawn as WhatsApp draws it
 // (the sender's picture, play, the bars filling in with a dot to drag, the
 // time; 1x / 1.5x / 2x in the picture's place while it plays), through
@@ -19,7 +20,7 @@ import { PersonAvatar } from "./PersonAvatar";
 export const VOICE_MAX_MS = 10 * 60 * 1000;
 const BARS = 48;
 const SAMPLE_MS = 70;
-const TYPES = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+const TYPES = ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
 
 export type RecordedVoice = { blob: Blob; mime: string; name: string; durationMs: number; peaks: number[] };
 
@@ -355,7 +356,7 @@ export function VoicePlayer({ track, meta, tone }: { track: VoiceTrack; meta?: R
             <PlayIcon playing={v.playing} />
           </button>
           {v.failed ? (
-            <a href={track.url} download className="min-w-0 truncate text-[12.5px] text-[var(--color-primary)] underline underline-offset-2">
+            <a href={voiceUrl(track)} download className="min-w-0 truncate text-[12.5px] text-[var(--color-primary)] underline underline-offset-2">
               Can&apos;t play here. Download it
             </a>
           ) : (

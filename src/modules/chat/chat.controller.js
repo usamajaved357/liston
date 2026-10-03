@@ -59,6 +59,16 @@ const schemas = {
 
 const auth = (req) => ({ userId: req.userId, ownerId: req.ownerId, role: req.role });
 
+// "Chrome 143 on Windows", for the logs: enough to tell a browser that can't play a format from a link that failed.
+const BROWSERS = [['Edge', /Edg\/(\d+)/], ['Opera', /OPR\/(\d+)/], ['Firefox', /Firefox\/(\d+)/], ['Chrome', /CriOS\/(\d+)/], ['Chrome', /Chrome\/(\d+)/], ['Safari', /Version\/(\d+)[^ ]* .*Safari/]];
+const SYSTEMS = [['iPhone or iPad', /iPhone|iPad/], ['Android', /Android/], ['Windows', /Windows/], ['Mac', /Mac OS X/], ['Linux', /Linux/]];
+function browserOf(ua) {
+  const text = String(ua || '');
+  const browser = BROWSERS.map(([name, re]) => [name, re.exec(text)]).find(([, m]) => m);
+  const system = SYSTEMS.find(([, re]) => re.test(text));
+  return `${browser ? `${browser[0]} ${browser[1][1]}` : 'Another browser'} on ${system ? system[0] : 'another system'}`;
+}
+
 function parse(schema, body, res) {
   const parsed = schema.safeParse(body || {});
   if (!parsed.success) {
@@ -144,6 +154,15 @@ module.exports = {
   conversationThreads: handle(async (req, res) => res.json(await chatService.conversationThreads(auth(req), req.params.id))),
   conversationFiles: handle(async (req, res) => res.json(await chatService.conversationFiles(auth(req), req.params.id))),
   thread: handle(async (req, res) => res.json(await chatService.thread(auth(req), req.params.rootId))),
+  voiceLink: handle(async (req, res) =>
+    res.json(
+      await chatService.voiceLink(auth(req), req.params.id, {
+        error: String(req.query.error || '').slice(0, 200) || null,
+        again: req.query.again === '1',
+        browser: browserOf(req.get('user-agent')),
+      })
+    )
+  ),
   threadRead: handle(async (req, res) => {
     const input = parse(schemas.read, req.body, res);
     if (input) res.json(await chatService.threadRead(auth(req), req.params.rootId, input));
