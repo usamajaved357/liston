@@ -2,13 +2,16 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ApiError, ebayInboxApi } from "@/lib/api";
 
-// "Message buyer" from an order page: a message to the order's buyer about
-// its item, sent through eBay from Liston (eBay threads it with anything
-// already said, and it shows in the Inbox). What eBay blocks or flags is
-// shown first with "Send anyway". A real message to a real buyer: it goes
-// only when Send is pressed. Once sent, a link opens the conversation.
+// "Message buyer" from an order page, when there's no conversation with the
+// buyer yet: a message to them about its item, sent through eBay from
+// Liston (eBay threads it with anything already said, and it shows in the
+// Inbox). What eBay blocks or flags is shown first with "Send anyway". A
+// real message to a real buyer: it goes only when Send is pressed. Once
+// sent, the conversation opens in the Inbox (or, when eBay doesn't say which
+// it is yet, a note says it was sent).
 
 const MAX = 2000;
 
@@ -18,6 +21,7 @@ export function MessageBuyerDialog({ connectionId, orderId, buyer, item, onClose
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<{ kind: string; text: string }[] | null>(null);
   const [sent, setSent] = useState<{ conversationId: string | null } | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && !sending && onClose();
@@ -36,7 +40,11 @@ export function MessageBuyerDialog({ connectionId, orderId, buyer, item, onClose
         return;
       }
       setWarnings(null);
-      setSent({ conversationId: out.conversationId });
+      if (out.conversationId) {
+        router.push(`/accounts/${connectionId}/inbox?e=${connectionId}~${encodeURIComponent(out.conversationId)}`);
+        return;
+      }
+      setSent({ conversationId: null });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't send it. Nothing went to the buyer.");
     } finally {
