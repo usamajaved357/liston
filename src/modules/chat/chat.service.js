@@ -4,6 +4,7 @@ const teamRepository = require('../team/team.repository');
 const connectionRepository = require('../connections/connection.repository');
 const filesRepository = require('../files/files.repository');
 const filesService = require('../files/files.service');
+const storage = require('../../lib/storage');
 const referencesService = require('../references/references.service');
 const { detect } = require('../references/reference-detect');
 const userEvents = require('../realtime/user-events');
@@ -699,6 +700,11 @@ async function voiceLink(auth, messageId, { error = null, again = false, browser
   await requireMember(auth, row.conversation_id);
   const [file] = await filesRepository.findByIds([String(row.detail.voice.fileId)]);
   if (!file) refuse('Voice message not found.', 404);
+  // Its bytes gone (kept on a server disk a redeploy emptied): no link will play it, so say so.
+  if (!(await storage.exists(file.storage_key))) {
+    logger.warn("Chat: a voice message's file is gone from storage", { messageId: row.id, fileId: file.id, error, browser });
+    refuse(`No longer on the server. Ask ${row.author_name || row.author_email || 'whoever sent it'} to send it again.`, 410);
+  }
   logger.warn(again ? "Chat: a voice message still didn't play" : "Chat: a voice message didn't play, fresh link given", { messageId: row.id, mime: file.mime, error, browser });
   return { url: filesService.signedUrl(file, 'full') };
 }

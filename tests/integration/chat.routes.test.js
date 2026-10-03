@@ -488,3 +488,23 @@ test("a voice note that didn't play gets a fresh link for anyone in its conversa
     mock.restoreAll();
   }
 });
+
+test("a voice note whose file is gone from the server (a redeploy emptied its disk) says so, and who to ask, instead of a link that can't play", async () => {
+  const t = await setup();
+  const storage = require('../../src/lib/storage');
+  const dm = (await request('POST', '/api/chat/dm', { userId: t.sara.id }, t.o.token)).data;
+  const audio = await (await fetch(`${baseUrl}/api/files?purpose=chat`, { method: 'POST', headers: { Authorization: `Bearer ${t.o.token}`, 'Content-Type': 'audio/mp4', 'X-File-Name': 'Voice message.m4a' }, body: crypto.randomBytes(1024) })).json();
+  const sent = (await request('POST', `/api/chat/conversations/${dm.id}/messages`, { fileIds: [audio.id], voice: { fileId: audio.id, durationMs: 2000, peaks: [0.5] } }, t.o.token)).data;
+  const { rows } = await pool.query('SELECT storage_key FROM files WHERE id = $1', [audio.id]);
+  await storage.remove(rows[0].storage_key);
+
+  // The link itself: gone, said plainly, not "Not found".
+  const link = new URL(sent.voice.url);
+  const bytes = await fetch(`${baseUrl}${link.pathname}${link.search}`);
+  assert.strictEqual(bytes.status, 410);
+  assert.match((await bytes.json()).error, /no longer on the server/);
+
+  // The player's fresh-link ask: who to ask for it again.
+  const fresh = await request('GET', `/api/chat/messages/${sent.id}/voice?error=4`, undefined, t.sara.token);
+  assert.deepStrictEqual([fresh.status, fresh.data.error], [410, 'No longer on the server. Ask Owen to send it again.']);
+});

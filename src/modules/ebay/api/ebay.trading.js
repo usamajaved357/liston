@@ -213,7 +213,11 @@ async function getUnsoldListings(accessToken, { pageNumber = 1, entriesPerPage =
 
 function mapLineItem(transaction) {
   const item = transaction.Item || {};
-  const tracking = transaction.ShippingDetails?.ShipmentTrackingDetails;
+  // One entry, or several once the number was changed or a second parcel added: the last is the
+  // current one. Read as a single entry, several looked like no tracking at all.
+  const tracking = toArray(transaction.ShippingDetails?.ShipmentTrackingDetails)
+    .filter((t) => t && t.ShipmentTrackingNumber)
+    .slice(-1)[0];
   return {
     itemId: item.ItemID ? String(item.ItemID) : null,
     title: item.Title || null,
@@ -226,8 +230,8 @@ function mapLineItem(transaction) {
       name: nv.Name,
       value: typeof nv.Value === 'object' ? nv.Value['#text'] : nv.Value,
     })),
-    trackingCarrier: tracking?.ShippingCarrierUsed || null,
-    trackingNumber: tracking?.ShipmentTrackingNumber || null,
+    trackingCarrier: tracking?.ShippingCarrierUsed ? String(tracking.ShippingCarrierUsed) : null,
+    trackingNumber: tracking?.ShipmentTrackingNumber ? String(tracking.ShipmentTrackingNumber) : null,
     handleByTime: transaction.ShippingServiceSelected?.ShippingPackageInfo?.HandleByTime || null,
     // The delivery window eBay showed the buyer at checkout.
     estimatedDeliveryMin: transaction.ShippingServiceSelected?.ShippingPackageInfo?.EstimatedDeliveryTimeMin || null,

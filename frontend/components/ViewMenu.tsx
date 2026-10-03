@@ -17,8 +17,9 @@ export interface ViewMenuSection {
   label: string;
   value: string;
   // `short`: the option's name on the button ("7 days" for "Last 7 days");
-  // `count`: how many rows it would show, listed beside it in the menu.
-  options: { key: string; label: string; short?: string; count?: number }[];
+  // `count`: how many rows it would show, listed beside it in the menu, in
+  // red or amber (`tone`) while there are any (tracking overdue, say).
+  options: { key: string; label: string; short?: string; count?: number; tone?: "danger" | "warn" }[];
   onChange: (key: string) => void;
   // Leave this section off the button (a filter set to "Any", say).
   hideInSummary?: boolean;
@@ -120,7 +121,9 @@ function Sections({ sections, large = false, onPicked }: { sections: ViewMenuSec
               >
                 {o.label}
                 <span className="flex items-center gap-2">
-                  {o.count !== undefined && <span className="text-[11.5px] font-normal tabular-nums text-[var(--color-muted)]">{o.count}</span>}
+                  {o.count !== undefined && (
+                    <span className={`text-[11.5px] tabular-nums ${o.tone && o.count > 0 ? (o.tone === "danger" ? "font-semibold text-rose-600" : "font-semibold text-amber-700") : "font-normal text-[var(--color-muted)]"}`}>{o.count}</span>
+                  )}
                   {active ? (
                     <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" aria-hidden>
                       <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

@@ -80,6 +80,38 @@ async function read(key) {
   }
 }
 
+/** Whether a key's bytes are there (a stored link can outlive them: a local folder lost on a redeploy). */
+async function exists(key) {
+  if (driver() === 'r2') {
+    const { HeadObjectCommand } = require('@aws-sdk/client-s3');
+    try {
+      await s3().send(new HeadObjectCommand({ Bucket: config.storage.r2.bucket, Key: key }));
+      return true;
+    } catch (err) {
+      if (err.name === 'NotFound' || err.name === 'NoSuchKey' || err.$metadata?.httpStatusCode === 404) return false;
+      throw err;
+    }
+  }
+  try {
+    await fsp.access(localPath(key));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where files are kept, for the start of the server's log: { lasting, where }.
+ * A local folder lasts only on a mounted volume; on a host like Railway
+ * without one, a redeploy starts with it empty.
+ */
+function describe() {
+  if (driver() === 'r2') return { lasting: true, where: `Cloudflare R2 (bucket ${config.storage.r2.bucket})` };
+  const dir = path.resolve(config.storage.dir);
+  const onVolume = Boolean(config.storage.volume) && (dir + path.sep).startsWith(path.resolve(config.storage.volume) + path.sep);
+  return { lasting: onVolume, where: onVolume ? `the mounted volume (${dir})` : `this server's own disk (${dir})` };
+}
+
 /** The whole file as a Buffer, or null. */
 /**
  * Part of a stored file, for a browser asking for a range (audio and video
@@ -141,4 +173,4 @@ function useClient(fake) {
   client = fake;
 }
 
-module.exports = { put, read, readRange, readBuffer, remove, directUrl, driver, r2Configured, useClient, localPath };
+module.exports = { put, read, readRange, readBuffer, remove, exists, describe, directUrl, driver, r2Configured, useClient, localPath };

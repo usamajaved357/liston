@@ -355,7 +355,12 @@ export function VoicePlayer({ track, meta, tone }: { track: VoiceTrack; meta?: R
           >
             <PlayIcon playing={v.playing} />
           </button>
-          {v.failed ? (
+          {v.gone ? (
+            // The server no longer has its file: who to ask for it again, never a download that would fail.
+            <span className="line-clamp-2 min-w-0 text-[12px] leading-snug text-[var(--color-muted)]" title={v.gone}>
+              {v.gone}
+            </span>
+          ) : v.failed ? (
             <a href={voiceUrl(track)} download className="min-w-0 truncate text-[12.5px] text-[var(--color-primary)] underline underline-offset-2">
               Can&apos;t play here. Download it
             </a>

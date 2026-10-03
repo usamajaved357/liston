@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter, SupplierFilter } from "@/lib/api";
+import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFilter, SupplierFilter, TrackingFilter } from "@/lib/api";
 import { readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
 import { scrollPageToTop } from "@/lib/pageScroll";
@@ -17,6 +17,7 @@ import { ViewMenu } from "@/components/ViewMenu";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { PillTabs } from "@/components/PillTabs";
 import { CsvButton, SelectBox } from "@/components/CsvExport";
+import { TrackingDueChip } from "@/components/orders/order-ui";
 
 // How the list is ordered, apart from which days it covers. Each status tab
 // keeps its own choice; untouched, Awaiting dispatch shows the nearest
@@ -58,6 +59,17 @@ const SUPPLIER_PHRASE: Record<SupplierFilter, string> = {
   problem: "with a supplier problem",
 };
 const defaultSupplier = (status: OrderStatusFilter): SupplierFilter => (status === "all" || status === "awaiting_dispatch" ? "pending" : "any");
+
+// Tracking eBay is still waiting for (orders/order-tracking.js on the
+// server): past the order's dispatch-by with none on eBay, or due within a
+// day. Each status tab keeps its own choice, untouched "Any".
+const TRACKING_LABELS: Record<TrackingFilter, string> = {
+  any: "Any",
+  overdue: "Overdue",
+  soon: "Due within 24 hours",
+};
+const TRACKING_SHORT: Partial<Record<TrackingFilter, string>> = { overdue: "Tracking overdue", soon: "Tracking due" };
+const TRACKING_TONE: Partial<Record<TrackingFilter, "danger" | "warn">> = { overdue: "danger", soon: "warn" };
 
 const STATUS_TABS: { key: OrderStatusFilter; label: string }[] = [
   { key: "all", label: "All orders" },
@@ -307,7 +319,7 @@ function OrderCard({ order, href, select }: { order: Order; href: string; select
 
   return (
     <div
-      className={`grid cursor-pointer items-start gap-3 border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : "hover:bg-[var(--color-paper)]/40"}`}
+      className={`grid cursor-pointer items-start gap-3 border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : "hover:bg-[var(--color-paper)]/40"} ${order.trackingDue?.state === "overdue" ? "shadow-[inset_3px_0_0_var(--color-danger)]" : ""}`}
       style={{ gridTemplateColumns: select ? `20px ${ROW_COLUMNS}` : ROW_COLUMNS }}
       title="Open order"
       onClick={(e) => {
@@ -324,6 +336,11 @@ function OrderCard({ order, href, select }: { order: Order; href: string; select
       <div className="pt-0.5">
         <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
         <MarkedLine order={order} />
+        {order.trackingDue && (
+          <div className="mt-1.5">
+            <TrackingDueChip due={order.trackingDue} timeZone={timeZone} />
+          </div>
+        )}
       </div>
 
       <div className="min-w-0">
@@ -396,7 +413,7 @@ function OrderMobileCard({ order, href, select }: { order: Order; href: string; 
   const quantity = order.lineItems.reduce((n, li) => n + (li.quantityPurchased || 0), 0);
   return (
     <div
-      className={`cursor-pointer border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 active:bg-[var(--color-paper)]/60 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : ""}`}
+      className={`cursor-pointer border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 active:bg-[var(--color-paper)]/60 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : ""} ${order.trackingDue?.state === "overdue" ? "shadow-[inset_3px_0_0_var(--color-danger)]" : ""}`}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest("a, button, label, input")) return;
         router.push(href);
@@ -411,6 +428,11 @@ function OrderMobileCard({ order, href, select }: { order: Order; href: string; 
         <div className="min-w-0 flex-1">
           <p className={`text-[13px] font-semibold leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
           <MarkedLine order={order} />
+          {order.trackingDue && (
+            <div className="mt-1.5">
+              <TrackingDueChip due={order.trackingDue} timeZone={timeZone} large />
+            </div>
+          )}
             <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">
             <Link href={href} className="font-mono tracking-tight text-[var(--color-ink)] underline decoration-[var(--color-line-strong)] underline-offset-2">
               {order.orderId}
@@ -474,6 +496,7 @@ function AccountOrdersContent() {
 
   const initialRange = searchParams.get("range");
   const initialStatus = searchParams.get("status");
+  const initialTracking = searchParams.get("tracking");
   const VALID_RANGES: OrderRange[] = ["7d", "30d", "90d"];
   const VALID_STATUSES: OrderStatusFilter[] = ["all", "awaiting_payment", "awaiting_dispatch", "dispatched", "marked", "delivered", "cancelled"];
 
@@ -498,6 +521,7 @@ function AccountOrdersContent() {
     cancelled: 0,
   });
   const [supplierCounts, setSupplierCounts] = useState<Partial<Record<SupplierFilter, number>> | null>(null);
+  const [trackingCounts, setTrackingCounts] = useState<Record<TrackingFilter, number> | null>(null);
   const [totalPages, setTotalPages] = useState(1);
   const [totalEntries, setTotalEntries] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -522,12 +546,27 @@ function AccountOrdersContent() {
     writeView(supplierKey, { [status]: next });
     setPage(1);
   }
+  // A link can open on a tracking filter (?tracking=overdue); otherwise each tab's own choice.
+  const trackingKey = `orders-tracking:${params.id}`;
+  const [trackings, setTrackings] = useState<Partial<Record<OrderStatusFilter, TrackingFilter>>>(() => {
+    const saved = readView<Record<OrderStatusFilter, TrackingFilter>>(trackingKey);
+    return initialTracking && initialTracking in TRACKING_LABELS ? { ...saved, [status]: initialTracking as TrackingFilter } : saved;
+  });
+  const tracking: TrackingFilter = trackings[status] || "any";
+  function changeTracking(next: TrackingFilter) {
+    setTrackings((t) => ({ ...t, [status]: next }));
+    writeView(trackingKey, { [status]: next });
+    // Tracking that's late cuts across supplier states (most are ordered or shipped, waiting on the
+    // supplier's number), so picking it shows every one rather than only those not ordered yet.
+    if (next !== "any" && supplier !== "any") changeSupplier("any");
+    setPage(1);
+  }
   // Orders the team put away (Seller Hub's "Archive"): shown on their own.
   const [archived, setArchived] = useState(false);
   const [archivedCount, setArchivedCount] = useState(0);
   // Ticked orders for the CSV download, kept across pages; changing a filter
   // starts afresh (the ticks belong to the filters they were made under).
-  const filterKey = [range, status, search, sort, archived, supplier].join("|");
+  const filterKey = [range, status, search, sort, archived, supplier, tracking].join("|");
   const [ticked, setTicked] = useState<{ key: string; ids: string[] }>({ key: "", ids: [] });
   const selectedIds = ticked.key === filterKey ? ticked.ids : [];
   function toggleOrder(id: string) {
@@ -536,22 +575,32 @@ function AccountOrdersContent() {
 
   useEffect(() => {
     if (!connection) return;
-    setLoading(true);
-    setError(null);
-    api
-      .getConnectionOrders(connection.id, { range, status, search, sort, page, perPage, archived, supplier })
-      .then((data) => {
-        setOrders(data.orders);
-        setCounts(data.counts);
-        setSupplierCounts(data.supplierCounts || null);
-        setTotalPages(data.totalPages);
-        setTotalEntries(data.totalEntries);
-        setSyncedAt(data.syncedAt);
-        setArchivedCount(data.archivedCount || 0);
-      })
-      .catch(() => setError("Couldn't load orders from eBay. Try again."))
-      .finally(() => setLoading(false));
-  }, [connection, range, status, search, sort, page, perPage, archived, supplier, reloadKey]);
+    // A tick later (state isn't set in the effect's own body); an answer for filters since changed is dropped.
+    let live = true;
+    const t = setTimeout(() => {
+      setLoading(true);
+      setError(null);
+      api
+        .getConnectionOrders(connection.id, { range, status, search, sort, page, perPage, archived, supplier, tracking })
+        .then((data) => {
+          if (!live) return;
+          setOrders(data.orders);
+          setCounts(data.counts);
+          setSupplierCounts(data.supplierCounts || null);
+          setTrackingCounts(data.trackingCounts || null);
+          setTotalPages(data.totalPages);
+          setTotalEntries(data.totalEntries);
+          setSyncedAt(data.syncedAt);
+          setArchivedCount(data.archivedCount || 0);
+        })
+        .catch(() => live && setError("Couldn't load orders from eBay. Try again."))
+        .finally(() => live && setLoading(false));
+    }, 0);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [connection, range, status, search, sort, page, perPage, archived, supplier, tracking, reloadKey]);
 
   useAccountEvents(connection?.id, (event) => {
     if (event.kind === "orders") setReloadKey((k) => k + 1);
@@ -636,7 +685,7 @@ function AccountOrdersContent() {
           <CsvButton
             selected={selectedIds.length}
             noun="order"
-            run={() => api.exportOrdersCsv(connection.id, { range, status, search, sort, archived, supplier, ids: selectedIds })}
+            run={() => api.exportOrdersCsv(connection.id, { range, status, search, sort, archived, supplier, tracking, ids: selectedIds })}
           />
         )
       }
@@ -666,9 +715,16 @@ function AccountOrdersContent() {
               </button>
             )}
             <ViewMenu
-              title="Period, supplier and sort"
+              title="Period, tracking, supplier and sort"
               sections={[
                 { label: "Period", value: range, options: (Object.keys(RANGE_LABELS) as OrderRange[]).map((key) => ({ key, label: RANGE_LABELS[key], short: RANGE_SHORT[key] })), onChange: (k) => changeRange(k as OrderRange) },
+                {
+                  label: "Tracking",
+                  value: tracking,
+                  hideInSummary: tracking === "any",
+                  options: (Object.keys(TRACKING_LABELS) as TrackingFilter[]).map((key) => ({ key, label: TRACKING_LABELS[key], short: TRACKING_SHORT[key], count: trackingCounts ? trackingCounts[key] ?? 0 : undefined, tone: TRACKING_TONE[key] })),
+                  onChange: (k) => changeTracking(k as TrackingFilter),
+                },
                 {
                   label: "Supplier order",
                   value: supplier,
@@ -720,6 +776,15 @@ function AccountOrdersContent() {
       {status === "marked" && (
         <p className="mb-2 text-xs leading-relaxed text-[var(--color-muted)]">
           Orders marked dispatched without a tracking number, in Seller Hub, the eBay app or from Liston. The buyer can&apos;t follow these parcels and eBay can&apos;t confirm their delivery, so add tracking from the order page once you have it.
+        </p>
+      )}
+      {tracking !== "any" && !loading && (
+        <p className={`mb-2 text-xs ${tracking === "overdue" ? "text-rose-700" : "text-amber-800"}`}>
+          {totalEntries} order{totalEntries === 1 ? "" : "s"}{" "}
+          {tracking === "overdue" ? "past eBay's dispatch-by with no tracking on eBay" : "due for tracking in the next 24 hours"}. Late or missing tracking counts against the account, so add it from each order&apos;s page ·{" "}
+          <button type="button" onClick={() => changeTracking("any")} className="font-semibold text-[var(--color-primary)] hover:underline">
+            Show all
+          </button>
         </p>
       )}
       {supplier !== "any" && !loading && (

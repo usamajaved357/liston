@@ -39,6 +39,7 @@ Click its box on the canvas → **Settings**:
 | `ALIEXPRESS_SOURCE` | `ds-api` |
 | `ALIEXPRESS_APP_KEY`, `ALIEXPRESS_APP_SECRET`, `ALIEXPRESS_CALLBACK` | as local |
 | `IMAGE_ADD_UK_FLAG` etc. | optional, default off |
+| `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` | where shared files are kept (see 5d) — **without these, or a volume, every redeploy deletes the team's voice notes, photos and files** |
 
 Don't set `PORT` (Railway injects it). Not needed: `REDIS_URL`, `OPENAI_API_KEY`, `BRIA_API_KEY`.
 
@@ -85,6 +86,24 @@ Liston's emails (invitations, email confirmations, password resets, access reque
 6. **A new domain earns trust slowly.** Ask the first members to mark Liston's email "Not spam" (and add the sender to contacts); each one teaches their mail provider.
 7. **Check a real send:** send one email to the address mail-tester.com gives you, and fix whatever it scores down.
 
+## 5d. Files that survive a redeploy
+
+Voice notes, photos and files shared in workspace chat, and the documents sent to eBay buyers, are kept by `src/lib/storage.js`. Without either option below they go in a folder on the API server's own disk, and **Railway starts every deploy with that disk empty**: everything shared before the deploy is gone (the chat shows "No longer on the server. Ask … to send it again." and the logs "Media: a file's bytes are gone from storage"). This happened on 3 Oct 2026. At each start the API logs where files are kept: `Files: kept on Cloudflare R2 …` or `… the mounted volume …` is right; an **error** `Files: kept on this server's own disk … which every redeploy empties` means neither is set up.
+
+Pick one:
+
+**A. Cloudflare R2 (recommended: no size limit to manage, the browser downloads from Cloudflare directly).**
+1. Cloudflare dashboard → **R2 Object Storage** → *Create bucket*, e.g. `liston-files` (location Automatic; keep it private — Liston hands out its own expiring links).
+2. R2 → **Manage API tokens** → *Create API token*: permission **Object Read & Write**, applied to that bucket only. Copy the *Access Key ID* and *Secret Access Key* (shown once).
+3. The **Account ID** is on the R2 overview page (right-hand side).
+4. API service → Variables: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (the bucket's name). Redeploy, and check the log line says Cloudflare R2.
+
+**B. A Railway volume (quickest; files stay on Railway).**
+1. API service → right-click → **Attach volume**, mount path `/data`.
+2. Nothing else to set: Railway gives the service `RAILWAY_VOLUME_MOUNT_PATH`, and Liston keeps files in `/data/storage` by itself (or set `STORAGE_DIR` to a folder inside the volume). Redeploy, and check the log line says the mounted volume.
+
+Files lost before either is set up can't be brought back; whoever shared them sends them again.
+
 ## 6. After the first deploy
 
 1. Sign up on the frontend with an address listed in `ADMIN_EMAILS` (auto-approved), verify the email (Resend), connect the eBay account(s) — plan limits are off (`ENFORCE_PLAN_LIMITS` unset).
@@ -94,6 +113,6 @@ Liston's emails (invitations, email confirmations, password resets, access reque
 
 ## Notes
 
-- The filesystem is ephemeral: `.cache/` (taxonomy cache) rebuilds itself; the AliExpress token lives in Postgres.
+- The filesystem is ephemeral: `.cache/` (taxonomy cache) rebuilds itself; the AliExpress token lives in Postgres; shared files need R2 or a volume (5d).
 - `sharp` builds fine on Railway's Node 20 image. Playwright's browser download is skipped (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`); set `ALIEXPRESS_SOURCE=scraper` only if you also install it.
 - Logs: Railway → service → Deployments → View logs. Request bodies and credentials are never logged.

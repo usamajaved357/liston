@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { inboxApi } from "@/lib/api";
+import { ApiError, inboxApi } from "@/lib/api";
 
 // Team chat's voice notes play through one audio element for the whole of
 // Liston, not one inside each bubble: a note keeps playing while its bubble
@@ -29,6 +29,8 @@ export type VoicePlayback = {
   at: number; // seconds in
   speed: number;
   failed: string[]; // notes this browser couldn't play
+  // Notes whose file the server no longer has (a redeploy emptied its disk), with what to say instead.
+  gone: Record<string, string>;
   shown: boolean; // the playing note's bubble is on screen
 };
 
@@ -44,7 +46,7 @@ function savedSpeed(): number {
   }
 }
 
-const SERVER: VoicePlayback = { track: null, playing: false, at: 0, speed: 1, failed: [], shown: false };
+const SERVER: VoicePlayback = { track: null, playing: false, at: 0, speed: 1, failed: [], gone: {}, shown: false };
 let state: VoicePlayback = typeof window === "undefined" ? SERVER : { ...SERVER, speed: savedSpeed() };
 const listeners = new Set<() => void>();
 let audio: HTMLAudioElement | null = null;
@@ -146,7 +148,11 @@ function didntPlay(track: VoiceTrack, reason: string) {
       load(track, at);
       play(element(), track);
     })
-    .catch(() => set({ failed: [...state.failed, track.id] }));
+    .catch((err) => {
+      // Its file is gone from the server: no link will play it, and a download would fail the same way.
+      if (err instanceof ApiError && err.status === 410) set({ gone: { ...state.gone, [track.id]: err.message } });
+      set({ failed: [...state.failed, track.id] });
+    });
 }
 
 function load(track: VoiceTrack, at: number) {
@@ -255,17 +261,18 @@ export function useVoicePlayback(): VoicePlayback {
   );
 }
 
-export type VoiceView = { current: boolean; playing: boolean; at: number; speed: number; failed: boolean };
+export type VoiceView = { current: boolean; playing: boolean; at: number; speed: number; failed: boolean; gone: string | null };
 // Each note's view, kept the same object until something it shows changes,
 // so the bubbles of notes not playing don't redraw as one plays.
 const views = new Map<string, { key: string; view: VoiceView }>();
 function viewOf(id: string): VoiceView {
   const current = state.track?.id === id;
   const failed = state.failed.includes(id);
-  const key = current ? `1|${state.playing}|${state.at}|${state.speed}|${failed}` : `0|${failed}`;
+  const gone = state.gone[id] || null;
+  const key = current ? `1|${state.playing}|${state.at}|${state.speed}|${failed}|${gone}` : `0|${failed}|${gone}`;
   const kept = views.get(id);
   if (kept?.key === key) return kept.view;
-  const view = { current, playing: current && state.playing, at: current ? state.at : 0, speed: state.speed, failed };
+  const view = { current, playing: current && state.playing, at: current ? state.at : 0, speed: state.speed, failed, gone };
   views.set(id, { key, view });
   return view;
 }

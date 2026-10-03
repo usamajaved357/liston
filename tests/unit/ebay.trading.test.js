@@ -401,3 +401,45 @@ test('reviseInventoryStatus sends price and quantity alone, a variation by its S
     fetchMock.mock.restore();
   }
 });
+
+test('a line with several tracking entries (the number changed, or a second parcel) keeps the last, not none', async () => {
+  mock.method(global, 'fetch', async () =>
+    fakeResponse(`<?xml version="1.0"?>
+      <GetOrdersResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+        <Ack>Success</Ack>
+        <PaginationResult><TotalNumberOfEntries>1</TotalNumberOfEntries><TotalNumberOfPages>1</TotalNumberOfPages></PaginationResult>
+        <OrderArray>
+          <Order>
+            <OrderID>ORD-2</OrderID>
+            <OrderStatus>Completed</OrderStatus>
+            <CreatedTime>2026-01-02T00:00:00.000Z</CreatedTime>
+            <CheckoutStatus><Status>Complete</Status></CheckoutStatus>
+            <ShippedTime>2026-01-03T09:00:00.000Z</ShippedTime>
+            <TransactionArray>
+              <Transaction>
+                <Item><ItemID>456</ItemID><Title>Widget</Title></Item>
+                <QuantityPurchased>1</QuantityPurchased>
+                <ShippingDetails>
+                  <ShipmentTrackingDetails><ShippingCarrierUsed>Evri</ShippingCarrierUsed><ShipmentTrackingNumber>H01OLDNUMBER</ShipmentTrackingNumber></ShipmentTrackingDetails>
+                  <ShipmentTrackingDetails><ShippingCarrierUsed>Royal Mail</ShippingCarrierUsed><ShipmentTrackingNumber>AB123456789GB</ShipmentTrackingNumber></ShipmentTrackingDetails>
+                </ShippingDetails>
+              </Transaction>
+              <Transaction>
+                <Item><ItemID>789</ItemID><Title>Gadget</Title></Item>
+                <QuantityPurchased>1</QuantityPurchased>
+                <ShippingDetails><ShipmentTrackingDetails><ShippingCarrierUsed>DPD</ShippingCarrierUsed><ShipmentTrackingNumber>15501234567890</ShipmentTrackingNumber></ShipmentTrackingDetails></ShippingDetails>
+              </Transaction>
+            </TransactionArray>
+          </Order>
+        </OrderArray>
+      </GetOrdersResponse>`)
+  );
+  const { orders } = await ebayTrading.getOrders('token', { createTimeFrom: '2026-01-01T00:00:00.000Z', createTimeTo: '2026-01-03T00:00:00.000Z' });
+  assert.deepStrictEqual(
+    orders[0].lineItems.map((li) => [li.trackingCarrier, li.trackingNumber]),
+    [
+      ['Royal Mail', 'AB123456789GB'],
+      ['DPD', '15501234567890'],
+    ]
+  );
+});

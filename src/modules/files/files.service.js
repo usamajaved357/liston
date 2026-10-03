@@ -196,7 +196,11 @@ async function send(res, file, variant, { range = null } = {}) {
     }
   }
   const found = await storage.read(key);
-  if (!found) return res.status(404).json({ error: 'Not found' });
+  // Its record is here but not its bytes: kept on a server disk a redeploy emptied (see lib/storage describe).
+  if (!found) {
+    logger.warn("Media: a file's bytes are gone from storage", { fileId: file.id, variant, purpose: file.purpose, storage: storage.driver() });
+    return res.status(410).json({ error: 'This file is no longer on the server. Ask whoever shared it to send it again.' });
+  }
   res.setHeader('Content-Type', mime);
   res.setHeader('Content-Disposition', disposition);
   if (found.size !== null) res.setHeader('Content-Length', String(found.size));

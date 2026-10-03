@@ -30,6 +30,7 @@ import {
   money,
   paymentLabel,
   postageServiceLabel,
+  TrackingDueChip,
 } from "@/components/orders/order-ui";
 import { SourcingCard } from "@/components/orders/SourcingCard";
 import { ActionDialog, type ActionKind } from "@/components/orders/ActionDialog";
@@ -429,6 +430,17 @@ export default function OrderDetailPage() {
                       {cancelled ? "Order cancelled" : dispatched ? `Dispatched${shippedAt ? ` on ${formatDayMonthYear(shippedAt, siteTz)}` : ""}` : dispatchBy ? `Dispatch by ${formatDeadline(dispatchBy, siteTz)}` : "Awaiting dispatch"}
                     </h2>
                     {!cancelled && !dispatched && <p className="mt-1 text-[13px] text-[var(--color-ink)]">Make sure you send your order within the dispatch time you specified in the listing.</p>}
+                    {/* eBay still waiting for tracking (orders/order-tracking.js), as the order's row says. */}
+                    {order.trackingDue && (
+                      <div className="mt-2.5">
+                        <TrackingDueChip due={order.trackingDue} timeZone={siteTz} large />
+                        <p className={`mt-1.5 text-[12.5px] leading-relaxed ${order.trackingDue.state === "overdue" ? "text-rose-800" : "text-amber-900"}`}>
+                          {order.trackingDue.state === "overdue"
+                            ? `eBay wanted a tracking number by ${formatDeadline(order.trackingDue.by, siteTz)}. Add it now: late or missing tracking counts against the account.`
+                            : `Add the tracking number before ${formatDeadline(order.trackingDue.by, siteTz)} so it counts as on time.`}
+                        </p>
+                      </div>
+                    )}
                     {(order.estimatedDelivery.min || order.estimatedDelivery.max) && (
                       <p className="mt-0.5 text-[13px] text-[var(--color-ink)]">
                         Estimated delivery date shown to buyer: {formatDayMonthYear(order.estimatedDelivery.min || order.estimatedDelivery.max, siteTz)}
@@ -599,7 +611,11 @@ export default function OrderDetailPage() {
                   {/* The two ways to dispatch, side by side: with a tracking number, or without one. */}
                   {!cancelled && (
                     <div className="flex flex-col items-stretch gap-1.5 sm:w-[160px] print:hidden">
-                      <button type="button" onClick={guarded(() => setAction("tracking"))} className="btn btn-secondary btn-sm rounded-full border-[var(--color-primary)] !h-8 !px-3 !text-[12.5px] text-[var(--color-primary)]">
+                      <button
+                        type="button"
+                        onClick={guarded(() => setAction("tracking"))}
+                        className={`btn btn-sm rounded-full !h-8 !px-3 !text-[12.5px] ${order.trackingDue ? "btn-primary" : "btn-secondary border-[var(--color-primary)] text-[var(--color-primary)]"}`}
+                      >
                         {dispatched ? "Edit tracking" : "Add tracking"}
                       </button>
                       {!dispatched && (

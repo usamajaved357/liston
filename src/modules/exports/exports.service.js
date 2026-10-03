@@ -51,6 +51,7 @@ async function ordersCsv(ownerId, connectionId, query, ids = null) {
       sort: query.sort,
       archived: query.archived,
       supplier: query.supplier,
+      tracking: query.tracking,
       page: 1,
       perPage: Number.MAX_SAFE_INTEGER,
       push: ebayService.pushEnabled(connection),

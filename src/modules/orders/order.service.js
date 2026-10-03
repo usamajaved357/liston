@@ -5,6 +5,7 @@ const ebayService = require('../ebay/ebay.service');
 const listingRepository = require('../listings/listing.repository');
 const orderRepository = require('./order.repository');
 const orderSupplier = require('./order-supplier');
+const orderTracking = require('./order-tracking');
 const { CARRIERS, detectCarrier } = require('./carriers');
 const { SELLER_CANCEL_REASONS } = require('../ebay/api/ebay.postorder');
 const logger = require('../../utils/logger');
@@ -108,7 +109,8 @@ async function getOrder(connectionId, userId, orderId) {
   }));
   const events = [...eventRows.map(eventView), ...ebayEvents(detail.order)].sort((a, b) => new Date(b.at) - new Date(a.at));
   return {
-    order: { ...detail.order, lineItems, archived: Boolean(archived) },
+    // `trackingDue`: eBay still waiting for its tracking (orders/order-tracking.js), as its row in the list says.
+    order: { ...detail.order, lineItems, archived: Boolean(archived), trackingDue: orderTracking.ofDetail(detail.order) },
     actionsEnabled: detail.actionsEnabled,
     source: detail.source,
     events,

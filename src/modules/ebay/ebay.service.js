@@ -18,6 +18,7 @@ const governor = require('./request-governor');
 const marketplaces = require('./marketplaces');
 const analyticsDays = require('../analytics/analytics-days');
 const orderSort = require('../orders/order-sort');
+const orderTracking = require('../orders/order-tracking');
 const marketScope = require('./market-scope');
 const money = require('../../utils/money');
 const connectionRepository = require('../connections/connection.repository');
@@ -2536,7 +2537,9 @@ function isMarkedDispatched(order) {
 // `dispatches` are the orders Liston marked dispatched (orders.dispatchLookup): orderId → { lines, at,
 // by, tracked }. eBay's order feed shows a dispatch minutes later; until it does, an order whose every
 // line Liston dispatched counts as dispatched now. Either way the order says who marked it.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null, dispatches = null, enrich = true }) {
+// Each order says whether eBay is still waiting for its tracking (`trackingDue`, orders/order-tracking.js:
+// overdue, or due within a day); `tracking` keeps only those, counted within the tab in `trackingCounts`.
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', tracking = 'any', supplierStateOf = null, dispatches = null, enrich = true }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2549,7 +2552,8 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
       const waiting = marked && !order.shippedTime && marked.lines >= (order.lineItems || []).length;
       const seen = waiting ? { ...order, shippedTime: marked.at } : order;
       return { ...seen, derivedStatus: classifyOrderStatus(seen), archived: archivedSet.has(order.orderId), markedDispatched: marked ? { ...marked, pending: Boolean(waiting) } : null };
-    });
+    })
+    .map((order) => ({ ...order, trackingDue: orderTracking.ofListOrder(order) }));
 
   const counts = { all: tagged.length };
   for (const key of ORDER_STATUS_FILTERS) {
@@ -2567,6 +2571,11 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
     overdue: awaiting.filter((o) => o.dispatchByTime && new Date(o.dispatchByTime).getTime() < nowMs).length,
     notOrdered: supplierStateOf ? awaiting.filter((o) => supplierStateOf(o) === 'pending').length : null,
   };
+
+  // Tracking eBay is waiting for, counted within the tab before any other filter; picking it narrows the rest.
+  const trackingCounts = { any: filtered.length, overdue: 0, soon: 0 };
+  for (const o of filtered) if (o.trackingDue) trackingCounts[o.trackingDue.state] += 1;
+  if (tracking && tracking !== 'any') filtered = filtered.filter((o) => o.trackingDue?.state === tracking);
 
   let supplierCounts = null;
   if (supplierStateOf) {
@@ -2615,6 +2624,8 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
     attention,
     supplierCounts,
     supplier: supplierStateOf ? supplier || 'any' : 'any',
+    trackingCounts,
+    tracking: tracking || 'any',
     totalEntries,
     totalPages,
     page,

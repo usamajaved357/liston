@@ -154,7 +154,11 @@ const config = {
   // buyers), in lib/storage.js. Cloudflare R2 (S3-compatible) when its four
   // settings are set; otherwise, and locally, a folder on this machine
   // (STORAGE_DIR) — fine for development, lost on a Railway redeploy unless
-  // it's a mounted volume, so production sets R2.
+  // it's on a mounted volume: with a Railway volume attached (Railway sets
+  // RAILWAY_VOLUME_MOUNT_PATH) and no STORAGE_DIR, files go on it by
+  // themselves. Production once ran with neither, and every redeploy took the
+  // team's voice notes and files with it (3 Oct 2026); the server says so
+  // at start (server.js).
   storage: {
     r2: {
       accountId: process.env.R2_ACCOUNT_ID || null,
@@ -162,7 +166,11 @@ const config = {
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || null,
       bucket: process.env.R2_BUCKET || null,
     },
-    dir: process.env.STORAGE_DIR || require('path').join(__dirname, '..', '..', 'storage'),
+    dir:
+      process.env.STORAGE_DIR ||
+      (process.env.RAILWAY_VOLUME_MOUNT_PATH ? require('path').join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'storage') : require('path').join(__dirname, '..', '..', 'storage')),
+    // The mounted volume's path, when there is one (Railway's own setting).
+    volume: process.env.RAILWAY_VOLUME_MOUNT_PATH || null,
   },
   hunting: {
     dailyCalls: parseInt(process.env.HUNTING_DAILY_CALLS || '1000', 10),

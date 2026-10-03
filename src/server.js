@@ -1,6 +1,7 @@
 const createApp = require('./app');
 const config = require('./config');
 const logger = require('./utils/logger');
+const storage = require('./lib/storage');
 const { pool } = require('./db/client');
 const aliexpressApi = require('./modules/sourcing/aliexpress/ds-api');
 const governor = require('./modules/ebay/request-governor');
@@ -15,6 +16,14 @@ const app = createApp();
 
 const server = app.listen(config.port, () => {
   logger.info(`Server listening on port ${config.port} (${config.env})`);
+  // Where shared files are kept. In production a folder on the server's own disk is emptied by every
+  // redeploy (Railway), taking the team's voice notes, photos and files with it: said loudly at each start.
+  const files = storage.describe();
+  if (config.env === 'production' && !files.lasting) {
+    logger.error(`Files: kept on ${files.where}, which every redeploy empties. Set the R2 settings or attach a Railway volume (DEPLOY.md, section 5d).`);
+  } else {
+    logger.info(`Files: kept on ${files.where}`);
+  }
   aliexpressApi.startTokenKeepAlive();
   // Loads today's eBay usage and keeps it in step with eBay's own figure.
   governor.start();

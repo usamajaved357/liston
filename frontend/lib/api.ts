@@ -987,6 +987,8 @@ export interface Order {
   markedDispatched?: { lines: number; at: string; by: string | null; tracked: boolean; pending: boolean } | null;
   // Liston's supplier-order rows for this order (one per line item).
   sourcing?: OrderSourcing[];
+  // eBay still waiting for its tracking: overdue, or due within a day.
+  trackingDue?: TrackingDue | null;
 }
 
 // --- one order in full (Fulfillment API shape) + Liston's sourcing --------
@@ -1096,6 +1098,8 @@ export interface OrderDetail {
   // Put away from Liston's order list (Seller Hub's "Archive").
   archived?: boolean;
   fulfillments: { fulfillmentId: string | null; carrier: string | null; trackingNumber: string | null; shippedDate: string | null; lineItems: { lineItemId: string; quantity: number }[] }[];
+  // eBay still waiting for its tracking, as the order's row in the list says.
+  trackingDue?: TrackingDue | null;
 }
 
 export interface OrderReturn {
@@ -1253,6 +1257,12 @@ export interface OrderCounts {
 
 // Where an order's supplier order stands (the Orders page's Supplier filter).
 export type SupplierFilter = "any" | "pending" | "ordered" | "shipped" | "delivered" | "problem";
+
+// Tracking eBay is still waiting for (backend orders/order-tracking.js): past
+// the order's dispatch-by with no tracking on eBay, or due within a day.
+export type TrackingDue = { state: "overdue" | "soon"; by: string };
+// The Orders page's Tracking filter.
+export type TrackingFilter = "any" | "overdue" | "soon";
 
 export interface Policy {
   fulfillmentPolicyId?: string;
@@ -2835,13 +2845,14 @@ export const api = {
   // CSV of the orders the page's filters show (or only `ids`), with the supplier orders' tracking but never their logins; the workspace owner and co-managers only.
   exportOrdersCsv: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; archived?: boolean; supplier?: SupplierFilter; ids?: string[] }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; archived?: boolean; supplier?: SupplierFilter; tracking?: TrackingFilter; ids?: string[] }
   ) => {
     const q = new URLSearchParams({ range: params.range, status: params.status });
     if (params.search) q.set("search", params.search);
     if (params.sort) q.set("sort", params.sort);
     if (params.archived) q.set("archived", "1");
     if (params.supplier && params.supplier !== "any") q.set("supplier", params.supplier);
+    if (params.tracking && params.tracking !== "any") q.set("tracking", params.tracking);
     if (params.ids?.length) q.set("ids", params.ids.join(","));
     return downloadCsvExport(`/api/connections/${id}/orders/export?${q.toString()}`, "orders.csv");
   },
@@ -2855,7 +2866,7 @@ export const api = {
   },
   getConnectionOrders: (
     id: string,
-    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean; supplier?: SupplierFilter }
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean; supplier?: SupplierFilter; tracking?: TrackingFilter }
   ) => {
     const query = new URLSearchParams({
       range: params.range,
@@ -2867,6 +2878,7 @@ export const api = {
     if (params.sort) query.set("sort", params.sort);
     if (params.archived) query.set("archived", "1");
     if (params.supplier && params.supplier !== "any") query.set("supplier", params.supplier);
+    if (params.tracking && params.tracking !== "any") query.set("tracking", params.tracking);
     return request<{
       orders: Order[];
       counts: OrderCounts;
@@ -2876,6 +2888,9 @@ export const api = {
       supplier?: SupplierFilter;
       // Orders in the chosen tab at each supplier state.
       supplierCounts?: Partial<Record<SupplierFilter, number>> | null;
+      tracking?: TrackingFilter;
+      // Orders in the chosen tab whose tracking is overdue, or due within a day.
+      trackingCounts?: Record<TrackingFilter, number>;
       totalEntries: number;
       totalPages: number;
       syncedAt: string | null;

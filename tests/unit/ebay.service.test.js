@@ -1022,6 +1022,36 @@ test('listOrdersDetailed says what needs doing: paid orders past dispatch-by, an
   assert.deepStrictEqual(result.attention, { overdue: 1, notOrdered: 1 });
 });
 
+test('listOrdersDetailed says which orders eBay is still waiting on tracking for, counts them in the tab, and filters to them', async () => {
+  const hour = 60 * 60 * 1000;
+  const at = (h) => new Date(Date.now() + h * hour).toISOString();
+  const line = (tracking = null) => ({ itemId: '111', title: 'Widget', quantityPurchased: 1, price: { amount: 10, currency: 'GBP' }, variation: [], trackingCarrier: null, trackingNumber: tracking, handleByTime: null });
+  const orders = [
+    makeOrder({ orderId: 'LATE', shippedTime: null, dispatchByTime: at(-3), lineItems: [line()] }),
+    makeOrder({ orderId: 'MARKED-LATE', shippedTime: at(-30), dispatchByTime: at(-24), lineItems: [line()] }),
+    makeOrder({ orderId: 'TONIGHT', shippedTime: null, dispatchByTime: at(5), lineItems: [line()] }),
+    makeOrder({ orderId: 'TRACKED', shippedTime: at(-30), dispatchByTime: at(-24), lineItems: [line('AB123456789GB')] }),
+    makeOrder({ orderId: 'LATER', shippedTime: null, dispatchByTime: at(48), lineItems: [line()] }),
+  ];
+  mock.method(ebayTrading, 'getOrders', async () => ({ orders, totalEntries: orders.length, totalPages: 1 }));
+  mock.method(ebayTrading, 'getItemSummary', async (token, itemId) => ({ itemId, imageUrl: null, quantity: null, quantityAvailable: null }));
+  const list = (opts) => ebayService.listOrdersDetailed(freshCredentials(), { connectionId: 'test-conn-tracking-due', range: '30d', status: 'all', page: 1, perPage: 25, ...opts });
+
+  const all = await list({});
+  assert.deepStrictEqual(Object.fromEntries(all.orders.map((o) => [o.orderId, o.trackingDue?.state || null])), { LATE: 'overdue', 'MARKED-LATE': 'overdue', TONIGHT: 'soon', TRACKED: null, LATER: null });
+  assert.deepStrictEqual(all.trackingCounts, { any: 5, overdue: 2, soon: 1 });
+
+  const overdue = await list({ tracking: 'overdue', supplierStateOf: (o) => (o.orderId === 'LATE' ? 'ordered' : 'shipped') });
+  assert.deepStrictEqual(overdue.orders.map((o) => o.orderId).sort(), ['LATE', 'MARKED-LATE']);
+  assert.strictEqual(overdue.tracking, 'overdue');
+  // The supplier's counts are of the overdue ones; the tracking counts stay the tab's.
+  assert.deepStrictEqual(overdue.supplierCounts, { any: 2, ordered: 1, shipped: 1 });
+  assert.deepStrictEqual(overdue.trackingCounts, { any: 5, overdue: 2, soon: 1 });
+
+  const marked = await list({ status: 'marked', tracking: 'overdue' });
+  assert.deepStrictEqual(marked.orders.map((o) => o.orderId), ['MARKED-LATE'], 'marked dispatched without tracking, past the deadline');
+});
+
 test('buildInventoryItem carries the parcel eBay needs for calculated postage: kg and cm, or pounds and inches on eBay US', () => {
   const { buildInventoryItem } = require('../../src/modules/ebay/ebay.service');
   const base = { title: 'T', description: 'd', imageUrls: [], aspects: {}, condition: 'NEW', quantity: 1 };

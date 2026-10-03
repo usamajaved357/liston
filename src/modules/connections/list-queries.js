@@ -3,6 +3,7 @@
 // exactly what the page's filters show. Pure.
 
 const { FILTERS: SUPPLIER_FILTERS } = require('../orders/order-supplier');
+const { FILTERS: TRACKING_FILTERS } = require('../orders/order-tracking');
 
 const ORDER_RANGES = ['7d', '30d', '90d'];
 const ORDER_STATUSES = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'marked', 'delivered', 'cancelled'];
@@ -18,6 +19,8 @@ function ordersQuery(q = {}) {
     archived: q.archived === '1' || q.archived === 'true',
     sort: typeof q.sort === 'string' ? q.sort : undefined,
     supplier: SUPPLIER_FILTERS.includes(q.supplier) ? q.supplier : 'any',
+    // Tracking eBay is waiting for: overdue, or due in the next 24 hours (orders/order-tracking.js).
+    tracking: TRACKING_FILTERS.includes(q.tracking) ? q.tracking : 'any',
   };
 }
 

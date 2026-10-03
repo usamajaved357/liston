@@ -5,7 +5,8 @@
 // progress track, and the modal shell.
 import { useState, type ReactNode } from "react";
 import { formatPrice } from "@/lib/format";
-import type { Amount, OrderDetail, OrderSourcing } from "@/lib/api";
+import { useNow } from "@/lib/useMyEvents";
+import type { Amount, OrderDetail, OrderSourcing, TrackingDue } from "@/lib/api";
 
 export const labelClass = "text-[11px] font-semibold uppercase tracking-wide text-[var(--color-muted)]";
 export const cardClass = "rounded-2xl border border-[var(--color-line)] bg-[var(--color-panel)] p-5";
@@ -61,6 +62,53 @@ export function Chip({ text, tone }: { text: string; tone: string }) {
     <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[var(--color-ink)]">
       <span className={`h-2 w-2 flex-shrink-0 rounded-full ${DOTS[tone] || DOTS.muted}`} aria-hidden />
       {text}
+    </span>
+  );
+}
+
+// A stretch of time in its largest parts: "40m", "5h", "1d 4h", "3d".
+export function spanOf(ms: number) {
+  const minutes = Math.max(1, Math.round(Math.abs(ms) / 60_000));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
+}
+
+const TRACKING_LOOK = {
+  overdue: "bg-rose-50 text-rose-700 ring-rose-200",
+  soon: "bg-amber-50 text-amber-800 ring-amber-200",
+};
+
+/**
+ * eBay still waiting for an order's tracking (backend orders/order-tracking.js):
+ * red "Tracking overdue" once its dispatch-by has passed, with how late
+ * under it (beside it, `large`); amber "Tracking due in 5h" in its last
+ * day. Moves on by itself every minute.
+ */
+export function TrackingDueChip({ due, timeZone, large = false }: { due: TrackingDue | null | undefined; timeZone?: string; large?: boolean }) {
+  const now = useNow();
+  if (!due) return null;
+  const left = new Date(due.by).getTime() - now;
+  const overdue = due.state === "overdue" || left <= 0;
+  const when = formatDeadline(due.by, timeZone);
+  return (
+    <span className={`inline-flex max-w-full ${large ? "flex-wrap items-center gap-x-2 gap-y-1" : "flex-col items-start gap-0.5"}`} title={overdue ? `eBay wanted tracking by ${when}` : `eBay wants tracking by ${when}`}>
+      <span className={`inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full font-semibold ring-1 ring-inset ${large ? "h-6 px-2.5 text-[12px]" : "h-5 px-2 text-[11px]"} ${overdue ? TRACKING_LOOK.overdue : TRACKING_LOOK.soon}`}>
+        <svg viewBox="0 0 16 16" fill="none" className={large ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden>
+          {overdue ? (
+            <path d="M8 2.5l6 10.5H2L8 2.5zM8 6.5v3M8 11.4v.1" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          ) : (
+            <>
+              <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.6" />
+              <path d="M8 5v3.2l2 1.3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </>
+          )}
+        </svg>
+        <span className="truncate">{overdue ? "Tracking overdue" : `Tracking due in ${spanOf(left)}`}</span>
+      </span>
+      {overdue && <span className={`font-medium text-rose-700 ${large ? "text-[12.5px]" : "text-[11px] leading-tight"}`}>{spanOf(left)} past dispatch-by</span>}
     </span>
   );
 }
