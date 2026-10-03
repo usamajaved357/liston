@@ -23,6 +23,34 @@ export class ApiError extends Error {
   }
 }
 
+// A sign-in's claims (who, its session version, when issued), read only to
+// compare two sign-ins on this browser; the API verifies them.
+function claimsOf(token: string | null): { sub?: string; sv: number; iat: number } | null {
+  try {
+    const payload = JSON.parse(atob(token!.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+    return { sub: payload.sub, sv: Number(payload.sv) || 0, iat: Number(payload.iat) || 0 };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A renewed sign-in is kept only when it renews the very one this request
+ * was sent with and that one is still the one stored: the same login and
+ * session version, issued later. An older one (a copy of a past answer, or
+ * from before the password changed) never replaces a newer sign-in, which
+ * would end it at the next request.
+ */
+function keepRenewed(sent: string | null, renewed: string | null) {
+  if (!sent || !renewed || renewed === sent) return;
+  const was = claimsOf(sent);
+  const now = claimsOf(renewed);
+  if (!was || !now || now.sub !== was.sub || now.sv !== was.sv || now.iat <= was.iat) return;
+  try {
+    if (localStorage.getItem("token") === sent) localStorage.setItem("token", renewed);
+  } catch {}
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {}
@@ -30,6 +58,8 @@ async function request<T>(
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
   const res = await fetch(`${API_URL}${path}`, {
+    // Never a stored copy: answers are live, and a copy's headers carry a past sign-in.
+    cache: "no-store",
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -41,12 +71,7 @@ async function request<T>(
   });
 
   // A sign-in renewed while in use: kept, so it doesn't run out mid-work.
-  const renewed = res.headers.get("X-Liston-Token");
-  if (renewed && typeof window !== "undefined") {
-    try {
-      localStorage.setItem("token", renewed);
-    } catch {}
-  }
+  if (typeof window !== "undefined") keepRenewed(token, res.headers.get("X-Liston-Token"));
 
   const data = await res.json().catch(() => ({}));
 
@@ -56,8 +81,12 @@ async function request<T>(
         localStorage.removeItem("liston:me");
       } catch {}
       // The sign-in has run out, the login was removed, or its password changed (on any device):
-      // to the sign-in page, not an error on this one.
-      if (data.code === "SESSION_ENDED" && !window.location.pathname.startsWith("/login")) endSession(token, data.reason);
+      // to the sign-in page (or, with a newer sign-in here already, this page again with it), and
+      // nothing more on this one: a page's own handling never touches the sign-in.
+      if (data.code === "SESSION_ENDED" && !window.location.pathname.startsWith("/login")) {
+        endSession(token, data.reason);
+        return new Promise<T>(() => {});
+      }
     }
     // Removed from the team this tab was in: forget it and open their home in the team they're in now.
     if (res.status === 403 && data.code === "TEAM_GONE" && typeof window !== "undefined") {

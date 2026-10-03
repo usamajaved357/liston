@@ -56,6 +56,17 @@ function createApp() {
     next();
   });
 
+  // The API's answers are live and may carry a renewed sign-in
+  // (X-Liston-Token): never kept by the browser, nor answered "not
+  // modified" from its copy, whose headers would hand a past sign-in back
+  // to the page (one from before a password change ended the next request).
+  // A route serving files sets its own caching.
+  app.set('etag', false);
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  });
+
   app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
   });

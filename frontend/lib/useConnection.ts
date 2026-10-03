@@ -24,11 +24,6 @@ export function useConnection(id: string) {
         setUser(meData.user);
       })
       .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) {
-          localStorage.removeItem("token");
-          router.replace("/login");
-          return;
-        }
         if (err instanceof ApiError && err.status === 404) {
           setError("This account connection doesn't exist, or isn't yours.");
           return;
@@ -36,7 +31,6 @@ export function useConnection(id: string) {
         setError("Couldn't load this account.");
       })
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, router]);
 
   return { connection, user, loading, error };

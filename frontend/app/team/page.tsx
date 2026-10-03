@@ -377,11 +377,6 @@ export default function TeamPage() {
       // Email changes show on the member's own page; here, the people still to join.
       setInvites(inviteData.invites.filter((i) => i.kind === "join"));
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        localStorage.removeItem("token");
-        router.replace("/login");
-        return;
-      }
       if (err instanceof ApiError && err.status === 403) {
         setError("Only the workspace owner or a co-manager can manage members.");
         return;
@@ -401,7 +396,6 @@ export default function TeamPage() {
     // After this render, as the member page does.
     const t = setTimeout(loadAll, 0);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   // Cold start with nothing cached: a skeleton, never a blank page.

@@ -124,3 +124,21 @@ test('sign-ins from before session versions still work until the password first 
   await request('PATCH', '/api/users/me/password', { currentPassword: PASSWORD, newPassword: 'brandnewpass123' }, old);
   assertSignedOut(await me(old), 'ended with the change');
 });
+
+test("the API's answers are never kept by the browser, so a past sign-in never comes back from a copy", async () => {
+  const usama = await owner();
+  // Signed in two days ago: the answer renews it (X-Liston-Token).
+  const twoDaysAgo = Math.floor(Date.now() / 1000) - 2 * 24 * 60 * 60;
+  const aging = jwt.sign({ sub: usama.id, email: usama.email, sv: 0, iat: twoDaysAgo }, config.jwt.secret, { expiresIn: '7d' });
+  const first = await fetch(`${baseUrl}/api/users/me`, { headers: { Authorization: `Bearer ${aging}` } });
+  assert.strictEqual(first.status, 200);
+  assert.ok(first.headers.get('x-liston-token'), 'renewed');
+  assert.strictEqual(first.headers.get('cache-control'), 'no-store', 'not stored, the renewal with it');
+  assert.strictEqual(first.headers.get('etag'), null, 'nothing to answer "not modified" against');
+
+  // Asked again "if not changed since": a full answer, never a 304 that would hand back the stored headers.
+  const fresh = (await login(usama.email)).data.token;
+  const again = await fetch(`${baseUrl}/api/users/me`, { headers: { Authorization: `Bearer ${fresh}`, 'If-None-Match': 'W/"anything"' } });
+  assert.strictEqual(again.status, 200);
+  assert.strictEqual(again.headers.get('x-liston-token'), null, 'a new sign-in needs no renewal');
+});

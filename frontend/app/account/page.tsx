@@ -173,13 +173,8 @@ export default function AccountPage() {
           cacheUser(user);
           setActionError(null);
         })
-        .catch((err) => {
+        .catch(() => {
           if (!live) return;
-          if (err instanceof ApiError && err.status === 401) {
-            localStorage.removeItem("token");
-            router.replace("/login");
-            return;
-          }
           if (attempt < 3) setTimeout(() => load(attempt + 1), 1500 * attempt);
           else setActionError("Couldn't reach Liston just now. Reload the page to try again.");
         });
@@ -318,7 +313,7 @@ export default function AccountPage() {
         <NotificationSettingsCard />
 
         <div className="card">
-          <SettingRow title="Password" description="Choose a strong password you're not using anywhere else. You'll stay logged in on this device." last>
+          <SettingRow title="Password" description="Choose a strong password you're not using anywhere else." last>
             <ChangePasswordForm email={user.email} />
           </SettingRow>
         </div>

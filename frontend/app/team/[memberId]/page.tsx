@@ -522,16 +522,11 @@ function MemberPageBody() {
       setEmailChange(invites.invites.find((i) => i.kind === "email" && i.memberId === memberId) || null);
       setError(null);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        localStorage.removeItem("token");
-        router.replace("/login");
-        return;
-      }
       setError(err instanceof ApiError ? (err.status === 404 ? "This member doesn't exist, or isn't in your workspace." : err.message) : "Couldn't load this member.");
     } finally {
       setAnswered(figuresKey);
     }
-  }, [memberId, range, custom, router, figuresKey]);
+  }, [memberId, range, custom, figuresKey]);
 
   useEffect(() => {
     if (!localStorage.getItem("token")) {

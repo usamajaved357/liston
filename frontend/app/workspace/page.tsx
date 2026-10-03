@@ -170,13 +170,8 @@ export default function WorkspaceSettingsPage() {
         if (!live) return;
         setMembers(team.members);
         setAccounts(connections.connections.length);
-      } catch (err) {
+      } catch {
         if (!live) return;
-        if (err instanceof ApiError && err.status === 401) {
-          localStorage.removeItem("token");
-          router.replace("/login");
-          return;
-        }
         setError("Couldn't load the workspace. Try refreshing.");
       }
     }, 0);

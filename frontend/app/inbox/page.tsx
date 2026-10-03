@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ApiError, User } from "@/lib/api";
+import { api, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { NotificationBell } from "@/components/NotificationBell";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -28,12 +28,8 @@ export default function InboxPage() {
         setUser(user);
         cacheUser(user);
       })
-      .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) {
-          localStorage.removeItem("token");
-          router.replace("/login");
-        }
-      });
+      // An ended sign-in goes to the sign-in page from the API helper; otherwise the remembered user stays.
+      .catch(() => {});
   }, [router]);
 
   if (!user) {

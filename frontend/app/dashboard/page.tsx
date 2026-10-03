@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, ApiError, ListingWork, Overview, User } from "@/lib/api";
+import { api, ListingWork, Overview, User } from "@/lib/api";
 import { AppShell } from "@/components/AppShell";
 import { HeaderAvatar } from "@/components/AccountMenu";
 import { AmountsToggle, ListingCards, SalesCards, MetricTabs, Metric, formatAmount } from "@/components/overview/OverviewMoney";
@@ -73,17 +73,12 @@ export default function DashboardPage() {
     setRefreshing(true);
     try {
       setOverview(await api.overview(r));
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        localStorage.removeItem("token");
-        router.replace("/login");
-        return;
-      }
+    } catch {
       setError("Couldn't load your overview. Try refreshing.");
     } finally {
       setRefreshing(false);
     }
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem("token");
@@ -103,12 +98,7 @@ export default function DashboardPage() {
         cacheUser(user);
         return loadOverview("today");
       })
-      .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) {
-          localStorage.removeItem("token");
-          router.replace("/login");
-          return;
-        }
+      .catch(() => {
         setError("Couldn't load your overview. Try refreshing.");
       });
   }, [router, loadOverview]);

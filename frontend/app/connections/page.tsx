@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, Connection, Platform, User } from "@/lib/api";
+import { api, Connection, Platform, User } from "@/lib/api";
 import { landingPathForConnection } from "@/lib/permissions";
 import { AppShell } from "@/components/AppShell";
 import { PageSkeleton } from "@/components/PageSkeleton";
@@ -197,12 +197,7 @@ export default function ConnectionsPage() {
       // The rail's "Connect an eBay account" opens the panel here.
       if (new URLSearchParams(window.location.search).get("add") === "1") setAdding(true);
       setLoading(false);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        localStorage.removeItem("token");
-        router.replace("/login");
-        return;
-      }
+    } catch {
       setError("Couldn't load your connections. Try refreshing.");
       setLoading(false);
     }
@@ -217,7 +212,6 @@ export default function ConnectionsPage() {
     // Deferred a tick: the load sets state, which an effect mustn't do in its own body.
     const t = setTimeout(loadAll, 0);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   // The rail's "Connect an eBay account" while already on this page.
