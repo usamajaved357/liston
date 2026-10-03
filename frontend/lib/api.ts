@@ -2553,6 +2553,27 @@ function researchQuery(params: ResearchParams): URLSearchParams {
 }
 
 // The Products tab's filters as query values (the Winners list, and Find more with the same).
+// A CSV download through the API: the token and workspace ride along, the
+// file is saved under the server's own name; resolves to how many rows it has.
+async function downloadCsvExport(path: string, fallbackName: string): Promise<number> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  const res = await fetch(`${API_URL}${path}`, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...teamHeaders() } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(body?.error || "Couldn't make the file. Try again.", res.status);
+  }
+  const blob = await res.blob();
+  const name = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] || fallbackName;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  return Number(res.headers.get("X-Liston-Rows") || 0);
+}
+
 export const api = {
   signup: (email: string, password: string, extra: { name?: string; accessNote?: string; teamName?: string } = {}) =>
     request<AuthResponse>("/api/auth/signup", {
@@ -2694,6 +2715,27 @@ export const api = {
   // Re-reads the account from eBay now (once a minute per account).
   refreshConnection: (id: string) => request<{ syncedAt: string }>(`/api/connections/${id}/refresh`, { method: "POST" }),
 
+  // CSV of the orders the page's filters show (or only `ids`), with the supplier orders' tracking but never their logins; the workspace owner and co-managers only.
+  exportOrdersCsv: (
+    id: string,
+    params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; archived?: boolean; supplier?: SupplierFilter; ids?: string[] }
+  ) => {
+    const q = new URLSearchParams({ range: params.range, status: params.status });
+    if (params.search) q.set("search", params.search);
+    if (params.sort) q.set("sort", params.sort);
+    if (params.archived) q.set("archived", "1");
+    if (params.supplier && params.supplier !== "any") q.set("supplier", params.supplier);
+    if (params.ids?.length) q.set("ids", params.ids.join(","));
+    return downloadCsvExport(`/api/connections/${id}/orders/export?${q.toString()}`, "orders.csv");
+  },
+  // CSV of the live or ended listings the page's filters show (or only `ids`); the workspace owner and co-managers only.
+  exportListingsCsv: (id: string, params: { status: ListingStatusFilter; search?: string; sort?: ListingSort; ids?: string[] }) => {
+    const q = new URLSearchParams({ status: params.status });
+    if (params.search) q.set("q", params.search);
+    if (params.sort) q.set("sort", params.sort);
+    if (params.ids?.length) q.set("ids", params.ids.join(","));
+    return downloadCsvExport(`/api/connections/${id}/listings/export?${q.toString()}`, "listings.csv");
+  },
   getConnectionOrders: (
     id: string,
     params: { range: OrderRange; status: OrderStatusFilter; search?: string; sort?: OrderSort; page?: number; perPage?: number; archived?: boolean; supplier?: SupplierFilter }

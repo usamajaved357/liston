@@ -32,7 +32,7 @@ function createApp() {
     cors({
       origin: config.env === 'production' ? allowedOrigins : true,
       // X-Liston-Token: a sign-in renewed while in use (auth.middleware).
-      exposedHeaders: ['Content-Disposition', 'X-Liston-Token'],
+      exposedHeaders: ['Content-Disposition', 'X-Liston-Token', 'X-Liston-Rows'],
     })
   );
   // 2mb accommodates base64 profile-photo uploads (src/modules/users) on top of normal JSON bodies

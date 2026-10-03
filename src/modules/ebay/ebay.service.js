@@ -2531,7 +2531,7 @@ function isMarkedDispatched(order) {
 // `dispatches` are the orders Liston marked dispatched (orders.dispatchLookup): orderId → { lines, at,
 // by, tracked }. eBay's order feed shows a dispatch minutes later; until it does, an order whose every
 // line Liston dispatched counts as dispatched now. Either way the order says who marked it.
-async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null, dispatches = null }) {
+async function listOrdersDetailed(credentials, { connectionId, range, status, search, sort, page = 1, perPage = 25, push = false, archivedOrderIds = [], archived = false, supplier = 'any', supplierStateOf = null, dispatches = null, enrich = true }) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   const [start, end] = resolveRangeWindow(range);
   const rawOrders = ordersWithin(await getOrdersLast90Cached(connectionId, accessToken, siteId, push), start, end);
@@ -2587,8 +2587,9 @@ async function listOrdersDetailed(credentials, { connectionId, range, status, se
   const totalPages = Math.max(1, Math.ceil(totalEntries / perPage));
   const pageOrders = filtered.slice((page - 1) * perPage, page * perPage);
 
-  const uniqueItemIds = [...new Set(pageOrders.flatMap((o) => o.lineItems.map((li) => li.itemId).filter(Boolean)))];
-  const summaryByItemId = await getItemSummariesCached(accessToken, uniqueItemIds, siteId);
+  // Each line's photo and stock (one GetItem per item not yet known); a CSV download skips it (`enrich: false`).
+  const uniqueItemIds = enrich ? [...new Set(pageOrders.flatMap((o) => o.lineItems.map((li) => li.itemId).filter(Boolean)))] : [];
+  const summaryByItemId = uniqueItemIds.length ? await getItemSummariesCached(accessToken, uniqueItemIds, siteId) : new Map();
 
   const enrichedOrders = pageOrders.map((order) => ({
     ...order,

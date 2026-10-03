@@ -136,20 +136,12 @@ async function remove(req, res, next) {
   }
 }
 
-const LIST_ORDER_RANGES = ['7d', '30d', '90d'];
-const ORDER_STATUS_FILTERS = ['all', 'awaiting_payment', 'awaiting_dispatch', 'dispatched', 'marked', 'delivered', 'cancelled'];
-const { FILTERS: SUPPLIER_FILTERS } = require('../orders/order-supplier');
-const ORDER_PAGE_SIZES = [25, 50, 100, 200];
+const { ordersQuery, listingsQuery } = require('./list-queries');
 const EARNINGS_RANGES = ['today', '7d', '30d', '90d', 'this_month', 'last_month', 'custom', 'all_time'];
 
 async function getListings(req, res, next) {
   try {
-    const status = req.query.status === 'inactive' ? 'inactive' : 'active';
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    // perPage=all puts everything on one page.
-    const perPage = req.query.perPage === 'all' ? 0 : Math.min(200, Math.max(1, parseInt(req.query.perPage, 10) || 25));
-    const search = typeof req.query.q === 'string' ? req.query.q : '';
-    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+    const { status, page, perPage, search, sort } = listingsQuery(req.query);
 
     const result = await connectionService.withDecryptedCredentials(req.params.id, req.ownerId, (credentials, connection) => {
       if (connection.platform_key !== 'ebay') {
@@ -184,14 +176,7 @@ async function getListings(req, res, next) {
 
 async function getOrders(req, res, next) {
   try {
-    const range = LIST_ORDER_RANGES.includes(req.query.range) ? req.query.range : '90d';
-    const status = ORDER_STATUS_FILTERS.includes(req.query.status) ? req.query.status : 'all';
-    const perPage = ORDER_PAGE_SIZES.includes(Number(req.query.perPage)) ? Number(req.query.perPage) : 25;
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : '';
-    const archived = req.query.archived === '1' || req.query.archived === 'true';
-    const sort = typeof req.query.sort === 'string' ? req.query.sort : undefined;
-    const supplier = SUPPLIER_FILTERS.includes(req.query.supplier) ? req.query.supplier : 'any';
+    const { range, status, perPage, page, search, archived, sort, supplier } = ordersQuery(req.query);
     const orderService = require('../orders/order.service');
     const [archivedOrderIds, supplierStateOf, dispatches] = await Promise.all([
       orderService.archivedOrderIds(req.params.id).catch(() => []),

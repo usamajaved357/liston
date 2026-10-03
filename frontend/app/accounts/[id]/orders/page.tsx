@@ -16,6 +16,7 @@ import { ListFooter } from "@/components/ListFooter";
 import { ViewMenu } from "@/components/ViewMenu";
 import { useAccountEvents } from "@/lib/useAccountEvents";
 import { PillTabs } from "@/components/PillTabs";
+import { CsvButton, SelectBox } from "@/components/CsvExport";
 
 // How the list is ordered, apart from which days it covers. Each status tab
 // keeps its own choice; untouched, Awaiting dispatch shows the nearest
@@ -112,12 +113,16 @@ function cleanLineItemTitle(title: string | null): string {
 // the breakdown lives on eBay's order page, not here.
 const ROW_COLUMNS = "136px minmax(220px,1fr) 240px 48px 96px 96px";
 
-function OrderTableHeader() {
+// A tick box leads each row for the workspace owner and co-managers (the CSV download).
+type RowSelect = { checked: boolean; onChange: () => void };
+
+function OrderTableHeader({ select }: { select?: RowSelect & { indeterminate: boolean } }) {
   return (
     <div
-      className="grid gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-4 py-2 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-muted)]"
-      style={{ gridTemplateColumns: ROW_COLUMNS }}
+      className="grid items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-paper)]/60 px-4 py-2 text-[10.5px] font-bold uppercase tracking-wider text-[var(--color-muted)]"
+      style={{ gridTemplateColumns: select ? `20px ${ROW_COLUMNS}` : ROW_COLUMNS }}
     >
+      {select && <SelectBox checked={select.checked} indeterminate={select.indeterminate} onChange={select.onChange} label="Select every order on this page" />}
       <span>Status</span>
       <span>Order</span>
       <span className="text-center">Customer</span>
@@ -215,7 +220,7 @@ function MarkedLine({ order }: { order: Order }) {
   );
 }
 
-function OrderCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
+function OrderCard({ order, country, countryName, href, select }: { order: Order; country: string | undefined; countryName: string | undefined; href: string; select?: RowSelect }) {
   const router = useRouter();
   const timeZone = useAccountTimeZone();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
@@ -227,15 +232,20 @@ function OrderCard({ order, country, countryName, href }: { order: Order; countr
 
   return (
     <div
-      className="grid cursor-pointer items-start gap-3 border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 hover:bg-[var(--color-paper)]/40"
-      style={{ gridTemplateColumns: ROW_COLUMNS }}
+      className={`grid cursor-pointer items-start gap-3 border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : "hover:bg-[var(--color-paper)]/40"}`}
+      style={{ gridTemplateColumns: select ? `20px ${ROW_COLUMNS}` : ROW_COLUMNS }}
       title="Open order"
       onClick={(e) => {
-        // The row opens the order; links and buttons inside keep their own job.
-        if ((e.target as HTMLElement).closest("a, button")) return;
+        // The row opens the order; links, buttons and its tick box inside keep their own job.
+        if ((e.target as HTMLElement).closest("a, button, label, input")) return;
         router.push(href);
       }}
     >
+      {select && (
+        <div className="pt-0.5">
+          <SelectBox checked={select.checked} onChange={select.onChange} label={`Select order ${order.orderId}`} />
+        </div>
+      )}
       <div className="pt-0.5">
         <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
         <MarkedLine order={order} />
@@ -310,7 +320,7 @@ function OrderCard({ order, country, countryName, href }: { order: Order; countr
 
 // An order on a phone, where the table's six columns don't fit: status and
 // total on top, the order number and date, each item, then who it goes to.
-function OrderMobileCard({ order, country, countryName, href }: { order: Order; country: string | undefined; countryName: string | undefined; href: string }) {
+function OrderMobileCard({ order, country, countryName, href, select }: { order: Order; country: string | undefined; countryName: string | undefined; href: string; select?: RowSelect }) {
   const router = useRouter();
   const timeZone = useAccountTimeZone();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
@@ -323,14 +333,19 @@ function OrderMobileCard({ order, country, countryName, href }: { order: Order; 
   const phone = a?.phone ? internationalPhone(a.phone, country) : null;
   return (
     <div
-      className="cursor-pointer border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 active:bg-[var(--color-paper)]/60"
+      className={`cursor-pointer border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 active:bg-[var(--color-paper)]/60 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : ""}`}
       onClick={(e) => {
-        if ((e.target as HTMLElement).closest("a, button")) return;
+        if ((e.target as HTMLElement).closest("a, button, label, input")) return;
         router.push(href);
       }}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        {select && (
+          <div className="pt-0.5">
+            <SelectBox checked={select.checked} onChange={select.onChange} label={`Select order ${order.orderId}`} />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
           <p className={`text-[13px] font-semibold leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
           <MarkedLine order={order} />
             <p className="mt-0.5 text-[11.5px] text-[var(--color-muted)]">
@@ -462,6 +477,14 @@ function AccountOrdersContent() {
   // Orders the team put away (Seller Hub's "Archive"): shown on their own.
   const [archived, setArchived] = useState(false);
   const [archivedCount, setArchivedCount] = useState(0);
+  // Ticked orders for the CSV download, kept across pages; changing a filter
+  // starts afresh (the ticks belong to the filters they were made under).
+  const filterKey = [range, status, search, sort, archived, supplier].join("|");
+  const [ticked, setTicked] = useState<{ key: string; ids: string[] }>({ key: "", ids: [] });
+  const selectedIds = ticked.key === filterKey ? ticked.ids : [];
+  function toggleOrder(id: string) {
+    setTicked({ key: filterKey, ids: selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id] });
+  }
 
   useEffect(() => {
     if (!connection) return;
@@ -540,6 +563,14 @@ function AccountOrdersContent() {
     );
   }
 
+  // Ticking rows is for the workspace owner and co-managers (the CSV download).
+  const canTick = !connection.permissions;
+  const pageTicked = orders.filter((o) => selectedIds.includes(o.orderId)).length;
+  function togglePage() {
+    const onPage = orders.map((o) => o.orderId);
+    setTicked({ key: filterKey, ids: pageTicked === onPage.length ? selectedIds.filter((id) => !onPage.includes(id)) : [...new Set([...selectedIds, ...onPage])] });
+  }
+
   return (
     <AccountShell
       connectionId={connection.id}
@@ -563,6 +594,14 @@ function AccountOrdersContent() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <PillTabs label="Orders" tabs={STATUS_TABS.map((t) => ({ key: t.key, label: t.label, count: counts[t.key] ?? 0 }))} value={status} onChange={changeStatus} />
           <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto sm:flex-wrap sm:justify-end">
+            {/* The workspace owner and co-managers: these orders (or the ticked ones) as a CSV file. */}
+            {!connection.permissions && (
+              <CsvButton
+                selected={selectedIds.length}
+                noun="order"
+                run={() => api.exportOrdersCsv(connection.id, { range, status, search, sort, archived, supplier, ids: selectedIds })}
+              />
+            )}
             {(archivedCount > 0 || archived) && (
               <button
                 type="button"
@@ -658,6 +697,15 @@ function AccountOrdersContent() {
         </p>
       )}
 
+      {canTick && selectedIds.length > 0 && (
+        <p className="mb-2 text-xs text-[var(--color-muted)]">
+          {`${selectedIds.length} order${selectedIds.length === 1 ? "" : "s"} ticked for the download · `}
+          <button type="button" onClick={() => setTicked({ key: filterKey, ids: [] })} className="font-semibold text-[var(--color-primary)] hover:underline">
+            Clear
+          </button>
+        </p>
+      )}
+
       <div className="card overflow-hidden">
         {error && (
           <div className="p-5">
@@ -677,15 +725,39 @@ function AccountOrdersContent() {
           <>
           <div className="hidden overflow-x-auto md:block">
             <div className="min-w-[980px]">
-              <OrderTableHeader />
+              <OrderTableHeader
+                select={
+                  canTick
+                    ? {
+                        checked: pageTicked === orders.length,
+                        indeterminate: pageTicked > 0 && pageTicked < orders.length,
+                        onChange: togglePage,
+                      }
+                    : undefined
+                }
+              />
               {orders.map((order) => (
-                <OrderCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} />
+                <OrderCard
+                  key={order.orderId}
+                  order={order}
+                  country={connection.marketplace?.country}
+                  countryName={connection.marketplace?.countryName}
+                  href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`}
+                  select={canTick ? { checked: selectedIds.includes(order.orderId), onChange: () => toggleOrder(order.orderId) } : undefined}
+                />
               ))}
             </div>
           </div>
           <div className="md:hidden">
             {orders.map((order) => (
-              <OrderMobileCard key={order.orderId} order={order} country={connection.marketplace?.country} countryName={connection.marketplace?.countryName} href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`} />
+              <OrderMobileCard
+                key={order.orderId}
+                order={order}
+                country={connection.marketplace?.country}
+                countryName={connection.marketplace?.countryName}
+                href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`}
+                select={canTick ? { checked: selectedIds.includes(order.orderId), onChange: () => toggleOrder(order.orderId) } : undefined}
+              />
             ))}
           </div>
           </>

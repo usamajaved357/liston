@@ -287,7 +287,32 @@ async function findPolicyRefusals(ownerId, limit = 500) {
   return rows;
 }
 
+/**
+ * Where each listing's product is bought, for many items at once (a CSV
+ * download): the supplier link of the draft it was published from, else of
+ * the hunted product it went live as, as supplierUrlFor does for one.
+ * Map itemId -> url, items with none left out.
+ */
+async function supplierUrlsByItem(connectionId, itemIds) {
+  const ids = [...new Set(itemIds.filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+  const { rows } = await query(
+    `SELECT DISTINCT ON (item_id) item_id, url FROM (
+       SELECT external_product_id AS item_id, source_data->'source'->>'sourceUrl' AS url, 1 AS rank, updated_at FROM listings
+        WHERE connection_id = $1 AND external_product_id = ANY($2) AND source_data->'source'->>'sourceUrl' IS NOT NULL
+       UNION ALL
+       SELECT unnest(item_ids) AS item_id, source_url, 2, updated_at FROM hunted_products
+        WHERE connection_id = $1 AND item_ids && $2::text[] AND source_url IS NOT NULL
+     ) found
+     WHERE item_id = ANY($2)
+     ORDER BY item_id, rank, updated_at DESC`,
+    [connectionId, ids]
+  );
+  return new Map(rows.map((r) => [r.item_id, r.url]));
+}
+
 module.exports = {
+  supplierUrlsByItem,
   findPolicyRefusals,
   countListingWork,
   listingEventsSince,
