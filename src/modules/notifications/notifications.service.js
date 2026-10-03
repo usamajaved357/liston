@@ -29,7 +29,7 @@ async function notify({ userId, ownerId = null, actorUserId = null, kind, title,
   }
   changed(userId);
   // Pushed in the background: the action that caused it doesn't wait on the push services.
-  pushTo(userId, { id: row.id, kind, title, body, url, tag: subjectId ? `${kind.split('.')[0]}-${subjectId}` : row.id }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
+  pushTo(userId, { id: row.id, at: row.created_at, kind, title, body, url, tag: subjectId ? `${kind.split('.')[0]}-${subjectId}` : row.id }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
   return row;
 }
 
@@ -50,7 +50,8 @@ async function notifyGrouped({ userId, ownerId = null, actorUserId = null, kind,
     return null;
   }
   changed(userId);
-  if (pushed) pushTo(userId, { id: row.id, kind, url, ...pushed }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
+  // `at`: when the line last moved, so an open tab knows a conversation's next message from the one before (same line, same id).
+  if (pushed) pushTo(userId, { id: row.id, at: row.created_at, kind, url, ...pushed }).catch((err) => logger.warn('Push not sent', { kind, error: err.message }));
   return row;
 }
 

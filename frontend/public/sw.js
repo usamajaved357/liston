@@ -20,7 +20,7 @@ self.addEventListener("push", (event) => {
   const title = data.title || "Liston";
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((tabs) => {
-      const message = { type: "liston:notification", id: data.id, title, body: data.body || "", url: data.url || null, kind: data.kind || null };
+      const message = { type: "liston:notification", id: data.id, at: data.at || null, title, body: data.body || "", url: data.url || null, kind: data.kind || null };
       tabs.forEach((tab) => tab.postMessage(message));
       // A Liston tab in view shows it; the system notification would only repeat it.
       if (tabs.some((tab) => tab.visibilityState === "visible" && tab.focused)) return;

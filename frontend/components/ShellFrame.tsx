@@ -8,6 +8,7 @@ import { useCurrentTeam } from "@/lib/useCurrentTeam";
 import { AccountRail } from "@/components/AccountRail";
 import { AccountFinder } from "@/components/AccountFinder";
 import { useRailShown } from "@/lib/rail";
+import { NotificationPopups } from "@/components/NotificationBell";
 
 // The frame both shells share: the sidebar beside the page on a laptop; on a
 // phone or a portrait tablet (below lg) a slim bar with the logo and a menu
@@ -19,7 +20,9 @@ import { useRailShown } from "@/lib/rail";
 // note playing on while you're away from it (NowPlaying, at the top right).
 // The account rail (teams and accounts, AccountRail) sits to the sidebar's
 // left on every page when shown, and inside the phone's menu too; the
-// account finder (AccountFinder, Ctrl/Cmd+K) is on every page.
+// account finder (AccountFinder, Ctrl/Cmd+K) is on every page, and so is a
+// new notification popping up while Liston is in view (NotificationPopups:
+// the service worker leaves a push to the tab in view, bell or not).
 
 export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false, children }: { sidebar: React.ReactNode; sidebarClassName?: string; member?: boolean; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -62,6 +65,7 @@ export function ShellFrame({ sidebar, sidebarClassName = "gap-7", member = false
 
       <NowPlaying />
       <AccountFinder />
+      <NotificationPopups />
 
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label="Menu">

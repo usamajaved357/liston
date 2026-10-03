@@ -10,13 +10,18 @@ import { useVoicePopupOpen } from "@/lib/voicePlayback";
 import { currentTeam } from "@/lib/team";
 
 // The bell in the page header: what Liston has told this person (a reviewer
-// approved, rejected, sent back or removed one of their hunted products),
-// newest first, and the switch for browser notifications, which reach them
-// even when Liston isn't open. While Liston is open and in view, a new one
-// also pops up as a card with a chime, whatever the computer's own
-// notification settings (the system notification is for when it isn't).
+// approved, rejected, sent back or removed one of their hunted products, a
+// team chat or buyer message), newest first, and the switch for browser
+// notifications, which reach them even when Liston isn't open. While Liston
+// is open and in view, a new one also pops up as a card with a chime,
+// whatever the computer's own notification settings (the system
+// notification is for when it isn't): NotificationPopups, on every
+// signed-in page, bell or not.
 
-type Toast = { id: string; kind: string | null; title: string; body: string | null; url: string | null };
+// `at`: when its line last moved. A chat or buyer conversation keeps one line
+// (one id) that each new message moves up, so a notification is new by both.
+type Toast = { id: string; at?: string | null; kind: string | null; title: string; body: string | null; url: string | null };
+const keyOf = (t: { id: string; at?: string | null }) => (t.at ? `${t.id}@${t.at}` : t.id);
 
 type Kind = { label: string; ring: string; chip: string; note: string; icon: React.ReactNode };
 const KIND: Record<string, Kind> = {
@@ -282,6 +287,134 @@ function ToastCard({ toast, onOpen, onClose }: { toast: Toast; onOpen: () => voi
   );
 }
 
+// ---- what's new, on every signed-in page ------------------------------------------
+//
+// The service worker leaves a push to a Liston tab that's in view (sw.js),
+// so every signed-in page has to be able to show it, not only the ones with
+// a bell in their header: NotificationPopups sits in the frame every
+// signed-in page is in (ShellFrame). It pops a new notification up as a card
+// with a chime (from a push, the live channel or a poll while in view), ties
+// this browser's push to whoever signed in (once per sign-in), and hands
+// each list it reads to the bell, if there is one on the page.
+
+/** Opens what a notification is about, in its team: another team's, or a change to one's access, loads Liston again there. */
+function openNotification(router: ReturnType<typeof useRouter>, url: string | null, kind?: string | null) {
+  const team = url ? new URLSearchParams(url.split("?")[1] || "").get("ws") : null;
+  if (url && (kind?.startsWith("team.") || (team && team !== currentTeam()))) window.location.assign(url);
+  else if (url) router.push(url);
+}
+
+// The notifications this tab has already had (keyOf: a line and when it last moved), for the sign-in they came to.
+let known: { token: string; ids: Set<string> } | null = null;
+// The sign-in this browser's push subscription was last tied to.
+let linkedFor: string | null = null;
+// The bell on the page, if any, kept in step with each list read here.
+const lists = new Set<(list: NotificationList) => void>();
+// The popper on the page: the bell's Test pops up through it.
+const poppers = new Set<(t: Toast) => void>();
+
+const signedIn = () => {
+  try {
+    return localStorage.getItem("token");
+  } catch {
+    return null;
+  }
+};
+
+export function NotificationPopups() {
+  const router = useRouter();
+  const [toast, setToast] = useState<Toast | null>(null);
+  // The last one popped up: a push and the live channel bring the same message within a moment of each other.
+  const shown = useRef<{ key: string; id: string; time: number } | null>(null);
+
+  const show = useCallback((t: Toast) => {
+    const key = keyOf(t);
+    known?.ids.add(key);
+    if (document.visibilityState !== "visible") return;
+    const last = shown.current;
+    if (last?.key === key) return;
+    // The same line again a moment later (the other route, or the next message straight after): the card says the latest, one chime.
+    const again = last?.id === t.id && Date.now() - last.time < 3000;
+    shown.current = { key, id: t.id, time: Date.now() };
+    setToast(t);
+    if (!again) chime();
+  }, []);
+
+  // Reads the list; with `fresh`, pops up the newest unread one this tab hasn't had yet.
+  const check = useCallback(
+    async (fresh: boolean) => {
+      const token = signedIn();
+      if (!token) return;
+      try {
+        const list = await api.notifications();
+        const before = known?.token === token ? known.ids : null;
+        known = { token, ids: new Set([...(before || []), ...list.items.map((n) => keyOf({ id: n.id, at: n.createdAt }))]) };
+        lists.forEach((fn) => fn(list));
+        if (!before || !fresh) return;
+        const next = list.items.find((n) => !n.readAt && !before.has(keyOf({ id: n.id, at: n.createdAt })));
+        if (next) show({ id: next.id, at: next.createdAt, kind: next.kind, title: next.title, body: next.body, url: next.url });
+      } catch {
+        // The next change or poll tries again.
+      }
+    },
+    [show]
+  );
+
+  // Live: the server says when a line is added (or read); a new one pops up at once.
+  useMyEvents((e) => {
+    if (e.type === "notifications.changed") check(true);
+  });
+
+  useEffect(() => {
+    const token = signedIn();
+    // This browser's push goes to whoever is signed in now (a changed password unties every browser).
+    if (token && linkedFor !== token) {
+      linkedFor = token;
+      refreshPush();
+    }
+    // What's there already is known, not new; then a poll every 30 seconds while in view, in case the live channel drops.
+    const first = setTimeout(() => check(false), 0);
+    const timer = setInterval(() => document.visibilityState === "visible" && check(true), 30_000);
+    // A push arrived: its card comes straight from it, then the bell catches up.
+    const onMessage = (e: MessageEvent) => {
+      if (e.data?.type !== "liston:notification") return;
+      if (e.data.id) show({ id: e.data.id, at: e.data.at || null, kind: e.data.kind || null, title: e.data.title, body: e.data.body || null, url: e.data.url || null });
+      check(false);
+    };
+    navigator.serviceWorker?.addEventListener("message", onMessage);
+    poppers.add(show);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+      navigator.serviceWorker?.removeEventListener("message", onMessage);
+      poppers.delete(show);
+    };
+  }, [check, show]);
+
+  // The card goes by itself after a while.
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 8000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  if (!toast) return null;
+  return (
+    <ToastCard
+      toast={toast}
+      onOpen={() => {
+        setToast(null);
+        api
+          .notificationsRead([toast.id])
+          .then((list) => lists.forEach((fn) => fn(list)))
+          .catch(() => {});
+        openNotification(router, toast.url, toast.kind);
+      }}
+      onClose={() => setToast(null)}
+    />
+  );
+}
+
 export function NotificationBell() {
   const router = useRouter();
   const [data, setData] = useState<NotificationList | null>(null);
@@ -290,74 +423,35 @@ export function NotificationBell() {
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
-  const [toast, setToast] = useState<Toast | null>(null);
   const [filter, setFilter] = useState<"all" | "unread">("all");
   const [confirmClear, setConfirmClear] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  // The notifications this tab has already seen: a new unread one pops up.
-  const seen = useRef<Set<string> | null>(null);
 
-  // The last one popped up, so a push and a poll never show the same one twice.
-  const shown = useRef<string | null>(null);
-  const show = useCallback((t: Toast) => {
-    seen.current?.add(t.id);
-    if (document.visibilityState !== "visible" || shown.current === t.id) return;
-    shown.current = t.id;
-    setToast(t);
-    chime();
+  const take = useCallback(async (next: NotificationList) => {
+    setData(next);
+    setPush(await pushState(next.push.available));
   }, []);
 
-  // announce: pop up what's new (a push arriving, a poll while in view); coming
-  // back to the tab only updates the bell, since the system already showed it.
-  const load = useCallback(async (announce = true) => {
+  const load = useCallback(async () => {
     try {
-      const next = await api.notifications();
-      const before = seen.current;
-      seen.current = new Set(next.items.map((n) => n.id));
-      if (before && announce) {
-        const fresh = next.items.find((n) => !n.readAt && !before.has(n.id));
-        if (fresh) show({ id: fresh.id, kind: fresh.kind, title: fresh.title, body: fresh.body, url: fresh.url });
-      }
-      setData(next);
-      setPush(await pushState(next.push.available));
+      await take(await api.notifications());
     } catch {
-      // The bell stays as it was; the next poll tries again.
+      // The bell stays as it was; the next change or poll tries again.
     }
-  }, [show]);
+  }, [take]);
 
-  // Live: the server says when a line is added or read, and the bell follows at once.
-  useMyEvents((e) => {
-    if (e.type === "notifications.changed") load(false);
-  });
-
+  // Every list read on the page (a change on the live channel, a push, a poll) comes here too.
   useEffect(() => {
-    const first = setTimeout(() => load(false), 0);
-    refreshPush();
-    // Every 30 seconds while the tab is seen, and at once when it comes back or a push arrives.
-    const timer = setInterval(() => document.visibilityState === "visible" && load(), 30_000);
-    const onFocus = () => load(false);
-    // A push arrived: its card comes straight from it, then the bell catches up.
-    const onMessage = (e: MessageEvent) => {
-      if (e.data?.type !== "liston:notification") return;
-      if (e.data.id) show({ id: e.data.id, kind: e.data.kind || null, title: e.data.title, body: e.data.body || null, url: e.data.url || null });
-      load(false);
-    };
-    window.addEventListener("focus", onFocus);
-    navigator.serviceWorker?.addEventListener("message", onMessage);
+    const first = setTimeout(load, 0);
+    lists.add(take);
+    // Coming back to the tab: the bell catches up (the system showed what came meanwhile).
+    window.addEventListener("focus", load);
     return () => {
       clearTimeout(first);
-      clearInterval(timer);
-      window.removeEventListener("focus", onFocus);
-      navigator.serviceWorker?.removeEventListener("message", onMessage);
+      lists.delete(take);
+      window.removeEventListener("focus", load);
     };
-  }, [load, show]);
-
-  // The card goes by itself after a while.
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 8000);
-    return () => clearTimeout(t);
-  }, [toast]);
+  }, [load, take]);
 
   // Closed by a click elsewhere or Escape.
   useEffect(() => {
@@ -374,12 +468,8 @@ export function NotificationBell() {
 
   function openOne(id: string, url: string | null, read: boolean, kind?: string | null) {
     setOpen(false);
-    setToast(null);
-    if (!read) api.notificationsRead([id]).then(setData).catch(() => {});
-    // Owner access given or taken away, or another team's (a push): the whole app loads again, in that team.
-    const team = url ? new URLSearchParams(url.split("?")[1] || "").get("ws") : null;
-    if (url && (kind?.startsWith("team.") || (team && team !== currentTeam()))) window.location.assign(url);
-    else if (url) router.push(url);
+    if (!read) api.notificationsRead([id]).then(take).catch(() => {});
+    openNotification(router, url, kind);
   }
 
   async function readAll() {
@@ -434,9 +524,9 @@ export function NotificationBell() {
     try {
       const res = await api.notificationsTest();
       setOpen(false);
-      setData(res);
+      await take(res);
       const t = res.items[0];
-      if (t) show({ id: t.id, kind: t.kind, title: t.title, body: t.body, url: t.url });
+      if (t) poppers.forEach((pop) => pop({ id: t.id, at: t.createdAt, kind: t.kind, title: t.title, body: t.body, url: t.url }));
     } catch {
       setPushError("Couldn't send a test. Try again.");
     } finally {
@@ -627,8 +717,6 @@ export function NotificationBell() {
           </div>
         </div>
       )}
-
-      {toast && <ToastCard toast={toast} onOpen={() => openOne(toast.id, toast.url, false, toast.kind)} onClose={() => setToast(null)} />}
     </div>
   );
 }

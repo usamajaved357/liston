@@ -424,3 +424,30 @@ test('"Discuss with team": a buyer\'s eBay conversation as a card, opening it in
   const linked = await request('POST', `/api/chat/conversations/${dm.id}/messages`, { body: `http://localhost:3001/accounts/${t.flipx.id}/inbox?e=${t.flipx.id}~c-777` }, t.o.token);
   assert.strictEqual(linked.data.cards[0].kind, 'conversation');
 });
+
+test("each push says when its line last moved, so an open tab knows a conversation's next message from the one before", async () => {
+  const t = await setup();
+  const push = require('../../src/modules/notifications/push');
+  const sent = [];
+  mock.method(push, 'configured', () => true);
+  mock.method(push, 'send', async (subscription, payload) => {
+    sent.push(payload);
+    return { sent: true };
+  });
+  try {
+    await pool.query(`INSERT INTO push_subscriptions (endpoint, user_id, p256dh, auth) VALUES ($1, $2, 'k', 'a')`, [`https://push.example.com/${crypto.randomUUID()}`, t.o.id]);
+    const channel = (await request('POST', '/api/chat/channels', { name: `moves-${crypto.randomInt(1e6)}`, userIds: [t.sara.id] }, t.o.token)).data;
+    await request('POST', `/api/chat/conversations/${channel.id}/messages`, { body: 'First' }, t.sara.token);
+    assert.ok(await until(() => sent.length === 1));
+    await new Promise((r) => setTimeout(r, 20));
+    await request('POST', `/api/chat/conversations/${channel.id}/messages`, { body: 'Second' }, t.sara.token);
+    assert.ok(await until(() => sent.length === 2));
+
+    const [first, second] = sent.map((p) => (typeof p === 'string' ? JSON.parse(p) : p));
+    assert.strictEqual(second.id, first.id, 'one line in the bell for the conversation');
+    assert.ok(first.at && second.at && new Date(second.at) > new Date(first.at), 'but it moved: the second message is new to an open tab');
+    assert.deepStrictEqual([first.body, second.body], ['First', 'Second']);
+  } finally {
+    mock.restoreAll();
+  }
+});
