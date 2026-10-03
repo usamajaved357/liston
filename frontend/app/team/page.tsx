@@ -10,6 +10,7 @@ import { cacheUser, useCachedUser } from "@/lib/session";
 import { formatShortDate } from "@/lib/format";
 import { LoginDetails, MemberAvatar, OwnerAccessBadge, YouBadge, accessSummary, timeAgo } from "@/components/team/team-shared";
 import { minutesText } from "@/components/team/time-format";
+import { EmptyCard, statIcon } from "@/components/StatCard";
 
 // The Team page: one compact card per member (who, what they can reach,
 // when they were last active, what they've done today and their time in
@@ -33,55 +34,62 @@ const TODAY_WORDS: [TeamMetricKey, string, string][] = [
   ["hunts_reviewed", "hunt reviewed", "hunts reviewed"],
   ["inbox_answered", "buyer answered", "buyers answered"],
 ];
-function todayLine(member: TeamMember): string | null {
+function todayParts(member: TeamMember): string[] {
   const t = member.today;
-  if (!t) return null;
-  const parts = TODAY_WORDS.filter(([k]) => t[k] > 0).map(([k, one, many]) => `${t[k]} ${t[k] === 1 ? one : many}`);
-  return parts.length ? parts.slice(0, 3).join(" · ") : null;
+  if (!t) return [];
+  return TODAY_WORDS.filter(([k]) => t[k] > 0).map(([k, one, many]) => `${t[k]} ${t[k] === 1 ? one : many}`);
+}
+
+// A small capsule on a member's card: what they've done today, their time.
+function Pill({ tone = "plain", children, title }: { tone?: "plain" | "work" | "time"; children: React.ReactNode; title?: string }) {
+  const look = tone === "work" ? "bg-[var(--color-primary-soft)] text-[var(--color-primary)] ring-[var(--color-primary)]/15" : tone === "time" ? "bg-emerald-50 text-emerald-700 ring-emerald-100" : "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]";
+  return (
+    <span title={title} className={`inline-flex max-w-full items-center gap-1 truncate whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${look}`}>
+      {children}
+    </span>
+  );
 }
 
 function MemberCard({ member, connections, knownFeatures, me }: { member: TeamMember; connections: Connection[]; knownFeatures: string[]; me: string }) {
   const removed = Boolean(member.deactivated_at);
-  const today = todayLine(member);
+  const today = todayParts(member);
+  const live = !removed && member.time?.inListon;
+  const timed = !removed && member.time && member.time.working + member.time.idle > 0;
   return (
     <Link
       href={`/team/${member.id}`}
-      className={`card group flex items-center gap-3.5 px-4 py-3.5 transition-colors hover:border-[var(--color-primary)]/40 ${removed ? "opacity-70" : ""}`}
+      className={`group relative flex min-w-0 items-start gap-3.5 rounded-[18px] border border-[var(--color-line)] bg-[var(--color-panel)] p-4 shadow-[var(--shadow-card)] transition-all hover:border-[var(--color-primary)]/30 hover:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_14px_30px_-14px_rgba(15,23,42,0.2)] ${removed ? "opacity-70" : ""}`}
     >
-      <MemberAvatar member={member} />
+      {/* Their photo, with a green dot while a Liston tab of theirs is open. */}
+      <span className="relative flex-shrink-0">
+        <MemberAvatar member={member} size={44} />
+        {live && <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-[var(--color-panel)]" title="In Liston now" aria-label="In Liston now" />}
+      </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="truncate text-[14px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{member.name || member.email}</p>
+        <div className="flex min-w-0 items-center gap-2">
+          <p className="truncate text-[14.5px] font-semibold text-[var(--color-ink)] group-hover:text-[var(--color-primary)]">{member.name || member.email}</p>
           {member.id === me && <YouBadge />}
           {member.owner_access_at && <OwnerAccessBadge />}
-          {!removed && member.time?.inListon && (
-            <span className="flex flex-shrink-0 items-center gap-1 text-[10.5px] font-medium text-emerald-700" title="A Liston tab of theirs is open now">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden />
-              In Liston
-            </span>
-          )}
           {removed && <span className="chip text-[10.5px] text-[var(--color-muted)]">Removed {formatShortDate(member.deactivated_at!)}</span>}
         </div>
-        <p className="truncate text-[12px] text-[var(--color-muted)]">{removed ? member.email : accessSummary(member, connections, knownFeatures)}</p>
-        <p className="mt-1 truncate text-[11.5px] text-[var(--color-muted)]">
+        <p className="mt-0.5 truncate text-[12px] text-[var(--color-muted)]">{removed ? member.email : accessSummary(member, connections, knownFeatures)}</p>
+        <div className="mt-2.5 flex min-w-0 flex-wrap items-center gap-1.5">
           {!member.lastActiveAt ? (
-            `No recorded work yet · added ${formatShortDate(member.created_at)}`
+            <Pill>{`No recorded work yet · added ${formatShortDate(member.created_at)}`}</Pill>
           ) : (
             <>
-              {today ? <span className="font-medium text-[var(--color-ink)]">Today: {today}</span> : "Nothing yet today"}
-              <span aria-hidden> · </span>
-              Last active {timeAgo(member.lastActiveAt)}
+              {today.length ? today.slice(0, 3).map((part) => <Pill key={part} tone="work" title="Today">{part}</Pill>) : <Pill>Nothing yet today</Pill>}
+              {timed && (
+                <Pill tone="time" title={member.time!.idle > 0 ? `${minutesText(member.time!.idle)} idle` : undefined}>
+                  {minutesText(member.time!.working)} working today
+                </Pill>
+              )}
+              <span className="text-[11px] text-[var(--color-muted)]">Active {timeAgo(member.lastActiveAt)}</span>
             </>
           )}
-        </p>
-        {!removed && member.time && member.time.working + member.time.idle > 0 && (
-          <p className="mt-0.5 truncate text-[11.5px] text-[var(--color-muted)]">
-            Time today: <span className="font-medium text-[var(--color-ink)]">{minutesText(member.time.working)} working</span>
-            {member.time.idle > 0 && <> · {minutesText(member.time.idle)} idle</>}
-          </p>
-        )}
+        </div>
       </div>
-      <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5" aria-hidden>
+      <svg viewBox="0 0 24 24" fill="none" className="mt-3 h-4 w-4 flex-shrink-0 text-[var(--color-muted)] transition-transform group-hover:translate-x-0.5" aria-hidden>
         <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </Link>
@@ -412,13 +420,15 @@ export default function TeamPage() {
 
               {active.length === 0 ? (
                 !adding && (
-                  <div className="card px-6 py-12 text-center">
-                    <p className="text-sm font-medium text-[var(--color-ink)]">No members yet</p>
-                    <p className="mt-1 text-[13px] text-[var(--color-muted)]">Add a member, then open them to pick which accounts and areas they can work in.</p>
+                  <EmptyCard
+                    icon={statIcon(<><circle cx="9" cy="8.5" r="3.2" /><path d="M3.5 19a5.5 5.5 0 0111 0" /><path d="M16 5.6a3.2 3.2 0 010 5.8M17.5 14a5.5 5.5 0 013 5" /></>, "h-6 w-6")}
+                    title="No members yet"
+                  >
+                    <p>Add a member, then open them to pick which accounts and areas they can work in.</p>
                     <button type="button" onClick={() => setAdding(true)} className="btn btn-primary btn-sm mt-4">
                       Add your first member
                     </button>
-                  </div>
+                  </EmptyCard>
                 )
               ) : (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

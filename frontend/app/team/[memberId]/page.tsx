@@ -16,6 +16,28 @@ import { AccessGrid, LoginDetails, MemberAvatar, OwnerAccessBadge, OwnerAccessCa
 import { MemberPerformance } from "@/components/team/MemberPerformance";
 import { MemberTimeView } from "@/components/team/MemberTime";
 import { waitText } from "@/components/team/time-format";
+import { CARD, EmptyCard, IconTile, statIcon } from "@/components/StatCard";
+
+const PAGE_ICONS = {
+  // The activity log: a list.
+  log: statIcon(<><path d="M9 6.5h10.5M9 12h10.5M9 17.5h10.5" /><circle cx="5" cy="6.5" r="1" fill="currentColor" stroke="none" /><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="5" cy="17.5" r="1" fill="currentColor" stroke="none" /></>),
+  // Access: a key.
+  access: statIcon(<><circle cx="8" cy="15" r="3.5" /><path d="M10.5 12.5L19 4M16 7l2.5 2.5M13.8 9.2l1.8 1.8" /></>),
+  // Nothing recorded: an empty tray.
+  empty: statIcon(<><path d="M4 13.5l2.2-7A1.5 1.5 0 017.6 5.5h8.8a1.5 1.5 0 011.4 1l2.2 7" /><path d="M4 13.5V18a1.5 1.5 0 001.5 1.5h13A1.5 1.5 0 0020 18v-4.5h-4.5l-1.2 2h-4.6l-1.2-2H4z" /></>, "h-6 w-6"),
+};
+
+// A fact about the member in the header: when added, last login, last active.
+function MetaChip({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[var(--color-panel)] px-2.5 py-0.5 text-[11.5px] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 flex-shrink-0" aria-hidden>
+        {icon}
+      </svg>
+      {children}
+    </span>
+  );
+}
 
 // One team member's page: what they did (figures for any range against the
 // period before, day by day and per eBay account), their time in Liston
@@ -126,14 +148,19 @@ function RangePicker({ range, custom, onChange }: { range: TeamRange; custom: { 
 // work only since Liston started noting who did it.
 function NothingRecorded({ recordingSince, compact = false }: { recordingSince: string | null; compact?: boolean }) {
   const since = recordingSince ? new Date(recordingSince).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" }) : null;
+  const why = (
+    <>
+      Work counts when it&apos;s done in Liston: supplier orders saved and dispatches, refunds and cases handled from an order, and listings drafted, published, edited,
+      relisted or ended. Work done straight on eBay or AliExpress can&apos;t be seen.
+      {since && ` Liston notes who did each listing from ${since}; listings made before then aren't anyone's on record.`}
+    </>
+  );
+  if (!compact) return <EmptyCard icon={PAGE_ICONS.empty} title="No recorded work in this period">{why}</EmptyCard>;
   return (
-    <div className={compact ? "px-6 py-8 text-center" : "card px-6 py-12 text-center"}>
-      <p className="text-sm font-medium text-[var(--color-ink)]">No recorded work in this period</p>
-      <p className="mx-auto mt-1 max-w-xl text-[12.5px] leading-relaxed text-[var(--color-muted)]">
-        Work counts when it&apos;s done in Liston: supplier orders saved and dispatches, refunds and cases handled from an order, and listings drafted, published, edited,
-        relisted or ended. Work done straight on eBay or AliExpress can&apos;t be seen.
-        {since && ` Liston notes who did each listing from ${since}; listings made before then aren't anyone's on record.`}
-      </p>
+    <div className="flex flex-col items-center px-6 py-10 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-paper)] text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">{PAGE_ICONS.empty}</span>
+      <p className="mt-3.5 text-[14px] font-semibold text-[var(--color-ink)]">No recorded work in this period</p>
+      <p className="mx-auto mt-1.5 max-w-xl text-[12.5px] leading-relaxed text-[var(--color-muted)]">{why}</p>
     </div>
   );
 }
@@ -292,8 +319,12 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
   }
 
   return (
-    <div className="card overflow-hidden">
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3">
+    <div className={CARD}>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3.5 sm:px-5">
+        <span className="mr-1 flex items-center gap-2.5 max-sm:w-full">
+          <IconTile hue="indigo">{PAGE_ICONS.log}</IconTile>
+          <span className="text-[14px] font-semibold text-[var(--color-ink)]">Activity log</span>
+        </span>
         <select value={kind} onChange={(e) => onKind(e.target.value)} className="input input-sm min-w-0 flex-1 sm:w-auto sm:flex-none" aria-label="What">
           <option value="">All work</option>
           {metrics.map((m) => (
@@ -317,11 +348,16 @@ function ActivityLog({ memberId, name, range, custom, connections, metrics, kind
             ))}
           </select>
         )}
-        <button type="button" onClick={exportCsv} disabled={exporting || items.length === 0} className="btn btn-secondary btn-sm flex-shrink-0 sm:ml-auto">
-          <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
-            <path d="M12 4v11M7 10l5 5 5-5M5 20h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <button
+          type="button"
+          onClick={exportCsv}
+          disabled={exporting || items.length === 0}
+          className="inline-flex h-8 flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-3 text-[12px] font-medium text-[var(--color-ink)] transition-colors hover:border-[var(--color-line-strong)] hover:bg-[var(--color-paper)] disabled:opacity-50 sm:ml-auto"
+        >
+          <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-primary)]" aria-hidden>
+            <path d="M12 4.5v10M8 10.5l4 4 4-4M5.5 19h13" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          {exporting ? "Preparing…" : "CSV"}
+          {exporting ? "Preparing…" : "Download CSV"}
         </button>
       </div>
 
@@ -550,9 +586,17 @@ function MemberPageBody() {
               {removed && <span className="chip text-[11px] font-medium text-[var(--color-muted)]">Removed {formatShortDate(member!.deactivated_at!)}</span>}
             </h1>
             {member && (
-              <p className="line-clamp-2 text-[12.5px] text-[var(--color-muted)] sm:line-clamp-none sm:truncate">
-                {member.name ? `${member.email} · ` : ""}added {formatShortDate(member.created_at)} · last login {timeAgo(member.last_login_at)} · last active {timeAgo(member.lastActiveAt)}
-              </p>
+              <>
+                <p className="line-clamp-2 text-[12.5px] text-[var(--color-muted)] sm:hidden">
+                  {member.name ? `${member.email} · ` : ""}added {formatShortDate(member.created_at)} · last login {timeAgo(member.last_login_at)} · last active {timeAgo(member.lastActiveAt)}
+                </p>
+                <div className="mt-1 hidden min-w-0 flex-wrap items-center gap-1.5 sm:flex">
+                  {member.name && <span className="mr-0.5 truncate text-[12.5px] text-[var(--color-muted)]">{member.email}</span>}
+                  <MetaChip icon={<><path d="M10 4.5v11M4.5 10h11" /></>}>Added {formatShortDate(member.created_at)}</MetaChip>
+                  <MetaChip icon={<><path d="M8 4H5.5A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H8M12 6.5L15.5 10 12 13.5M15.5 10H8" /></>}>Last login {timeAgo(member.last_login_at)}</MetaChip>
+                  <MetaChip icon={<path d="M3 10h3l2-4.5 3.5 9 2-4.5H17" />}>Last active {timeAgo(member.lastActiveAt)}</MetaChip>
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -647,14 +691,17 @@ function MemberPageBody() {
               </p>
             )}
             {tab === "access" && memberForGrid && !memberForGrid.owner_access_at && manage && (
-              <div className="card overflow-hidden">
-                <div className="px-5 py-4">
-                  <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">What {member!.name || "they"} can use</h2>
-                  <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
-                    {removed
-                      ? "Kept as it was, and back in force if you restore them."
-                      : "Switch an area on for every account, then tap an account to set it apart. Changes save straight away and apply from their next click."}
-                  </p>
+              <div className={CARD}>
+                <div className="flex items-start gap-3 px-5 py-4">
+                  <IconTile hue="violet">{PAGE_ICONS.access}</IconTile>
+                  <div className="min-w-0">
+                    <h2 className="text-[14px] font-semibold text-[var(--color-ink)]">What {member!.name || "they"} can use</h2>
+                    <p className="mt-0.5 text-[12px] text-[var(--color-muted)]">
+                      {removed
+                        ? "Kept as it was, and back in force if you restore them."
+                        : "Switch an area on for every account, then tap an account to set it apart. Changes save straight away and apply from their next click."}
+                    </p>
+                  </div>
                 </div>
                 <div className="border-t border-[var(--color-line)]">
                   <AccessGrid member={memberForGrid} connections={connections.filter((c) => c.platform_key === "ebay")} knownFeatures={data.knownFeatures} onChange={changeAccess} />

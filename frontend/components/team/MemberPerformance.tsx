@@ -3,6 +3,9 @@
 import { ReactNode, useState } from "react";
 import { ViewMenu } from "@/components/ViewMenu";
 import { TeamMetricKey, WorkOverview } from "@/lib/api";
+import { CARD, EmptyCard, FIGURE, Hue, IconTile, SectionHead, StatCard, StatRow, statIcon } from "@/components/StatCard";
+import { initials, tintFor } from "@/components/AccountRail";
+import { useConnections } from "@/lib/useConnections";
 import { DeltaBadge } from "@/components/charts/DeltaBadge";
 import { TrendChart } from "@/components/charts/TrendChart";
 import { dayRangeLabel, fullNumber } from "@/components/charts/chart-format";
@@ -36,9 +39,47 @@ const TONE: Record<Tone, string> = {
 
 type Row = { label: string; value: string; tone?: Tone; metric?: TeamMetricKey; hint?: string };
 
+// Each area's icon.
+const AREA_ICONS = {
+  // Work: a calendar with a tick, days worked.
+  work: statIcon(<><rect x="3.5" y="5" width="17" height="15" rx="2.5" /><path d="M3.5 9.5h17M8 3v4M16 3v4" /><path d="M9 14.5l2 2 4-4" /></>),
+  // Orders: a parcel.
+  orders: statIcon(<><path d="M12 3.5l7.5 4.2v8.6L12 20.5l-7.5-4.2V7.7L12 3.5z" /><path d="M4.5 7.7L12 12l7.5-4.3M12 12v8.5" /></>),
+  // Inbox: a speech bubble.
+  inbox: statIcon(<path d="M5 5.5h14a1.5 1.5 0 011.5 1.5v8.5A1.5 1.5 0 0119 17h-7l-4 3.5V17H5a1.5 1.5 0 01-1.5-1.5V7A1.5 1.5 0 015 5.5z" />),
+  // Listings: a price tag.
+  listings: statIcon(<><path d="M4 12.5V5a1 1 0 011-1h7.5l7.5 7.5-8 8-8-7z" /><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none" /></>),
+  // Hunting: a target.
+  hunting: statIcon(<><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" /><path d="M12 2.5V5M12 19v2.5M2.5 12H5M19 12h2.5" /></>),
+  // Reviewing: a clipboard with a tick.
+  reviewing: statIcon(<><rect x="5" y="4.5" width="14" height="16" rx="2.5" /><path d="M9 4.5v-1h6v1" /><path d="M9 13l2 2 4-4.5" /></>),
+  // Time in Liston: a clock.
+  time: statIcon(<><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></>),
+  // The chart: bars.
+  chart: statIcon(<><path d="M4 20h16" /><rect x="5.5" y="11" width="3" height="6.5" rx="1" /><rect x="10.5" y="6.5" width="3" height="11" rx="1" /><rect x="15.5" y="13.5" width="3" height="4" rx="1" /></>),
+  // By eBay account: a shopfront.
+  store: statIcon(<><path d="M4.5 9.5l1.2-4.5h12.6l1.2 4.5" /><path d="M4.5 9.5a2.5 2.5 0 005 0 2.5 2.5 0 005 0 2.5 2.5 0 005 0" /><path d="M5.5 11.5V19h13v-7.5M10 19v-4h4v4" /></>),
+  // Nothing recorded: an empty tray.
+  empty: statIcon(<><path d="M4 13.5l2.2-7A1.5 1.5 0 017.6 5.5h8.8a1.5 1.5 0 011.4 1l2.2 7" /><path d="M4 13.5V18a1.5 1.5 0 001.5 1.5h13A1.5 1.5 0 0020 18v-4.5h-4.5l-1.2 2h-4.6l-1.2-2H4z" /></>, "h-6 w-6"),
+};
+
+// A capsule in a card's corner: its log, or the Time tab.
+function CornerLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-full bg-[var(--color-panel)]/80 px-2.5 py-1 text-[11.5px] font-semibold text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/15 transition-colors hover:bg-[var(--color-primary-soft)]"
+    >
+      {label}
+    </button>
+  );
+}
+
 function AreaCard({
   title,
-  accent,
+  hue,
+  icon,
   value,
   unit,
   delta,
@@ -50,7 +91,8 @@ function AreaCard({
   action,
 }: {
   title: string;
-  accent: string;
+  hue: Hue;
+  icon: ReactNode;
   value: string;
   unit?: string;
   delta?: number | null;
@@ -62,62 +104,45 @@ function AreaCard({
   // A link in the corner instead of the log's (the Time tab).
   action?: { label: string; onClick: () => void };
 }) {
+  const corner = action ? <CornerLink label={action.label} onClick={action.onClick} /> : headlineMetric && onOpenLog ? <CornerLink label="Log" onClick={() => onOpenLog(headlineMetric)} /> : null;
   return (
-    <section className="card flex min-w-0 flex-col px-4 pb-2 pt-3.5">
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-2 text-[12.5px] font-semibold text-[var(--color-muted)]">
-          <span className={`h-2 w-2 rounded-full ${accent}`} aria-hidden />
-          {title}
-        </span>
-        {action ? (
-          <button type="button" onClick={action.onClick} className="text-[11.5px] font-medium text-[var(--color-primary)] hover:underline">
-            {action.label}
-          </button>
-        ) : (
-          headlineMetric &&
-          onOpenLog && (
-            <button type="button" onClick={() => onOpenLog(headlineMetric)} className="text-[11.5px] font-medium text-[var(--color-primary)] hover:underline">
-              Log
-            </button>
-          )
-        )}
-      </div>
-      <div className="mt-2 flex items-baseline gap-2">
-        <span className="text-[26px] font-semibold leading-none tracking-tight tabular-nums text-[var(--color-ink)]">{value}</span>
-        {unit && <span className="text-[12px] text-[var(--color-muted)]">{unit}</span>}
+    <StatCard
+      label={title}
+      hue={hue}
+      icon={icon}
+      corner={corner}
+      details={rows.map((r) => (
+        <StatRow key={r.label} label={r.label} hint={r.metric && onOpenLog ? r.hint || "See each one in the log" : r.hint} ink={TONE[r.tone || "plain"]} onClick={r.metric && onOpenLog ? () => onOpenLog(r.metric!) : undefined}>
+          {r.value}
+        </StatRow>
+      ))}
+    >
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className={`${FIGURE} flex-shrink-0 text-[var(--color-ink)]`}>{value}</span>
+        {unit && <span className="min-w-0 truncate text-[12.5px] text-[var(--color-muted)]">{unit}</span>}
         {delta !== undefined && (
-          <span className="ml-auto">
+          <span className="ml-auto flex-shrink-0 self-center">
             <DeltaBadge change={delta} compared={compared} size="sm" />
           </span>
         )}
       </div>
-      <p className="mt-1 text-[11.5px] text-[var(--color-muted)]">{note}</p>
-      <dl className="mt-3 divide-y divide-[var(--color-line)] border-t border-[var(--color-line)]">
-        {rows.map((r) => {
-          const content = (
-            <>
-              <dt className="truncate text-[12.5px] text-[var(--color-muted)]">{r.label}</dt>
-              <dd className={`flex-shrink-0 text-[12.5px] font-semibold tabular-nums ${TONE[r.tone || "plain"]}`}>{r.value}</dd>
-            </>
-          );
-          return r.metric && onOpenLog ? (
-            <button
-              key={r.label}
-              type="button"
-              onClick={() => onOpenLog(r.metric!)}
-              title={r.hint || `See each one in the log`}
-              className="-mx-1.5 flex w-[calc(100%+12px)] items-center justify-between gap-3 rounded-md px-1.5 py-1.5 text-left transition-colors hover:bg-[var(--color-paper)]"
-            >
-              {content}
-            </button>
-          ) : (
-            <div key={r.label} className="flex items-center justify-between gap-3 py-1.5" title={r.hint}>
-              {content}
-            </div>
-          );
-        })}
-      </dl>
-    </section>
+      {/* A member's notes run longer than the Overview's: they wrap rather than being cut. */}
+      <p className="mt-2 text-[12px] leading-snug text-[var(--color-muted)]">{note}</p>
+    </StatCard>
+  );
+}
+
+// An eBay account in the by-account table: its store logo in a circle, or its initials in its colour.
+function AccountMark({ id, label }: { id: string | null; label: string }) {
+  const connections = useConnections();
+  const logo = id ? connections.find((c) => c.id === id)?.logo_url : null;
+  return logo ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={logo} alt="" className="h-7 w-7 flex-shrink-0 rounded-full bg-white object-cover ring-1 ring-black/[0.08]" />
+  ) : (
+    <span className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold ${id ? tintFor(id) : "bg-[var(--color-paper)] text-[var(--color-muted)]"}`} aria-hidden>
+      {initials(label, "A")}
+    </span>
   );
 }
 
@@ -191,7 +216,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <AreaCard
           title="Work"
-          accent="bg-[var(--color-primary)]"
+          hue="indigo"
+          icon={AREA_ICONS.work}
           value={fullNumber(t.active_days)}
           unit={`of ${data.range.days} day${data.range.days === 1 ? "" : "s"}`}
           delta={change(t.active_days, p.active_days)}
@@ -207,7 +233,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
         {showOrders && (
           <AreaCard
             title="Orders"
-            accent="bg-sky-500"
+            hue="sky"
+            icon={AREA_ICONS.orders}
             value={fullNumber(t.supplier_orders)}
             unit="supplier orders"
             delta={change(t.supplier_orders, p.supplier_orders)}
@@ -224,7 +251,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
         {showInbox && (
           <AreaCard
             title="Inbox"
-            accent="bg-teal-500"
+            hue="teal"
+            icon={AREA_ICONS.inbox}
             value={fullNumber(t.inbox_answered)}
             unit="buyers answered"
             delta={change(t.inbox_answered, p.inbox_answered)}
@@ -247,7 +275,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
         {showListings && (
           <AreaCard
             title="Listings"
-            accent="bg-violet-500"
+            hue="violet"
+            icon={AREA_ICONS.listings}
             value={fullNumber(t.published)}
             unit="published"
             delta={change(t.published, p.published)}
@@ -266,7 +295,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
         {showHunting && (
           <AreaCard
             title="Hunting"
-            accent="bg-amber-500"
+            hue="amber"
+            icon={AREA_ICONS.hunting}
             value={fullNumber(h?.hunter.hunted ?? t.hunted)}
             unit="products hunted"
             delta={h ? change(h.hunter.hunted, h.previousHunter.hunted) : change(t.hunted, p.hunted)}
@@ -298,7 +328,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
         {showReviews && (
           <AreaCard
             title="Reviewing"
-            accent="bg-emerald-500"
+            hue="emerald"
+            icon={AREA_ICONS.reviewing}
             value={fullNumber(h?.reviewer.reviewed ?? t.hunts_reviewed)}
             unit="decisions"
             delta={h ? change(h.reviewer.reviewed, h.previousReviewer.reviewed) : change(t.hunts_reviewed, p.hunts_reviewed)}
@@ -317,7 +348,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
         {showTime && time && prevTime && (
           <AreaCard
             title="Time in Liston"
-            accent="bg-slate-500"
+            hue="slate"
+            icon={AREA_ICONS.time}
             value={minutesText(time.working)}
             unit="working"
             delta={change(time.working, prevTime.working)}
@@ -334,31 +366,37 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
       </div>
 
       {h && h.reasons.length > 0 && (
-        <p className="text-[12px] text-[var(--color-muted)]">
-          {Their} finds were rejected for: <span className="text-[var(--color-ink)]">{h.reasons.map((r) => `${r.label} (${r.count})`).join(", ")}</span>
-        </p>
+        <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-muted)]">
+          <span className="mr-0.5">{Their} finds were rejected for</span>
+          {h.reasons.map((r) => (
+            <span key={r.label} className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 py-0.5 pl-2.5 pr-1 text-[11.5px] font-medium text-rose-700 ring-1 ring-inset ring-rose-100">
+              {r.label}
+              <span className="rounded-full bg-[var(--color-panel)] px-1.5 text-[10.5px] font-semibold tabular-nums ring-1 ring-inset ring-rose-100">{r.count}</span>
+            </span>
+          ))}
+        </div>
       )}
 
       {nothing ? (
-        <div className="card px-6 py-10 text-center">
-          <p className="text-[13px] font-semibold text-[var(--color-ink)]">No recorded work in this period</p>
-          <p className="mx-auto mt-1 max-w-xl text-[12px] leading-relaxed text-[var(--color-muted)]">
-            Work counts when it&apos;s done in Liston: supplier orders, dispatches, refunds and cases from an order, buyers answered and queries resolved in the Inbox, listings
-            drafted, published, edited, relisted or ended, and products hunted or reviewed. Work done straight on eBay or AliExpress can&apos;t be seen.
-          </p>
-        </div>
+        <EmptyCard icon={AREA_ICONS.empty} title="No recorded work in this period">
+          Work counts when it&apos;s done in Liston: supplier orders, dispatches, refunds and cases from an order, buyers answered and queries resolved in the Inbox, listings
+          drafted, published, edited, relisted or ended, and products hunted or reviewed. Work done straight on eBay or AliExpress can&apos;t be seen.
+        </EmptyCard>
       ) : (
         data.series.length > 1 && (
-          <section className="card p-4">
+          <section className={`${CARD} p-4 sm:p-5`}>
             {/* One measure at a time, as the Analytics chart does: the figure on the left, the key and the choice on the right. */}
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[12px] font-medium text-[var(--color-muted)]">{chosen.label} per day</p>
-                <p className="mt-0.5 flex items-baseline gap-2">
-                  <span className="text-[22px] font-semibold leading-none tabular-nums text-[var(--color-ink)]">{fullNumber(totalOf(chosen.key))}</span>
+              <div className="flex min-w-0 items-start gap-3">
+                <IconTile hue="indigo">{AREA_ICONS.chart}</IconTile>
+                <div className="min-w-0">
+                <p className="text-[12.5px] font-medium text-[var(--color-muted)]">{chosen.label} per day</p>
+                <p className="mt-1 flex items-baseline gap-2">
+                  <span className="text-[24px] font-semibold leading-none tracking-[-0.025em] tabular-nums text-[var(--color-ink)]">{fullNumber(totalOf(chosen.key))}</span>
                   <DeltaBadge change={change(totalOf(chosen.key), totalOf(chosen.key, true))} compared={compared} size="sm" variant="text" />
                   <span className="text-[11.5px] text-[var(--color-muted)]">{fullNumber(totalOf(chosen.key, true))} before</span>
                 </p>
+                </div>
               </div>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                 <span className="flex items-center gap-3 text-[11px] text-[var(--color-muted)]">
@@ -388,10 +426,8 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
               />
             </div>
             {chosen.log && onOpenLog && (
-              <div className="mt-1 text-right">
-                <button type="button" onClick={() => onOpenLog?.(chosen.log!)} className="text-[12px] font-medium text-[var(--color-primary)] hover:underline">
-                  See each one in the log
-                </button>
+              <div className="mt-1 flex justify-end">
+                <CornerLink label="See each one in the log" onClick={() => onOpenLog?.(chosen.log!)} />
               </div>
             )}
           </section>
@@ -399,21 +435,16 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
       )}
 
       {!self && data.accounts.some((a) => a.actions > 0) && (
-        <section className="card overflow-hidden">
-          <div className="flex items-baseline justify-between gap-2 px-4 py-3">
-            <h2 className="text-[13px] font-semibold text-[var(--color-ink)]">By eBay account</h2>
-            <span className="text-[11.5px] text-[var(--color-muted)]">
-              {fullNumber(data.actions)} action{data.actions === 1 ? "" : "s"} in all
-            </span>
-          </div>
-          <div className="overflow-x-auto border-t border-[var(--color-line)]">
+        <section className={`${CARD} p-4 sm:p-5`}>
+          <SectionHead hue="sky" icon={AREA_ICONS.store} title="By eBay account" sub={`${fullNumber(data.actions)} action${data.actions === 1 ? "" : "s"} in all`} />
+          <div className="-mx-4 mt-4 overflow-x-auto px-4 sm:-mx-5 sm:px-5">
             <table className="w-full min-w-[480px] table-fixed text-[12.5px]">
               <thead>
-                <tr className="bg-[var(--color-paper)] text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-                  <th className="w-[34%] px-4 py-2 text-left font-semibold">Account</th>
-                  <th className="px-3 py-2 text-center font-semibold">Actions</th>
+                <tr className="text-[11px] font-medium text-[var(--color-muted)] [&>th]:bg-[var(--color-paper)] [&>th:first-child]:rounded-l-lg [&>th:last-child]:rounded-r-lg">
+                  <th className="w-[34%] px-3 py-2 text-left font-medium">Account</th>
+                  <th className="px-3 py-2 text-center font-medium">Actions</th>
                   {accountColumns.map((k) => (
-                    <th key={k} className="px-3 py-2 text-center font-semibold">
+                    <th key={k} className="px-3 py-2 text-center font-medium">
                       {label(k)}
                     </th>
                   ))}
@@ -424,13 +455,18 @@ export function MemberPerformance({ data, onOpenLog, onOpenTime, self = false }:
                   .filter((a) => a.actions > 0)
                   .map((a) => (
                     <tr key={a.connectionId || a.label}>
-                      <td className="px-4 py-2 font-medium text-[var(--color-ink)]">
-                        {a.label}
-                        {!a.connectionId && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">(disconnected)</span>}
+                      <td className="px-3 py-2.5">
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <AccountMark id={a.connectionId} label={a.label} />
+                          <span className="min-w-0 truncate font-medium text-[var(--color-ink)]">
+                            {a.label}
+                            {!a.connectionId && <span className="ml-1.5 text-[11px] font-normal text-[var(--color-muted)]">(disconnected)</span>}
+                          </span>
+                        </span>
                       </td>
-                      <td className="px-3 py-2 text-center tabular-nums text-[var(--color-ink)]">{fullNumber(a.actions)}</td>
+                      <td className="px-3 py-2.5 text-center font-semibold tabular-nums text-[var(--color-ink)]">{fullNumber(a.actions)}</td>
                       {accountColumns.map((k) => (
-                        <td key={k} className={`px-3 py-2 text-center tabular-nums ${a[k] ? "text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>
+                        <td key={k} className={`px-3 py-2.5 text-center tabular-nums ${a[k] ? "text-[var(--color-ink)]" : "text-[var(--color-muted)]"}`}>
                           {fullNumber(a[k])}
                         </td>
                       ))}

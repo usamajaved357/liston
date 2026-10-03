@@ -4,6 +4,7 @@ import { ReactNode } from "react";
 import Link from "next/link";
 import { ListingWork, MoneySummary } from "@/lib/api";
 import { currencySymbol } from "@/lib/format";
+import { FIGURE, Hue, NOTE, StatCard, StatRow, statIcon } from "@/components/StatCard";
 
 // The business Overview: two tabs. Sales shows the money end to end in
 // one view, one card per step (sales, fees, earnings, source cost, profit),
@@ -53,23 +54,7 @@ function inkOf(tone: Tone | undefined, value: number | null): string {
   return INK[tone];
 }
 
-// Each card's colour: its icon's tile and a faint wash at the card's top.
-type Hue = "indigo" | "rose" | "sky" | "amber" | "emerald" | "violet" | "slate";
-const HUES: Record<Hue, { tile: string; wash: string }> = {
-  indigo: { tile: "bg-indigo-50 text-indigo-600 ring-indigo-100", wash: "from-indigo-50/80" },
-  rose: { tile: "bg-rose-50 text-rose-600 ring-rose-100", wash: "from-rose-50/80" },
-  sky: { tile: "bg-sky-50 text-sky-600 ring-sky-100", wash: "from-sky-50/80" },
-  amber: { tile: "bg-amber-50 text-amber-600 ring-amber-100", wash: "from-amber-50/80" },
-  emerald: { tile: "bg-emerald-50 text-emerald-600 ring-emerald-100", wash: "from-emerald-50/80" },
-  violet: { tile: "bg-violet-50 text-violet-600 ring-violet-100", wash: "from-violet-50/80" },
-  slate: { tile: "bg-slate-100 text-slate-600 ring-slate-200", wash: "from-slate-50" },
-};
-
-const icon = (paths: ReactNode) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-[17px] w-[17px]" aria-hidden>
-    {paths}
-  </svg>
-);
+const icon = (paths: ReactNode) => statIcon(paths);
 const ICONS = {
   // Sales: a shopping bag.
   bag: icon(<><path d="M5.5 8.5h13l-1 11a1.5 1.5 0 01-1.5 1.4H8a1.5 1.5 0 01-1.5-1.4l-1-11z" /><path d="M9 8.5V7a3 3 0 016 0v1.5" /></>),
@@ -92,46 +77,6 @@ const ICONS = {
   // Published: going up to eBay.
   publish: icon(<><path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9" /><path d="M4.5 14.5v3a2.5 2.5 0 002.5 2.5h10a2.5 2.5 0 002.5-2.5v-3" /></>),
 };
-
-// One Overview card: its icon and name (what it means on hover), the
-// figure and its note, then its details on a soft panel that runs to the
-// card's foot, so a row of cards lines up whatever each one holds.
-function StatCard({ label, hue, iconNode, hint, wide, children, details }: { label: string; hue: Hue; iconNode: ReactNode; hint?: string; wide?: boolean; children: ReactNode; details: ReactNode }) {
-  const h = HUES[hue];
-  return (
-    <div
-      title={hint}
-      className={`relative flex min-w-0 flex-col overflow-hidden rounded-[18px] border border-[var(--color-line)] bg-[var(--color-panel)] p-3.5 shadow-[var(--shadow-card)] transition-shadow hover:shadow-[0_1px_2px_rgba(15,23,42,0.04),0_14px_30px_-14px_rgba(15,23,42,0.2)] sm:p-4 xl:p-3.5 2xl:p-4 ${wide ? "max-lg:col-span-2" : ""}`}
-    >
-      <div aria-hidden className={`pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b ${h.wash} to-transparent`} />
-      <div className="relative flex items-center gap-2.5">
-        <span className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-[10px] ring-1 ring-inset ${h.tile}`}>{iconNode}</span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-[var(--color-ink)]">{label}</span>
-      </div>
-      <div className="relative mt-4 flex min-w-0 flex-col">{children}</div>
-      <dl className="relative mt-4 flex-1 space-y-1.5 rounded-xl bg-[var(--color-paper)] px-2.5 py-2.5 text-[12px] sm:px-3 sm:text-[12.5px] xl:px-2.5 xl:text-[12px] 2xl:px-3 2xl:text-[12.5px]">{details}</dl>
-    </div>
-  );
-}
-
-// A line on a card's panel: its name, and its figure on the right. On a
-// phone's two narrow columns a long name takes a second line rather than
-// being cut.
-function DetailRow({ label, hint, warn, ink, children }: { label: string; hint?: string; warn?: boolean; ink: string; children: ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-2" title={hint}>
-      <dt className="flex min-w-0 items-baseline gap-1.5 text-[var(--color-muted)]">
-        {warn && <span className="h-1.5 w-1.5 flex-shrink-0 -translate-y-px self-center rounded-full bg-amber-500" aria-hidden />}
-        <span className="min-w-0 leading-snug sm:truncate">{label}</span>
-      </dt>
-      <dd className={`shrink-0 font-semibold tabular-nums ${warn ? "text-amber-600" : ink}`}>{children}</dd>
-    </div>
-  );
-}
-
-// 28px where a card has the room, 24px while five share a row on a laptop.
-const FIGURE = "truncate text-[24px] font-semibold leading-none tracking-[-0.025em] tabular-nums sm:text-[28px] xl:text-[24px] 2xl:text-[28px]";
-const NOTE = "mt-2 truncate text-[12px] text-[var(--color-muted)]";
 
 interface Detail {
   label: string;
@@ -333,7 +278,7 @@ export function SalesCards({
             key={step.label}
             label={step.label}
             hue={step.hue}
-            iconNode={step.icon}
+            icon={step.icon}
             hint={step.hint}
             wide={index === STEPS.length - 1}
             details={step.details
@@ -342,9 +287,9 @@ export function SalesCards({
                 const dBlocked = Boolean(unavailable && d.fromEbay);
                 const warn = main && !dBlocked && !loading ? Boolean(d.warn?.(main)) : false;
                 return (
-                  <DetailRow key={d.label} label={d.label} warn={warn} ink={main && !dBlocked && !loading ? inkFor(d.tone, d.figure) : INK.plain}>
+                  <StatRow key={d.label} label={d.label} warn={warn} ink={main && !dBlocked && !loading ? inkFor(d.tone, d.figure) : INK.plain}>
                     {loading || !main ? <span className="inline-block h-3 w-12 animate-pulse rounded bg-[var(--color-line)] align-middle" /> : dBlocked ? "—" : show(d.figure)}
-                  </DetailRow>
+                  </StatRow>
                 );
               })}
           >
@@ -483,14 +428,14 @@ export function ListingCards({ work, loading, huntingHref }: { work: ListingWork
               key={stage.label}
               label={stage.label}
               hue={stage.hue}
-              iconNode={stage.icon}
+              icon={stage.icon}
               wide={index === STAGES.length - 1}
               details={stage.details.map((d) => {
                 const figure = work ? Math.max(0, d.of(work)) : 0;
                 return (
-                  <DetailRow key={d.label} label={d.label} hint={d.hint} warn={Boolean(d.warn && figure > 0)} ink="text-[var(--color-ink)]">
+                  <StatRow key={d.label} label={d.label} hint={d.hint} warn={Boolean(d.warn && figure > 0)} ink="text-[var(--color-ink)]">
                     {loading || !work ? <span className="inline-block h-3 w-6 animate-pulse rounded bg-[var(--color-line)] align-middle" /> : count(figure)}
-                  </DetailRow>
+                  </StatRow>
                 );
               })}
             >

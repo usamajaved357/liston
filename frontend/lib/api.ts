@@ -651,6 +651,8 @@ export interface TeamMember {
   id: string;
   email: string;
   name: string | null;
+  // Their profile photo, when they've set one.
+  avatar_url?: string | null;
   created_at: string;
   last_login_at?: string | null;
   deactivated_at?: string | null; // removed: no login, history kept

@@ -13,8 +13,9 @@ const KNOWN_FEATURES = ['orders', 'listings', 'listings_publish', 'analytics', '
 // A team's members (migration 051: a login's place in an owner's team).
 // `created_at` is when they joined this team; `shared_login`: the login is
 // also an owner's or in another team, so only the person changes its
-// password.
-const MEMBER_COLUMNS = `u.id, u.email, u.name, m.created_at, u.last_login_at, m.deactivated_at, m.owner_access_at,
+// password; `avatar_url` their profile photo (a small JPEG, as workspace
+// chat sends it) for the Members page and their own page.
+const MEMBER_COLUMNS = `u.id, u.email, u.name, u.avatar_url, m.created_at, u.last_login_at, m.deactivated_at, m.owner_access_at,
   (u.role = 'owner' OR EXISTS (SELECT 1 FROM workspace_members o WHERE o.user_id = u.id AND o.owner_user_id <> m.owner_user_id)) AS shared_login`;
 
 async function listMembers(ownerId) {

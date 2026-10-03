@@ -316,7 +316,7 @@ export function OwnerAccessCard({ member, canChange, ownerName, onChange }: { me
   }
 
   return (
-    <div className={`card mb-4 overflow-hidden ${on ? "border-[var(--color-primary)]/30" : ""}`}>
+    <div className={`mb-4 overflow-hidden rounded-[18px] border bg-[var(--color-panel)] shadow-[var(--shadow-card)] ${on ? "border-[var(--color-primary)]/30" : "border-[var(--color-line)]"}`}>
       <div className={`flex items-start gap-3 px-5 py-4 ${on ? "bg-[radial-gradient(120%_160%_at_0%_0%,var(--color-primary-soft)_0%,transparent_60%)]" : ""}`}>
         <span
           className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ring-1 ring-inset ${
@@ -396,7 +396,19 @@ export function OwnerAccessCard({ member, canChange, ownerName, onChange }: { me
 }
 
 /** A member's initials in a circle; greyed once they've been removed. */
-export function MemberAvatar({ member, size = 40 }: { member: Pick<TeamMember, "name" | "email" | "deactivated_at">; size?: number }) {
+export function MemberAvatar({ member, size = 40 }: { member: Pick<TeamMember, "name" | "email" | "deactivated_at" | "avatar_url">; size?: number }) {
+  // Their profile photo when they've set one (greyed once removed), else their initials.
+  if (member.avatar_url) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={member.avatar_url}
+        alt=""
+        style={{ width: size, height: size }}
+        className={`flex-shrink-0 rounded-full object-cover ring-1 ring-black/[0.06] ${member.deactivated_at ? "opacity-60 grayscale" : ""}`}
+      />
+    );
+  }
   return (
     <span
       style={{ width: size, height: size, fontSize: Math.round(size * 0.36) }}
