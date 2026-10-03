@@ -125,7 +125,7 @@ function OrderTableHeader({ select }: { select?: RowSelect & { indeterminate: bo
       {select && <SelectBox checked={select.checked} indeterminate={select.indeterminate} onChange={select.onChange} label="Select every order on this page" />}
       <span>Status</span>
       <span>Order</span>
-      <span>Supplier</span>
+      <span className="text-center">Supplier</span>
       <span className="text-center">Qty</span>
       <span className="text-right">Total</span>
       <span className="text-right">Date</span>
@@ -182,13 +182,13 @@ function supplierView(order: Order) {
 
 // The stage as a tinted capsule and, for an order on its way, a three-step
 // track (ordered, shipped, delivered) filled as far as it has got.
-function SupplierBadge({ view }: { view: ReturnType<typeof supplierView> }) {
+function SupplierBadge({ view, centred }: { view: ReturnType<typeof supplierView>; centred: boolean }) {
   const style = SUPPLIER_STYLES[view.stage];
   const label = view.stage === "untracked" && view.cancelled ? "Not needed" : style.label;
   const step = SUPPLIER_STEPS.indexOf(view.stage);
   const showTrack = view.stage !== "problem" && view.stage !== "untracked";
   return (
-    <div className="flex items-center gap-2">
+    <div className={`flex items-center gap-2 ${centred ? "justify-center" : ""}`}>
       <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-[3px] text-[11.5px] font-semibold leading-none ring-1 ring-inset ${style.chip}`}>
         <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${style.dot}`} aria-hidden />
         {label}
@@ -206,8 +206,9 @@ function SupplierBadge({ view }: { view: ReturnType<typeof supplierView> }) {
 
 // The Supplier column: the stage, then what backs it up: the supplier and
 // its order number, its tracking once shipped, who ordered it and when, or
-// what the problem is.
-function SupplierCell({ order }: { order: Order }) {
+// what the problem is. Centred in the table, between the order and its
+// quantity; on a phone's card, along the left.
+function SupplierCell({ order, centred = false }: { order: Order; centred?: boolean }) {
   const timeZone = useAccountTimeZone();
   const view = supplierView(order);
   const reference = (view.supplier || view.orderNos.length) && (
@@ -263,8 +264,8 @@ function SupplierCell({ order }: { order: Order }) {
       break;
   }
   return (
-    <div className="min-w-0 pt-0.5">
-      <SupplierBadge view={view} />
+    <div className={`min-w-0 pt-0.5 ${centred ? "text-center" : ""}`}>
+      <SupplierBadge view={view} centred={centred} />
       {detail && <div className="mt-1.5 space-y-0.5 text-[11.5px] leading-snug text-[var(--color-muted)]">{detail}</div>}
     </div>
   );
@@ -370,7 +371,7 @@ function OrderCard({ order, href, select }: { order: Order; href: string; select
         </div>
       </div>
 
-      <SupplierCell order={order} />
+      <SupplierCell order={order} centred />
       <p className="pt-0.5 text-center text-[12.5px] font-semibold leading-snug text-[var(--color-ink)]">{quantity}</p>
       <div className="pt-0.5 text-right text-[12.5px] font-semibold leading-snug text-[var(--color-ink)]">
         {formatMoney(order.total)}
