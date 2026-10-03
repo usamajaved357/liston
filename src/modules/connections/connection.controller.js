@@ -2,6 +2,7 @@ const { z } = require('zod');
 const connectionService = require('./connection.service');
 const ebayOauth = require('../ebay/api/ebay.oauth');
 const ebayService = require('../ebay/ebay.service');
+const config = require('../../config');
 const logoPalette$ = require('./logo-palette');
 const marketplaces = require('../ebay/marketplaces');
 const ebayPush = require('../ebay/ebay-push');
@@ -83,6 +84,8 @@ async function list(req, res, next) {
       ({ connections } = await connectionService.listConnections(req.ownerId, { role: req.role, userId: req.userId }));
     }
     res.status(200).json({ connections, maxConnections });
+    // Store logos not read yet (or not for a week), in the background for the next visit.
+    if (config.ebay.storeLogos) connectionService.refreshStoreLogos(req.ownerId, ebayService).catch(() => null);
   } catch (err) {
     next(err);
   }

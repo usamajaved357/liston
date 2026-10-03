@@ -7,7 +7,7 @@ import { api, ApiError, Order, OrderCounts, OrderRange, OrderSort, OrderStatusFi
 import { readView, writeView } from "@/lib/viewState";
 import { useConnection } from "@/lib/useConnection";
 import { scrollPageToTop } from "@/lib/pageScroll";
-import { formatMoney, formatShortDate, formatTime, internationalPhone } from "@/lib/format";
+import { formatMoney, formatShortDate, formatTime } from "@/lib/format";
 import { useAccountTimeZone } from "@/lib/timezone";
 import { AccountShell } from "@/components/AccountShell";
 import { Alert } from "@/components/Alert";
@@ -108,10 +108,10 @@ function cleanLineItemTitle(title: string | null): string {
 }
 
 // Fixed column widths shared by the header and every row, so everything
-// lines up into real table columns: Status | Order | Customer | Qty | Total
+// lines up into real table columns: Status | Order | Supplier | Qty | Total
 // | Date. One price (what the buyer paid) and one date (when they bought):
-// the breakdown lives on eBay's order page, not here.
-const ROW_COLUMNS = "136px minmax(220px,1fr) 240px 48px 96px 96px";
+// the breakdown and who it goes to live on the order's own page.
+const ROW_COLUMNS = "136px minmax(220px,1fr) 220px 48px 96px 96px";
 
 // A tick box leads each row for the workspace owner and co-managers (the CSV download).
 type RowSelect = { checked: boolean; onChange: () => void };
@@ -125,7 +125,7 @@ function OrderTableHeader({ select }: { select?: RowSelect & { indeterminate: bo
       {select && <SelectBox checked={select.checked} indeterminate={select.indeterminate} onChange={select.onChange} label="Select every order on this page" />}
       <span>Status</span>
       <span>Order</span>
-      <span className="text-center">Customer</span>
+      <span>Supplier</span>
       <span className="text-center">Qty</span>
       <span className="text-right">Total</span>
       <span className="text-right">Date</span>
@@ -133,69 +133,141 @@ function OrderTableHeader({ select }: { select?: RowSelect & { indeterminate: bo
   );
 }
 
-// International dialling codes for the markets Liston sells on. A buyer's
-// phone comes from eBay as a local number; the account's marketplace says
-// which country that is.
+// Where the order stands with the supplier, the same states as the Supplier
+// filter (orders/order-supplier.js on the server): only as far along as its
+// least advanced line, a line with no supplier order not ordered yet, and
+// dispatched or cancelled on eBay with nothing recorded "untracked".
+type SupplierStage = "pending" | "ordered" | "shipped" | "delivered" | "problem" | "untracked";
+const SUPPLIER_STEPS = ["ordered", "shipped", "delivered"];
 
-// Who it goes to: name, then the address as eBay gives it, then the phone
-// — each on its own line, so it can be read straight onto a label. The name
-// is a link-in-waiting: it opens a conversation once the Inbox exists.
-function CustomerCell({ order, country, countryName }: { order: Order; country: string | undefined; countryName: string | undefined }) {
-  const a = order.shippingAddress;
-  const name = a?.name || order.buyerName || order.buyerUserId || "Unknown buyer";
-  // Two lines: the street, then town · county · postcode · country. The
-  // buyer's own country is what matters for the label; on a domestic order
-  // it is the marketplace's and says nothing, so it is left off.
-  const streetLine = a ? [a.street1, a.street2].filter(Boolean).join(", ") : "";
-  const domestic = a?.country && countryName && a.country.toLowerCase() === countryName.toLowerCase();
-  const placeLine = a ? [a.city, a.state, a.postalCode, domestic ? "" : a.country].filter(Boolean).join(" · ") : "";
-  const addressLines = [streetLine, placeLine].filter(Boolean);
-  const phone = a?.phone ? internationalPhone(a.phone, country) : null;
+const SUPPLIER_STYLES: Record<SupplierStage, { label: string; chip: string; dot: string; bar: string }> = {
+  pending: { label: "To order", chip: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500", bar: "bg-amber-400" },
+  ordered: { label: "Ordered", chip: "bg-indigo-50 text-indigo-700 ring-indigo-200", dot: "bg-indigo-500", bar: "bg-indigo-500" },
+  shipped: { label: "Shipped", chip: "bg-sky-50 text-sky-700 ring-sky-200", dot: "bg-sky-500", bar: "bg-sky-500" },
+  delivered: { label: "Delivered", chip: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500", bar: "bg-emerald-500" },
+  problem: { label: "Problem", chip: "bg-rose-50 text-rose-700 ring-rose-200", dot: "bg-rose-500", bar: "bg-rose-500" },
+  untracked: { label: "Not recorded", chip: "bg-[var(--color-paper)] text-[var(--color-muted)] ring-[var(--color-line)]", dot: "bg-slate-300", bar: "" },
+};
+
+const SUPPLIER_NAMES: Record<string, string> = { aliexpress: "AliExpress", amazon: "Amazon", temu: "Temu", cj: "CJ", cjdropshipping: "CJ" };
+const supplierName = (platform: string | null | undefined) =>
+  !platform ? "" : SUPPLIER_NAMES[platform.toLowerCase()] || platform.charAt(0).toUpperCase() + platform.slice(1);
+const distinct = (values: (string | null | undefined)[]) => [...new Set(values.filter((v): v is string => Boolean(v)))];
+
+function supplierView(order: Order) {
+  const rows = order.sourcing || [];
+  const lineCount = Math.max(1, order.lineItems.length);
+  const settled = Boolean(order.shippedTime) || ["dispatched", "delivered", "cancelled"].includes(order.derivedStatus || "");
+  const statuses = rows.map((r) => r.status as string);
+  const placed = statuses.filter((st) => SUPPLIER_STEPS.includes(st)).length;
+  let stage: SupplierStage;
+  if (!rows.length && settled) stage = "untracked";
+  else if (statuses.includes("problem")) stage = "problem";
+  else if (rows.length < lineCount || placed < statuses.length) stage = "pending";
+  else stage = statuses.reduce((lowest, st) => (SUPPLIER_STEPS.indexOf(st) < SUPPLIER_STEPS.indexOf(lowest) ? st : lowest), "delivered") as SupplierStage;
+  const latest = [...rows].filter((r) => r.placedAt).sort((a, b) => (a.placedAt! < b.placedAt! ? 1 : -1))[0];
+  return {
+    stage,
+    // How many of its items are on a supplier order, while some still aren't.
+    placed: stage === "pending" && placed > 0 ? `${placed} of ${lineCount} items ordered` : null,
+    supplier: distinct(rows.map((r) => supplierName(r.sourcePlatform)))[0] || "",
+    orderNos: distinct(rows.map((r) => r.sourceOrderNo)),
+    tracking: distinct(rows.map((r) => (r.trackingNumber ? `${r.carrier ? `${r.carrier} ` : ""}${r.trackingNumber}` : null))),
+    placedBy: latest?.placedBy?.name || null,
+    placedAt: latest?.placedAt || null,
+    notes: rows.find((r) => r.status === "problem")?.notes || null,
+    cancelled: order.derivedStatus === "cancelled",
+  };
+}
+
+// The stage as a tinted capsule and, for an order on its way, a three-step
+// track (ordered, shipped, delivered) filled as far as it has got.
+function SupplierBadge({ view }: { view: ReturnType<typeof supplierView> }) {
+  const style = SUPPLIER_STYLES[view.stage];
+  const label = view.stage === "untracked" && view.cancelled ? "Not needed" : style.label;
+  const step = SUPPLIER_STEPS.indexOf(view.stage);
+  const showTrack = view.stage !== "problem" && view.stage !== "untracked";
   return (
-    <div className="min-w-0 pt-0.5 text-center text-[12.5px] leading-snug text-[var(--color-ink)]">
-      <p className="truncate">
-        <button type="button" title="Message this buyer (coming with Inbox)" className="font-medium underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
-          {name}
-        </button>
-      </p>
-      {addressLines.map((line, i) => (
-        <p key={i} className="line-clamp-2 text-[11.5px] leading-[1.35] text-[var(--color-muted)]">
-          {line}
-        </p>
-      ))}
-      {phone && (
-        <p className="truncate text-[11.5px]">
-          <a href={`tel:${phone.replace(/\s+/g, "")}`} className="text-[var(--color-muted)] underline decoration-[var(--color-line-strong)] underline-offset-2 hover:text-[var(--color-primary)] hover:decoration-[var(--color-primary)]">
-            {phone}
-          </a>
-        </p>
+    <div className="flex items-center gap-2">
+      <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-[3px] text-[11.5px] font-semibold leading-none ring-1 ring-inset ${style.chip}`}>
+        <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${style.dot}`} aria-hidden />
+        {label}
+      </span>
+      {showTrack && (
+        <span className="flex items-center gap-0.5" title="Ordered → Shipped → Delivered" aria-hidden>
+          {SUPPLIER_STEPS.map((s, i) => (
+            <span key={s} className={`h-1 w-3.5 rounded-full ${i <= step ? style.bar : "bg-slate-200"}`} />
+          ))}
+        </span>
       )}
-      {!a && order.buyerUserId && <p className="truncate text-[var(--color-muted)]">@{order.buyerUserId}</p>}
     </div>
   );
 }
 
-// One order per row. The Order column carries the order number and buyer
-// on a quiet first line, then each item as a thumbnail beside a two-line
-// title and its details; the money and dates sit in their columns at the
-// top of the row, where the eye lands.
-const SOURCING_LABELS: Record<string, { text: string; className: string }> = {
-  to_order: { text: "To order", className: "bg-amber-50 text-amber-800 border-amber-200" },
-  ordered: { text: "Ordered", className: "bg-[var(--color-paper)] text-[var(--color-muted)] border-[var(--color-line)]" },
-  shipped: { text: "Shipped", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  delivered: { text: "Delivered", className: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-  problem: { text: "Problem", className: "bg-red-50 text-[var(--color-danger)] border-red-200" },
-};
-
-// The supplier-order state of the whole order, from its lines: the least
-// advanced line wins, so "Shipped" means every item has shipped.
-function sourcingSummary(order: Order) {
-  const rows = order.sourcing || [];
-  if (!rows.length) return null;
-  const rank = ["problem", "to_order", "ordered", "shipped", "delivered"];
-  const lowest = rows.map((r) => r.status).sort((a, b) => rank.indexOf(a) - rank.indexOf(b))[0];
-  const partial = rows.length < order.lineItems.length;
-  return { ...SOURCING_LABELS[lowest], partial };
+// The Supplier column: the stage, then what backs it up: the supplier and
+// its order number, its tracking once shipped, who ordered it and when, or
+// what the problem is.
+function SupplierCell({ order }: { order: Order }) {
+  const timeZone = useAccountTimeZone();
+  const view = supplierView(order);
+  const reference = (view.supplier || view.orderNos.length) && (
+    <p className="truncate">
+      {view.supplier}
+      {view.supplier && view.orderNos.length > 0 && " · "}
+      {view.orderNos.length > 0 && <span className="font-mono tracking-tight text-[var(--color-ink)]">{view.orderNos.join(", ")}</span>}
+    </p>
+  );
+  let detail: React.ReactNode = null;
+  switch (view.stage) {
+    case "pending":
+      detail = <p className="truncate">{view.placed || "Not ordered from the supplier yet"}</p>;
+      break;
+    case "ordered":
+      detail = (
+        <>
+          {reference}
+          {(view.placedBy || view.placedAt) && (
+            <p className="truncate">
+              Ordered{view.placedBy ? ` by ${view.placedBy}` : ""}
+              {view.placedAt ? ` · ${formatShortDate(view.placedAt, timeZone)}` : ""}
+            </p>
+          )}
+        </>
+      );
+      break;
+    case "shipped":
+    case "delivered":
+      detail = (
+        <>
+          {reference}
+          {view.tracking.length > 0 ? (
+            <p className="truncate font-mono tracking-tight" title={view.tracking.join(", ")}>
+              {view.tracking.join(", ")}
+            </p>
+          ) : (
+            <p className="truncate">No supplier tracking yet</p>
+          )}
+        </>
+      );
+      break;
+    case "problem":
+      detail = (
+        <>
+          <p className="line-clamp-2 text-rose-700/90">{view.notes || "Needs a look on the order page"}</p>
+          {reference}
+        </>
+      );
+      break;
+    case "untracked":
+      detail = <p className="truncate">{view.cancelled ? "Cancelled on eBay" : "No supplier order in Liston"}</p>;
+      break;
+  }
+  return (
+    <div className="min-w-0 pt-0.5">
+      <SupplierBadge view={view} />
+      {detail && <div className="mt-1.5 space-y-0.5 text-[11.5px] leading-snug text-[var(--color-muted)]">{detail}</div>}
+    </div>
+  );
 }
 
 // Dispatched on the seller's word alone: no tracking number on any line.
@@ -220,11 +292,13 @@ function MarkedLine({ order }: { order: Order }) {
   );
 }
 
-function OrderCard({ order, country, countryName, href, select }: { order: Order; country: string | undefined; countryName: string | undefined; href: string; select?: RowSelect }) {
+// One order per row: its eBay status, the order number over each item as a
+// thumbnail beside a two-line title and its details, the supplier order,
+// then the money and date at the top of the row, where the eye lands.
+function OrderCard({ order, href, select }: { order: Order; href: string; select?: RowSelect }) {
   const router = useRouter();
   const timeZone = useAccountTimeZone();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
-  const sourcing = sourcingSummary(order);
   const shippingCost =
     order.total && order.subtotal ? Math.round((order.total.amount - order.subtotal.amount) * 100) / 100 : null;
   const quantity = order.lineItems.reduce((n, li) => n + (li.quantityPurchased || 0), 0);
@@ -249,12 +323,6 @@ function OrderCard({ order, country, countryName, href, select }: { order: Order
       <div className="pt-0.5">
         <p className={`text-[12.5px] font-medium leading-snug ${statusStyle}`}>{statusLabel(order, timeZone)}</p>
         <MarkedLine order={order} />
-        {sourcing && (
-          <span className={`mt-1.5 inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourcing.className}`} title="Supplier order">
-            {sourcing.text}
-            {sourcing.partial ? " (some)" : ""}
-          </span>
-        )}
       </div>
 
       <div className="min-w-0">
@@ -302,7 +370,7 @@ function OrderCard({ order, country, countryName, href, select }: { order: Order
         </div>
       </div>
 
-      <CustomerCell order={order} country={country} countryName={countryName} />
+      <SupplierCell order={order} />
       <p className="pt-0.5 text-center text-[12.5px] font-semibold leading-snug text-[var(--color-ink)]">{quantity}</p>
       <div className="pt-0.5 text-right text-[12.5px] font-semibold leading-snug text-[var(--color-ink)]">
         {formatMoney(order.total)}
@@ -319,18 +387,12 @@ function OrderCard({ order, country, countryName, href, select }: { order: Order
 }
 
 // An order on a phone, where the table's six columns don't fit: status and
-// total on top, the order number and date, each item, then who it goes to.
-function OrderMobileCard({ order, country, countryName, href, select }: { order: Order; country: string | undefined; countryName: string | undefined; href: string; select?: RowSelect }) {
+// total on top, the order number and date, each item, then the supplier order.
+function OrderMobileCard({ order, href, select }: { order: Order; href: string; select?: RowSelect }) {
   const router = useRouter();
   const timeZone = useAccountTimeZone();
   const statusStyle = STATUS_TEXT_STYLES[order.derivedStatus || "all"];
-  const sourcing = sourcingSummary(order);
   const quantity = order.lineItems.reduce((n, li) => n + (li.quantityPurchased || 0), 0);
-  const a = order.shippingAddress;
-  const name = a?.name || order.buyerName || order.buyerUserId || "Unknown buyer";
-  const domestic = a?.country && countryName && a.country.toLowerCase() === countryName.toLowerCase();
-  const place = a ? [a.city, a.postalCode, domestic ? "" : a.country].filter(Boolean).join(" · ") : "";
-  const phone = a?.phone ? internationalPhone(a.phone, country) : null;
   return (
     <div
       className={`cursor-pointer border-b border-[var(--color-line)] px-4 py-3.5 last:border-b-0 active:bg-[var(--color-paper)]/60 ${select?.checked ? "bg-[var(--color-primary-soft)]/50" : ""}`}
@@ -385,23 +447,8 @@ function OrderMobileCard({ order, country, countryName, href, select }: { order:
           </div>
         ))}
       </div>
-      <div className="mt-2.5 flex items-center justify-between gap-3 text-[12px]">
-        <p className="min-w-0 truncate text-[var(--color-muted)]">
-          <span className="font-medium text-[var(--color-ink)]">{name}</span>
-          {place && ` · ${place}`}
-        </p>
-        {sourcing ? (
-          <span className={`flex-shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${sourcing.className}`}>
-            {sourcing.text}
-            {sourcing.partial ? " (some)" : ""}
-          </span>
-        ) : (
-          phone && (
-            <a href={`tel:${phone.replace(/\s+/g, "")}`} className="flex-shrink-0 text-[var(--color-muted)] underline decoration-[var(--color-line-strong)] underline-offset-2">
-              {phone}
-            </a>
-          )
-        )}
+      <div className="mt-3 border-t border-dashed border-[var(--color-line)] pt-2.5">
+        <SupplierCell order={order} />
       </div>
     </div>
   );
@@ -582,6 +629,16 @@ function AccountOrdersContent() {
       permissions={connection.permissions}
       user={user}
       sync={{ syncedAt, onRefresh: handleRefresh, refreshing, note: refreshNote }}
+      // The workspace owner and co-managers: these orders (or the ticked ones) as a CSV file.
+      actions={
+        !connection.permissions && (
+          <CsvButton
+            selected={selectedIds.length}
+            noun="order"
+            run={() => api.exportOrdersCsv(connection.id, { range, status, search, sort, archived, supplier, ids: selectedIds })}
+          />
+        )
+      }
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Orders</h1>
@@ -594,14 +651,6 @@ function AccountOrdersContent() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <PillTabs label="Orders" tabs={STATUS_TABS.map((t) => ({ key: t.key, label: t.label, count: counts[t.key] ?? 0 }))} value={status} onChange={changeStatus} />
           <div className="flex w-full min-w-0 items-center gap-2 sm:ml-auto sm:w-auto sm:flex-wrap sm:justify-end">
-            {/* The workspace owner and co-managers: these orders (or the ticked ones) as a CSV file. */}
-            {!connection.permissions && (
-              <CsvButton
-                selected={selectedIds.length}
-                noun="order"
-                run={() => api.exportOrdersCsv(connection.id, { range, status, search, sort, archived, supplier, ids: selectedIds })}
-              />
-            )}
             {(archivedCount > 0 || archived) && (
               <button
                 type="button"
@@ -740,8 +789,6 @@ function AccountOrdersContent() {
                 <OrderCard
                   key={order.orderId}
                   order={order}
-                  country={connection.marketplace?.country}
-                  countryName={connection.marketplace?.countryName}
                   href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`}
                   select={canTick ? { checked: selectedIds.includes(order.orderId), onChange: () => toggleOrder(order.orderId) } : undefined}
                 />
@@ -753,8 +800,6 @@ function AccountOrdersContent() {
               <OrderMobileCard
                 key={order.orderId}
                 order={order}
-                country={connection.marketplace?.country}
-                countryName={connection.marketplace?.countryName}
                 href={`/accounts/${connection.id}/orders/${encodeURIComponent(order.orderId)}`}
                 select={canTick ? { checked: selectedIds.includes(order.orderId), onChange: () => toggleOrder(order.orderId) } : undefined}
               />

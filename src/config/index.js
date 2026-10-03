@@ -227,6 +227,10 @@ const config = {
       process.env.EBAY_COMMERCE_NOTIFICATIONS_URL ||
       (process.env.EBAY_DELETION_ENDPOINT_URL ? process.env.EBAY_DELETION_ENDPOINT_URL.replace(/\/api\/ebay\/account-deletion\/?$/, '/api/ebay/commerce-notifications') : null),
     commerceNotificationsToken: process.env.EBAY_COMMERCE_NOTIFICATIONS_TOKEN || process.env.EBAY_DELETION_VERIFICATION_TOKEN || null,
+    // Store logos for the account rail read from eBay in the background when
+    // Liston has none (connection.service.refreshStoreLogos). Off under tests,
+    // whose accounts carry fake tokens; EBAY_STORE_LOGOS=off turns it off.
+    storeLogos: process.env.EBAY_STORE_LOGOS ? process.env.EBAY_STORE_LOGOS !== 'off' : !process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test',
   },
 
   google: {

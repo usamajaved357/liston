@@ -691,6 +691,16 @@ export default function AccountListingsPage() {
       permissions={connection.permissions}
       user={user}
       sync={filter !== "draft" ? { syncedAt, onRefresh: handleRefresh, refreshing, note: refreshNote } : undefined}
+      // The workspace owner and co-managers: these listings (or the ticked ones) as a CSV file.
+      actions={
+        canTick && (
+          <CsvButton
+            selected={selectedIds.length}
+            noun="listing"
+            run={() => api.exportListingsCsv(connection.id, { status: filter === "inactive" ? "inactive" : "active", search: debounced, sort, ids: selectedIds })}
+          />
+        )
+      }
       header={
         <div>
           <h1 className="text-lg font-semibold text-[var(--color-ink)]">Listings</h1>
@@ -712,14 +722,6 @@ export default function AccountListingsPage() {
               </svg>
               Draft a listing
             </Link>
-          )}
-          {/* The workspace owner and co-managers: these listings (or the ticked ones) as a CSV file. */}
-          {canTick && (
-            <CsvButton
-              selected={selectedIds.length}
-              noun="listing"
-              run={() => api.exportListingsCsv(connection.id, { status: filter === "inactive" ? "inactive" : "active", search: debounced, sort, ids: selectedIds })}
-            />
           )}
           {filter !== "draft" && (
             <ViewMenu title="Sort listings" sections={[{ label: "Sort", value: sort, options: filter === "inactive" ? INACTIVE_SORT_OPTIONS : SORT_OPTIONS, onChange: (k) => changeSort(k as ListingSort) }]} />

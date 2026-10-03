@@ -42,19 +42,25 @@ export function CsvButton({ selected, noun, run }: { selected: number; noun: str
     }
   }
 
+  // A slim capsule beside the header's sync time: quiet until rows are
+  // ticked, then tinted to say the file is only those.
   return (
     <button
       type="button"
       onClick={click}
       disabled={busy}
       title={note || (selected ? `Download the ${selected} ticked ${selected === 1 ? noun : `${noun}s`} as a CSV file` : `Download every ${noun} these filters show as a CSV file`)}
-      className={`btn btn-sm flex-shrink-0 gap-1.5 ${selected ? "btn-primary" : "btn-secondary"}`}
+      className={`inline-flex h-7 flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3 text-[12px] font-medium transition-colors disabled:cursor-wait ${
+        selected
+          ? "border-[var(--color-primary)]/25 bg-[var(--color-primary-soft)] text-[var(--color-primary)] hover:border-[var(--color-primary)]/45"
+          : "border-[var(--color-line)] bg-[var(--color-panel)] text-[var(--color-ink)] hover:border-[var(--color-line-strong)] hover:bg-[var(--color-paper)]"
+      }`}
     >
       {busy ? (
-        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />
+        <span className="h-3 w-3 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" aria-hidden />
       ) : (
-        <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" aria-hidden>
-          <path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5 text-[var(--color-primary)]" aria-hidden>
+          <path d="M12 4.5v10M8 10.5l4 4 4-4M5.5 19h13" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
       <span aria-live="polite">{busy ? "Preparing…" : note || (selected ? `Download ${selected} selected` : "Download CSV")}</span>

@@ -241,7 +241,7 @@ export default function WorkspaceSettingsPage() {
         <div className="card">
           {/* The workspace at a glance. */}
           <div className="flex flex-col gap-4 rounded-t-[var(--radius-card)] border-b border-[var(--color-line)] bg-[radial-gradient(120%_140%_at_0%_0%,var(--color-primary-soft)_0%,transparent_55%)] px-5 py-5 sm:flex-row sm:items-center">
-            <span className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-2xl bg-[var(--color-primary)] text-[22px] font-bold text-white shadow-[0_8px_20px_-8px_rgba(79,70,229,0.6)]" aria-hidden>
+            <span className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary)] text-[22px] font-bold text-white shadow-[0_8px_20px_-8px_rgba(79,70,229,0.6)]" aria-hidden>
               {initials(workspace.name, "W")}
             </span>
             <div className="min-w-0 flex-1">

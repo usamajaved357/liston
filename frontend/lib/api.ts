@@ -634,6 +634,8 @@ export interface Connection {
   settings?: { ebay?: EbaySettings; pricing?: PricingSettings; template?: DescriptionTemplate };
   marketplace?: Marketplace | null;
   permissions?: ConnectionPermissions;
+  // The account's eBay store logo (its store profile, read by Liston), when it has one.
+  logo_url?: string | null;
   created_at: string;
   updated_at: string;
 }

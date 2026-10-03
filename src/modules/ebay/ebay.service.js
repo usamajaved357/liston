@@ -684,7 +684,7 @@ const storeProfileCache = createSwrCache({
   store: (key, value) => mirror.saveSnapshot(key, 'store_profile', value),
 });
 
-async function getStoreProfile(credentials, connectionId, { refresh = false } = {}) {
+async function getStoreProfile(credentials, connectionId, { refresh = false, priority = 'user' } = {}) {
   const { accessToken, credentials: refreshedCredentials, credentialsChanged, siteId } = await ensureValidAccessToken(credentials);
   if (!connectionId) {
     const profile = await ebayTrading.getStoreProfile(accessToken, { siteId });
@@ -692,7 +692,7 @@ async function getStoreProfile(credentials, connectionId, { refresh = false } = 
   }
   const key = String(connectionId);
   if (refresh) storeProfileCache.invalidate(key);
-  const profile = await storeProfileCache.get(key, { accessToken, siteId, connectionId: key, priority: 'user' });
+  const profile = await storeProfileCache.get(key, { accessToken, siteId, connectionId: key, priority });
   return { ...profile, credentialsChanged, credentials: refreshedCredentials };
 }
 

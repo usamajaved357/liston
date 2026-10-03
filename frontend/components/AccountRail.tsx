@@ -56,22 +56,36 @@ export function tintFor(id: string) {
 
 const count = (n: number) => (n > 99 ? "99+" : String(n));
 
-/** An account's square: its initials in its colour, its eBay site in the corner. */
+/**
+ * An account's circle: its eBay store's logo, the way eBay draws it on the
+ * store page (its initials in its colour while it has none, or if the logo
+ * won't load), its eBay site in the corner.
+ */
 export function AccountTile({ connection, size = 40 }: { connection: Connection; size?: number }) {
   const site = connection.marketplace?.label;
+  const [broken, setBroken] = useState<string | null>(null);
+  const logo = connection.logo_url && connection.logo_url !== broken ? connection.logo_url : null;
   return (
     <span
       style={{ width: size, height: size, fontSize: Math.round(size * 0.33) }}
-      className={`relative flex flex-shrink-0 items-center justify-center rounded-xl font-bold ${tintFor(connection.id)}`}
+      className={`relative flex flex-shrink-0 items-center justify-center rounded-full font-bold ${logo ? "bg-white" : tintFor(connection.id)}`}
       aria-hidden
     >
-      {initials(connection.label, "A")}
+      {logo ? (
+        <>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={logo} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(logo)} className="h-full w-full rounded-full object-cover" />
+          <span className="pointer-events-none absolute inset-0 rounded-full ring-1 ring-inset ring-black/[0.08]" />
+        </>
+      ) : (
+        initials(connection.label, "A")
+      )}
       {site && (
         <span className="absolute -bottom-1 -right-1.5 rounded-[5px] bg-[var(--color-panel)] px-[3px] text-[9px] font-bold leading-[13px] tracking-wide text-[var(--color-muted)] ring-1 ring-[var(--color-line)]">
           {site}
         </span>
       )}
-      {connection.status !== "active" && <span className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-[var(--color-paper)]" />}
+      {connection.status !== "active" && <span className="absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-[var(--color-paper)]" />}
     </span>
   );
 }
@@ -148,7 +162,7 @@ function Here({ on }: { on: boolean }) {
 function Badge({ n }: { n: number }) {
   if (!n) return null;
   return (
-    <span className="absolute -right-1.5 -top-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold tabular-nums text-white ring-2 ring-[var(--color-paper)]" aria-hidden>
+    <span className="absolute -right-1.5 -top-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold tabular-nums text-white ring-2 ring-[var(--color-paper)]" aria-hidden>
       {count(n)}
     </span>
   );
@@ -156,7 +170,7 @@ function Badge({ n }: { n: number }) {
 
 // One place on the rail: its tile with its name under it.
 const ITEM = "group relative flex w-full flex-col items-center gap-1.5 px-1.5 outline-none disabled:opacity-60";
-const TILE = "relative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl text-[13px] font-bold transition-all group-focus-visible:ring-2 group-focus-visible:ring-[var(--color-primary)]";
+const TILE = "relative flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-[13px] font-bold transition-all group-focus-visible:ring-2 group-focus-visible:ring-[var(--color-primary)]";
 const NAME = (on: boolean) => `line-clamp-2 w-full text-center text-[10.5px] leading-[13px] [overflow-wrap:anywhere] ${on ? "font-semibold text-[var(--color-ink)]" : "text-[var(--color-muted)] group-hover:text-[var(--color-ink)]"}`;
 const CAPTION = "w-full text-center text-[9.5px] font-semibold uppercase tracking-wide text-[var(--color-muted)]";
 
@@ -211,14 +225,14 @@ function TeamSwitch() {
         className="group flex w-full flex-col items-center gap-1.5 outline-none"
       >
         <span
-          className={`relative flex h-11 w-11 items-center justify-center rounded-[13px] bg-[var(--color-primary)] text-[15px] font-bold text-white shadow-[0_6px_16px_-6px_rgba(79,70,229,0.6)] transition-all group-hover:rounded-[15px] group-focus-visible:ring-2 group-focus-visible:ring-[var(--color-primary)] group-focus-visible:ring-offset-2 ${
+          className={`relative flex h-11 w-11 items-center justify-center rounded-full bg-[var(--color-primary)] text-[15px] font-bold text-white shadow-[0_6px_16px_-6px_rgba(79,70,229,0.6)] transition-all group-hover:-translate-y-px group-hover:shadow-[0_8px_18px_-6px_rgba(79,70,229,0.7)] group-focus-visible:ring-2 group-focus-visible:ring-[var(--color-primary)] group-focus-visible:ring-offset-2 ${
             open ? "ring-2 ring-[var(--color-primary)]/30 ring-offset-2 ring-offset-[var(--color-paper)]" : ""
           }`}
         >
           {initials(team.name, "T")}
           <Badge n={othersUnread} />
           {/* The switch: up and down, the way a picker is marked. */}
-          <span className="absolute -bottom-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-panel)] text-[var(--color-muted)] shadow-sm ring-1 ring-[var(--color-line)] transition-colors group-hover:text-[var(--color-primary)]" aria-hidden>
+          <span className="absolute -bottom-1 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-panel)] text-[var(--color-muted)] shadow-sm ring-1 ring-[var(--color-line)] transition-colors group-hover:text-[var(--color-primary)]" aria-hidden>
             <svg viewBox="0 0 20 20" fill="none" className="h-3 w-3">
               <path d="M6.5 8l3.5-3.5L13.5 8M6.5 12l3.5 3.5 3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -245,7 +259,7 @@ function TeamSwitch() {
                     className={`flex w-full items-center gap-2.5 px-3.5 py-2 text-left transition-colors disabled:opacity-60 ${current ? "bg-[var(--color-primary-soft)]/60" : "hover:bg-[var(--color-paper)]"}`}
                   >
                     <span
-                      className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-[12px] font-bold ${
+                      className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-[12px] font-bold ${
                         current ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-primary-soft)] text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/15"
                       }`}
                       aria-hidden
@@ -389,7 +403,7 @@ export function AccountRail() {
                   className={ITEM}
                 >
                   <Here on={current} />
-                  <span className={`relative rounded-xl transition-all ${current ? "ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--color-paper)]" : "group-hover:-translate-y-px"}`}>
+                  <span className={`relative rounded-full transition-all ${current ? "ring-2 ring-[var(--color-primary)] ring-offset-2 ring-offset-[var(--color-paper)]" : "group-hover:-translate-y-px"}`}>
                     <AccountTile connection={c} />
                     <Badge n={n} />
                   </span>

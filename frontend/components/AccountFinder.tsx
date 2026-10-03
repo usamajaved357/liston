@@ -139,7 +139,7 @@ export function AccountFinder() {
     if (row.kind === "home") {
       return (
         <button key={row.key} type="button" {...common} className={rowClass(index)}>
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-[var(--color-primary-soft)] text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/20" aria-hidden>
+          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-soft)] text-[var(--color-primary)] ring-1 ring-inset ring-[var(--color-primary)]/20" aria-hidden>
             {DASHBOARD_ICON}
           </span>
           <span className="min-w-0 flex-1">
@@ -174,7 +174,7 @@ export function AccountFinder() {
     const current = t.id === team?.id;
     return (
       <button key={row.key} type="button" {...common} disabled={Boolean(switching)} className={`${rowClass(index)} disabled:opacity-60`}>
-        <span className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl text-[12px] font-bold ${current ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-panel)] text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-line)]"}`} aria-hidden>
+        <span className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-[12px] font-bold ${current ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-panel)] text-[var(--color-ink)] ring-1 ring-inset ring-[var(--color-line)]"}`} aria-hidden>
           {initials(t.name, "T")}
         </span>
         <span className="min-w-0 flex-1">
