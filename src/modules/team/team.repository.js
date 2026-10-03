@@ -46,7 +46,7 @@ async function findMemberForOwner(id, ownerId) {
 
 /** The login with this email, whoever's it is: { id, email, name, role } or null. */
 async function findLoginByEmail(email) {
-  const result = await query(`SELECT id, email, name, role FROM users WHERE lower(email) = lower($1)`, [email]);
+  const result = await query(`SELECT id, email, name, role, created_at FROM users WHERE lower(email) = lower($1)`, [email]);
   return result.rows[0] || null;
 }
 

@@ -695,6 +695,8 @@ export interface InvitePage {
   workspace: string;
   invitedBy: string;
   kind: "new" | "join" | "email";
+  // When the login they join with was made (kind "join"): they may not remember having one.
+  loginSince?: string | null;
   currentEmail: string | null;
   expiresAt: string;
   status: "open" | "expired" | "accepted" | "revoked";
@@ -3170,6 +3172,8 @@ export const api = {
     request<{ invite: TeamInvite; emailed: boolean }>(`/api/team/members/${id}/email`, { method: "POST", body: JSON.stringify({ email }) }),
   // The invited person's side: what the link is, and accepting it (signs them in).
   getInvite: (token: string) => request<{ invite: InvitePage }>(`/api/invites/${encodeURIComponent(token)}`),
+  // Already on Liston but can't sign in: a link to choose a new password, emailed to the invited address, back to the invitation after.
+  sendInvitePasswordLink: (token: string) => request<{ email: string }>(`/api/invites/${encodeURIComponent(token)}/password-link`, { method: "POST" }),
   acceptInvite: (token: string, input: { name?: string; password?: string }) =>
     request<AuthResponse>(`/api/invites/${encodeURIComponent(token)}/accept`, { method: "POST", body: JSON.stringify(input) }),
 

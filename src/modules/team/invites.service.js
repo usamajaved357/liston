@@ -230,6 +230,8 @@ async function view(token) {
     invitedBy: whoIs(invite, 'invited_by') || invite.owner_name || invite.owner_email,
     // new: they create their login; join: they have one; email: their login moves to this email.
     kind: invite.member_user_id ? 'email' : login ? 'join' : 'new',
+    // When the login they join with was made: they may not remember it.
+    loginSince: login?.created_at || null,
     currentEmail: invite.member_email || null,
     expiresAt: invite.expires_at,
     status: statusOf(invite),
@@ -241,6 +243,22 @@ function refuseUnlessOpen(invite) {
   if (status === 'accepted') throw new InviteError('This invitation has been used already. Log in to Liston instead.', 409, 'INVITE_USED');
   if (status === 'revoked') throw new InviteError('This invitation was withdrawn. Ask the workspace for a new one if you still need it.', 410, 'INVITE_REVOKED');
   if (status === 'expired') throw new InviteError('This invitation has expired. Ask the workspace to send it again.', 410, 'INVITE_EXPIRED');
+}
+
+/**
+ * For someone invited whose email already has a Liston login they can't
+ * sign in to: a link to choose a new password, emailed to that address
+ * (only its owner can open it, never the inviter, who can copy the
+ * invitation's own link), coming back to the invitation once it's set.
+ */
+async function sendPasswordLink(token) {
+  const invite = await openInvite(token);
+  refuseUnlessOpen(invite);
+  if (invite.member_user_id || !(await teamRepository.findLoginByEmail(invite.email))) {
+    throw new InviteError("This invitation makes a new login: choose your password on its page.", 400);
+  }
+  await authService.requestPasswordReset(invite.email, { next: `/invite/${token}`, joining: invite.team_name });
+  return { email: invite.email };
 }
 
 const raced = () => new InviteError('This invitation has just been used or withdrawn. Reload the page.', 409, 'INVITE_USED');
@@ -306,7 +324,7 @@ async function accept(token, { name = null, password = null, authorization = nul
   const isThem = viewer && String(viewer.id) === String(login.id);
   if (!isThem) {
     if (!password) throw new InviteError(`Enter the password you use for ${invite.email} on Liston.`, 400, 'PASSWORD_NEEDED');
-    if (!(await bcrypt.compare(password, login.password_hash))) throw new InviteError("That password isn't right. Use Forgot password on the sign-in page if you've lost it.", 401, 'WRONG_PASSWORD');
+    if (!(await bcrypt.compare(password, login.password_hash))) throw new InviteError(`That isn't the password for ${invite.email}. Don't know it? Email yourself a link to set a new one, below.`, 401, 'WRONG_PASSWORD');
   }
   const there = await teamRepository.findMemberForOwner(login.id, ownerId);
   if (there?.deactivated_at) throw new InviteError('You were removed from this workspace earlier. Ask its owner to restore you.', 409);
@@ -346,4 +364,4 @@ async function signedIn(user, ownerId) {
   };
 }
 
-module.exports = { listInvites, invite, resend, revoke, changeMemberEmail, view, accept, idOf, tokenOf, linkOf, InviteError, DAYS };
+module.exports = { listInvites, invite, resend, revoke, changeMemberEmail, view, accept, sendPasswordLink, idOf, tokenOf, linkOf, InviteError, DAYS };

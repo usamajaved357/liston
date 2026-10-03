@@ -13,6 +13,8 @@ function ResetPasswordForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
+  // Back to an invitation once the password is set (an existing login joining a workspace).
+  const next = /^\/invite\/[A-Za-z0-9._~-]{10,200}$/.test(searchParams.get("next") || "") ? searchParams.get("next") : null;
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -36,8 +38,8 @@ function ResetPasswordForm() {
     try {
       await api.resetPassword(token, password);
       setDone(true);
-      // Every device signed in before is signed out now: the sign-in page says so.
-      setTimeout(() => router.push("/login?reason=password"), 1500);
+      // Every device signed in before is signed out now: the sign-in page says so, or the invitation takes them on.
+      setTimeout(() => router.push(next ? `${next}?reset=1` : "/login?reason=password"), 1500);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't reset your password. Try again.");
     } finally {
@@ -59,7 +61,7 @@ function ResetPasswordForm() {
 
   if (done) {
     return (
-      <Alert variant="success">Password reset. Redirecting you to log in.</Alert>
+      <Alert variant="success">{next ? "Password set. Taking you back to your invitation." : "Password reset. Redirecting you to log in."}</Alert>
     );
   }
 

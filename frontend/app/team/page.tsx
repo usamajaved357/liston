@@ -238,7 +238,11 @@ function InviteRow({ invite, onChanged }: { invite: TeamInvite; onChanged: (note
       <div className="min-w-0 flex-1 basis-[calc(100%-52px)] sm:basis-auto">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <p className="min-w-0 break-all text-[13.5px] font-semibold text-[var(--color-ink)] sm:truncate sm:break-normal">{invite.name || invite.email}</p>
-          {invite.existingLogin && <span className="inline-flex h-5 items-center rounded-full bg-teal-50 px-2 text-[10.5px] font-semibold text-teal-700 ring-1 ring-inset ring-teal-200">On Liston</span>}
+          {invite.existingLogin && (
+            <span title="This email already has a Liston login, so they join with its password (or set a new one from the invitation)." className="inline-flex h-5 items-center rounded-full bg-teal-50 px-2 text-[10.5px] font-semibold text-teal-700 ring-1 ring-inset ring-teal-200">
+              Has a Liston login
+            </span>
+          )}
           {invite.sameAs && <span className="inline-flex h-5 items-center truncate rounded-full bg-[var(--color-paper)] px-2 text-[10.5px] font-medium text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">{`Access as ${invite.sameAs.name || "a member"}`}</span>}
         </div>
         <p className="break-words text-[12px] text-[var(--color-muted)] sm:truncate">

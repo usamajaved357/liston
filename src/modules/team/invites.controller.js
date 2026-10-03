@@ -98,4 +98,13 @@ async function accept(req, res, next) {
   }
 }
 
-module.exports = { listInvites, invite, resend, revoke, changeMemberEmail, view, accept };
+// Someone already on Liston who can't sign in: a new-password link to the invited address.
+async function passwordLink(req, res, next) {
+  try {
+    res.status(200).json(await invitesService.sendPasswordLink(req.params.token));
+  } catch (err) {
+    fail(err, res, next);
+  }
+}
+
+module.exports = { listInvites, invite, resend, revoke, changeMemberEmail, view, accept, passwordLink };

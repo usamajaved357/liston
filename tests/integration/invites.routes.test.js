@@ -259,3 +259,26 @@ test("an email change is refused for a login in another workspace, or an email s
   assert.strictEqual(refused.status, 409);
   assert.strictEqual((await login(sara.data.member.email)).status, 200);
 });
+
+test("someone on Liston who doesn't know their login's password gets a link to set one, back to the invitation", async () => {
+  const usama = await owner('Usama');
+  const talha = await owner('Talha', 'Talha Traders');
+  const sent = await invite(talha, { email: usama.email });
+  const page = await view(sent.data.invite.link);
+  assert.strictEqual(page.data.invite.kind, 'join');
+  assert.ok(page.data.invite.loginSince, 'when their login was made, to jog their memory');
+
+  const wrong = await accept(sent.data.invite.link, { password: 'not-the-password' });
+  assert.match(wrong.data.error, /Email yourself a link to set a new one/);
+
+  const linked = await request('POST', `/api/invites/${linkToken(sent.data.invite.link)}/password-link`);
+  assert.deepStrictEqual([linked.status, linked.data.email], [200, usama.email]);
+  const { rows } = await pool.query('SELECT password_reset_token_hash IS NOT NULL AS asked, password_reset_expires_at > now() AS open FROM users WHERE id = $1', [usama.id]);
+  assert.deepStrictEqual(rows[0], { asked: true, open: true }, 'a reset link went to their own address');
+
+  // Not for an invitation that makes a new login, nor one no longer open.
+  const fresh2 = await invite(talha, { email: fresh('nobody') });
+  assert.strictEqual((await request('POST', `/api/invites/${linkToken(fresh2.data.invite.link)}/password-link`)).status, 400);
+  await request('DELETE', `/api/team/invites/${sent.data.invite.id}`, undefined, talha.token);
+  assert.strictEqual((await request('POST', `/api/invites/${linkToken(sent.data.invite.link)}/password-link`)).status, 410);
+});

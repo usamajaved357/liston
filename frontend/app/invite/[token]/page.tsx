@@ -11,6 +11,7 @@ import { PasswordInput } from "@/components/PasswordInput";
 import { LinesSkeleton } from "@/components/Skeleton";
 import { Alert } from "@/components/Alert";
 import { offerToSaveLogin } from "@/lib/savedLogin";
+import { formatShortDate } from "@/lib/format";
 import { homeFor, rememberTeam } from "@/lib/team";
 
 // The page an invitation link opens (invites.service). Someone new chooses
@@ -63,6 +64,27 @@ export default function InvitePageView() {
   const [usePassword, setUsePassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A new-password link emailed (an existing login they can't sign in to), and back here once it's set.
+  const [linkSent, setLinkSent] = useState<"sending" | "sent" | null>(null);
+  const [passwordSet, setPasswordSet] = useState(false);
+
+  useEffect(() => {
+    // Back from choosing a new password (reset-password's `next`): after the first paint, as the address says so.
+    const t = setTimeout(() => setPasswordSet(new URLSearchParams(window.location.search).get("reset") === "1"), 0);
+    return () => clearTimeout(t);
+  }, []);
+
+  async function emailPasswordLink() {
+    setError(null);
+    setLinkSent("sending");
+    try {
+      await api.sendInvitePasswordLink(token);
+      setLinkSent("sent");
+    } catch (err) {
+      setLinkSent(null);
+      setError(err instanceof ApiError ? err.message : "Couldn't send the link. Try again.");
+    }
+  }
 
   useEffect(() => {
     let live = true;
@@ -217,6 +239,7 @@ export default function InvitePageView() {
     );
   }
 
+  // The email already has a Liston login (made by them before, maybe long ago): its password, or a new one by email.
   return (
     <AuthLayout eyebrow="Invitation" title={title} subtitle={subtitle} footer={footer}>
       <form onSubmit={accept} method="post" action="/invite" className="space-y-3.5">
@@ -225,22 +248,39 @@ export default function InvitePageView() {
             You&apos;re signed in as <span className="break-all font-medium">{me}</span>. This invitation is for the email below, so joining signs you in as it.
           </p>
         )}
+        {passwordSet ? (
+          <Alert variant="success">Your new password is set. Enter it below to join {invite.workspace}.</Alert>
+        ) : (
+          <div className="rounded-xl bg-[var(--color-paper)] px-3.5 py-3 text-[12.5px] leading-relaxed text-[var(--color-muted)] ring-1 ring-inset ring-[var(--color-line)]">
+            <span className="font-semibold text-[var(--color-ink)]">This email already has a Liston login</span>
+            {invite.loginSince ? `, made ${formatShortDate(invite.loginSince)}` : ""}. You join with its password; you don&apos;t make a new one.
+          </div>
+        )}
         <FixedEmail label="Your Liston login" email={invite.email} />
         <input type="hidden" name="email" value={invite.email} autoComplete="username" />
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="block text-sm font-medium text-[var(--color-ink)]">Password</span>
-            <Link href="/forgot-password" className="text-sm font-medium text-[var(--color-accent)] hover:underline">
-              Forgot password?
-            </Link>
-          </div>
+          <span className="mb-1.5 block text-sm font-medium text-[var(--color-ink)]">Its password</span>
           <PasswordInput name="password" value={password} onChange={setPassword} autoComplete="current-password" required />
         </div>
         {error && <Alert>{error}</Alert>}
         <button type="submit" disabled={busy || !password} className="btn btn-primary w-full">
-          {busy ? "Joining…" : "Join workspace"}
+          {busy ? "Joining…" : `Join ${invite.workspace}`}
         </button>
-        <p className="text-center text-[12px] leading-relaxed text-[var(--color-muted)]">You already have a Liston login, so you join with the password you use now.</p>
+        {/* Don't know it: a new one chosen from a link sent to this email (only its owner opens it), then back here. */}
+        <div className="rounded-xl border border-dashed border-[var(--color-line-strong)] px-3.5 py-3 text-center">
+          {linkSent === "sent" ? (
+            <p className="text-[12.5px] leading-relaxed text-[var(--color-ink)]">
+              Check <span className="break-all font-semibold">{invite.email}</span>. The link there lets you choose a new password and brings you back here to join. It works for an hour.
+            </p>
+          ) : (
+            <>
+              <p className="text-[12.5px] text-[var(--color-muted)]">Don&apos;t know this login&apos;s password?</p>
+              <button type="button" onClick={emailPasswordLink} disabled={linkSent === "sending"} className="mt-1 text-[13px] font-semibold text-[var(--color-accent)] hover:underline disabled:opacity-60">
+                {linkSent === "sending" ? "Sending…" : "Email me a link to set a new one"}
+              </button>
+            </>
+          )}
+        </div>
       </form>
     </AuthLayout>
   );

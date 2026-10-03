@@ -35,9 +35,9 @@ function hashToken(rawToken) {
 // Sends via Resend when RESEND_API_KEY is configured (see utils/email.js).
 // Falls back to logging the link when it isn't (or the send failed) — never
 // in production, where a real provider is required.
-async function deliverLink(kind, sendFn, userEmail, rawToken, path) {
-  const link = `${config.frontendUrl}${path}?token=${rawToken}`;
-  const { sent } = await sendFn(userEmail, link);
+async function deliverLink(kind, sendFn, userEmail, rawToken, path, { next = null, ...context } = {}) {
+  const link = `${config.frontendUrl}${path}?token=${rawToken}${next ? `&next=${encodeURIComponent(next)}` : ''}`;
+  const { sent } = await sendFn(userEmail, link, context);
   if (!sent && config.env !== 'production') {
     logger.info(`[DEV FALLBACK — no email sent] ${kind} link for ${userEmail}`, { link });
   }
@@ -148,7 +148,15 @@ async function resendVerification(userId) {
 
 // Always succeeds from the caller's point of view whether or not the email
 // exists — otherwise this endpoint becomes an account-enumeration oracle.
-async function requestPasswordReset(email) {
+// Where a reset may send someone back to afterwards: only an invitation's page.
+const RESET_NEXT = /^\/invite\/[A-Za-z0-9._~-]{10,200}$/;
+
+/**
+ * Emails a link to choose a new password. `next`: the page it returns to
+ * once set (an invitation's, to join with it); `joining`: the workspace that
+ * invitation is to, for the email's wording.
+ */
+async function requestPasswordReset(email, { next = null, joining = null } = {}) {
   const result = await query('SELECT id FROM users WHERE email = $1', [email]);
   if (result.rows.length === 0) return {};
 
@@ -159,7 +167,7 @@ async function requestPasswordReset(email) {
      WHERE id = $3`,
     [hashToken(rawToken), new Date(Date.now() + PASSWORD_RESET_TTL_MS), result.rows[0].id]
   );
-  await deliverLink('Password reset', emailService.sendPasswordResetEmail, email, rawToken, '/reset-password');
+  await deliverLink('Password reset', emailService.sendPasswordResetEmail, email, rawToken, '/reset-password', { next: next && RESET_NEXT.test(next) ? next : null, joining });
   return { passwordResetToken: rawToken };
 }
 

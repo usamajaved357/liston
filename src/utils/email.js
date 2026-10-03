@@ -147,13 +147,16 @@ function sendVerificationEmail(to, link) {
   });
 }
 
-function sendPasswordResetEmail(to, link) {
+// `joining`: the workspace an invitation is to, when the reset is so they can join it.
+function sendPasswordResetEmail(to, link, { joining = null } = {}) {
   return sendEmail({
     to,
-    subject: 'Reset your Liston password',
+    subject: joining ? `Choose a password to join ${joining} on Liston` : 'Reset your Liston password',
     html: layout({
-      title: 'Reset your password',
-      intro: 'We received a request to reset the password on your Liston account. Choose a new one below.',
+      title: joining ? 'Choose a new password' : 'Reset your password',
+      intro: joining
+        ? `You were invited to join <strong style="color:${BRAND.ink}">${escape(joining)}</strong> on Liston with this email, which already has a Liston login. Choose a new password for it, and you go straight back to the invitation to join.`
+        : 'We received a request to reset the password on your Liston account. Choose a new one below.',
       action: button('Choose a new password', link),
       afterAction: linkFallback(link),
       footnote: `This link expires in 1 hour. If you didn't request a reset, no action is needed and your password stays as it is.`,
@@ -222,7 +225,7 @@ function sendWorkspaceInviteEmail(to, { inviter, team, link, existingLogin, days
       preheader: `Join ${team} on Liston.`,
       title: `Join ${where}`,
       intro: existingLogin
-        ? `<strong style="color:${BRAND.ink}">${who}</strong> invited you to work in <strong style="color:${BRAND.ink}">${where}</strong> on Liston. You already have a Liston login, so you join with the email and password you use now.`
+        ? `<strong style="color:${BRAND.ink}">${who}</strong> invited you to work in <strong style="color:${BRAND.ink}">${where}</strong> on Liston. You already have a Liston login with this email, so you join with its password. Don't know it? You can set a new one from the invitation.`
         : `<strong style="color:${BRAND.ink}">${who}</strong> invited you to work in <strong style="color:${BRAND.ink}">${where}</strong> on Liston. Choose your name and a password, and you're in.`,
       action: button(existingLogin ? 'Join the workspace' : 'Accept the invitation', link),
       afterAction: linkFallback(link),

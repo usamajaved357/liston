@@ -7,5 +7,6 @@ const router = express.Router();
 
 router.get('/:token', invitesController.view);
 router.post('/:token/accept', invitesController.accept);
+router.post('/:token/password-link', invitesController.passwordLink);
 
 module.exports = router;
