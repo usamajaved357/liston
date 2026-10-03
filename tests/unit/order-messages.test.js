@@ -136,6 +136,9 @@ test("a pushed order is welcomed once: sent when it's on and due, left alone whe
   const credentials = { accessToken: 't', marketplaceId: 'EBAY_GB', scopes: [service.SCOPE] };
   mock.method(connectionService, 'withDecryptedCredentials', async (id, userId, action) => action(credentials, full));
   mock.method(ebayService, 'ensureValidAccessToken', async (c) => ({ accessToken: 't', siteId: 3, credentials: c, credentialsChanged: false }));
+  // The account on one site here: every order is its own (another site's is checked below).
+  let otherSite = false;
+  mock.method(ebayService, 'ordersInScope', async (id, orders) => (otherSite ? [] : orders));
   mock.method(orderRepository, 'messagedOrderIds', async () => new Set());
   const claims = ['claimed', 'taken', 'skipped'];
   const claim = mock.method(orderRepository, 'claimMessage', async () => claims.shift());
@@ -157,9 +160,12 @@ test("a pushed order is welcomed once: sent when it's on and due, left alone whe
   assert.strictEqual(await service.welcomeOrder('c1', 'owner', fresh), 'skipped');
   assert.strictEqual(sent.mock.calls.length, 1);
 
-  // Dispatched already, or switched off: not even claimed.
+  // Dispatched already, an order of the account's other site (that site's connection welcomes it), or switched off: not even claimed.
   const claimsBefore = claim.mock.calls.length;
   assert.strictEqual(await service.welcomeOrder('c1', 'owner', { ...fresh, shippedTime: new Date().toISOString() }), 'not-due');
+  otherSite = true;
+  assert.strictEqual(await service.welcomeOrder('c1', 'owner', fresh), 'other-site');
+  otherSite = false;
   settings.messages.placed.enabled = false;
   assert.strictEqual(await service.welcomeOrder('c1', 'owner', fresh), 'off');
   assert.strictEqual(claim.mock.calls.length, claimsBefore);

@@ -1436,6 +1436,11 @@ async function getOrdersLast90Cached(connectionId, accessToken, siteId, push = f
   return marketScope.ordersIn(scope, orders);
 }
 
+/** The orders this connection keeps (its own site's, when the eBay account is connected on several). */
+async function ordersInScope(connectionId, orders) {
+  return marketScope.ordersIn(await scopeOf(String(connectionId)), orders);
+}
+
 const itemSummaryCache = new Map(); // itemId -> { fetchedAt, summary }
 const ITEM_SUMMARY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // a listing's photo and URL hardly ever change
 
@@ -2798,6 +2803,7 @@ function categoryAspectSchema(marketplaceId, categoryId) {
 }
 
 module.exports = {
+  ordersInScope,
   postagePolicyDetails,
   listingStates,
   searchSimilarListings,

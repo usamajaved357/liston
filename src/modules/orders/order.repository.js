@@ -118,15 +118,18 @@ async function saveMessage({ connectionId, orderId, kind, status, buyer, itemId,
  * resolves to 'claimed' (send it, then finishMessage), 'taken' (another run
  * has it, or it was dealt with before) or 'skipped' (with `buyerGapHours`,
  * this buyer was sent this message on another order that recently; noted
- * with that order). The check and the claim happen under a lock on the
- * account, kind and buyer, so two runs at once can't both pass.
+ * with that order). An eBay order number is eBay's alone, so an order
+ * claimed by any connection is taken for all of them: an eBay account
+ * connected once per site, or in two workspaces, messages it once. The
+ * check and the claim happen under a lock on the kind and the buyer (the
+ * same whichever connection asks), so two runs at once can't both pass.
  */
 async function claimMessage({ connectionId, orderId, kind, buyer, itemId, text, buyerGapHours = 0 }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`order-message:${connectionId}:${kind}:${buyer || orderId}`]);
-    const known = await client.query('SELECT 1 FROM order_messages WHERE connection_id = $1 AND order_id = $2 AND kind = $3', [connectionId, orderId, kind]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`order-message:${kind}:${buyer || orderId}`]);
+    const known = await client.query('SELECT 1 FROM order_messages WHERE order_id = $1 AND kind = $2', [orderId, kind]);
     if (known.rowCount) {
       await client.query('COMMIT');
       return 'taken';

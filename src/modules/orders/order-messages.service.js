@@ -24,7 +24,8 @@ const orderMessages = require('./order-messages');
 //              (those from just before it was switched on too).
 // Never twice: each order and kind is claimed in the database before eBay
 // is asked (order.repository claimMessage), so the push and the hourly run,
-// or two servers, can't both send it; whatever eBay answers is kept and
+// two servers, or two connections of the same eBay account (one per site,
+// or the account in two workspaces) can't both send it; whatever eBay answers is kept and
 // never retried. A buyer is welcomed at most once a day (a second order
 // that day is noted as skipped), and each run sends at most PER_RUN per
 // account. A real message to a real buyer: off until the owner switches it on.
@@ -136,8 +137,12 @@ async function welcomeOrder(connectionId, ownerId, order) {
       const setting = settingOf(full.settings, 'placed');
       if (!setting?.enabled) return { outcome: 'off' };
       if (!ebayOauth.hasScope(credentials, SCOPE)) return { outcome: 'no-scope' };
+      // An eBay account connected on several sites hears of each order once per
+      // connection: only the order's own site's connection welcomes it (as the hourly run reads).
+      const [mine] = await ebayService.ordersInScope(connectionId, [order]);
+      if (!mine) return { outcome: 'other-site' };
       const done = await orderRepository.messagedOrderIds(connectionId, 'placed');
-      const [due] = orderMessages.placedDue([order], { since: setting.enabledAt, done, statusOf: ebayService.classifyOrderStatus });
+      const [due] = orderMessages.placedDue([mine], { since: setting.enabledAt, done, statusOf: ebayService.classifyOrderStatus });
       if (!due) return { outcome: 'not-due' };
       const { accessToken, credentials: fresh, credentialsChanged } = await ebayService.ensureValidAccessToken(credentials);
       const ctx = { connection: full, accessToken, marketplaceId: full.settings?.ebay?.marketplaceId || credentials.marketplaceId || 'EBAY_GB', store: await storeNameOf(full) };
